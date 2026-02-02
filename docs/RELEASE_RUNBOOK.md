@@ -3,6 +3,7 @@
 Step-by-step guide to release a new Ticker alpha build with Sparkle auto-updates.
 
 If you want a “single entry point” that wraps the common dev/prod/release commands, use `./tickerctl.sh`.
+`./run.sh` is intended for local dev convenience only (not signing/notarization/release automation).
 
 ## Mental model (what each thing “means”)
 
