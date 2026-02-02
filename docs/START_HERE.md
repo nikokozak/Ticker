@@ -42,3 +42,13 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 - Never ship a migration without a backup and a downgrade story.
 - Treat the proxy request ID as your primary debugging handle.
 
+## Drag & drop (native → stream)
+
+You can drag files from Finder directly onto the app window:
+
+- **Images** (`png/jpg/webp/heic/...`): saved to local assets and inserted into the editor as `ticker-asset://...`.
+- **Documents** (`pdf/txt/md/...`): imported as Sources for the current stream.
+
+Notes:
+- Drops are routed to the **most recently opened stream**.
+- If no stream has been opened yet, Ticker shows an error toast (“Open a stream before dropping files.”).

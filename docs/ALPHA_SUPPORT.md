@@ -47,3 +47,13 @@ Do not include logs by default.
 - Errors shown to users must include a copyable request ID or feedback ID.
 - When proxy quota is exceeded, show reset timing and a next step.
 
+## Drag & drop troubleshooting (files from Finder)
+
+Expected behavior:
+- Dropping an image inserts it into the current stream as a `ticker-asset://...` image.
+- Dropping a PDF/text file adds it as a Source to the current stream.
+
+Common failures:
+- **“Open a stream before dropping files.”**: open any stream first (drops go to the most recently opened stream).
+- **“Could not import that image.”**: try re-exporting the image (some apps produce odd containers), or try a PNG/JPG.
+- **Source import fails**: capture the exact error toast text and include it in the bug report.
