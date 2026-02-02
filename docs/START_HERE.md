@@ -42,3 +42,14 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 - Never ship a migration without a backup and a downgrade story.
 - Treat the proxy request ID as your primary debugging handle.
 
+## Quick Panel (capture + ephemeral chat)
+
+Quick Panel is the fast capture surface (hotkey-driven) and has two distinct modes:
+
+- **Save** (`↵`): saves captured context and/or your input into a stream.
+- **AI + Save** (`⌘↵`): saves, then triggers AI for the created cell.
+- **Ask (ephemeral)** (`⌥↵`): runs an in-memory chat turn that is **not** saved to the stream DB.
+
+Cancellation / escape behavior:
+- `Esc` cancels streaming + clears the ephemeral chat (if active).
+- Otherwise `Esc` clears input/context; a second `Esc` hides the panel.

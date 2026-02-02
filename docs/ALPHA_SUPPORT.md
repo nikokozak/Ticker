@@ -47,3 +47,14 @@ Do not include logs by default.
 - Errors shown to users must include a copyable request ID or feedback ID.
 - When proxy quota is exceeded, show reset timing and a next step.
 
+## Quick Panel support notes
+
+When triaging Quick Panel bugs, always ask which mode was used:
+- `↵` save
+- `⌘↵` AI+save
+- `⌥↵` ask (ephemeral; not saved)
+
+Repro checklist for testers:
+- Was there captured context (selection or screenshot)?
+- Did streaming start, and did it stop when pressing `Esc`?
+- If using `⌥↵`: confirm no new stream/cell was created and nothing persisted after app restart.
