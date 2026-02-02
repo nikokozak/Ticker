@@ -21,6 +21,7 @@ Rationale: GitHub asset URLs typically redirect; Sparkle update checks are more 
 - Signed + notarized build produced (see `docs/MAC_DISTRIBUTION.md`)
 - Sparkle appcast updated and published
 - Rollback available: last 2–3 releases remain in appcast
+- Data safety verified: upgrading an existing `ticker.db` triggers a pre-migration backup (see `docs/DATA_MIGRATIONS.md`)
 
 ## Rollback policy
 
@@ -28,4 +29,3 @@ If a release is broken:
 - Prefer to ship a fast follow-up patch (`YYYY.MM.(patch+1)`)
 - Ensure appcast still lists the last known good release
 - Document manual downgrade steps for testers (link in `/alpha` page)
-

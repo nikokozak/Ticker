@@ -42,3 +42,13 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 - Never ship a migration without a backup and a downgrade story.
 - Treat the proxy request ID as your primary debugging handle.
 
+## Local data (what exists on disk)
+
+Ticker stores user data under:
+- `~/Library/Application Support/Ticker/`
+
+Key items:
+- `ticker.db` — the SQLite database (streams, cells, sources metadata)
+- `backups/` — automatic pre-migration DB backups (created only when pending migrations are detected)
+
+If you need to restore data from a backup, follow the step-by-step instructions in `docs/ALPHA_SUPPORT.md`.
