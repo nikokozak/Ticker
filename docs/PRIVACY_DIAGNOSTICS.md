@@ -18,6 +18,12 @@ This document defines what Ticker collects and what it does **not** collect.
 - App version, OS version
 - Support ID (derived; not the raw key)
 
+### Local-only secrets (stored on device)
+- Proxy device key + device id are stored locally at `~/Library/Application Support/Ticker/device.json`.
+  - This file contains the **plaintext device key** (`tk_...`) and must be treated as sensitive.
+  - The device key is used only to authenticate to the proxy (sent in `Authorization: Bearer ...`).
+  - The device key must never be logged, and must never be included in support bundles.
+
 ### Diagnostics events
 - Structured error events (stack traces where available)
 - Key validation failures

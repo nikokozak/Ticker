@@ -70,7 +70,9 @@ Depending on the Sparkle archive layout, the tools may be under `tools/sparkle/S
 If not already done:
 
 > Recommended: use a separate worktree for `gh-pages` so you never mix source + appcast:
-> `git worktree add ../Streams-gh-pages gh-pages`
+> `git worktree add ../Ticker-gh-pages gh-pages`
+>
+> If you already have an older worktree name (e.g. `../Streams-gh-pages`), that’s fine — the key point is keeping `gh-pages` isolated.
 
 ```bash
 # Create orphan gh-pages branch
@@ -96,7 +98,7 @@ Then in GitHub repo **Settings > Pages**:
 - Branch: **gh-pages** / **/ (root)**
 - Save
 
-Verify: `https://nikokozak.github.io/Streams/appcast-alpha.xml` should return the XML.
+Verify: `https://nikokozak.github.io/Ticker/appcast-alpha.xml` should return the XML.
 
 ---
 
@@ -263,7 +265,7 @@ Add a new `<item>` entry at the top of the channel (keep previous 2-3 entries fo
       <sparkle:shortVersionString>YYYY.MM.patch</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure
-        url="https://github.com/nikokozak/Streams/releases/download/vYYYY.MM.patch/Ticker-YYYY.MM.patch.zip"
+        url="https://github.com/nikokozak/Ticker/releases/download/vYYYY.MM.patch/Ticker-YYYY.MM.patch.zip"
         type="application/octet-stream"
         sparkle:edSignature="BASE64_SIGNATURE_FROM_STEP_6"
         length="FILE_SIZE_FROM_STEP_5"
@@ -306,7 +308,7 @@ curl -L -I "https://github.com/.../releases/download/.../Ticker-....zip"
 
 - **Keep last 2-3 `<item>` entries** in appcast-alpha.xml
 - **Do not delete older release assets** from GitHub Releases
-- Users can manually download previous versions from: https://github.com/nikokozak/Streams/releases
+- Users can manually download previous versions from: https://github.com/nikokozak/Ticker/releases
 
 ---
 

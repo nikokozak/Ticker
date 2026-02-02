@@ -19,6 +19,9 @@ This checklist is what “ready to invite users” means for Ticker alpha.
 - Data stored in `~/Library/Application Support/Ticker/`
 - Backup created before any DB migration
 - Migration failures are handled without destroying user data
+- Device key storage is clean and private:
+  - No stray `device.json.tmp*` files after key entry/updates
+  - `~/Library/Application Support/Ticker/device.json` is user-readable only (best-effort)
 
 ### Proxy
 - Proxy deployed on Fly.io

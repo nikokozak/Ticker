@@ -44,3 +44,18 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 - Prefer “boring and reliable” over “clever”.
 - Never ship a migration without a backup and a downgrade story.
 - Treat the proxy request ID as your primary debugging handle.
+
+## Local data + secrets (don’t lose this)
+
+All user data lives under:
+- `~/Library/Application Support/Ticker/`
+
+Important files:
+- `ticker.db` — the user’s SQLite database
+- `assets/` — local images
+- `device.json` — **contains the plaintext proxy device key (`tk_...`) and device id**
+
+Rules:
+- Never log the device key.
+- Never ask a tester to send `device.json`.
+- For “fresh install” QA, delete `device.json` while Ticker is fully quit, then relaunch.
