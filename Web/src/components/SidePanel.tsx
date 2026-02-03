@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, forwardRef, useMemo } from 'react';
 import { Cell, CellType, SourceReference, bridge } from '../types';
 import { useToastStore } from '../store/toastStore';
+import { deriveCellTitle, extractFirstHeadingFromHtml } from '../utils/cellTitle';
 
 type Tab = 'outline' | 'sources';
 
@@ -41,7 +42,7 @@ export function SidePanel({
     return cells.filter(cell => {
       // Check if cell has meaningful content
       if (cell.blockName) return true;
-      if (cell.restatement) return true;
+      if (extractFirstHeadingFromHtml(cell.content)) return true;
       if (cell.originalPrompt) return true;
       // Strip HTML and check for actual text content
       const stripped = stripHtml(cell.content).trim();
@@ -420,12 +421,7 @@ function getCellIcon(type: CellType): string {
 }
 
 function getCellTitle(cell: Cell): string {
-  if (cell.blockName) return cell.blockName;
-  if (cell.restatement) return cell.restatement;
-  if (cell.originalPrompt) return truncate(cell.originalPrompt, 50);
-  const stripped = stripHtml(cell.content);
-  if (stripped) return truncate(stripped, 50);
-  return 'Untitled';
+  return truncate(deriveCellTitle(cell), 50);
 }
 
 function stripHtml(html: string): string {

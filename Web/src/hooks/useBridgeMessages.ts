@@ -297,13 +297,6 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
         store.updateBlock(cellId, { modelId });
       }
 
-      // Restatement updates (heading form of original prompt)
-      if (message.type === 'restatementGenerated' && message.payload?.cellId && message.payload?.restatement) {
-        const cellId = message.payload.cellId as string;
-        const restatement = message.payload.restatement as string;
-        store.updateBlock(cellId, { restatement });
-      }
-
       // Modifier streaming updates
       if (message.type === 'modifierCreated' && message.payload?.cellId && message.payload?.modifier) {
         const cellId = message.payload.cellId as string;

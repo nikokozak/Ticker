@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useBlockStore } from '../store/blockStore';
 import { findByShortIdOrName } from '../utils/references';
+import { deriveCellTitle } from '../utils/cellTitle';
 
 interface ReferencePreviewProps {
   onScrollToCell?: (cellId: string) => void;
@@ -54,8 +55,7 @@ export function ReferencePreview({ onScrollToCell }: ReferencePreviewProps) {
         ? plainText.slice(0, 150) + '...'
         : plainText;
 
-      // Get title from restatement, blockName, or fallback
-      const title = cell.restatement || cell.blockName || 'Referenced cell';
+      const title = deriveCellTitle(cell);
 
       // Estimate preview height (~120px for typical content)
       const estimatedHeight = 120;

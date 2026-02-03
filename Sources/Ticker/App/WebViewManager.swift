@@ -848,30 +848,6 @@ final class WebViewManager: NSObject {
                 )
             }
 
-            // Generate restatement asynchronously (use original, not resolved, for better heading)
-            aiService.generateRestatement(for: currentCell) { [weak self] restatement in
-                guard let self, let restatement else { return }
-
-                // Send restatement to frontend
-                self.bridgeService.send(BridgeMessage(
-                    type: "restatementGenerated",
-                    payload: [
-                        "cellId": AnyCodable(cellId),
-                        "restatement": AnyCodable(restatement)
-                    ]
-                ))
-
-                // Also persist to database if we have a stream ID and persistence
-                if let persistence = self.persistence,
-                   let cellUUID = UUID(uuidString: cellId) {
-                    do {
-                        try persistence.updateCellRestatement(cellId: cellUUID, restatement: restatement)
-                    } catch {
-                        print("Failed to save restatement: \(error)")
-                    }
-                }
-            }
-
         case "applyModifier":
             guard let payload = message.payload,
                   let cellId = payload["cellId"]?.value as? String,

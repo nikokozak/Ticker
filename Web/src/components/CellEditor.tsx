@@ -8,6 +8,7 @@ import { createReferenceSuggestion } from './ReferenceSuggestion';
 import { useBlockStore } from '../store/blockStore';
 import { Cell } from '../types/models';
 import { bridge } from '../types';
+import { extractFirstHeadingFromHtml } from '../utils/cellTitle';
 
 interface CellEditorProps {
   content: string;
@@ -48,8 +49,8 @@ export function CellEditor({
         if (cellId && b.id === cellId) return false;
         // Always include AI responses (even if content appears empty after HTML strip)
         if (b.type === 'aiResponse') return true;
-        // Always include cells with a blockName or restatement
-        if (b.blockName || b.restatement) return true;
+        // Always include cells with a blockName or a heading-derived title
+        if (b.blockName || extractFirstHeadingFromHtml(b.content)) return true;
         // Exclude empty cells (spacing blocks)
         const textContent = b.content.replace(/<[^>]*>/g, '').trim();
         if (textContent.length === 0) return false;
