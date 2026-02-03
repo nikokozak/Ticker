@@ -87,13 +87,13 @@ final class SettingsService {
         // Skip if already migrated
         guard !defaults.bool(forKey: Keys.hasCompletedKeychainMigration) else { return }
 
-        print("[Settings] Migrating API keys from UserDefaults to Keychain...")
+        DebugLog.log("[Settings] Migrating API keys from UserDefaults to Keychain...")
 
         // Migrate OpenAI key
         if let oldKey = defaults.string(forKey: Keys.legacyOpenaiAPIKey), !oldKey.isEmpty {
             if keychain.get(key: KeychainKeys.openaiAPIKey) == nil {
                 try? keychain.save(key: KeychainKeys.openaiAPIKey, value: oldKey)
-                print("[Settings] Migrated OpenAI key to Keychain")
+                DebugLog.log("[Settings] Migrated OpenAI key to Keychain")
             }
             defaults.removeObject(forKey: Keys.legacyOpenaiAPIKey)
         }
@@ -102,7 +102,7 @@ final class SettingsService {
         if let oldKey = defaults.string(forKey: Keys.legacyAnthropicAPIKey), !oldKey.isEmpty {
             if keychain.get(key: KeychainKeys.anthropicAPIKey) == nil {
                 try? keychain.save(key: KeychainKeys.anthropicAPIKey, value: oldKey)
-                print("[Settings] Migrated Anthropic key to Keychain")
+                DebugLog.log("[Settings] Migrated Anthropic key to Keychain")
             }
             defaults.removeObject(forKey: Keys.legacyAnthropicAPIKey)
         }
@@ -111,13 +111,13 @@ final class SettingsService {
         if let oldKey = defaults.string(forKey: Keys.legacyPerplexityAPIKey), !oldKey.isEmpty {
             if keychain.get(key: KeychainKeys.perplexityAPIKey) == nil {
                 try? keychain.save(key: KeychainKeys.perplexityAPIKey, value: oldKey)
-                print("[Settings] Migrated Perplexity key to Keychain")
+                DebugLog.log("[Settings] Migrated Perplexity key to Keychain")
             }
             defaults.removeObject(forKey: Keys.legacyPerplexityAPIKey)
         }
 
         defaults.set(true, forKey: Keys.hasCompletedKeychainMigration)
-        print("[Settings] Keychain migration complete")
+        DebugLog.log("[Settings] Keychain migration complete")
     }
 
     /// Check if the OpenAI API key is configured

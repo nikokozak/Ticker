@@ -38,7 +38,7 @@ final class ProcessingService {
 
         guard !liveBlocks.isEmpty else { return }
 
-        print("[ProcessingService] Found \(liveBlocks.count) live blocks to refresh")
+        DebugLog.log("[ProcessingService] Found \(liveBlocks.count) live blocks to refresh")
 
         // Process in batches to limit concurrency
         await withTaskGroup(of: Void.self) { group in
@@ -91,7 +91,7 @@ final class ProcessingService {
 
         guard !blocksToRefresh.isEmpty else { return }
 
-        print("[ProcessingService] Cascade update: \(blocksToRefresh.count) blocks to refresh")
+        DebugLog.log("[ProcessingService] Cascade update: \(blocksToRefresh.count) blocks to refresh")
 
         // Process sequentially to maintain order and avoid conflicts
         for block in blocksToRefresh {
@@ -124,11 +124,11 @@ final class ProcessingService {
         let prompt = block.originalPrompt ?? extractPromptFromContent(block.content)
 
         guard !prompt.isEmpty else {
-            print("[ProcessingService] Block \(block.id) has no prompt to refresh")
+            DebugLog.log("[ProcessingService] Block \(block.id) has no prompt to refresh")
             return
         }
 
-        print("[ProcessingService] Refreshing block \(block.id) with prompt: \(prompt)")
+        DebugLog.log("[ProcessingService] Refreshing block \(block.id) (promptLength=\(prompt.count))")
 
         // Notify start
         await MainActor.run { onStart(block.id) }

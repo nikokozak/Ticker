@@ -94,7 +94,7 @@ final class WebViewManager: NSObject {
                 persistence: p
             )
         } catch {
-            print("Failed to initialize persistence: \(error)")
+            DebugLog.log("[WebViewManager] Failed to initialize persistence (\(DebugLog.errorSummary(error)))")
             self.persistence = nil
             self.sourceService = nil
             self.retrievalService = nil
@@ -132,7 +132,7 @@ final class WebViewManager: NSObject {
 
     /// Handle files dropped via native macOS drag-and-drop
     private func handleDroppedFiles(_ urls: [URL]) {
-        print("handleDroppedFiles: \(urls.map { $0.lastPathComponent })")
+        DebugLog.log("handleDroppedFiles: received \(urls.count) file(s)")
 
         // Get current stream ID from frontend
         bridgeService.send(BridgeMessage(
@@ -148,14 +148,14 @@ final class WebViewManager: NSObject {
 
     /// Called by frontend with the current stream ID
     private func processDroppedFiles(streamId: UUID) {
-        print("processDroppedFiles: streamId=\(streamId), files=\(pendingDroppedFiles.count)")
+        DebugLog.log("processDroppedFiles: streamId=\(streamId), files=\(pendingDroppedFiles.count)")
         for url in pendingDroppedFiles {
             // Check if this is an image file
             if isImageFile(url) {
-                print("Processing as image: \(url.lastPathComponent)")
+                DebugLog.log("processDroppedFiles: processing image")
                 processDroppedImage(url, streamId: streamId)
             } else {
-                print("Processing as document: \(url.lastPathComponent)")
+                DebugLog.log("processDroppedFiles: processing document")
                 processDroppedDocument(url, streamId: streamId)
             }
         }
@@ -173,10 +173,10 @@ final class WebViewManager: NSObject {
     private func processDroppedImage(_ url: URL, streamId: UUID) {
         do {
             let imageData = try Data(contentsOf: url)
-            print("Read image data: \(imageData.count) bytes")
+            DebugLog.log("Read image data: \(imageData.count) bytes")
             let relativePath = try assetService.saveImage(data: imageData, streamId: streamId, filename: url.lastPathComponent)
             let fullPath = assetService.assetURL(for: relativePath).path
-            print("Saved image to: \(fullPath)")
+            DebugLog.log("Saved dropped image asset")
 
             // Use custom URL scheme that WKWebView can access
             let assetUrl = "ticker-asset://\(fullPath)"
@@ -188,9 +188,9 @@ final class WebViewManager: NSObject {
                 "assetUrl": AnyCodable(assetUrl),
                 "streamId": AnyCodable(streamId.uuidString)
             ]))
-            print("Sent imageDropped message with assetUrl: \(assetUrl)")
+            DebugLog.log("Sent imageDropped message")
         } catch {
-            print("Failed to save dropped image \(url.lastPathComponent): \(error)")
+            DebugLog.log("Failed to save dropped image (\(DebugLog.errorSummary(error)))")
             bridgeService.send(BridgeMessage(type: "imageDropError", payload: [
                 "error": AnyCodable(error.localizedDescription)
             ]))
@@ -200,7 +200,7 @@ final class WebViewManager: NSObject {
     /// Process a dropped document - add as source
     private func processDroppedDocument(_ url: URL, streamId: UUID) {
         guard let sourceService else {
-            print("Source service unavailable")
+            DebugLog.log("Source service unavailable")
             return
         }
 
@@ -209,7 +209,7 @@ final class WebViewManager: NSObject {
             let sourcePayload = encodeSource(source)
             bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
         } catch {
-            print("Failed to add dropped file \(url.lastPathComponent): \(error)")
+            DebugLog.log("Failed to add dropped file (\(DebugLog.errorSummary(error)))")
             bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
         }
     }
@@ -240,13 +240,13 @@ final class WebViewManager: NSObject {
     private func loadMLXClassifier() {
         // Only load classifier if smart routing is enabled and Perplexity is configured
         guard SettingsService.shared.smartRoutingEnabled else {
-            print("MLX classifier skipped: smart routing disabled")
+            DebugLog.log("MLX classifier skipped: smart routing disabled")
             classifierSkipped = true
             return
         }
         guard let perplexityKey = SettingsService.shared.perplexityAPIKey,
               !perplexityKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            print("MLX classifier skipped: Perplexity API key not configured")
+            DebugLog.log("MLX classifier skipped: Perplexity API key not configured")
             classifierSkipped = true
             return
         }
@@ -259,9 +259,9 @@ final class WebViewManager: NSObject {
             do {
                 try await classifier.prepare()
                 orchestrator.setClassifier(classifier)
-                print("MLX classifier loaded and ready")
+                DebugLog.log("MLX classifier loaded and ready")
             } catch {
-                print("Failed to load MLX classifier: \(error)")
+                DebugLog.log("Failed to load MLX classifier (\(DebugLog.errorSummary(error)))")
                 // App continues to work, just uses direct GPT calls
             }
 
@@ -313,7 +313,7 @@ final class WebViewManager: NSObject {
 
     private func processMessage(_ message: BridgeMessage) async {
         guard let persistence else {
-            print("Persistence not available")
+            DebugLog.log("[WebViewManager] Persistence not available")
             return
         }
 
@@ -339,14 +339,14 @@ final class WebViewManager: NSObject {
                 ]
                 bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: payload))
             } catch {
-                print("Failed to load streams: \(error)")
+                DebugLog.log("[WebViewManager] Failed to load streams (\(DebugLog.errorSummary(error)))")
             }
 
         case "loadStream":
             guard let payload = message.payload,
                   let idValue = payload["id"]?.value as? String,
                   let id = UUID(uuidString: idValue) else {
-                print("Invalid loadStream payload")
+                DebugLog.log("[WebViewManager] Invalid loadStream payload")
                 return
             }
             do {
@@ -399,7 +399,7 @@ final class WebViewManager: NSObject {
                     }
                 }
             } catch {
-                print("Failed to load stream: \(error)")
+                DebugLog.log("[WebViewManager] Failed to load stream (\(DebugLog.errorSummary(error)))")
             }
 
         case "createStream":
@@ -409,7 +409,7 @@ final class WebViewManager: NSObject {
                 let streamPayload = encodeStream(stream)
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
             } catch {
-                print("Failed to create stream: \(error)")
+                DebugLog.log("[WebViewManager] Failed to create stream (\(DebugLog.errorSummary(error)))")
             }
 
         case "updateStreamTitle":
@@ -417,7 +417,7 @@ final class WebViewManager: NSObject {
                   let idValue = payload["id"]?.value as? String,
                   let id = UUID(uuidString: idValue),
                   let title = payload["title"]?.value as? String else {
-                print("Invalid updateStreamTitle payload")
+                DebugLog.log("[WebViewManager] Invalid updateStreamTitle payload")
                 return
             }
             do {
@@ -427,14 +427,14 @@ final class WebViewManager: NSObject {
                     bridgeService.send(BridgeMessage(type: "streamTitleUpdated", payload: ["id": AnyCodable(id.uuidString), "title": AnyCodable(title)]))
                 }
             } catch {
-                print("Failed to update stream title: \(error)")
+                DebugLog.log("[WebViewManager] Failed to update stream title (\(DebugLog.errorSummary(error)))")
             }
 
         case "deleteStream":
             guard let payload = message.payload,
                   let idValue = payload["id"]?.value as? String,
                   let id = UUID(uuidString: idValue) else {
-                print("Invalid deleteStream payload")
+                DebugLog.log("[WebViewManager] Invalid deleteStream payload")
                 return
             }
             do {
@@ -461,12 +461,12 @@ final class WebViewManager: NSObject {
                 ]
                 bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: summariesPayload))
             } catch {
-                print("Failed to delete stream: \(error)")
+                DebugLog.log("[WebViewManager] Failed to delete stream (\(DebugLog.errorSummary(error)))")
             }
 
         case "saveCell":
             guard let payload = message.payload else {
-                print("Invalid saveCell payload")
+                DebugLog.log("[WebViewManager] Invalid saveCell payload")
                 return
             }
             do {
@@ -541,14 +541,14 @@ final class WebViewManager: NSObject {
                     }
                 }
             } catch {
-                print("Failed to save cell: \(error)")
+                DebugLog.log("[WebViewManager] Failed to save cell (\(DebugLog.errorSummary(error)))")
             }
 
         case "deleteCell":
             guard let payload = message.payload,
                   let idValue = payload["id"]?.value as? String,
                   let id = UUID(uuidString: idValue) else {
-                print("Invalid deleteCell payload")
+                DebugLog.log("[WebViewManager] Invalid deleteCell payload")
                 return
             }
             do {
@@ -563,7 +563,7 @@ final class WebViewManager: NSObject {
                 try persistence.deleteCell(id: id)
                 bridgeService.send(BridgeMessage(type: "cellDeleted", payload: ["id": AnyCodable(id.uuidString)]))
             } catch {
-                print("Failed to delete cell: \(error)")
+                DebugLog.log("[WebViewManager] Failed to delete cell (\(DebugLog.errorSummary(error)))")
             }
 
         case "reorderBlocks":
@@ -571,7 +571,7 @@ final class WebViewManager: NSObject {
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue),
                   let ordersRaw = payload["orders"]?.value as? [[String: Any]] else {
-                print("Invalid reorderBlocks payload")
+                DebugLog.log("[WebViewManager] Invalid reorderBlocks payload")
                 return
             }
             do {
@@ -597,14 +597,14 @@ final class WebViewManager: NSObject {
                     return (id, order)
                 }
                 if orders.isEmpty {
-                    print("reorderBlocks payload had orders=[], skipping persistence")
+                    DebugLog.log("[WebViewManager] reorderBlocks payload had orders=[], skipping persistence")
                     bridgeService.send(BridgeMessage(type: "blocksReordered", payload: [:]))
                     return
                 }
                 try persistence.updateCellOrders(orders, streamId: streamId)
                 bridgeService.send(BridgeMessage(type: "blocksReordered", payload: [:]))
             } catch {
-                print("Failed to reorder blocks: \(error)")
+                DebugLog.log("[WebViewManager] Failed to reorder blocks (\(DebugLog.errorSummary(error)))")
             }
 
         case "addSource":
@@ -612,7 +612,7 @@ final class WebViewManager: NSObject {
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue),
                   let sourceService else {
-                print("Invalid addSource payload or service unavailable")
+                DebugLog.log("[WebViewManager] Invalid addSource payload or service unavailable")
                 return
             }
 
@@ -633,7 +633,7 @@ final class WebViewManager: NSObject {
                         let sourcePayload = encodeSource(source)
                         bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
                     } catch {
-                        print("Failed to add source: \(error)")
+                        DebugLog.log("[WebViewManager] Failed to add source (\(DebugLog.errorSummary(error)))")
                         bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
                     }
                 }
@@ -645,7 +645,7 @@ final class WebViewManager: NSObject {
                   let streamId = UUID(uuidString: streamIdValue),
                   let filePath = payload["path"]?.value as? String,
                   let sourceService else {
-                print("Invalid addSourceFromPath payload or service unavailable")
+                DebugLog.log("[WebViewManager] Invalid addSourceFromPath payload or service unavailable")
                 return
             }
 
@@ -655,7 +655,7 @@ final class WebViewManager: NSObject {
                 let sourcePayload = encodeSource(source)
                 bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
             } catch {
-                print("Failed to add source from path: \(error)")
+                DebugLog.log("[WebViewManager] Failed to add source from path (\(DebugLog.errorSummary(error)))")
                 bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
             }
 
@@ -664,14 +664,14 @@ final class WebViewManager: NSObject {
                   let idValue = payload["id"]?.value as? String,
                   let id = UUID(uuidString: idValue),
                   let sourceService else {
-                print("Invalid removeSource payload")
+                DebugLog.log("[WebViewManager] Invalid removeSource payload")
                 return
             }
             do {
                 try sourceService.removeSource(id: id)
                 bridgeService.send(BridgeMessage(type: "sourceRemoved", payload: ["id": AnyCodable(id.uuidString)]))
             } catch {
-                print("Failed to remove source: \(error)")
+                DebugLog.log("[WebViewManager] Failed to remove source (\(DebugLog.errorSummary(error)))")
                 bridgeService.send(BridgeMessage(type: "sourceRemoveError", payload: [
                     "id": AnyCodable(id.uuidString),
                     "error": AnyCodable(error.localizedDescription)
@@ -682,7 +682,7 @@ final class WebViewManager: NSObject {
             guard let payload = message.payload,
                   let cellId = payload["cellId"]?.value as? String,
                   let currentCell = payload["currentCell"]?.value as? String else {
-                print("Invalid think payload")
+                DebugLog.log("[WebViewManager] Invalid think payload")
                 return
             }
 
@@ -690,7 +690,7 @@ final class WebViewManager: NSObject {
             let currentCellImageURLs = payload["imageURLs"]?.value as? [String] ?? []
             var allImageDataURLs = assetService.assetsToDataURLs(currentCellImageURLs)
             if !allImageDataURLs.isEmpty {
-                print("Think: Converting \(currentCellImageURLs.count) current cell images to data URLs")
+                DebugLog.log("Think: Converting \(currentCellImageURLs.count) current cell images to data URLs")
             }
 
             // Get referenced content (from Quick Panel - the highlighted text/screenshot)
@@ -700,7 +700,7 @@ final class WebViewManager: NSObject {
             let referencedImageURLs = payload["referencedImageURLs"]?.value as? [String] ?? []
             let referencedDataURLs = assetService.assetsToDataURLs(referencedImageURLs)
             if !referencedDataURLs.isEmpty {
-                print("Think: Converting \(referencedImageURLs.count) referenced images to data URLs")
+                DebugLog.log("Think: Converting \(referencedImageURLs.count) referenced images to data URLs")
                 allImageDataURLs.append(contentsOf: referencedDataURLs)
             }
 
@@ -867,7 +867,7 @@ final class WebViewManager: NSObject {
                     do {
                         try persistence.updateCellRestatement(cellId: cellUUID, restatement: restatement)
                     } catch {
-                        print("Failed to save restatement: \(error)")
+                        DebugLog.log("Failed to save restatement (\(DebugLog.errorSummary(error)))")
                     }
                 }
             }
@@ -877,15 +877,15 @@ final class WebViewManager: NSObject {
                   let cellId = payload["cellId"]?.value as? String,
                   let modifierPrompt = payload["modifierPrompt"]?.value as? String,
                   let currentContent = payload["currentContent"]?.value as? String else {
-                print("[Modifier] Invalid applyModifier payload")
+                DebugLog.log("[Modifier] Invalid applyModifier payload")
                 return
             }
 
-            print("[Modifier] Received request - cellId: \(cellId), prompt: \(modifierPrompt.prefix(50))")
+            DebugLog.log("[Modifier] Received request - cellId: \(cellId), promptLength=\(modifierPrompt.count)")
 
             // Check if configured
             guard aiService.isConfigured else {
-                print("[Modifier] Error: API not configured")
+                DebugLog.log("[Modifier] Error: API not configured")
                 bridgeService.send(BridgeMessage(
                     type: "modifierError",
                     payload: ["cellId": AnyCodable(cellId), "error": AnyCodable("OpenAI API key not configured.")]
@@ -897,9 +897,9 @@ final class WebViewManager: NSObject {
             var modifierLabel = ""
             do {
                 modifierLabel = try await generateModifierLabel(prompt: modifierPrompt)
-                print("[Modifier] Generated label: \(modifierLabel)")
+                DebugLog.log("[Modifier] Generated label")
             } catch {
-                print("[Modifier] Label generation failed: \(error), using truncated prompt")
+                DebugLog.log("[Modifier] Label generation failed (\(DebugLog.errorSummary(error))), using truncated prompt")
                 modifierLabel = String(modifierPrompt.prefix(20))
             }
 
@@ -913,7 +913,7 @@ final class WebViewManager: NSObject {
             ]
 
             // Send modifier created event
-            print("[Modifier] Sending modifierCreated event")
+            DebugLog.log("[Modifier] Sending modifierCreated event")
             bridgeService.send(BridgeMessage(
                 type: "modifierCreated",
                 payload: ["cellId": AnyCodable(cellId), "modifier": AnyCodable(modifier)]
@@ -928,7 +928,7 @@ final class WebViewManager: NSObject {
                 chunkCount += 1
                 totalContent += chunk
                 if chunkCount <= 3 || chunkCount % 10 == 0 {
-                    print("[Modifier] Chunk #\(chunkCount), total length: \(totalContent.count)")
+                    DebugLog.log("[Modifier] Chunk #\(chunkCount), total length: \(totalContent.count)")
                 }
                 self?.bridgeService.send(BridgeMessage(
                     type: "modifierChunk",
@@ -936,14 +936,14 @@ final class WebViewManager: NSObject {
                 ))
             }
             let onComplete: () -> Void = { [weak self] in
-                print("[Modifier] Complete - received \(chunkCount) chunks, total content length: \(totalContent.count)")
+                DebugLog.log("[Modifier] Complete - received \(chunkCount) chunks, total content length: \(totalContent.count)")
                 self?.bridgeService.send(BridgeMessage(
                     type: "modifierComplete",
                     payload: ["cellId": AnyCodable(cellId), "modifierId": AnyCodable(modifierId.uuidString)]
                 ))
             }
             let onError: (Error) -> Void = { [weak self] error in
-                print("[Modifier] Error: \(error.localizedDescription)")
+                DebugLog.log("[Modifier] Error (\(DebugLog.errorSummary(error)))")
                 self?.bridgeService.send(BridgeMessage(
                     type: "modifierError",
                     payload: ["cellId": AnyCodable(cellId), "error": AnyCodable(error.localizedDescription)]
@@ -951,7 +951,7 @@ final class WebViewManager: NSObject {
             }
 
             // Apply the modifier using AI
-            print("[Modifier] Starting AI request")
+            DebugLog.log("[Modifier] Starting AI request")
             aiService.applyModifier(
                 currentContent: currentContent,
                 modifierPrompt: modifierPrompt,
@@ -965,13 +965,13 @@ final class WebViewManager: NSObject {
                   let streamIdString = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdString),
                   let format = payload["format"]?.value as? String else {
-                print("Invalid exportStream payload")
+                DebugLog.log("[WebViewManager] Invalid exportStream payload")
                 return
             }
 
             do {
                 guard let stream = try persistence.loadStream(id: streamId) else {
-                    print("Stream not found for export: \(streamId)")
+                    DebugLog.log("[WebViewManager] Stream not found for export")
                     bridgeService.send(BridgeMessage(type: "exportError", payload: [
                         "streamId": AnyCodable(streamIdString),
                         "error": AnyCodable("Stream not found")
@@ -1005,7 +1005,7 @@ final class WebViewManager: NSObject {
                                 "path": AnyCodable(url.path)
                             ]))
                         } catch {
-                            print("Failed to write export file: \(error)")
+                            DebugLog.log("[WebViewManager] Failed to write export file (\(DebugLog.errorSummary(error)))")
                             bridgeService.send(BridgeMessage(type: "exportError", payload: [
                                 "streamId": AnyCodable(streamId.uuidString),
                                 "error": AnyCodable(error.localizedDescription)
@@ -1019,7 +1019,7 @@ final class WebViewManager: NSObject {
                     }
                 }
             } catch {
-                print("Failed to load stream for export: \(error)")
+                DebugLog.log("[WebViewManager] Failed to load stream for export (\(DebugLog.errorSummary(error)))")
                 bridgeService.send(BridgeMessage(type: "exportError", payload: [
                     "streamId": AnyCodable(streamIdString),
                     "error": AnyCodable(error.localizedDescription)
@@ -1035,7 +1035,7 @@ final class WebViewManager: NSObject {
 
         case "saveSettings":
             guard let payload = message.payload else {
-                print("Invalid saveSettings payload")
+                DebugLog.log("[WebViewManager] Invalid saveSettings payload")
                 return
             }
 
@@ -1090,7 +1090,7 @@ final class WebViewManager: NSObject {
         case "loadProxyAuth":
             // Pure read of cached state - no network call
             guard let callbackId = message.callbackId else {
-                print("Invalid loadProxyAuth payload")
+                DebugLog.log("[WebViewManager] Invalid loadProxyAuth payload")
                 return
             }
             Task {
@@ -1132,7 +1132,7 @@ final class WebViewManager: NSObject {
             guard let payload = message.payload,
                   let key = payload["key"]?.value as? String,
                   let callbackId = message.callbackId else {
-                print("Invalid setProxyDeviceKey payload")
+                DebugLog.log("[WebViewManager] Invalid setProxyDeviceKey payload")
                 return
             }
             Task {
@@ -1173,7 +1173,7 @@ final class WebViewManager: NSObject {
 
         case "clearProxyDeviceKey":
             guard let callbackId = message.callbackId else {
-                print("Invalid clearProxyDeviceKey payload")
+                DebugLog.log("[WebViewManager] Invalid clearProxyDeviceKey payload")
                 return
             }
             Task {
@@ -1190,7 +1190,7 @@ final class WebViewManager: NSObject {
         case "validateProxyDeviceKey", "refreshProxyAuth":
             // Re-validate cached key with server and return fresh limits/usage
             guard let callbackId = message.callbackId else {
-                print("Invalid validateProxyDeviceKey/refreshProxyAuth payload")
+                DebugLog.log("[WebViewManager] Invalid validateProxyDeviceKey/refreshProxyAuth payload")
                 return
             }
             Task {
@@ -1234,7 +1234,7 @@ final class WebViewManager: NSObject {
                   let payload = message.payload,
                   let feedbackType = payload["type"]?.value as? String,
                   let title = payload["title"]?.value as? String else {
-                print("Invalid submitFeedback payload")
+                DebugLog.log("[WebViewManager] Invalid submitFeedback payload")
                 return
             }
             let description = payload["description"]?.value as? String
@@ -1268,7 +1268,7 @@ final class WebViewManager: NSObject {
 
         case "getSupportBundle":
             guard let callbackId = message.callbackId else {
-                print("Invalid getSupportBundle payload")
+                DebugLog.log("[WebViewManager] Invalid getSupportBundle payload")
                 return
             }
             Task {
@@ -1285,7 +1285,7 @@ final class WebViewManager: NSObject {
             guard let payload = message.payload,
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue) else {
-                print("Invalid currentStreamId payload")
+                DebugLog.log("[WebViewManager] Invalid currentStreamId payload")
                 pendingDroppedFiles = []
                 return
             }
@@ -1298,7 +1298,7 @@ final class WebViewManager: NSObject {
                   let streamId = UUID(uuidString: streamIdValue),
                   let base64Data = payload["data"]?.value as? String,
                   let imageData = Data(base64Encoded: base64Data) else {
-                print("Invalid saveImage payload")
+                DebugLog.log("[WebViewManager] Invalid saveImage payload")
                 let requestId = message.payload?["requestId"]?.value as? String
                 bridgeService.send(BridgeMessage(type: "imageSaveError", payload: [
                     "error": AnyCodable("Invalid image data"),
@@ -1321,7 +1321,7 @@ final class WebViewManager: NSObject {
                     "requestId": AnyCodable(requestId as Any)
                 ]))
             } catch {
-                print("Failed to save image: \(error)")
+                DebugLog.log("[WebViewManager] Failed to save image (\(DebugLog.errorSummary(error)))")
                 bridgeService.send(BridgeMessage(type: "imageSaveError", payload: [
                     "error": AnyCodable(error.localizedDescription),
                     "requestId": AnyCodable(requestId as Any)
@@ -1332,7 +1332,7 @@ final class WebViewManager: NSObject {
             // Get the full file path for an asset
             guard let payload = message.payload,
                   let relativePath = payload["relativePath"]?.value as? String else {
-                print("Invalid getAssetPath payload")
+                DebugLog.log("[WebViewManager] Invalid getAssetPath payload")
                 return
             }
             let fullPath = assetService.assetURL(for: relativePath).path
@@ -1347,7 +1347,7 @@ final class WebViewManager: NSObject {
                   let currentStreamIdStr = payload["currentStreamId"]?.value as? String,
                   let currentStreamId = UUID(uuidString: currentStreamIdStr),
                   let callbackId = message.callbackId else {
-                print("Invalid hybridSearch payload")
+                DebugLog.log("[WebViewManager] Invalid hybridSearch payload")
                 return
             }
 
@@ -1387,7 +1387,7 @@ final class WebViewManager: NSObject {
             }
 
         default:
-            print("Unknown message type: \(message.type)")
+            DebugLog.log("[WebViewManager] Unknown message type: \(message.type)")
         }
     }
 
@@ -1782,19 +1782,19 @@ final class WebViewManager: NSObject {
 
 extension WebViewManager: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        print("WebView: Started loading")
+        DebugLog.log("[WebViewManager] WebView started loading")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        print("WebView: Finished loading")
+        DebugLog.log("[WebViewManager] WebView finished loading")
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        print("WebView: Failed with error: \(error.localizedDescription)")
+        DebugLog.log("[WebViewManager] WebView navigation failed (\(DebugLog.errorSummary(error)))")
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        print("WebView: Failed provisional navigation: \(error.localizedDescription)")
+        DebugLog.log("[WebViewManager] WebView provisional navigation failed (\(DebugLog.errorSummary(error)))")
     }
 
     // MARK: - Asset Cleanup
@@ -1816,7 +1816,7 @@ extension WebViewManager: WKNavigationDelegate {
             do {
                 try assetService.deleteAsset(relativePath: relativePath)
             } catch {
-                print("Failed to delete asset \(relativePath): \(error)")
+                DebugLog.log("[WebViewManager] Failed to delete asset (\(DebugLog.errorSummary(error)))")
             }
         }
     }

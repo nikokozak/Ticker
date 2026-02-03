@@ -206,7 +206,7 @@ final class PersistenceService {
             do {
                 try fileManager.removeItem(at: url)
             } catch {
-                print("PersistenceService: Failed to delete old DB backup at \(url.path): \(error)")
+                DebugLog.log("PersistenceService: Failed to delete old DB backup (\(DebugLog.errorSummary(error)))")
             }
         }
     }

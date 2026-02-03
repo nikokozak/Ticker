@@ -74,9 +74,9 @@ final class AIOrchestrator {
             do {
                 let result = try await classifier.classify(query: query)
                 intent = result.intent
-                print("AIOrchestrator: classified as \(intent) (confidence: \(result.confidence))")
+                DebugLog.log("AIOrchestrator: classified as \(intent) (confidence: \(result.confidence))")
             } catch {
-                print("AIOrchestrator: classification failed, defaulting to knowledge - \(error)")
+                DebugLog.log("AIOrchestrator: classification failed, defaulting to knowledge (\(DebugLog.errorSummary(error)))")
             }
         }
 
@@ -98,12 +98,12 @@ final class AIOrchestrator {
                 let retrievedChunks = try await retrievalService.retrieve(query: query, streamId: streamId)
                 if !retrievedChunks.isEmpty {
                     contextToUse = retrievalService.buildContext(from: retrievedChunks)
-                    print("AIOrchestrator: Using RAG context (\(retrievedChunks.count) chunks)")
+                    DebugLog.log("AIOrchestrator: Using RAG context (\(retrievedChunks.count) chunks)")
                 } else {
-                    print("AIOrchestrator: No RAG chunks found, using fallback context")
+                    DebugLog.log("AIOrchestrator: No RAG chunks found, using fallback context")
                 }
             } catch {
-                print("AIOrchestrator: RAG retrieval failed, using fallback context - \(error)")
+                DebugLog.log("AIOrchestrator: RAG retrieval failed, using fallback context (\(DebugLog.errorSummary(error)))")
             }
         }
 
@@ -157,7 +157,7 @@ final class AIOrchestrator {
         // If proxy mode is active, always use proxy service
         // The proxy handles routing to providers on the server side
         if useProxy {
-            print("AIOrchestrator: using proxy mode")
+            DebugLog.log("AIOrchestrator: using proxy mode")
             return proxyService
         }
 

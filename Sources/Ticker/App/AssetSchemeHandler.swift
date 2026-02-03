@@ -38,7 +38,7 @@ final class AssetSchemeHandler: NSObject, WKURLSchemeHandler {
 
         // Verify the requested path is within the assets directory
         guard canonicalPath.hasPrefix(canonicalBase + "/") else {
-            print("AssetSchemeHandler: Blocked path outside assets directory: \(filePath)")
+            DebugLog.log("AssetSchemeHandler: Blocked path outside assets directory")
             urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
             return
         }
@@ -66,7 +66,7 @@ final class AssetSchemeHandler: NSObject, WKURLSchemeHandler {
             urlSchemeTask.didReceive(data)
             urlSchemeTask.didFinish()
         } catch {
-            print("AssetSchemeHandler: Failed to read file: \(error)")
+            DebugLog.log("AssetSchemeHandler: Failed to read asset file (\(DebugLog.errorSummary(error)))")
             urlSchemeTask.didFailWithError(error)
         }
     }

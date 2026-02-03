@@ -427,7 +427,7 @@ final class QuickPanelManager: ObservableObject {
 
         } catch {
             self.error = error.localizedDescription
-            print("[QuickPanel] Error adding to stream: \(error)")
+            DebugLog.log("[QuickPanel] Error adding to stream (\(DebugLog.errorSummary(error)))")
         }
 
         isLoading = false
@@ -443,7 +443,7 @@ final class QuickPanelManager: ObservableObject {
                 selectedStreamId = first.id
             }
         } catch {
-            print("[QuickPanel] Failed to load streams: \(error)")
+            DebugLog.log("[QuickPanel] Failed to load streams (\(DebugLog.errorSummary(error)))")
         }
     }
 
@@ -519,7 +519,7 @@ final class QuickPanelManager: ObservableObject {
                     content += "<p class=\"source-info\">— Screenshot from \(source)</p>"
                 }
             } catch {
-                print("[QuickPanel] Failed to save screenshot: \(error)")
+                DebugLog.log("[QuickPanel] Failed to save screenshot (\(DebugLog.errorSummary(error)))")
                 content = "<p>[Screenshot failed to save]</p>"
             }
         }

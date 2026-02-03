@@ -50,7 +50,7 @@ final class BundleSchemeHandler: NSObject, WKURLSchemeHandler {
         }
 
         guard let resourceURL = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: subdir) else {
-            print("BundleSchemeHandler: Resource not found: \(filePath) (looked in \(subdir)/\(name).\(ext ?? ""))")
+            DebugLog.log("BundleSchemeHandler: Resource not found: \(filePath) (looked in \(subdir)/\(name).\(ext ?? ""))")
             urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
             return
         }
@@ -70,7 +70,7 @@ final class BundleSchemeHandler: NSObject, WKURLSchemeHandler {
             urlSchemeTask.didReceive(data)
             urlSchemeTask.didFinish()
         } catch {
-            print("BundleSchemeHandler: Failed to read resource: \(error)")
+            DebugLog.log("BundleSchemeHandler: Failed to read resource (\(DebugLog.errorSummary(error)))")
             urlSchemeTask.didFailWithError(error)
         }
     }

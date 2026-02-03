@@ -17,7 +17,7 @@ final class RAGMigrationService {
         // Check if embedding service is configured before querying
         // This prevents infinite retry when no OpenAI key is set
         guard sourceService.isEmbeddingConfigured else {
-            print("RAGMigration: Embedding service not configured, skipping migration")
+            DebugLog.log("RAGMigration: Embedding service not configured, skipping migration")
             return
         }
 
@@ -25,29 +25,29 @@ final class RAGMigrationService {
             let sources = try persistence.loadSourcesNeedingEmbedding()
 
             guard !sources.isEmpty else {
-                print("RAGMigration: No sources need embedding")
+                DebugLog.log("RAGMigration: No sources need embedding")
                 return
             }
 
-            print("RAGMigration: Found \(sources.count) sources to process")
+            DebugLog.log("RAGMigration: Found \(sources.count) sources to process")
 
             for source in sources {
                 // Skip sources without extracted text
                 guard source.extractedText != nil else {
-                    print("RAGMigration: Skipping \(source.displayName) - no extracted text")
+                    DebugLog.log("RAGMigration: Skipping sourceId=\(source.id) - no extracted text")
                     continue
                 }
 
-                print("RAGMigration: Processing \(source.displayName)...")
+                DebugLog.log("RAGMigration: Processing sourceId=\(source.id)...")
                 await sourceService.processSourceForRAG(source: source)
 
                 // Small delay between sources to avoid overwhelming the API
                 try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5 second
             }
 
-            print("RAGMigration: Migration complete")
+            DebugLog.log("RAGMigration: Migration complete")
         } catch {
-            print("RAGMigration: Failed to load sources - \(error)")
+            DebugLog.log("RAGMigration: Failed to load sources (\(DebugLog.errorSummary(error)))")
         }
     }
 }

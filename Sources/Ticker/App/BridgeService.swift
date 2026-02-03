@@ -83,39 +83,34 @@ final class BridgeService: NSObject, WKScriptMessageHandler {
             let bridgeMessage = try JSONDecoder().decode(BridgeMessage.self, from: data)
             onMessage?(bridgeMessage)
         } catch {
-            print("Failed to decode bridge message: \(error)")
+            DebugLog.log("Failed to decode bridge message (\(DebugLog.errorSummary(error)))")
         }
     }
 
     /// Send a message to JavaScript
     func send(_ message: BridgeMessage) {
         guard let webView else {
-            print("Bridge send: No webView available for message: \(message.type)")
+            DebugLog.log("Bridge send: No webView available for message: \(message.type)")
             return
         }
 
         do {
             let data = try JSONEncoder().encode(message)
             guard let json = String(data: data, encoding: .utf8) else {
-                print("Bridge send: Failed to encode JSON for message: \(message.type)")
+                DebugLog.log("Bridge send: Failed to encode JSON for message: \(message.type)")
                 return
-            }
-
-            // Debug: log what we're sending for image-related messages
-            if message.type.contains("image") || message.type.contains("Image") {
-                print("Bridge send: Sending \(message.type) with JSON length \(json.count)")
             }
 
             let script = "window.bridge?.receive(\(json))"
             webView.evaluateJavaScript(script) { result, error in
                 if let error {
-                    print("Bridge send error for \(message.type): \(error)")
+                    DebugLog.log("Bridge send error for \(message.type) (\(DebugLog.errorSummary(error)))")
                 } else if message.type.contains("image") || message.type.contains("Image") {
-                    print("Bridge send: Successfully sent \(message.type), result: \(String(describing: result))")
+                    DebugLog.log("Bridge send: Successfully sent \(message.type), result: \(String(describing: result))")
                 }
             }
         } catch {
-            print("Failed to encode bridge message: \(error)")
+            DebugLog.log("Failed to encode bridge message (\(DebugLog.errorSummary(error)))")
         }
     }
 

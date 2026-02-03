@@ -106,13 +106,13 @@ final class AssetService {
 
         // Verify the requested path is within the assets directory
         guard canonicalPath.hasPrefix(canonicalBase + "/") else {
-            print("AssetService: Blocked path outside assets directory: \(filePath)")
+            DebugLog.log("AssetService: Blocked path outside assets directory")
             return nil
         }
 
         let safeURL = URL(fileURLWithPath: canonicalPath)
         guard let data = try? Data(contentsOf: safeURL) else {
-            print("AssetService: Could not read file at \(canonicalPath)")
+            DebugLog.log("AssetService: Could not read asset file")
             return nil
         }
 

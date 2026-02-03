@@ -37,7 +37,7 @@ class DroppableWebView: WKWebView {
             return super.performDragOperation(sender)
         }
 
-        print("DroppableWebView: Received \(urls.count) file(s)")
+        DebugLog.log("DroppableWebView: Received \(urls.count) file(s)")
         onFilesDropped?(urls)
         return true
     }

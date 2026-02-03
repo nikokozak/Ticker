@@ -116,7 +116,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func requestAccessibilityPermissionIfNeeded() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         if !AXIsProcessTrustedWithOptions(options) {
-            print("[Ticker] Accessibility permission not yet granted - prompt shown")
+            DebugLog.log("[Ticker] Accessibility permission not yet granted - prompt shown")
         }
     }
 
@@ -330,7 +330,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // Only show panel if capture succeeded (exit code 0)
                 // User cancellation (ESC) returns exit code 1
                 guard terminatedProcess.terminationStatus == 0 else {
-                    print("[Screenshot] Capture cancelled or failed (exit code: \(terminatedProcess.terminationStatus))")
+                    DebugLog.log("[Screenshot] Capture cancelled or failed (exit code: \(terminatedProcess.terminationStatus))")
                     return
                 }
 
@@ -339,7 +339,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
                 // Verify clipboard actually has an image before showing panel
                 guard ClipboardService.hasImage() else {
-                    print("[Screenshot] No image in clipboard after capture")
+                    DebugLog.log("[Screenshot] No image in clipboard after capture")
                     return
                 }
 
@@ -350,7 +350,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do {
             try process.run()
         } catch {
-            print("Failed to run screencapture: \(error)")
+            DebugLog.log("[Screenshot] Failed to run screencapture (\(DebugLog.errorSummary(error)))")
         }
     }
 }

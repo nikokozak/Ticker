@@ -185,7 +185,7 @@ final class SourceService {
             source.status = .ready
         } catch {
             source.status = .error
-            print("Text extraction failed: \(error)")
+            DebugLog.log("Text extraction failed (\(DebugLog.errorSummary(error)))")
         }
 
         // Update in database
@@ -206,12 +206,12 @@ final class SourceService {
     /// Process a source for RAG: chunk, embed, and store
     func processSourceForRAG(source: SourceReference) async {
         guard let text = source.extractedText, !text.isEmpty else {
-            print("RAG: No text to process for \(source.displayName)")
+            DebugLog.log("RAG: No text to process for sourceId=\(source.id)")
             return
         }
 
         guard embeddingService.isConfigured else {
-            print("RAG: Embedding service not configured, skipping \(source.displayName)")
+            DebugLog.log("RAG: Embedding service not configured, skipping sourceId=\(source.id)")
             // Mark as unconfigured so UI can explain why indexing didn't run
             try? persistence.updateSourceEmbeddingStatus(source.id, status: "unconfigured")
             return
@@ -220,7 +220,7 @@ final class SourceService {
         do {
             // Mark as processing
             try persistence.updateSourceEmbeddingStatus(source.id, status: "processing")
-            print("RAG: Processing \(source.displayName)...")
+            DebugLog.log("RAG: Processing sourceId=\(source.id)...")
 
             // Chunk the document
             let chunks: [SourceChunk]
@@ -237,7 +237,7 @@ final class SourceService {
                     }
                 } catch {
                     // Fall back to text-based chunking if file access fails
-                    print("RAG: File access failed, using text-based chunking: \(error)")
+                    DebugLog.log("RAG: File access failed, using text-based chunking (\(DebugLog.errorSummary(error)))")
                     chunks = chunkingService.chunkText(text: text, sourceId: source.id)
                 }
             } else {
@@ -245,12 +245,12 @@ final class SourceService {
             }
 
             guard !chunks.isEmpty else {
-                print("RAG: No chunks generated for \(source.displayName)")
+                DebugLog.log("RAG: No chunks generated for sourceId=\(source.id)")
                 try persistence.updateSourceEmbeddingStatus(source.id, status: "failed")
                 return
             }
 
-            print("RAG: Generated \(chunks.count) chunks for \(source.displayName)")
+            DebugLog.log("RAG: Generated \(chunks.count) chunks for sourceId=\(source.id)")
 
             // Save chunks
             try persistence.saveChunks(chunks)
@@ -260,7 +260,7 @@ final class SourceService {
             let embeddings = try await embeddingService.embedBatch(texts: texts)
 
             guard embeddings.count == chunks.count else {
-                print("RAG: Embedding count mismatch for \(source.displayName)")
+                DebugLog.log("RAG: Embedding count mismatch for sourceId=\(source.id)")
                 try persistence.updateSourceEmbeddingStatus(source.id, status: "failed")
                 return
             }
@@ -276,10 +276,10 @@ final class SourceService {
 
             // Mark complete
             try persistence.updateSourceEmbeddingStatus(source.id, status: "complete")
-            print("RAG: Completed processing \(source.displayName): \(chunks.count) chunks embedded")
+            DebugLog.log("RAG: Completed processing sourceId=\(source.id): \(chunks.count) chunks embedded")
 
         } catch {
-            print("RAG: Processing failed for \(source.displayName): \(error)")
+            DebugLog.log("RAG: Processing failed for sourceId=\(source.id) (\(DebugLog.errorSummary(error)))")
             try? persistence.updateSourceEmbeddingStatus(source.id, status: "failed")
         }
     }

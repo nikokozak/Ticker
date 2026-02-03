@@ -7,6 +7,8 @@ This document defines what Ticker collects and what it does **not** collect.
 - Default diagnostics **ON**, with clear disclosure and an in-app **opt-out** toggle.
 - Collect only what is necessary to debug reliability issues and manage cost.
 - Avoid collecting note/editor content by default.
+- Avoid printing note content/prompts to console in Release builds.
+- For ad-hoc debugging, use `DebugLog.log(...)` (DEBUG only) and prefer `DebugLog.errorSummary(error)` over `error.localizedDescription`.
 
 ## Data collected (by default)
 
@@ -48,4 +50,3 @@ This document defines what Ticker collects and what it does **not** collect.
 
 - Settings toggle to disable diagnostics (opt-out).
 - Support bundle copying should never include raw device keys or note content.
-

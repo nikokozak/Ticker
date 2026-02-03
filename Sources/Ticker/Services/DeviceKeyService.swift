@@ -548,7 +548,7 @@ actor DeviceKeyService {
            let imageData = Data(base64Encoded: base64) {
             // Enforce 10MB limit
             guard imageData.count <= Self.maxAttachmentBytes else {
-                print("[DeviceKeyService] Attachment too large: \(imageData.count) bytes (max \(Self.maxAttachmentBytes))")
+                DebugLog.log("[DeviceKeyService] Attachment too large: \(imageData.count) bytes (max \(Self.maxAttachmentBytes))")
                 throw DeviceKeyError.payloadTooLarge
             }
 
@@ -564,7 +564,7 @@ actor DeviceKeyService {
                 )
             } catch {
                 // Log but don't fail the whole feedback submission
-                print("[DeviceKeyService] Attachment upload failed: \(error)")
+                DebugLog.log("[DeviceKeyService] Attachment upload failed (\(DebugLog.errorSummary(error)))")
             }
         }
 
