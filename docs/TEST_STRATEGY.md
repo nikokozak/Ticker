@@ -9,6 +9,7 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
 
 - Swift build succeeds (`xcodebuild ...`)
 - Web typecheck succeeds (`npm run typecheck`)
+- Prod console sanity: `./tickerctl.sh run-prod` + Web Inspector Console is quiet (no prompt/content/key logging)
 
 ## Smoke coverage (must-have before inviting users)
 
@@ -34,4 +35,3 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
 
 - Prefer “cheap tests that catch breaking changes” over broad end-to-end automation at this stage.
 - Snapshot tests are especially valuable for avoiding accidental protocol breakage when iterating quickly.
-
