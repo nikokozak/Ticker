@@ -11,7 +11,7 @@ This document defines what Ticker collects and what it does **not** collect.
 ## Data collected (by default)
 
 ### Proxy request metadata
-- Request IDs (`X-Ticker-Request-Id`)
+- Request IDs (`X-Ticker-Request-Id`, treated as an opaque string; Ticker should send a UUID per request)
 - Provider/model identifiers
 - Token counts (in/out)
 - Timing, status code, error codes
@@ -48,4 +48,3 @@ This document defines what Ticker collects and what it does **not** collect.
 
 - Settings toggle to disable diagnostics (opt-out).
 - Support bundle copying should never include raw device keys or note content.
-

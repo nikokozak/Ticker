@@ -25,7 +25,7 @@ This checklist is what “ready to invite users” means for Ticker alpha.
 - Proxy deployed on Fly.io
 - Per-device keys supported; key binding enforced
 - Per-minute + daily + monthly quotas enforced
-- Proxy returns `X-Ticker-Request-Id` for every request
+- Proxy returns `X-Ticker-Request-Id` for every request (treat as an opaque string; Ticker should send a UUID per request)
 - Logs retained for max 30 days; purge job in place
 
 ### In-app alpha support
@@ -35,6 +35,9 @@ This checklist is what “ready to invite users” means for Ticker alpha.
 - “Report bug / request feature” flow exists with optional attachments
 - “Copy Support Bundle” exists (no note content)
 - Diagnostics default ON with disclosure + opt-out toggle
+
+Implementation reference:
+- `docs/GITHUB_BACKLOG_ALPHA.md` (Epic D integration notes + acceptance criteria)
 
 ### Website
 - Landing + waitlist
