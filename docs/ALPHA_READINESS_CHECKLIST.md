@@ -19,6 +19,7 @@ This checklist is what “ready to invite users” means for Ticker alpha.
 - Data stored in `~/Library/Application Support/Ticker/`
 - Backup created before any DB migration
 - Migration failures are handled without destroying user data
+- AI markdown rendering cannot trigger external image loads (`<img src="http(s)://...">` is stripped)
 
 ### Proxy
 - Proxy deployed on Fly.io
