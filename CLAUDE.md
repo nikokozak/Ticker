@@ -63,6 +63,10 @@ The user will share this summary with GPT for review. Only commit after approval
 ./tickerctl.sh build-prod   # Build Release (unsigned, bundles web)
 ./tickerctl.sh run-prod     # Build + run Release (bundled web)
 
+# Legacy runner (still supported; prefer tickerctl.sh)
+./run.sh --dev
+./run.sh --prod
+
 # Direct xcodebuild (if needed)
 xcodebuild build -project Ticker.xcodeproj -scheme Ticker -destination 'platform=macOS' -derivedDataPath .build/xcode
 
