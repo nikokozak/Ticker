@@ -120,7 +120,7 @@ For each Issue below:
 - Labels: `alpha`, `type:feature`, `area:proxy`, `p0`
 - AC:
   - Admin can issue/revoke keys
-  - Keys stored hashed
+  - Keys stored securely (never stored in plaintext; encrypted storage acceptable for alpha)
   - Key associated to user email + device label
 
 ### C3 — Device binding enforcement
@@ -157,13 +157,80 @@ For each Issue below:
   - Returns `feedback_id`
   - Admin can view and export/copy feedback for manual GitHub promotion
 
+### C12 — Vision: image prompts via proxy (message parts)
+- Labels: `alpha`, `type:feature`, `area:proxy`, `p0`
+- Depends on: `D8`
+- AC:
+  - `/v1/llm/request` accepts image inputs alongside text (a stable, documented message-parts format)
+  - Proxy can forward multimodal requests to at least one provider (OpenAI) and return streaming SSE deltas
+  - Quotas/rate limits apply to vision requests the same as text requests
+  - No user/editor content is stored server-side; request logs remain metadata-only
+  - Contract updated in `Ticker-Proxy/openapi/v1.yaml` (optional: vendor a pinned copy in `Ticker` for snapshot tests)
+
 ---
 
 ## Epic D — In-app alpha support + UX (reduces support load)
 
+Implementation notes (source of truth for Epic D):
+- Keep GitHub issues short; put implementation detail in this section.
+- Read this once before starting D1–D6/D8.
+
+### Epic D integration notes (Ticker ↔ Ticker-Proxy)
+
+#### Product gate (main window)
+- The main window “Streams” list is gated until a valid serial/device key is registered.
+- If the key becomes invalid/revoked/bound-elsewhere, return to the gate and block stream access with an actionable message.
+- Quota errors (`429`) should disable AI features but should not hide stream list access.
+
+#### Storage rules (do not violate)
+- Serial/device key is stored **only in Keychain** (Swift-side). Never store it in localStorage or logs.
+- Device ID is generated once and stored in Keychain; it’s sent as `X-Ticker-Device-Id`.
+- `X-Ticker-Request-Id` is treated as an opaque string; Ticker should send a UUID per request and surface it to the user on failures.
+
+#### Proxy endpoints and auth models
+- Header-auth endpoints (send `Authorization: Bearer <device_key>` + `X-Ticker-Device-Id`):
+  - `POST /v1/auth/validate`
+  - `POST /v1/llm/request` (sync + SSE when `stream: true`)
+  - `POST /v1/diagnostics/event`, `POST /v1/diagnostics/crash`
+- Key-in-body endpoints (send `device_key` in JSON body):
+  - `POST /v1/feedback`
+  - `POST /v1/feedback/{feedback_id}/attachments`
+  - `POST /v1/feedback/{feedback_id}/attachments/{attachment_id}/complete`
+
+#### Swift↔Web bridge messages to add (recommended contract)
+Web → Swift:
+- `loadProxyAuth`
+- `setProxyDeviceKey` `{ deviceKey }` (store in Keychain; validate)
+- `clearProxyDeviceKey`
+- `validateProxyDeviceKey`
+- `proxyLlmRequest` `{ provider?, model, messages, stream, ... }` (used by “think” path)
+- `submitFeedback` `{ type, title, description, metadata?, relatedRequestId? }`
+- `createFeedbackAttachment` `{ feedbackId, filename, contentType, byteSize }`
+- `completeFeedbackAttachment` `{ feedbackId, attachmentId }`
+- `copySupportBundle`
+
+Swift → Web:
+- `proxyAuthState` `{ state, supportId?, message?, limits?, usage?, lastRequestId? }`
+- `proxyLlmDelta` / `proxyLlmDone` / `proxyLlmError` (or reuse existing `aiChunk/aiComplete/aiError` with proxy-shaped errors)
+- `feedbackSubmitted` `{ feedbackId }`
+- `attachmentCreated` `{ attachmentId, upload: { url, headers, expiresAt } }`
+- `attachmentCompleted` `{ attachmentId, status }`
+- `supportBundleCopied`
+
+#### Vision (images in prompts): explicit scope
+- Full “images in prompts” requires two issues:
+  - `C12` (proxy accepts/forwards multimodal requests)
+  - `D8` (Ticker extracts/serializes images and sends them to proxy)
+- Do not send `ticker-asset://...` URLs to proxy; providers cannot fetch them.
+- Pick one alpha-safe representation (recommended for alpha): **inline base64** image parts in the LLM request message parts:
+  - `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"<base64>"}}`
+  - Keep images small (downsample/compress); the proxy enforces a base64 payload size cap (currently ~20MB) and will reject oversized requests.
+  - Avoid URL images for alpha even if some providers support them; base64 is the simplest path and avoids “provider fetch” failure modes.
+
 ### D1 — Key entry + validation (Keychain)
 - Labels: `alpha`, `type:feature`, `area:swift`, `area:web`, `p0`
 - AC:
+  - Main window stream list is gated until a valid serial/device key is registered
   - Settings allows entering a device key and validating it against proxy
   - Key stored in Keychain
   - Never display/log raw key; show `support_id` instead
@@ -181,6 +248,7 @@ For each Issue below:
   - `401`: invalid/bound-elsewhere key: prompt next step
   - `429`: quota exceeded: show usage + reset timing
   - `5xx`: retry affordance + request id
+  - All AI requests route through the proxy (`/v1/llm/request`); the app does not require user-supplied provider API keys in order to use AI
 
 ### D4 — Request correlation captured and surfaced
 - Labels: `alpha`, `type:feature`, `area:web`, `p1`
@@ -208,6 +276,16 @@ For each Issue below:
   - Export current stream to Markdown and plain text
   - Bulk export explicitly deferred
 
+### D8 — Vision: send images in prompts via proxy
+- Labels: `alpha`, `type:feature`, `area:swift`, `area:web`, `p0`
+- Depends on: `C12`
+- AC:
+  - When a prompt includes images (screenshots or embedded images), Ticker sends a multimodal request to proxy using the C12 message-parts format
+  - For alpha, Ticker uses **base64 image sources** (not URL images) and keeps payloads within the proxy’s size cap
+  - Streaming responses render correctly (same UX as text streaming)
+  - Clear UX when vision is unavailable (if `C12` disabled/unsupported provider/model)
+  - No raw serial key, editor content, or full prompts are written to local logs or support bundle (only request ids and metadata)
+
 ---
 
 ## Epic E — Website + onboarding
@@ -234,4 +312,3 @@ For each Issue below:
 - AC:
   - Admin approves waitlist entry
   - System issues device key and emails instructions
-

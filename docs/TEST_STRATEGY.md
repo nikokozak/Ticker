@@ -24,7 +24,7 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
    - App → Proxy request
    - Proxy → Provider
    - Response returned and rendered
-   - Request correlation ID captured (`X-Ticker-Request-Id`)
+   - Request correlation ID captured (`X-Ticker-Request-Id`, treated as an opaque string)
 
 4) **Schema snapshot tests**
    - Bridge message payload shapes
@@ -34,4 +34,3 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
 
 - Prefer “cheap tests that catch breaking changes” over broad end-to-end automation at this stage.
 - Snapshot tests are especially valuable for avoiding accidental protocol breakage when iterating quickly.
-
