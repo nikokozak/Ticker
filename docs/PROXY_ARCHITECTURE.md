@@ -27,6 +27,16 @@ Ticker Proxy enables shipping the app without embedding provider API keys and pr
 
 This provides lightweight abuse detection and prevents casual key sharing.
 
+## Contract source of truth
+
+- This document is the **human-readable overview** of the proxy behavior and endpoints.
+- The **machine-readable API contract** (OpenAPI/JSON schema) should live in the `ticker-proxy` repo (e.g., `openapi/v1.yaml`) and be treated as the source of truth for request/response shapes.
+- This repo (`Ticker`) should vendor a **pinned copy** of that contract for client development + snapshot tests, and update it only when the proxy contract changes.
+- Versioning is URL-based (`/v1/...`); prefer “proxy first, backwards compatible” changes when evolving endpoints during alpha.
+
+Client integration reference:
+- `docs/GITHUB_BACKLOG_ALPHA.md` (Epic D integration notes + acceptance criteria)
+
 ## Contract: headers
 
 Requests must include:
@@ -37,7 +47,11 @@ Requests must include:
 - `X-Ticker-OS-Version: <version>`
 
 Responses must include:
-- `X-Ticker-Request-Id: <uuid>`
+- `X-Ticker-Request-Id: <string>` (opaque request correlation id)
+
+Notes:
+- Ticker should generate a UUID per request and send it as `X-Ticker-Request-Id`.
+- The proxy will echo/return `X-Ticker-Request-Id` for every response (including errors). Treat it as an opaque string (not guaranteed to be a UUID).
 
 ## Endpoints (v1)
 
@@ -48,15 +62,20 @@ Responses must include:
 ### LLM request
 `POST /v1/llm/request`
 - Body includes:
-  - provider (optional, or “auto”)
+  - provider (optional; supported values: `openai`, `anthropic`, `perplexity`)
   - model
-  - messages / prompt
-  - streaming flag
+  - messages (each `content` is either a string or an array of parts for multimodal prompts)
+    - For alpha vision: send **base64** image parts (`media_type` + `data`) rather than URL images
+  - streaming flag (`stream: true` uses SSE)
   - metadata (stream id, cell id) *only if non-sensitive*
 - Returns:
   - streaming or non-stream response
   - token counts (if available)
   - `X-Ticker-Request-Id`
+
+Notes:
+- `perplexity` does not support vision/image inputs (proxy returns `400` for image parts)
+- `anthropic` vision requires base64 image sources (proxy rejects URL images)
 
 ### Diagnostics
 `POST /v1/diagnostics/event`
@@ -67,7 +86,7 @@ Responses must include:
 `POST /v1/feedback`
 - `type`: `bug` | `feature`
 - `title`, `description`
-- Optional attachments (e.g., screenshot), size-limited (recommend 10MB)
+- Optional attachments (e.g., screenshot) via a presigned upload flow (size-limited; 10MB cap)
 - Returns `feedback_id` for the user to reference
 
 ## Metering and quotas
@@ -96,4 +115,3 @@ Behavior:
 - Adjust quotas per key
 - View recent requests/errors per key
 - View feedback items and manually promote to GitHub Issues
-
