@@ -15,6 +15,7 @@ import { DOMSerializer, DOMParser, Node as ProseMirrorNode } from '@tiptap/pm/mo
 import { Selection, NodeSelection } from '@tiptap/pm/state';
 import { stripHtml, extractImages, buildImageBlock, extractImageURLs } from '../utils/html';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
+import { isCellNodeEmpty } from '../extensions/cellEmpty';
 import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 /** Save debounce delay in ms - matches Cell component */
@@ -719,11 +720,70 @@ export function UnifiedStreamEditor({
       }
     }
 
+    // Slice 3: Auto-reset empty AI cells to text type.
+    // When an aiResponse cell becomes empty (all content deleted by user),
+    // reset it to a normal text cell. This removes the AI chrome and allows
+    // the user to start fresh.
+    const storeState = useBlockStore.getState();
+    for (const extracted of extractedCells) {
+      const cellId = extracted.id;
+      if (!cellId) continue;
+
+      const storeCell = storeState.getBlock(cellId);
+      if (!storeCell || storeCell.type !== 'aiResponse') continue;
+
+      // Don't reset while streaming or refreshing
+      if (storeState.isStreaming(cellId) || storeState.isRefreshing(cellId)) continue;
+
+      // Find the cellBlock node in the document
+      const cellInfo = findCellBlockById(editor.state.doc, cellId);
+      if (!cellInfo) continue;
+
+      // Check if the cell is empty
+      if (!isCellNodeEmpty(cellInfo.node)) continue;
+
+      if (IS_DEV) {
+        console.log('[UnifiedStreamEditor] Auto-resetting empty AI cell to text:', cellId);
+      }
+
+      // Reset to text type in store
+      updateBlock(cellId, {
+        type: 'text',
+        originalPrompt: undefined,
+        modelId: undefined,
+      });
+
+      // Persist the reset
+      bridge.send({
+        type: 'saveCell',
+        payload: {
+          id: cellId,
+          streamId: stream.id,
+          content: storeCell.content || '<p></p>',
+          type: 'text',
+          order: storeCell.order,
+          // Clear AI-specific fields
+          originalPrompt: undefined,
+          modelId: undefined,
+          // Preserve other fields
+          sourceApp: storeCell.sourceApp,
+          blockName: storeCell.blockName,
+          processingConfig: storeCell.processingConfig,
+        },
+      });
+
+      // Update baseline to prevent re-saving
+      baselineRef.current.set(cellId, {
+        content: storeCell.content || '<p></p>',
+        order: storeCell.order,
+      });
+    }
+
     // Schedule debounced save if there were changes (Slice 03)
     if (hasChanges) {
       scheduleSave();
     }
-  }, [getBlock, updateBlock, scheduleSave]);
+  }, [getBlock, updateBlock, scheduleSave, stream.id]);
 
   // Create the unified editor
   const editor = useEditor({

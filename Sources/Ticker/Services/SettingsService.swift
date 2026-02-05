@@ -7,6 +7,14 @@ final class SettingsService {
 
     private let defaults: UserDefaults
     private let keychain = KeychainService.shared
+    /// Alpha posture: all AI goes through `ticker-proxy`, so vendor API keys are disabled.
+    /// This prevents Keychain access prompts in signed Release builds.
+    private static let vendorKeysEnabled = false
+
+    /// Proxy-only mode: all LLM and embedding calls must go through Ticker Proxy.
+    /// When true, local vendor API calls (OpenAI, Anthropic, Perplexity) are disabled at runtime.
+    /// This includes EmbeddingService (RAG is disabled for alpha).
+    static let proxyOnlyMode = true
 
     // UserDefaults keys (non-sensitive settings)
     private enum Keys {
@@ -42,15 +50,18 @@ final class SettingsService {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // Migrate keys from UserDefaults to Keychain (one-time)
-        migrateKeysToKeychain()
+        // Alpha: vendor keys disabled; avoid touching Keychain unless explicitly re-enabled.
+        if Self.vendorKeysEnabled {
+            migrateKeysToKeychain()
+        }
     }
 
     // MARK: - API Keys (Keychain-backed)
 
     var openaiAPIKey: String? {
-        get { keychain.get(key: KeychainKeys.openaiAPIKey) }
+        get { Self.vendorKeysEnabled ? keychain.get(key: KeychainKeys.openaiAPIKey) : nil }
         set {
+            guard Self.vendorKeysEnabled else { return }
             if let value = newValue, !value.isEmpty {
                 try? keychain.save(key: KeychainKeys.openaiAPIKey, value: value)
             } else {
@@ -60,8 +71,9 @@ final class SettingsService {
     }
 
     var anthropicAPIKey: String? {
-        get { keychain.get(key: KeychainKeys.anthropicAPIKey) }
+        get { Self.vendorKeysEnabled ? keychain.get(key: KeychainKeys.anthropicAPIKey) : nil }
         set {
+            guard Self.vendorKeysEnabled else { return }
             if let value = newValue, !value.isEmpty {
                 try? keychain.save(key: KeychainKeys.anthropicAPIKey, value: value)
             } else {
@@ -71,8 +83,9 @@ final class SettingsService {
     }
 
     var perplexityAPIKey: String? {
-        get { keychain.get(key: KeychainKeys.perplexityAPIKey) }
+        get { Self.vendorKeysEnabled ? keychain.get(key: KeychainKeys.perplexityAPIKey) : nil }
         set {
+            guard Self.vendorKeysEnabled else { return }
             if let value = newValue, !value.isEmpty {
                 try? keychain.save(key: KeychainKeys.perplexityAPIKey, value: value)
             } else {
@@ -153,13 +166,21 @@ final class SettingsService {
 
     /// Whether onboarding should be shown (not completed and no API keys configured)
     var needsOnboarding: Bool {
-        !hasCompletedOnboarding && !isOpenAIConfigured && !isAnthropicConfigured
+        !hasCompletedOnboarding
     }
 
     // MARK: - Routing Settings
 
+    /// Whether to use MLX classifier for smart model routing.
+    /// Defaults to true if not explicitly set (alpha posture: smart routing ON by default).
     var smartRoutingEnabled: Bool {
-        get { defaults.bool(forKey: Keys.smartRoutingEnabled) }
+        get {
+            // Default to true if not set
+            if defaults.object(forKey: Keys.smartRoutingEnabled) == nil {
+                return true
+            }
+            return defaults.bool(forKey: Keys.smartRoutingEnabled)
+        }
         set { defaults.set(newValue, forKey: Keys.smartRoutingEnabled) }
     }
 
@@ -218,28 +239,13 @@ final class SettingsService {
 
     /// Get all settings as a dictionary for sending to React
     func allSettings() -> [String: Any] {
-        var settings: [String: Any] = [
-            "hasOpenAIKey": isOpenAIConfigured,
-            "hasAnthropicKey": isAnthropicConfigured,
-            "hasPerplexityKey": isPerplexityConfigured,
+        [
+            "proxyOnlyMode": Self.proxyOnlyMode,
             "smartRoutingEnabled": smartRoutingEnabled,
             "defaultModel": defaultModel.rawValue,
             "appearance": appearance.rawValue,
             "diagnosticsEnabled": diagnosticsEnabled
         ]
-
-        // Include masked key preview if set
-        if let key = openaiAPIKey, !key.isEmpty {
-            settings["openaiKeyPreview"] = maskAPIKey(key)
-        }
-        if let key = anthropicAPIKey, !key.isEmpty {
-            settings["anthropicKeyPreview"] = maskAPIKey(key)
-        }
-        if let key = perplexityAPIKey, !key.isEmpty {
-            settings["perplexityKeyPreview"] = maskAPIKey(key)
-        }
-
-        return settings
     }
 
     /// Mask an API key for display (show first 7 and last 4 chars)

@@ -271,6 +271,58 @@ actor DeviceKeyService {
         return tickerDir.appendingPathComponent("device.json")
     }
 
+    /// Directory that contains `device.json`
+    private var deviceDirectoryURL: URL {
+        fileURL.deletingLastPathComponent()
+    }
+
+    /// Ensure Application Support directory exists and is private to the user (best effort).
+    /// `device.json` contains the plaintext device key, so we prefer restrictive permissions.
+    private func ensureDeviceDirectoryExists(fileManager: FileManager = .default) {
+        let dir = deviceDirectoryURL
+        do {
+            try fileManager.createDirectory(
+                at: dir,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        } catch {
+            // Best-effort; do not crash the app for a permissions edge case.
+            try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        // If directory already existed, `createDirectory` won't update perms.
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+    }
+
+    /// Stale temp files created by prior versions of `save(_:)` or interrupted writes.
+    /// These can contain plaintext device keys and must be cleaned up on startup.
+    private func cleanupStaleDeviceTempFiles(fileManager: FileManager = .default) {
+        let dir = deviceDirectoryURL
+
+        // Old implementation wrote to this fixed filename.
+        let legacyTempURL = fileURL.appendingPathExtension("tmp")
+        if fileManager.fileExists(atPath: legacyTempURL.path) {
+            try? fileManager.removeItem(at: legacyTempURL)
+        }
+
+        // New implementation writes to `device.json.tmp.<uuid>`; if the app crashes mid-save,
+        // these may be left behind. Remove any such leftovers (best effort).
+        if let entries = try? fileManager.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            for url in entries {
+                let name = url.lastPathComponent
+                if name.hasPrefix("device.json.tmp.") {
+                    try? fileManager.removeItem(at: url)
+                }
+            }
+        }
+    }
+
+    /// Best-effort permission hardening for the device file (contains plaintext device key).
+    private func hardenDeviceFilePermissions(fileManager: FileManager = .default) {
+        try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+    }
+
     // MARK: - Initialization
 
     /// Initialize and determine initial state based on stored data
@@ -793,9 +845,8 @@ actor DeviceKeyService {
 
         let fileManager = FileManager.default
 
-        // Ensure directory exists
-        let dir = fileURL.deletingLastPathComponent()
-        try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        ensureDeviceDirectoryExists(fileManager: fileManager)
+        cleanupStaleDeviceTempFiles(fileManager: fileManager)
 
         // Try to load existing
         if let data = try? Data(contentsOf: fileURL) {
@@ -827,14 +878,35 @@ actor DeviceKeyService {
 
         guard let encoded = try? encoder.encode(data) else { return }
 
-        // Write atomically to avoid corruption on crash
-        let tempURL = fileURL.appendingPathExtension("tmp")
+        let fileManager = FileManager.default
+        ensureDeviceDirectoryExists(fileManager: fileManager)
+
+        // Write to a unique temp file in the same directory, then atomically replace.
+        // This avoids leaving a fixed `device.json.tmp` file behind.
+        let tempURL = deviceDirectoryURL.appendingPathComponent("device.json.tmp.\(UUID().uuidString)")
         do {
-            try encoded.write(to: tempURL, options: .atomic)
-            try FileManager.default.moveItem(at: tempURL, to: fileURL)
+            try encoded.write(to: tempURL, options: [])
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tempURL.path)
+
+            if fileManager.fileExists(atPath: fileURL.path) {
+                _ = try fileManager.replaceItemAt(fileURL, withItemAt: tempURL)
+            } else {
+                try fileManager.moveItem(at: tempURL, to: fileURL)
+            }
+
+            hardenDeviceFilePermissions(fileManager: fileManager)
         } catch {
-            // Fallback: try direct write
-            try? encoded.write(to: fileURL, options: .atomic)
+            // Best-effort cleanup; temp file may contain plaintext key.
+            try? fileManager.removeItem(at: tempURL)
+
+            // Fallback: direct atomic write (system-managed temp). Still harden perms afterwards.
+            do {
+                try encoded.write(to: fileURL, options: .atomic)
+                hardenDeviceFilePermissions(fileManager: fileManager)
+            } catch {
+                // If even fallback fails, we keep cachedData in memory; caller will still function
+                // for this session (but persistence is compromised).
+            }
         }
     }
 
@@ -873,8 +945,18 @@ actor DeviceKeyService {
             let validation = try decoder.decode(ProxyAuthValidationResponse.self, from: responseData)
 
             // Check if bound to different device
-            if let boundDeviceId = validation.boundDeviceId, boundDeviceId != data.deviceId {
-                throw DeviceKeyError.boundToOtherDevice
+            if let boundDeviceId = validation.boundDeviceId {
+                let local = data.deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                let remote = boundDeviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // Prefer UUID parsing to avoid case/format mismatches (proxy may normalize UUID strings).
+                if let localUUID = UUID(uuidString: local), let remoteUUID = UUID(uuidString: remote) {
+                    if localUUID != remoteUUID {
+                        throw DeviceKeyError.boundToOtherDevice
+                    }
+                } else if local.lowercased() != remote.lowercased() {
+                    throw DeviceKeyError.boundToOtherDevice
+                }
             }
 
             return validation

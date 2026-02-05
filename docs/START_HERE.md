@@ -20,9 +20,12 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 
 4) **Proxy + diagnostics**
    - Read `docs/PROXY_ARCHITECTURE.md` and `docs/PRIVACY_DIAGNOSTICS.md`
-   - Implement device keys, metering/quotas, request correlation, and 30‑day log retention
+   - Use `docs/GITHUB_BACKLOG_ALPHA.md` as the canonical alpha issue list (Epic C/D integration notes included)
 
-5) **Alpha ops**
+5) **Stability (2-week ship)**
+   - Option A (single-call heading+body) + house-cleaning audit: `docs/ALPHA_STABILITY_PLAN.md`
+
+6) **Alpha ops**
    - Read `docs/ALPHA_READINESS_CHECKLIST.md`
    - Read `docs/ALPHA_SUPPORT.md` (in-app feedback → manual triage)
    - Read `docs/WEBSITE_REQUIREMENTS.md`
@@ -87,6 +90,15 @@ Ticker stores user data under:
 
 Key items:
 - `ticker.db` — the SQLite database (streams, cells, sources metadata)
+- `assets/` — local images (inserted as `ticker-asset://...`)
 - `backups/` — automatic pre-migration DB backups (created only when pending migrations are detected)
+- `device.json` — **contains the plaintext proxy device key (`tk_...`) and device id**
 
 If you need to restore data from a backup, follow the step-by-step instructions in `docs/ALPHA_SUPPORT.md`.
+
+Device key rules:
+- Never log the device key.
+- Never ask a tester to send `device.json`.
+- For “fresh install” QA, delete `device.json` while Ticker is fully quit, then relaunch.
+- If you ever see stale temp files next to it, remove them too:
+  - `~/Library/Application Support/Ticker/device.json.tmp*`

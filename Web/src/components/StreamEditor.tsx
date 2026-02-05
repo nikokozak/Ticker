@@ -208,9 +208,14 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
           type: cell.type,
           order: cell.order,
           originalPrompt: cell.originalPrompt,
+          restatement: cell.restatement,
+          modelId: cell.modelId,
+          processingConfig: cell.processingConfig,
           modifiers: cell.modifiers,
           sourceApp: cell.sourceApp,
           references: cell.references,
+          blockName: cell.blockName,
+          sourceBinding: cell.sourceBinding,
         },
       });
     }
@@ -410,7 +415,7 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
     // Update local state
     store.updateBlock(cellId, { processingConfig: newConfig });
 
-    // Persist to backend (preserve sourceApp and references)
+    // Persist to backend (preserve all metadata)
     bridge.send({
       type: 'saveCell',
       payload: {
@@ -419,9 +424,15 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
         content: cell.content,
         type: cell.type,
         order: cell.order,
+        originalPrompt: cell.originalPrompt,
+        restatement: cell.restatement,
+        modelId: cell.modelId,
         processingConfig: newConfig,
+        modifiers: cell.modifiers,
         sourceApp: cell.sourceApp,
         references: cell.references,
+        blockName: cell.blockName,
+        sourceBinding: cell.sourceBinding,
       },
     });
   }, [stream.id, store]);

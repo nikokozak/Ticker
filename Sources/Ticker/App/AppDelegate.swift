@@ -25,6 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var mainWindow: NSWindow?
     private var webViewManager: WebViewManager?
     private var onboardingWindow: NSWindow?
+    private var didCompleteStartup = false
 
     // Menu bar (status item)
     private var statusItem: NSStatusItem?
@@ -45,7 +46,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupMenuBar()
         setupAppearanceObserver()
 
-        // Check if onboarding is needed
+        // Alpha: proxy-only onboarding (no vendor API keys).
         if SettingsService.shared.needsOnboarding {
             showOnboarding()
         } else {
@@ -56,6 +57,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Complete startup after onboarding (or skip if not needed)
     private func completeStartup() {
+        guard !didCompleteStartup else { return }
+        didCompleteStartup = true
         setupMainWindow()
         setupQuickPanel()
         requestAccessibilityPermissionIfNeeded()
@@ -87,6 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         onboardingWindow?.contentView = hostingView
         onboardingWindow?.center()
         onboardingWindow?.isReleasedWhenClosed = false
+        onboardingWindow?.delegate = self
         onboardingWindow?.makeKeyAndOrderFront(nil)
     }
 
@@ -114,9 +118,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Request accessibility permission early so it's ready when Quick Panel is first used
     private func requestAccessibilityPermissionIfNeeded() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-        if !AXIsProcessTrustedWithOptions(options) {
-            print("[Ticker] Accessibility permission not yet granted - prompt shown")
+        // Alpha: avoid prompting on app launch. The onboarding flow (and in-context feature usage)
+        // is responsible for presenting the permission prompt.
+        if !AXIsProcessTrusted() {
+            print("[Ticker] Accessibility permission not yet granted")
         }
     }
 
@@ -180,8 +185,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Hide window instead of closing when user clicks close button
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
-        return false  // Don't actually close, just hide
+        // Only intercept the main window close button (hide to menu bar).
+        // Other windows (like onboarding) should be allowed to close.
+        if sender == mainWindow {
+            sender.orderOut(nil)
+            return false
+        }
+        return true
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        guard window == onboardingWindow else { return }
+
+        // If the user closes onboarding without completing, proceed anyway and don't show again.
+        SettingsService.shared.hasCompletedOnboarding = true
+        onboardingWindow = nil
+        completeStartup()
     }
 
     // MARK: - Status Item (Menu Bar)

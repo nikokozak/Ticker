@@ -455,7 +455,7 @@ function getEmbeddingInfo(status: string): { label: string; tooltip: string } | 
     case 'failed':
       return { label: 'Index failed', tooltip: 'Semantic indexing failed - full text will be used' };
     case 'unconfigured':
-      return { label: 'Not indexed', tooltip: 'Add OpenAI API key in Settings to enable semantic search' };
+      return { label: 'Not indexed', tooltip: 'Semantic search is not available in this version' };
     default:
       return null;
   }

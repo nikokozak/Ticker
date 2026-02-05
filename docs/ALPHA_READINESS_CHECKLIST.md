@@ -20,6 +20,9 @@ This checklist is what “ready to invite users” means for Ticker alpha.
 - Backup created before any DB migration
 - Migration failures are handled without destroying user data
 - AI markdown rendering cannot trigger external image loads (`<img src="http(s)://...">` is stripped)
+- Device key storage is clean and private:
+  - No stray `device.json.tmp*` files after key entry/updates
+  - `~/Library/Application Support/Ticker/device.json` is user-readable only (best-effort)
 
 ### Proxy
 - Proxy deployed on Fly.io

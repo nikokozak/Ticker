@@ -46,6 +46,19 @@ struct AnyCodable: Codable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
 
+        // Handle Optional values passed as `Any` (e.g. `someOptional as Any`).
+        // This is common in bridge payload construction; encode nil as `null`,
+        // and unwrap `.some` to encode the underlying value.
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            if let child = mirror.children.first?.value {
+                try AnyCodable(child).encode(to: encoder)
+            } else {
+                try container.encodeNil()
+            }
+            return
+        }
+
         switch value {
         case is NSNull:
             try container.encodeNil()

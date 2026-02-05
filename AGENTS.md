@@ -13,9 +13,10 @@ It is intended for coding agents (Codex/Claude/GPT) so future sessions don’t h
 ## Proxy integration (alpha)
 
 - The canonical backlog + acceptance criteria live in `docs/GITHUB_BACKLOG_ALPHA.md` (Epic C for proxy, Epic D + D8 for Ticker integration, and C12 for vision).
-- Device/serial keys must be stored in **Keychain (Swift)** and must never be written to localStorage or logs.
-- Ticker is moving from user-supplied provider API keys to proxy-based AI calls; treat existing “API Keys” settings UI as legacy until D is complete.
+- Ticker is **proxy-only** for alpha: no local OpenAI/Anthropic/Perplexity calls and no vendor keys stored locally.
+- Device/serial keys are stored by `DeviceKeyService` under `~/Library/Application Support/Ticker/device.json` (never in localStorage; never log the key).
 - Vision (D8): keep it lightweight — send images as **base64 message parts** (do not rely on URL images or add upload endpoints unless explicitly scoped).
+- Current stabilization plan (Option A restatement + house-cleaning audit): `docs/ALPHA_STABILITY_PLAN.md`.
 
 ## Repo Orientation (high-level)
 

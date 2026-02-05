@@ -4,30 +4,22 @@ import ApplicationServices
 /// Onboarding view shown on first launch
 struct OnboardingView: View {
     @State private var step: OnboardingStep = .welcome
-    @State private var apiKey = ""
-    @State private var selectedProvider: APIProvider = .openai
     @State private var hasAccessibility = false
-    @State private var isSaving = false
+    @State private var isPromptingAccessibility = false
 
     var onComplete: () -> Void
 
     enum OnboardingStep {
         case welcome
         case accessibility
-        case apiKey
         case complete
-    }
-
-    enum APIProvider: String, CaseIterable {
-        case openai = "OpenAI"
-        case anthropic = "Anthropic"
     }
 
     var body: some View {
         VStack(spacing: 0) {
             // Progress indicator
             HStack(spacing: 8) {
-                ForEach(0..<4, id: \.self) { index in
+                ForEach(0..<3, id: \.self) { index in
                     Circle()
                         .fill(stepIndex >= index ? Color.accentColor : Color.gray.opacity(0.3))
                         .frame(width: 8, height: 8)
@@ -43,8 +35,6 @@ struct OnboardingView: View {
                     welcomeStep
                 case .accessibility:
                     accessibilityStep
-                case .apiKey:
-                    apiKeyStep
                 case .complete:
                     completeStep
                 }
@@ -60,8 +50,7 @@ struct OnboardingView: View {
         switch step {
         case .welcome: return 0
         case .accessibility: return 1
-        case .apiKey: return 2
-        case .complete: return 3
+        case .complete: return 2
         }
     }
 
@@ -78,6 +67,12 @@ struct OnboardingView: View {
 
             Text("A research companion that captures and connects your thoughts.")
                 .font(.system(size: 14))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            Text("To enable AI features, you’ll enter a Device Key in Settings (Ticker Proxy).")
+                .font(.system(size: 13))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
@@ -119,83 +114,33 @@ struct OnboardingView: View {
                 .font(.system(size: 14, weight: .medium))
             } else {
                 Button("Open System Settings") {
+                    guard !isPromptingAccessibility else { return }
+                    isPromptingAccessibility = true
                     requestAccessibility()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        isPromptingAccessibility = false
+                    }
                 }
                 .buttonStyle(.bordered)
+                .disabled(isPromptingAccessibility)
             }
 
             Spacer()
 
             HStack(spacing: 12) {
-                Button("Skip") {
-                    withAnimation { step = .apiKey }
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.secondary)
-
-                Button("Continue") {
-                    withAnimation { step = .apiKey }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!hasAccessibility)
-            }
-        }
-        .onAppear { checkAccessibility() }
-    }
-
-    // MARK: - API Key Step
-
-    private var apiKeyStep: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "key.fill")
-                .font(.system(size: 48))
-                .foregroundColor(.accentColor)
-
-            Text("Add an API Key")
-                .font(.system(size: 20, weight: .semibold))
-
-            Text("Choose your AI provider and enter your API key to enable AI features.")
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-
-            Picker("Provider", selection: $selectedProvider) {
-                ForEach(APIProvider.allCases, id: \.self) { provider in
-                    Text(provider.rawValue).tag(provider)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-
-            SecureField("API Key", text: $apiKey)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal)
-
-            if selectedProvider == .openai {
-                Link("Get an OpenAI API key", destination: URL(string: "https://platform.openai.com/api-keys")!)
-                    .font(.system(size: 12))
-            } else {
-                Link("Get an Anthropic API key", destination: URL(string: "https://console.anthropic.com/settings/keys")!)
-                    .font(.system(size: 12))
-            }
-
-            Spacer()
-
-            HStack(spacing: 12) {
-                Button("Skip") {
+                Button("Skip for now") {
                     withAnimation { step = .complete }
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
 
-                Button("Save & Continue") {
-                    saveAPIKey()
+                Button(hasAccessibility ? "Continue" : "Continue") {
+                    withAnimation { step = .complete }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
             }
         }
+        .onAppear { checkAccessibility() }
     }
 
     // MARK: - Complete Step
@@ -233,6 +178,10 @@ struct OnboardingView: View {
             .background(Color.gray.opacity(0.1))
             .cornerRadius(8)
 
+            Text("You can enter or update your Device Key in Settings at any time.")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+
             Spacer()
 
             Button("Start Using Ticker") {
@@ -263,18 +212,4 @@ struct OnboardingView: View {
         }
     }
 
-    private func saveAPIKey() {
-        isSaving = true
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespaces)
-
-        switch selectedProvider {
-        case .openai:
-            SettingsService.shared.openaiAPIKey = trimmedKey
-        case .anthropic:
-            SettingsService.shared.anthropicAPIKey = trimmedKey
-        }
-
-        isSaving = false
-        withAnimation { step = .complete }
-    }
 }

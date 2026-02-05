@@ -1,6 +1,8 @@
 import Foundation
 
 /// Generates and manages embeddings via OpenAI API
+/// @note RAG (semantic search) is disabled for alpha (proxyOnlyMode = true).
+/// All embed() calls will throw EmbeddingError.disabled in proxy-only mode.
 final class EmbeddingService {
     private let settings: SettingsService
     private let baseURL = "https://api.openai.com/v1/embeddings"
@@ -13,10 +15,14 @@ final class EmbeddingService {
     }
 
     private var apiKey: String? {
-        settings.openaiAPIKey ?? ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
+        // In proxy-only mode, never return an API key
+        guard !SettingsService.proxyOnlyMode else { return nil }
+        return settings.openaiAPIKey ?? ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
     }
 
     var isConfigured: Bool {
+        // In proxy-only mode, always return false
+        guard !SettingsService.proxyOnlyMode else { return false }
         guard let key = apiKey else { return false }
         return !key.isEmpty
     }
@@ -34,6 +40,11 @@ final class EmbeddingService {
 
     /// Generate embeddings for multiple texts (batched)
     func embedBatch(texts: [String]) async throws -> [[Float]] {
+        // Explicit check: RAG/embeddings are disabled in proxy-only mode
+        guard !SettingsService.proxyOnlyMode else {
+            throw EmbeddingError.disabled
+        }
+
         guard let apiKey else {
             throw EmbeddingError.notConfigured
         }
@@ -128,6 +139,7 @@ final class EmbeddingService {
 // MARK: - Errors
 
 enum EmbeddingError: LocalizedError {
+    case disabled
     case notConfigured
     case invalidRequest
     case invalidResponse
@@ -136,6 +148,8 @@ enum EmbeddingError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .disabled:
+            return "Embeddings are disabled (RAG not available in alpha)"
         case .notConfigured:
             return "OpenAI API key not configured"
         case .invalidRequest:

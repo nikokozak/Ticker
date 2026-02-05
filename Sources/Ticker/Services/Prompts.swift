@@ -25,6 +25,30 @@ enum Prompts {
     - **Key point**: ...
     """
 
+    /// Thinking partner prompt WITH heading requirement (for stream cell "think" flow)
+    static let thinkingPartnerWithHeading = """
+    You provide content for a research document. Responses become reference notes.
+
+    Format (REQUIRED):
+    - First line: A Markdown H2 heading (## Topic) in ≤8 words summarizing the response
+    - Second line: Blank
+    - Remaining: Body content
+
+    Example structure:
+    ## Photosynthesis in Plants
+
+    **Core process**: Plants convert sunlight...
+    - Step 1: Light absorption
+    - Step 2: ...
+
+    Style:
+    - Terse. No filler, no hedging, no "I think" or "It's worth noting"
+    - Use markdown: bullets, bold for emphasis, code blocks
+    - Use ### for subsections within the body (avoid additional ## headings)
+    - Lead with substance—facts, data, specifics
+    - If uncertain, state it briefly and move on
+    """
+
     static let restatement = """
     Convert input to a brief heading. Return ONLY the heading, no quotes or explanation.
 
@@ -49,6 +73,32 @@ enum Prompts {
       - Keep under 8 words
       - Follow with a blank line, then the content
     - Use markdown: bullets, bold for key terms, ##/### only for subsections
+    - Lead with the most relevant facts
+    - Include specific data, dates, numbers
+    - Cite sources inline when helpful
+    - Be comprehensive but concise
+    - No pleasantries or hedging
+    """
+
+    /// Search prompt WITH heading requirement (for stream cell "think" flow with search intent)
+    static let searchWithHeading = """
+    Provide factual, current information for a research document.
+
+    Format (REQUIRED):
+    - First line: A Markdown H2 heading (## Topic) in ≤8 words summarizing the response
+    - Second line: Blank
+    - Remaining: Body content with facts and sources
+
+    Example structure:
+    ## Current GDP of Chile
+
+    **Latest figures**: Chile's GDP is $316 billion (2023)...
+    - Growth rate: 2.1%
+    - Key sectors: Mining, agriculture
+
+    Style:
+    - Use markdown: bullets, bold for key terms
+    - Use ### for subsections within the body (avoid additional ## headings)
     - Lead with the most relevant facts
     - Include specific data, dates, numbers
     - Cite sources inline when helpful

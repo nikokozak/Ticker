@@ -208,8 +208,15 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
                   content: block.content,
                   type: block.type,
                   order: block.order,
+                  originalPrompt: block.originalPrompt,
+                  restatement: block.restatement,
+                  modelId: block.modelId,
+                  processingConfig: block.processingConfig,
+                  modifiers: block.modifiers,
                   sourceApp: block.sourceApp,
                   references: block.references,
+                  blockName: block.blockName,
+                  sourceBinding: block.sourceBinding,
                 },
               });
             }
@@ -246,7 +253,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
             editorAPIRef.current.replaceCellHtml(cellId, finalContent);
           }
 
-          // Save to Swift (include modelId if set, preserve sourceApp and references)
+          // Save to Swift (include modelId if set, preserve all metadata)
           bridge.send({
             type: 'saveCell',
             payload: {
@@ -256,9 +263,14 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
               type: 'aiResponse',
               order: cell.order,
               originalPrompt: cell.originalPrompt,
+              restatement: cell.restatement,
               modelId: cell.modelId,
+              processingConfig: cell.processingConfig,
               sourceApp: cell.sourceApp,
               references: cell.references,
+              blockName: cell.blockName,
+              modifiers: cell.modifiers,
+              sourceBinding: cell.sourceBinding,
             },
           });
         }
@@ -368,7 +380,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
           editorAPIRef.current.replaceCellHtml(cellId, htmlContent);
         }
 
-        // Save to Swift (preserve sourceApp and references)
+        // Save to Swift (preserve all metadata)
         bridge.send({
           type: 'saveCell',
           payload: {
@@ -377,9 +389,15 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
             content: htmlContent,
             type: cell.type,
             order: cell.order,
+            originalPrompt: cell.originalPrompt,
+            restatement: cell.restatement,
+            modelId: cell.modelId,
+            processingConfig: cell.processingConfig,
             modifiers: cell.modifiers,
             sourceApp: cell.sourceApp,
             references: cell.references,
+            blockName: cell.blockName,
+            sourceBinding: cell.sourceBinding,
           },
         });
 

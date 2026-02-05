@@ -1,6 +1,9 @@
 import Foundation
 
 /// Service for Anthropic API calls (Claude models)
+/// @deprecated For alpha, all LLM traffic routes through Ticker Proxy.
+/// This service is kept as a fallback for development/testing with local API keys.
+/// In production, vendorKeysEnabled = false so this service reports isConfigured = false.
 final class AnthropicService: LLMProvider {
     private let settings: SettingsService
     private let baseURL = "https://api.anthropic.com/v1/messages"
@@ -19,10 +22,14 @@ final class AnthropicService: LLMProvider {
 
     /// Get API key from settings or environment
     private var apiKey: String? {
-        settings.anthropicAPIKey ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
+        // In proxy-only mode, never return an API key
+        guard !SettingsService.proxyOnlyMode else { return nil }
+        return settings.anthropicAPIKey ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
     }
 
     var isConfigured: Bool {
+        // In proxy-only mode, always return false
+        guard !SettingsService.proxyOnlyMode else { return false }
         guard let key = apiKey else { return false }
         return !key.isEmpty
     }
@@ -30,10 +37,12 @@ final class AnthropicService: LLMProvider {
     /// LLMProvider streaming implementation
     func stream(
         request: LLMRequest,
+        onModelSelected: ((String, String) -> Void)? = nil,
         onChunk: @escaping (String) -> Void,
         onComplete: @escaping () -> Void,
         onError: @escaping (Error) -> Void
     ) async {
+        // Legacy vendor service - onModelSelected not used
         guard let apiKey else {
             onError(LLMProviderError.notConfigured(name))
             return

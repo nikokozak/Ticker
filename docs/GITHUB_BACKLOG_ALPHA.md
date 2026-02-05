@@ -183,9 +183,16 @@ Implementation notes (source of truth for Epic D):
 - Quota errors (`429`) should disable AI features but should not hide stream list access.
 
 #### Storage rules (do not violate)
-- Serial/device key is stored **only in Keychain** (Swift-side). Never store it in localStorage or logs.
-- Device ID is generated once and stored in Keychain; it’s sent as `X-Ticker-Device-Id`.
+- Ticker is **proxy-only**: never store or use vendor API keys locally (OpenAI/Anthropic/Perplexity).
+- Serial/device key (proxy-issued) is stored by `DeviceKeyService` in `~/Library/Application Support/Ticker/device.json`. Never store it in localStorage or logs.
+- Device ID is generated once per install (also stored in `device.json`) and sent as `X-Ticker-Device-Id`.
 - `X-Ticker-Request-Id` is treated as an opaque string; Ticker should send a UUID per request and surface it to the user on failures.
+
+#### Routing / dispatch (alpha)
+- Intent classification is **client-side** (MLX) and must never require vendor keys.
+- Ticker attaches an `intent` object to `/v1/llm/request`; the proxy uses intent to choose provider/model.
+- Default behavior: if classification is disabled/unavailable/fails, omit `intent` and use the user’s default provider preference.
+- Model IDs should be centralized on the proxy (env-configurable). Ticker should send `model: "default"` and let the proxy resolve the actual model id.
 
 #### Proxy endpoints and auth models
 - Header-auth endpoints (send `Authorization: Bearer <device_key>` + `X-Ticker-Device-Id`):

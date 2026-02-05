@@ -19,6 +19,13 @@ Commands:
   build-prod           Build Release app (unsigned, bundles web UI)
   run-prod             Build Release + run (bundled web UI)
   release-alpha        Build+sign+notarize+zip+Sparkle-sign (+ optional publish/appcast)
+  reset-onboarding     Clear onboarding completion flag (shows onboarding on next launch)
+  reset-proxy-soft     Clear Device Key but keep device_id (edits Application Support file)
+  reset-proxy-hard     Delete device.json (new device_id on next launch)
+  reset-accessibility  Reset Accessibility permission (TCC) for Ticker
+  reset-proxy-url      Clear proxy URL override (UserDefaults)
+  reset-diagnostics    Clear diagnostics opt-out (UserDefaults; defaults to ON)
+  reset-all            Convenience reset (onboarding + proxy-hard + proxy-url + diagnostics)
   versions             Print version + build number for HEAD
 
 Common options:
@@ -59,6 +66,10 @@ if [[ -f "$CONFIG_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$CONFIG_FILE"
 fi
+
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.app}"
+TICKER_APP_SUPPORT_DIR="${TICKER_APP_SUPPORT_DIR:-$HOME/Library/Application Support/Ticker}"
+TICKER_DEVICE_JSON_PATH="${TICKER_DEVICE_JSON_PATH:-$TICKER_APP_SUPPORT_DIR/device.json}"
 
 DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode"
 RELEASE_DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode-release"
@@ -165,6 +176,17 @@ confirm_delete_dir() {
     prompt="Delete directory '$dir'? [y/N] "
   fi
 
+  echo -n "$prompt"
+  local reply
+  read -r reply
+  case "$reply" in
+  y | Y | yes | YES) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+confirm_action() {
+  local prompt="$1"
   echo -n "$prompt"
   local reply
   read -r reply
@@ -1057,6 +1079,92 @@ PY
   echo "Signed/notarized app: $app_path"
 }
 
+cmd_reset_onboarding() {
+  require_cmd defaults
+  echo "Resetting onboarding for $APP_BUNDLE_ID..."
+  defaults delete "$APP_BUNDLE_ID" has_completed_onboarding >/dev/null 2>&1 || true
+  echo "Done. Relaunch Ticker to see onboarding."
+}
+
+cmd_reset_proxy_soft() {
+  require_cmd python3
+  echo "Soft reset proxy registration (keep device_id):"
+  echo "  File: $TICKER_DEVICE_JSON_PATH"
+
+  python3 - "$TICKER_DEVICE_JSON_PATH" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1]).expanduser()
+if not path.exists():
+    print("No device.json found; nothing to reset.")
+    raise SystemExit(0)
+
+data = json.loads(path.read_text(encoding="utf-8"))
+for key in ("device_key", "support_id", "validated_at"):
+    if key in data:
+        data[key] = None
+
+tmp = path.with_suffix(path.suffix + ".tmp")
+tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+tmp.replace(path)
+print("Cleared device_key/support_id/validated_at (kept device_id).")
+PY
+}
+
+cmd_reset_proxy_hard() {
+  echo "Hard reset proxy registration (regenerates device_id on next launch):"
+  echo "  File: $TICKER_DEVICE_JSON_PATH"
+  if ! confirm_action "Delete this file? [y/N] "; then
+    echo "Canceled."
+    return 0
+  fi
+  rm -f "$TICKER_DEVICE_JSON_PATH"
+  echo "Deleted. Relaunch Ticker to re-register."
+}
+
+cmd_reset_accessibility() {
+  require_cmd tccutil
+  echo "Reset Accessibility permission for $APP_BUNDLE_ID."
+  if ! confirm_action "Run: tccutil reset Accessibility $APP_BUNDLE_ID ? [y/N] "; then
+    echo "Canceled."
+    return 0
+  fi
+  tccutil reset Accessibility "$APP_BUNDLE_ID"
+  echo "Done. Relaunch Ticker and re-grant Accessibility when prompted."
+}
+
+cmd_reset_proxy_url() {
+  require_cmd defaults
+  echo "Clearing proxy URL override (UserDefaults key: TickerProxyURL) for $APP_BUNDLE_ID..."
+  defaults delete "$APP_BUNDLE_ID" TickerProxyURL >/dev/null 2>&1 || true
+  echo "Done."
+}
+
+cmd_reset_diagnostics() {
+  require_cmd defaults
+  echo "Clearing diagnostics opt-out (UserDefaults key: diagnostics_enabled) for $APP_BUNDLE_ID..."
+  defaults delete "$APP_BUNDLE_ID" diagnostics_enabled >/dev/null 2>&1 || true
+  echo "Done. Diagnostics defaults to ON when unset."
+}
+
+cmd_reset_all() {
+  echo "Reset bundle: onboarding + proxy-hard + proxy-url + diagnostics"
+  echo "  Bundle ID: $APP_BUNDLE_ID"
+  echo "  device.json: $TICKER_DEVICE_JSON_PATH"
+  if ! confirm_action "Proceed? [y/N] "; then
+    echo "Canceled."
+    return 0
+  fi
+  cmd_reset_onboarding
+  cmd_reset_proxy_hard
+  cmd_reset_proxy_url
+  cmd_reset_diagnostics
+  echo "Done."
+  echo "Optional: reset Accessibility via: ./tickerctl.sh reset-accessibility"
+}
+
 cmd_versions() {
   local build_num
   build_num="$(build_number)"
@@ -1076,6 +1184,13 @@ cmd_menu() {
     "Release (alpha) + promote: publish + update appcast" \
     "Promote existing alpha (skip build): publish + update appcast" \
     "Versions (build number)" \
+    "Reset: onboarding" \
+    "Reset: proxy (soft)" \
+    "Reset: proxy (hard)" \
+    "Reset: Accessibility permission" \
+    "Reset: proxy URL override" \
+    "Reset: diagnostics toggle" \
+    "Reset: all (onboarding + proxy-hard + proxy-url + diagnostics)" \
     "Quit"; do
     case "$REPLY" in
     1)
@@ -1124,7 +1239,35 @@ cmd_menu() {
       cmd_versions
       break
       ;;
-    11) break ;;
+    11)
+      cmd_reset_onboarding
+      break
+      ;;
+    12)
+      cmd_reset_proxy_soft
+      break
+      ;;
+    13)
+      cmd_reset_proxy_hard
+      break
+      ;;
+    14)
+      cmd_reset_accessibility
+      break
+      ;;
+    15)
+      cmd_reset_proxy_url
+      break
+      ;;
+    16)
+      cmd_reset_diagnostics
+      break
+      ;;
+    17)
+      cmd_reset_all
+      break
+      ;;
+    18) break ;;
     *) echo "Invalid selection" ;;
     esac
   done
@@ -1147,6 +1290,13 @@ main() {
   build-prod) cmd_build_prod ;;
   run-prod) cmd_run_prod ;;
   release-alpha) cmd_release_alpha "$@" ;;
+  reset-onboarding) cmd_reset_onboarding ;;
+  reset-proxy-soft) cmd_reset_proxy_soft ;;
+  reset-proxy-hard) cmd_reset_proxy_hard ;;
+  reset-accessibility) cmd_reset_accessibility ;;
+  reset-proxy-url) cmd_reset_proxy_url ;;
+  reset-diagnostics) cmd_reset_diagnostics ;;
+  reset-all) cmd_reset_all ;;
   versions) cmd_versions ;;
   -h | --help) usage ;;
   *)

@@ -1,6 +1,7 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection } from '@tiptap/pm/state';
 import { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { isCellNodeEmpty } from './cellEmpty';
 import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 /**
@@ -166,7 +167,7 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
               if (!isAtCellStart) return false;
 
               // Only delete if cell is truly empty (no text and no atom/leaf content like images/mentions).
-              if (!isCellEmpty(cellBlockNode)) return false;
+              if (!isCellNodeEmpty(cellBlockNode)) return false;
 
               const cellIndex = findCellIndex(doc, cellBlockPos);
               if (cellIndex <= 0) return false;
@@ -191,8 +192,6 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
 
               dispatch(tr);
               return true;
-
-              return false;
             }
 
             // === ARROW UP ===
@@ -211,7 +210,6 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
 
               dispatch(state.tr.setSelection(prevEndSel));
               return true;
-              return false;
             }
 
             // === ARROW DOWN ===
@@ -231,7 +229,6 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
 
               dispatch(state.tr.setSelection(nextStartSel));
               return true;
-              return false;
             }
 
             return false;
@@ -242,33 +239,8 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
   },
 });
 
-function isCellEmpty(cellBlockNode: ProseMirrorNode): boolean {
-  let hasMeaningfulContent = false;
-
-  cellBlockNode.descendants((node) => {
-    if (hasMeaningfulContent) return false;
-
-    if (node.isText) {
-      if ((node.text ?? '').trim().length > 0) {
-        hasMeaningfulContent = true;
-        return false;
-      }
-      return true;
-    }
-
-    // Atom/leaf nodes are meaningful (images, mentions, etc.), except hardBreak.
-    if (node.isAtom || node.isLeaf) {
-      if (node.type.name !== 'hardBreak') {
-        hasMeaningfulContent = true;
-        return false;
-      }
-    }
-
-    return true;
-  });
-
-  return !hasMeaningfulContent;
-}
+// NOTE: isCellNodeEmpty is now imported from ./cellEmpty.ts
+// This shared helper is also used by UnifiedStreamEditor for auto-resetting empty AI cells.
 
 /**
  * Find the index of a cellBlock in the document by its position.
