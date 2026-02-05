@@ -36,6 +36,7 @@ final class AIOrchestrator {
     ///   - streamId: Optional stream ID for RAG retrieval
     ///   - priorCells: Conversation history (each has "content", "type", optionally "imageURLs")
     ///   - sourceContext: Fallback source context (used if RAG unavailable)
+    ///   - systemPromptOverride: Optional system prompt override (used for ephemeral Quick Panel "ask" mode)
     ///   - includeHeading: If true, use prompt that requires "## Heading" on first line (for think flow)
     ///   - onModelSelected: Called with the model ID when provider is selected
     func route(
@@ -44,6 +45,7 @@ final class AIOrchestrator {
         streamId: UUID? = nil,
         priorCells: [[String: Any]],
         sourceContext: String?,
+        systemPromptOverride: String? = nil,
         includeHeading: Bool = false,
         onChunk: @escaping (String) -> Void,
         onComplete: @escaping () -> Void,
@@ -94,6 +96,7 @@ final class AIOrchestrator {
             priorCells: priorCells,
             sourceContext: contextToUse,
             classificationResult: classificationResult,
+            systemPromptOverride: systemPromptOverride,
             includeHeading: includeHeading
         ).truncated()
 
@@ -121,6 +124,7 @@ final class AIOrchestrator {
         priorCells: [[String: Any]],
         sourceContext: String?,
         classificationResult: ClassificationResult?,
+        systemPromptOverride: String? = nil,
         includeHeading: Bool = false
     ) -> LLMRequest {
         // Select appropriate system prompt based on intent and heading requirement
@@ -134,6 +138,14 @@ final class AIOrchestrator {
             systemPrompt = Prompts.applyModifier
         case .knowledge, .ambiguous:
             systemPrompt = includeHeading ? Prompts.thinkingPartnerWithHeading : Prompts.thinkingPartner
+        }
+
+        let resolvedSystemPrompt: String
+        if let override = systemPromptOverride?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty {
+            resolvedSystemPrompt = override
+        } else {
+            resolvedSystemPrompt = systemPrompt
         }
 
         // Build messages from conversation history with image support
@@ -170,7 +182,7 @@ final class AIOrchestrator {
         let llmIntent = classificationResult.map { LLMIntent(from: $0) }
 
         return LLMRequest(
-            systemPrompt: systemPrompt,
+            systemPrompt: resolvedSystemPrompt,
             messages: messages,
             temperature: 0.7,
             maxTokens: 2048,

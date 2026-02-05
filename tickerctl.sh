@@ -7,7 +7,11 @@ usage() {
 Usage: ./tickerctl.sh [command] [options]
 
 Commands:
+  help [command]       Show help/manual (more verbose than --help)
   menu                 Interactive menu (default)
+  preflight-alpha      Run preflight checks (contract + web typecheck)
+  contracts            Run bridge contract tests (if present in this checkout)
+  web-typecheck        Run Web TypeScript typecheck
   clean-derived-data    Delete repo-local Xcode DerivedData (fixes stale SPM artifacts)
   install-sparkle-tools  Install Sparkle CLI tools into ./tools/sparkle (from SwiftPM artifacts)
   build-dev            Build Debug app (unsigned)
@@ -30,6 +34,7 @@ Common options:
 release-alpha options:
   --version X.Y.Z             Required. Marketing version, e.g. 2025.12.1
   --derived-data PATH         Release DerivedData path (default: ./.build/xcode-release)
+  --skip-build                Reuse existing artifact + signature from .build/releases/vX.Y.Z/release.env
   --publish                   Create a GitHub Release via `gh` and upload the zip
   --update-appcast            Update appcast in APPCAST_REPO_DIR (requires config)
   --commit-appcast            Commit the appcast change (requires config)
@@ -89,6 +94,78 @@ require_cmd() {
     echo "Missing required command: $name" >&2
     exit 1
   }
+}
+
+cmd_help() {
+  local topic="${1:-}"
+
+  if [[ -n "$topic" ]]; then
+    case "$topic" in
+    release-alpha)
+      cat <<'EOF'
+release-alpha
+
+Builds a signed+notarized alpha artifact and prepares Sparkle update metadata.
+
+Recommended flow (smoke test before publish):
+  1) ./tickerctl.sh preflight-alpha
+  2) ./tickerctl.sh release-alpha --version X.Y.Z
+  3) Run manual smoke pass: docs/TEST_STRATEGY.md and docs/ALPHA_READINESS_CHECKLIST.md
+  4) ./tickerctl.sh release-alpha --version X.Y.Z --skip-build --promote
+
+Why split build vs promote?
+- The build step produces an installable artifact you can test locally before publishing.
+- The promote step reuses the exact zip + Sparkle signature from:
+    ./.build/releases/vX.Y.Z/release.env
+EOF
+      return 0
+      ;;
+    preflight-alpha)
+      cat <<'EOF'
+preflight-alpha
+
+Runs cheap checks that catch “protocol breakage” before you ship:
+- Bridge contract tests (if present in this checkout)
+- Web TypeScript typecheck
+
+Run it:
+  ./tickerctl.sh preflight-alpha
+EOF
+      return 0
+      ;;
+    *)
+      echo "Unknown help topic: $topic" >&2
+      usage
+      return 2
+      ;;
+    esac
+  fi
+
+  usage
+
+  cat <<'EOF'
+
+Before sending a build to testers (recommended):
+
+  1) Ensure all target PRs are merged and CI is green.
+
+  2) Run automated preflight:
+       ./tickerctl.sh preflight-alpha
+
+  3) Build a signed+notarized tester artifact (no publish):
+       ./tickerctl.sh release-alpha --version X.Y.Z
+
+  4) Manual smoke pass (must be done on the built artifact):
+     - docs/TEST_STRATEGY.md (stream CRUD, persistence restart, AI request flow)
+     - docs/ALPHA_READINESS_CHECKLIST.md (release/proxy/support expectations)
+
+  5) Promote the already-tested artifact (publish + update appcast):
+       ./tickerctl.sh release-alpha --version X.Y.Z --skip-build --promote
+
+If you come back after a break:
+  - Start with: ./tickerctl.sh help
+  - If builds fail due to stale SwiftPM artifacts: ./tickerctl.sh clean-derived-data -y
+EOF
 }
 
 confirm_delete_dir() {
@@ -244,11 +321,62 @@ build_app() {
 
 build_web_assets() {
   require_cmd npm
-  cd "$ROOT_DIR/Web"
-  if [[ ! -d node_modules ]]; then
-    npm ci
+  (cd "$ROOT_DIR/Web" && {
+    if [[ ! -d node_modules ]]; then
+      npm ci
+    fi
+    npm run build
+  })
+}
+
+web_typecheck() {
+  require_cmd npm
+  (cd "$ROOT_DIR/Web" && {
+    if [[ ! -d node_modules ]]; then
+      npm ci
+    fi
+    npm run typecheck
+  })
+}
+
+cmd_web_typecheck() {
+  echo "Web typecheck…"
+  web_typecheck
+}
+
+cmd_contracts() {
+  local script="$ROOT_DIR/tools/contracts/check_bridge_contract.mjs"
+  if [[ ! -f "$script" ]]; then
+    echo "Bridge contract tests not found at: $script"
+    echo "Tip: update to a commit that includes the contract tests, or skip this step."
+    return 0
   fi
-  npm run build
+  require_cmd node
+  echo "Bridge contract tests…"
+  node "$script"
+}
+
+cmd_preflight_alpha() {
+  local -a remaining=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -h | --help)
+      cmd_help preflight-alpha
+      return 0
+      ;;
+    *)
+      remaining+=("$1")
+      shift
+      ;;
+    esac
+  done
+  if (( ${#remaining[@]} > 0 )); then
+    echo "Unknown arguments: ${remaining[*]}" >&2
+    exit 2
+  fi
+
+  cmd_contracts
+  cmd_web_typecheck
 }
 
 cmd_build_dev() {
@@ -479,6 +607,7 @@ cmd_release_alpha() {
   local push_appcast="false"
   local promote="false"
   local allow_dirty="false"
+  local skip_build="false"
   local release_derived_data="$RELEASE_DERIVED_DATA_PATH_DEFAULT"
   local -a remaining=()
 
@@ -512,6 +641,10 @@ cmd_release_alpha() {
       allow_dirty="true"
       shift
       ;;
+    --skip-build)
+      skip_build="true"
+      shift
+      ;;
     --derived-data)
       release_derived_data="$2"
       shift 2
@@ -536,16 +669,205 @@ cmd_release_alpha() {
     echo "release-alpha requires --version (e.g. 2025.12.1)" >&2
     exit 2
   fi
+
+  require_cmd git
+  cd "$ROOT_DIR"
+
+  local release_out_dir="$ROOT_DIR/.build/releases/v${version}"
+  mkdir -p "$release_out_dir"
+  local meta_path="$release_out_dir/release.env"
+
+  if [[ "$skip_build" == "true" ]]; then
+    if [[ ! -f "$meta_path" ]]; then
+      echo "Release metadata not found: $meta_path" >&2
+      echo "Run a build first:" >&2
+      echo "  ./tickerctl.sh release-alpha --version ${version}" >&2
+      exit 1
+    fi
+
+    # shellcheck disable=SC1090
+    source "$meta_path"
+
+    local head_commit
+    head_commit="$(git rev-parse HEAD)"
+    if [[ "${RELEASE_COMMIT:-}" != "$head_commit" ]]; then
+      echo "Release metadata commit mismatch:" >&2
+      echo "  metadata: ${RELEASE_COMMIT:-<missing>}" >&2
+      echo "  HEAD:     $head_commit" >&2
+      echo "Checkout the release commit or rebuild without --skip-build." >&2
+      exit 1
+    fi
+
+    if [[ -z "${RELEASE_ZIP_PATH:-}" || -z "${RELEASE_ZIP_NAME:-}" || -z "${RELEASE_SIGNATURE:-}" || -z "${RELEASE_LENGTH:-}" || -z "${RELEASE_BUILD_NUM:-}" ]]; then
+      echo "Release metadata missing required fields: $meta_path" >&2
+      exit 1
+    fi
+
+    if [[ ! -f "$RELEASE_ZIP_PATH" ]]; then
+      echo "Release zip not found: $RELEASE_ZIP_PATH" >&2
+      exit 1
+    fi
+
+    # Carry forward metadata into local vars used by promote steps.
+    local zip_name="$RELEASE_ZIP_NAME"
+    local zip_path="$RELEASE_ZIP_PATH"
+    local signature="$RELEASE_SIGNATURE"
+    local length="$RELEASE_LENGTH"
+    local bundle_build_num="$RELEASE_BUILD_NUM"
+
+    # Prefer metadata updates repo slug if config is empty.
+    if [[ -z "$UPDATES_REPO_SLUG" && -n "${RELEASE_UPDATES_REPO_SLUG:-}" ]]; then
+      UPDATES_REPO_SLUG="$RELEASE_UPDATES_REPO_SLUG"
+    fi
+
+    if [[ -z "$UPDATES_REPO_SLUG" ]]; then
+      echo "Missing UPDATES_REPO_SLUG (owner/repo) where the zip is hosted." >&2
+      echo "Set it in tickerctl.local.sh, or ensure release.env includes RELEASE_UPDATES_REPO_SLUG." >&2
+      exit 1
+    fi
+
+    if [[ -n "${RELEASE_UPDATES_REPO_SLUG:-}" && "$UPDATES_REPO_SLUG" != "$RELEASE_UPDATES_REPO_SLUG" ]]; then
+      echo "UPDATES_REPO_SLUG mismatch:" >&2
+      echo "  metadata: $RELEASE_UPDATES_REPO_SLUG" >&2
+      echo "  config:   $UPDATES_REPO_SLUG" >&2
+      exit 1
+    fi
+
+    if [[ "$promote" == "true" ]]; then
+      publish="true"
+      update_appcast="true"
+      commit_appcast="true"
+      push_appcast="true"
+    fi
+
+    if [[ "$publish" == "true" ]]; then
+      require_cmd gh
+    fi
+
+    if [[ "$update_appcast" == "true" ]]; then
+      require_cmd python3
+    fi
+
+    local item
+    item="$(write_appcast_item "$version" "$bundle_build_num" "$signature" "$length" "$zip_name")"
+
+    echo
+    echo "=== Appcast item (paste into appcast-alpha.xml) ==="
+    echo "$item"
+    echo "=================================================="
+    echo
+
+    if [[ "$publish" != "true" && "$update_appcast" != "true" ]]; then
+      echo "Nothing else to do (no --publish/--update-appcast/--promote flags)."
+      echo "Zip: $zip_path"
+      exit 0
+    fi
+
+    # Promote from existing artifact + signature.
+    if [[ "$publish" == "true" ]]; then
+      echo "Publishing GitHub Release v${version}…"
+      local -a gh_cmd=(gh release create "v${version}" --repo "$UPDATES_REPO_SLUG")
+      if [[ -n "$UPDATES_RELEASE_TARGET" ]]; then
+        gh_cmd+=(--target "$UPDATES_RELEASE_TARGET")
+      else
+        local local_slug
+        local_slug="$(local_repo_slug_from_origin)"
+        if [[ -n "$local_slug" && "$local_slug" == "$UPDATES_REPO_SLUG" ]]; then
+          gh_cmd+=(--target "$(git rev-parse HEAD)")
+        fi
+      fi
+
+      gh_cmd+=(--title "Ticker ${version}" --notes "Alpha release ${version}" "$zip_path")
+      "${gh_cmd[@]}"
+    fi
+
+    if [[ "$update_appcast" == "true" ]]; then
+      if [[ -z "$APPCAST_REPO_DIR" ]]; then
+        echo "Missing APPCAST_REPO_DIR (path to gh-pages worktree). Set it in tickerctl.local.sh." >&2
+        exit 1
+      fi
+      if [[ ! -d "$APPCAST_REPO_DIR" ]]; then
+        echo "APPCAST_REPO_DIR not found: $APPCAST_REPO_DIR" >&2
+        exit 1
+      fi
+      local appcast_path="$APPCAST_REPO_DIR/$APPCAST_FILENAME"
+      if [[ ! -f "$appcast_path" ]]; then
+        echo "Appcast file not found: $appcast_path" >&2
+        exit 1
+      fi
+
+      echo "Updating appcast file: $appcast_path"
+      python3 - <<PY
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from datetime import datetime, timezone
+
+path = Path(r\"\"\"$appcast_path\"\"\")
+xml = path.read_text(encoding=\"utf-8\")
+
+SPARKLE_NS = \"http://www.andymatuschak.org/xml-namespaces/sparkle\"
+ET.register_namespace(\"sparkle\", SPARKLE_NS)
+
+tree = ET.ElementTree(ET.fromstring(xml))
+root = tree.getroot()
+channel = root.find(\"channel\")
+if channel is None:
+    raise SystemExit(\"appcast missing <channel>\")
+
+def sparkle(tag: str) -> str:
+    return f\"{{{SPARKLE_NS}}}{tag}\"
+
+item = ET.Element(\"item\")
+ET.SubElement(item, \"title\").text = f\"Version {r'''$version'''}\"
+ET.SubElement(item, \"pubDate\").text = datetime.now(timezone.utc).strftime(\"%a, %d %b %Y %H:%M:%S +0000\")
+ET.SubElement(item, sparkle(\"version\")).text = r'''$bundle_build_num'''
+ET.SubElement(item, sparkle(\"shortVersionString\")).text = r'''$version'''
+ET.SubElement(item, sparkle(\"minimumSystemVersion\")).text = r'''$MIN_MACOS'''
+
+enclosure = ET.SubElement(item, \"enclosure\")
+enclosure.set(\"url\", f\"https://github.com/{r'''$UPDATES_REPO_SLUG'''}/releases/download/v{r'''$version'''}/{r'''$zip_name'''}\")
+enclosure.set(\"type\", \"application/octet-stream\")
+enclosure.set(sparkle(\"edSignature\"), r'''$signature''')
+enclosure.set(\"length\", r'''$length''')
+
+channel.insert(1 if len(channel) > 0 and channel[0].tag == \"title\" else 0, item)
+
+max_items = int(r'''$APPCAST_MAX_ITEMS''')
+items = [child for child in list(channel) if child.tag == \"item\"]
+for extra in items[max_items:]:
+    channel.remove(extra)
+
+path.write_text(ET.tostring(root, encoding=\"unicode\", xml_declaration=True), encoding=\"utf-8\")
+PY
+
+      echo "Appcast updated."
+
+      if [[ "$commit_appcast" == "true" || "$push_appcast" == "true" ]]; then
+        local current_branch
+        current_branch="$(git -C "$APPCAST_REPO_DIR" branch --show-current)"
+        if [[ "$current_branch" != "gh-pages" ]]; then
+          echo "Refusing to commit/push appcast: $APPCAST_REPO_DIR is on branch '$current_branch' (expected gh-pages)." >&2
+          exit 1
+        fi
+        git -C "$APPCAST_REPO_DIR" add "$APPCAST_FILENAME"
+        if [[ "$commit_appcast" == "true" ]]; then
+          git -C "$APPCAST_REPO_DIR" commit -m "Release v${version}" || true
+        fi
+        if [[ "$push_appcast" == "true" ]]; then
+          git -C "$APPCAST_REPO_DIR" push
+        fi
+      fi
+    fi
+
+    echo "Release artifact: $zip_path"
+    exit 0
+  fi
+
   if [[ -z "$SIGN_IDENTITY" ]]; then
     echo "Missing SIGN_IDENTITY. Set it in tickerctl.local.sh." >&2
     exit 1
   fi
-  if [[ -z "$UPDATES_REPO_SLUG" ]]; then
-    echo "Missing UPDATES_REPO_SLUG (owner/repo) where the zip is hosted." >&2
-    exit 1
-  fi
 
-  require_cmd git
   require_cmd ditto
   require_cmd codesign
   require_cmd xcrun
@@ -570,10 +892,20 @@ cmd_release_alpha() {
     fi
   fi
 
+  if [[ -z "$UPDATES_REPO_SLUG" ]]; then
+    UPDATES_REPO_SLUG="$(local_repo_slug_from_origin)"
+  fi
+  if [[ -z "$UPDATES_REPO_SLUG" ]]; then
+    echo "Missing UPDATES_REPO_SLUG (owner/repo) where the zip is hosted." >&2
+    echo "Set it in tickerctl.local.sh." >&2
+    exit 1
+  fi
+
+  echo "Running preflight checks…"
+  cmd_preflight_alpha
+
   DERIVED_DATA_PATH="$release_derived_data"
   local release_dd="$DERIVED_DATA_PATH"
-  local release_out_dir="$ROOT_DIR/.build/releases/v${version}"
-  mkdir -p "$release_out_dir"
 
   echo "Building web assets (Release)…"
   build_web_assets
@@ -624,6 +956,21 @@ cmd_release_alpha() {
   echo "Preparing appcast <item>…"
   local item
   item="$(write_appcast_item "$version" "$bundle_build_num" "$signature" "$length" "$zip_name")"
+
+  echo "Writing release metadata: $meta_path"
+  {
+    echo "# Generated by tickerctl.sh release-alpha"
+    printf 'RELEASE_VERSION=%q\n' "$version"
+    printf 'RELEASE_BUILD_NUM=%q\n' "$bundle_build_num"
+    printf 'RELEASE_ZIP_NAME=%q\n' "$zip_name"
+    printf 'RELEASE_ZIP_PATH=%q\n' "$zip_path"
+    printf 'RELEASE_SIGNATURE=%q\n' "$signature"
+    printf 'RELEASE_LENGTH=%q\n' "$length"
+    printf 'RELEASE_APP_PATH=%q\n' "$app_path"
+    printf 'RELEASE_UPDATES_REPO_SLUG=%q\n' "$UPDATES_REPO_SLUG"
+    printf 'RELEASE_COMMIT=%q\n' "$(git rev-parse HEAD)"
+    printf 'RELEASE_CREATED_AT_UTC=%q\n' "$(LC_ALL=C date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  } >"$meta_path"
 
   echo
   echo "=== Appcast item (paste into appcast-alpha.xml) ==="
@@ -831,9 +1178,11 @@ cmd_menu() {
     "Build + Run Debug (dev)" \
     "Build Release (prod, unsigned)" \
     "Build + Run Release (prod, unsigned)" \
+    "Preflight (alpha): contract + web typecheck" \
     "Clean DerivedData (fix stale SPM artifacts)" \
     "Release (alpha): build+sign+notarize+zip+Sparkle-sign" \
     "Release (alpha) + promote: publish + update appcast" \
+    "Promote existing alpha (skip build): publish + update appcast" \
     "Versions (build number)" \
     "Reset: onboarding" \
     "Reset: proxy (soft)" \
@@ -861,54 +1210,64 @@ cmd_menu() {
       break
       ;;
     5)
-      cmd_clean_derived_data
+      cmd_preflight_alpha
       break
       ;;
     6)
-      echo "Enter marketing version (e.g. 2025.12.1):"
-      read -r v
-      cmd_release_alpha --version "$v"
+      cmd_clean_derived_data
       break
       ;;
     7)
       echo "Enter marketing version (e.g. 2025.12.1):"
       read -r v
-      cmd_release_alpha --version "$v" --promote
+      cmd_release_alpha --version "$v"
       break
       ;;
     8)
-      cmd_versions
+      echo "Enter marketing version (e.g. 2025.12.1):"
+      read -r v
+      cmd_release_alpha --version "$v" --promote
       break
       ;;
     9)
-      cmd_reset_onboarding
+      echo "Enter marketing version (e.g. 2025.12.1):"
+      read -r v
+      cmd_release_alpha --version "$v" --skip-build --promote
       break
       ;;
     10)
-      cmd_reset_proxy_soft
+      cmd_versions
       break
       ;;
     11)
-      cmd_reset_proxy_hard
+      cmd_reset_onboarding
       break
       ;;
     12)
-      cmd_reset_accessibility
+      cmd_reset_proxy_soft
       break
       ;;
     13)
-      cmd_reset_proxy_url
+      cmd_reset_proxy_hard
       break
       ;;
     14)
-      cmd_reset_diagnostics
+      cmd_reset_accessibility
       break
       ;;
     15)
+      cmd_reset_proxy_url
+      break
+      ;;
+    16)
+      cmd_reset_diagnostics
+      break
+      ;;
+    17)
       cmd_reset_all
       break
       ;;
-    16) break ;;
+    18) break ;;
     *) echo "Invalid selection" ;;
     esac
   done
@@ -919,7 +1278,11 @@ main() {
   shift || true
 
   case "$cmd" in
+  help) cmd_help "$@" ;;
   menu) cmd_menu ;;
+  preflight-alpha) cmd_preflight_alpha "$@" ;;
+  contracts) cmd_contracts ;;
+  web-typecheck) cmd_web_typecheck ;;
   clean-derived-data) cmd_clean_derived_data "$@" ;;
   install-sparkle-tools) cmd_install_sparkle_tools "$@" ;;
   build-dev) cmd_build_dev ;;
@@ -935,7 +1298,7 @@ main() {
   reset-diagnostics) cmd_reset_diagnostics ;;
   reset-all) cmd_reset_all ;;
   versions) cmd_versions ;;
-  -h | --help | help) usage ;;
+  -h | --help) usage ;;
   *)
     echo "Unknown command: $cmd" >&2
     usage

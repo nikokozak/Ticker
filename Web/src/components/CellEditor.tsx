@@ -8,6 +8,8 @@ import { createReferenceSuggestion } from './ReferenceSuggestion';
 import { useBlockStore } from '../store/blockStore';
 import { Cell } from '../types/models';
 import { bridge } from '../types';
+import { extractFirstHeadingFromHtml } from '../utils/cellTitle';
+import { debugError, debugLog, debugWarn } from '../utils/debug';
 
 interface CellEditorProps {
   content: string;
@@ -48,8 +50,8 @@ export function CellEditor({
         if (cellId && b.id === cellId) return false;
         // Always include AI responses (even if content appears empty after HTML strip)
         if (b.type === 'aiResponse') return true;
-        // Always include cells with a blockName or restatement
-        if (b.blockName || b.restatement) return true;
+        // Always include cells with a blockName or a heading-derived title
+        if (b.blockName || extractFirstHeadingFromHtml(b.content)) return true;
         // Exclude empty cells (spacing blocks)
         const textContent = b.content.replace(/<[^>]*>/g, '').trim();
         if (textContent.length === 0) return false;
@@ -67,7 +69,7 @@ export function CellEditor({
   // Handle image file drop/paste
   const handleImageFile = useCallback(async (file: File): Promise<string | null> => {
     if (!streamId) {
-      console.warn('Cannot save image: no streamId provided');
+      debugWarn('Cannot save image: no streamId provided');
       return null;
     }
 
@@ -83,7 +85,7 @@ export function CellEditor({
         // Timeout to prevent listener leak if response never comes
         const timeout = setTimeout(() => {
           unsubscribe();
-          console.error('Image save timed out');
+          debugError('Image save timed out');
           resolve(null);
         }, 10000);
 
@@ -99,7 +101,7 @@ export function CellEditor({
           } else if (message.type === 'imageSaveError' && message.payload?.requestId === requestId) {
             clearTimeout(timeout);
             unsubscribe();
-            console.error('Failed to save image:', message.payload?.error);
+            debugError('Failed to save image');
             resolve(null);
           }
         });
@@ -115,7 +117,7 @@ export function CellEditor({
         });
       };
       reader.onerror = () => {
-        console.error('Failed to read image file');
+        debugError('Failed to read image file');
         resolve(null);
       };
       reader.readAsDataURL(file);
@@ -345,7 +347,10 @@ export function CellEditor({
 
   useEffect(() => {
     if (pendingImage && pendingImage.cellId === cellId && editor) {
-      console.log('[CellEditor] Processing pending image:', pendingImage.url);
+      debugLog('[CellEditor] Processing pending image', {
+        cellId: pendingImage.cellId,
+        isTickerAsset: typeof pendingImage.url === 'string' && pendingImage.url.startsWith('ticker-asset:'),
+      });
       
       const node = editor.schema.nodes.image.create({ src: pendingImage.url });
       

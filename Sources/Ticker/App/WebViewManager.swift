@@ -25,6 +25,13 @@ final class WebViewManager: NSObject {
 
     // Asset management
     private let assetService = AssetService()
+    private var currentStreamIdForFileDrops: UUID?
+
+    private static func debugLog(_ message: String) {
+#if DEBUG
+        print(message)
+#endif
+    }
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -125,35 +132,20 @@ final class WebViewManager: NSObject {
 
     /// Handle files dropped via native macOS drag-and-drop
     private func handleDroppedFiles(_ urls: [URL]) {
-        print("handleDroppedFiles: \(urls.map { $0.lastPathComponent })")
+        guard let streamId = currentStreamIdForFileDrops else {
+            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                "error": AnyCodable("Open a stream before dropping files.")
+            ]))
+            return
+        }
 
-        // Get current stream ID from frontend
-        bridgeService.send(BridgeMessage(
-            type: "requestCurrentStreamId",
-            payload: nil
-        ))
-
-        // Store URLs temporarily and wait for stream ID response
-        pendingDroppedFiles = urls
-    }
-
-    private var pendingDroppedFiles: [URL] = []
-
-    /// Called by frontend with the current stream ID
-    private func processDroppedFiles(streamId: UUID) {
-        print("processDroppedFiles: streamId=\(streamId), files=\(pendingDroppedFiles.count)")
-        for url in pendingDroppedFiles {
-            // Check if this is an image file
+        for url in urls {
             if isImageFile(url) {
-                print("Processing as image: \(url.lastPathComponent)")
                 processDroppedImage(url, streamId: streamId)
             } else {
-                print("Processing as document: \(url.lastPathComponent)")
                 processDroppedDocument(url, streamId: streamId)
             }
         }
-
-        pendingDroppedFiles = []
     }
 
     /// Check if URL points to an image file
@@ -162,30 +154,38 @@ final class WebViewManager: NSObject {
         return imageExtensions.contains(url.pathExtension.lowercased())
     }
 
+    private func withSecurityScopedAccess<T>(_ url: URL, _ work: () throws -> T) rethrows -> T {
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStart {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try work()
+    }
+
     /// Process a dropped image - save to assets and notify frontend
     private func processDroppedImage(_ url: URL, streamId: UUID) {
         do {
-            let imageData = try Data(contentsOf: url)
-            print("Read image data: \(imageData.count) bytes")
-            let relativePath = try assetService.saveImage(data: imageData, streamId: streamId, filename: url.lastPathComponent)
-            let fullPath = assetService.assetURL(for: relativePath).path
-            print("Saved image to: \(fullPath)")
+            let imageData = try withSecurityScopedAccess(url) { try Data(contentsOf: url) }
+            let relativePath = try assetService.saveImage(
+                data: imageData,
+                streamId: streamId,
+                filename: url.lastPathComponent
+            )
 
-            // Use custom URL scheme that WKWebView can access
-            let assetUrl = "ticker-asset://\(fullPath)"
+            // Portable, privacy-preserving URL (no absolute user paths).
+            let assetUrl = "ticker-asset:///\(relativePath)"
 
-            // Send to frontend to insert into focused cell
             bridgeService.send(BridgeMessage(type: "imageDropped", payload: [
                 "relativePath": AnyCodable(relativePath),
-                "fullPath": AnyCodable(fullPath),
                 "assetUrl": AnyCodable(assetUrl),
                 "streamId": AnyCodable(streamId.uuidString)
             ]))
-            print("Sent imageDropped message with assetUrl: \(assetUrl)")
         } catch {
-            print("Failed to save dropped image \(url.lastPathComponent): \(error)")
-            bridgeService.send(BridgeMessage(type: "imageDropError", payload: [
-                "error": AnyCodable(error.localizedDescription)
+            Self.debugLog("WebViewManager: Failed to import dropped image: \(error)")
+            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                "error": AnyCodable("Could not import that image.")
             ]))
         }
     }
@@ -193,16 +193,18 @@ final class WebViewManager: NSObject {
     /// Process a dropped document - add as source
     private func processDroppedDocument(_ url: URL, streamId: UUID) {
         guard let sourceService else {
-            print("Source service unavailable")
+            bridgeService.send(BridgeMessage(type: "sourceError", payload: [
+                "error": AnyCodable("Sources are unavailable right now.")
+            ]))
             return
         }
 
         do {
-            let source = try sourceService.addSource(from: url, to: streamId)
+            let source = try withSecurityScopedAccess(url) { try sourceService.addSource(from: url, to: streamId) }
             let sourcePayload = encodeSource(source)
             bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
         } catch {
-            print("Failed to add dropped file \(url.lastPathComponent): \(error)")
+            Self.debugLog("WebViewManager: Failed to import dropped document: \(error)")
             bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
         }
     }
@@ -337,6 +339,7 @@ final class WebViewManager: NSObject {
                 print("Invalid loadStream payload")
                 return
             }
+            currentStreamIdForFileDrops = id
             do {
                 if let stream = try persistence.loadStream(id: id) {
                     // Build dependency graph for this stream
@@ -394,6 +397,7 @@ final class WebViewManager: NSObject {
             let title = (message.payload?["title"]?.value as? String) ?? "Untitled"
             do {
                 let stream = try persistence.createStream(title: title)
+                currentStreamIdForFileDrops = stream.id
                 let streamPayload = encodeStream(stream)
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
             } catch {
@@ -427,6 +431,9 @@ final class WebViewManager: NSObject {
             }
             do {
                 try persistence.deleteStream(id: id)
+                if currentStreamIdForFileDrops == id {
+                    currentStreamIdForFileDrops = nil
+                }
                 // Also delete stream assets (images, etc.)
                 try? assetService.deleteAssets(for: id)
                 // Reload streams list
@@ -836,8 +843,37 @@ final class WebViewManager: NSObject {
                 )
             }
 
-            // NOTE: Restatement is now included in the streamed response via the heading-enabled prompt.
-            // No separate restatement call needed (Option A from ALPHA_STABILITY_PLAN.md).
+            // Restatement is now included in the streamed response via the heading-enabled prompt (Option A),
+            // but we still emit a best-effort `restatementGenerated` message to satisfy the bridge contract
+            // and populate the legacy restatement field for search fallbacks.
+            let restatementCandidate = currentCell.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !restatementCandidate.isEmpty {
+                let maxLen = 80
+                let restatement = restatementCandidate.count > maxLen
+                    ? String(restatementCandidate.prefix(maxLen - 1)) + "…"
+                    : restatementCandidate
+
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+
+                    self.bridgeService.send(BridgeMessage(
+                        type: "restatementGenerated",
+                        payload: [
+                            "cellId": AnyCodable(cellId),
+                            "restatement": AnyCodable(restatement)
+                        ]
+                    ))
+
+                    if let persistence = self.persistence,
+                       let cellUUID = UUID(uuidString: cellId) {
+                        do {
+                            try persistence.updateCellRestatement(cellId: cellUUID, restatement: restatement)
+                        } catch {
+                            print("Failed to save restatement: \(error)")
+                        }
+                    }
+                }
+            }
 
         case "applyModifier":
             guard let payload = message.payload,
@@ -1239,17 +1275,6 @@ final class WebViewManager: NSObject {
                 }
             }
 
-        case "currentStreamId":
-            // Response from frontend with current stream ID for file drops
-            guard let payload = message.payload,
-                  let streamIdValue = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdValue) else {
-                print("Invalid currentStreamId payload")
-                pendingDroppedFiles = []
-                return
-            }
-            processDroppedFiles(streamId: streamId)
-
         case "saveImage":
             // Save base64-encoded image data to stream's assets folder
             guard let payload = message.payload,
@@ -1270,12 +1295,10 @@ final class WebViewManager: NSObject {
 
             do {
                 let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
-                let fullPath = assetService.assetURL(for: relativePath).path
-                let assetUrl = "ticker-asset://\(fullPath)"
+                let assetUrl = "ticker-asset:///\(relativePath)"
 
                 bridgeService.send(BridgeMessage(type: "imageSaved", payload: [
                     "relativePath": AnyCodable(relativePath),
-                    "fullPath": AnyCodable(fullPath),
                     "assetUrl": AnyCodable(assetUrl),
                     "requestId": AnyCodable(requestId as Any)
                 ]))

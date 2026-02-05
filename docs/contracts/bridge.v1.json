@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "swiftToWeb": {
+    "messages": {
+      "proxyAuthState": {
+        "requiredPayloadKeys": ["state"]
+      },
+      "fileDropError": {
+        "requiredPayloadKeys": ["error"]
+      },
+      "imageDropped": {
+        "requiredPayloadKeys": ["relativePath", "assetUrl", "streamId"]
+      },
+      "sourceAdded": {
+        "requiredPayloadKeys": ["source"]
+      },
+      "sourceError": {
+        "requiredPayloadKeys": ["error"]
+      },
+      "settingsLoaded": {
+        "requiredPayloadKeys": ["settings"]
+      },
+      "streamsLoaded": {
+        "requiredPayloadKeys": ["streams"]
+      },
+      "streamLoaded": {
+        "requiredPayloadKeys": ["stream"]
+      },
+      "blockRefreshStart": {
+        "requiredPayloadKeys": ["cellId"]
+      },
+      "blockRefreshChunk": {
+        "requiredPayloadKeys": ["cellId", "chunk"]
+      },
+      "blockRefreshComplete": {
+        "requiredPayloadKeys": ["cellId", "content"]
+      },
+      "blockRefreshError": {
+        "requiredPayloadKeys": ["cellId", "error"]
+      },
+      "modelSelected": {
+        "requiredPayloadKeys": ["cellId", "modelId"]
+      },
+      "streamTitleUpdated": {
+        "requiredPayloadKeys": ["id", "title"]
+      },
+      "cellSaved": {
+        "requiredPayloadKeys": ["id", "dependents"]
+      },
+      "cellDeleted": {
+        "requiredPayloadKeys": ["id"]
+      },
+      "blocksReordered": {
+        "requiredPayloadKeys": []
+      },
+      "sourceRemoved": {
+        "requiredPayloadKeys": ["id"]
+      },
+      "sourceRemoveError": {
+        "requiredPayloadKeys": ["id", "error"]
+      },
+      "aiChunk": {
+        "requiredPayloadKeys": ["cellId", "chunk"]
+      },
+      "aiComplete": {
+        "requiredPayloadKeys": ["cellId"]
+      },
+      "aiError": {
+        "requiredPayloadKeys": ["cellId", "error"],
+        "optionalPayloadKeys": [
+          "errorCode",
+          "requestId",
+          "quotaScope",
+          "quotaLimit",
+          "quotaUsed",
+          "quotaResetAt",
+          "retryAfter"
+        ]
+      },
+      "restatementGenerated": {
+        "requiredPayloadKeys": ["cellId", "restatement"]
+      },
+      "modifierCreated": {
+        "requiredPayloadKeys": ["cellId", "modifier"]
+      },
+      "modifierChunk": {
+        "requiredPayloadKeys": ["cellId", "modifierId", "chunk"]
+      },
+      "modifierComplete": {
+        "requiredPayloadKeys": ["cellId", "modifierId"]
+      },
+      "modifierError": {
+        "requiredPayloadKeys": ["cellId", "error"]
+      },
+      "exportComplete": {
+        "requiredPayloadKeys": ["streamId", "path"]
+      },
+      "exportError": {
+        "requiredPayloadKeys": ["streamId", "error"]
+      },
+      "exportCanceled": {
+        "requiredPayloadKeys": ["streamId"]
+      },
+      "imageSaveError": {
+        "requiredPayloadKeys": ["error", "requestId"]
+      },
+      "imageSaved": {
+        "requiredPayloadKeys": ["relativePath", "assetUrl", "requestId"]
+      },
+      "assetPath": {
+        "requiredPayloadKeys": ["relativePath", "fullPath"]
+      },
+      "streamsChanged": {
+        "requiredPayloadKeys": []
+      },
+      "quickPanelCellsAdded": {
+        "requiredPayloadKeys": ["streamId", "cells", "isNewStream"],
+        "optionalPayloadKeys": ["triggerAI"]
+      },
+      "callback": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      }
+    }
+  }
+}

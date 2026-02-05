@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { bridge } from '../types';
 import { isUnifiedEditorEnabled, setUnifiedEditorEnabled } from '../utils/featureFlags';
+import { debugError } from '../utils/debug';
 
 type Appearance = 'light' | 'dark' | 'system';
 type DefaultModel = 'openai' | 'anthropic';
@@ -89,12 +90,12 @@ export function Settings({ onClose }: SettingsProps) {
     // First, load cached state immediately (no network call)
     bridge.sendAsync<ProxyAuthStatus>('loadProxyAuth')
       .then(setProxyAuth)
-      .catch((err) => console.error('Failed to load proxy auth:', err));
+      .catch(() => debugError('Failed to load proxy auth'));
 
     // Then refresh from server to get fresh usage data
     bridge.sendAsync<ProxyAuthStatus>('refreshProxyAuth')
       .then(setProxyAuth)
-      .catch((err) => console.error('Failed to refresh proxy auth:', err));
+      .catch(() => debugError('Failed to refresh proxy auth'));
   }, []);
 
   // Validate device key
@@ -135,7 +136,7 @@ export function Settings({ onClose }: SettingsProps) {
       const result = await bridge.sendAsync<{ success: boolean; state: ProxyAuthState }>('clearProxyDeviceKey');
       setProxyAuth((prev) => (prev ? { ...prev, state: result.state, supportId: null, limits: null, usage: null } : null));
     } catch (err) {
-      console.error('Failed to clear device key:', err);
+      debugError('Failed to clear device key');
     }
   };
 
@@ -186,7 +187,7 @@ export function Settings({ onClose }: SettingsProps) {
       // Could show a toast here, but for simplicity just alert
       alert('Support bundle copied to clipboard');
     } catch (err) {
-      console.error('Failed to copy support bundle:', err);
+      debugError('Failed to copy support bundle');
       alert('Failed to copy support bundle');
     }
   };
