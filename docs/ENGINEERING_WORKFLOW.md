@@ -54,12 +54,12 @@ Every PR includes:
 
 - Swift: `xcodebuild build -scheme Ticker -destination 'platform=OS X' -derivedDataPath .build/xcode`
 - Web: `cd Web && npm run typecheck`
+- Bridge contract: `node tools/contracts/check_bridge_contract.mjs`
 
 ## Review checklist (fast but strict)
 
 - Does this change affect persistence or identifiers? (UUID invariants, migrations)
-- Does this change affect bridge messages? (add/verify schema snapshot tests)
+- Does this change affect bridge messages? (run contract tests; update `docs/contracts/bridge.v1.json`)
 - Does this change affect the proxy contract? (versioned request/response changes)
 - Are errors user-readable and actionable?
 - Are we collecting any new diagnostics? (update `docs/PRIVACY_DIAGNOSTICS.md`)
-

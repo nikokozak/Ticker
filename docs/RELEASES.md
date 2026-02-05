@@ -18,10 +18,25 @@ Rationale: GitHub asset URLs typically redirect; Sparkle update checks are more 
 
 - `CHANGELOG.md` updated for the release
 - Tag created: `vYYYY.MM.patch`
+- Preflight checks pass:
+  - `./tickerctl.sh preflight-alpha`
 - Signed + notarized build produced (see `docs/MAC_DISTRIBUTION.md`)
 - Sparkle appcast updated and published
 - Rollback available: last 2–3 releases remain in appcast
 - Data safety verified: upgrading an existing `ticker.db` triggers a pre-migration backup (see `docs/DATA_MIGRATIONS.md`)
+- Manual QA: generate an AI response containing `![x](https://example.com/x.png)` → no image loads (and no external network request is triggered)
+
+## Recommended flow (smoke test before publish)
+
+1) Build a tester artifact (no publish):
+   - `./tickerctl.sh release-alpha --version YYYY.MM.patch`
+
+2) Run the manual smoke pass on the built artifact:
+   - `docs/TEST_STRATEGY.md`
+   - `docs/ALPHA_READINESS_CHECKLIST.md`
+
+3) Promote the already-tested artifact (no rebuild):
+   - `./tickerctl.sh release-alpha --version YYYY.MM.patch --skip-build --promote`
 
 ## Rollback policy
 

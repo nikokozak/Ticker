@@ -13,14 +13,14 @@ Usage: ./run.sh [--dev|-d] [--prod|-p] [-h]
 Notes:
   - This script builds an unsigned app (`CODE_SIGNING_ALLOWED=NO`). Distribution builds
     should follow the signing/notarization runbook.
-  - Override build output location with DERIVED_DATA_PATH, e.g.:
+  - Override build output location with DERIVED_DATA_PATH (or TICKER_DERIVED_DATA_PATH), e.g.:
       DERIVED_DATA_PATH=/tmp/ticker-xcode-build ./run.sh --prod
 EOF
 }
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode"
-DERIVED_DATA_PATH="${TICKER_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}"
+DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-${TICKER_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}}"
 APP="$DERIVED_DATA_PATH/Build/Products"
 
 MODE="dev"
@@ -46,11 +46,41 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+resolve_package_dependencies_if_needed() {
+  local workspace_state="$DERIVED_DATA_PATH/SourcePackages/workspace-state.json"
+  local sparkle_xcframework="$DERIVED_DATA_PATH/SourcePackages/artifacts/sparkle/Sparkle/Sparkle.xcframework"
+
+  if [[ -f "$workspace_state" ]] && grep -Fq "Sparkle.xcframework" "$workspace_state" && ! grep -Fq "$sparkle_xcframework" "$workspace_state"; then
+    echo "Detected stale SwiftPM artifact paths in DerivedData; clearing: $DERIVED_DATA_PATH" >&2
+    case "$DERIVED_DATA_PATH" in
+    "$ROOT_DIR"/*) rm -rf "$DERIVED_DATA_PATH" ;;
+    *)
+      echo "Refusing to delete DerivedData outside repo root: $DERIVED_DATA_PATH" >&2
+      echo "Try: ./tickerctl.sh clean-derived-data -y --derived-data \"$DERIVED_DATA_PATH\"" >&2
+      return 1
+      ;;
+    esac
+  fi
+
+  if [[ -d "$sparkle_xcframework" ]]; then
+    return 0
+  fi
+
+  echo "Resolving Swift package dependencies (Sparkle)..."
+  xcodebuild -resolvePackageDependencies \
+    -project Ticker.xcodeproj \
+    -scheme Ticker \
+    -derivedDataPath "$DERIVED_DATA_PATH" \
+    -quiet
+}
+
 build_app() {
   local configuration="$1"
 
   echo "Building Ticker ($configuration)..."
   cd "$ROOT_DIR"
+
+  resolve_package_dependencies_if_needed
 
   local -a extra_build_settings=()
   if [[ "$configuration" == "Release" ]]; then
@@ -59,26 +89,37 @@ build_app() {
     extra_build_settings+=("CURRENT_PROJECT_VERSION=$build_number")
   fi
 
+  local log_path
+  log_path="$(mktemp -t ticker-xcodebuild.XXXXXX.log)"
+
+  local -a cmd=(
+    xcodebuild build
+    -project Ticker.xcodeproj
+    -scheme Ticker
+    -configuration "$configuration"
+    -destination 'platform=macOS'
+    -derivedDataPath "$DERIVED_DATA_PATH"
+    CODE_SIGNING_ALLOWED=NO
+    -quiet
+  )
   if [[ ${#extra_build_settings[@]} -gt 0 ]]; then
-    xcodebuild build \
-      -project Ticker.xcodeproj \
-      -scheme Ticker \
-      -configuration "$configuration" \
-      -destination 'platform=macOS' \
-      -derivedDataPath "$DERIVED_DATA_PATH" \
-      CODE_SIGNING_ALLOWED=NO \
-      "${extra_build_settings[@]}" \
-      -quiet
-  else
-    xcodebuild build \
-      -project Ticker.xcodeproj \
-      -scheme Ticker \
-      -configuration "$configuration" \
-      -destination 'platform=macOS' \
-      -derivedDataPath "$DERIVED_DATA_PATH" \
-      CODE_SIGNING_ALLOWED=NO \
-      -quiet
+    cmd+=("${extra_build_settings[@]}")
   fi
+
+  set +e
+  "${cmd[@]}" 2>&1 | tee "$log_path"
+  local status="${PIPESTATUS[0]}"
+  set -e
+
+  if (( status != 0 )); then
+    if grep -Fq "There is no XCFramework found" "$log_path" && grep -Fq "Sparkle.xcframework" "$log_path"; then
+      echo "Tip: missing Sparkle XCFramework usually means stale SwiftPM artifacts." >&2
+      echo "Try: ./tickerctl.sh clean-derived-data -y" >&2
+    fi
+  fi
+
+  rm -f "$log_path" 2>/dev/null || true
+  return "$status"
 }
 
 run_dev() {

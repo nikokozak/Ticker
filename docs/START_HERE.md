@@ -42,6 +42,21 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 - Never ship a migration without a backup and a downgrade story.
 - Treat the proxy request ID as your primary debugging handle.
 
+## Running locally (when you come back in a month)
+
+Preferred entry point: `./tickerctl.sh` (menu + scripted commands).
+
+Common flows:
+- Dev (Debug + Vite): `./tickerctl.sh run-dev`
+- Prod-ish (Release + bundled web): `./tickerctl.sh run-prod`
+
+Legacy runner (still supported):
+- Dev: `./run.sh --dev`
+- Prod: `./run.sh --prod`
+
+If you hit SwiftPM/Sparkle artifact issues, run:
+- `./tickerctl.sh clean-derived-data -y`
+
 ## Local data (what exists on disk)
 
 Ticker stores user data under:
