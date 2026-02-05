@@ -227,6 +227,16 @@ final class WebViewManager: NSObject {
 
     /// Load the MLX classifier in the background (only if smart routing enabled)
     private func loadMLXClassifier() {
+        // Unit tests should not trigger heavyweight MLX model downloads or background loading.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            DebugLog.log("MLX classifier skipped: running unit tests")
+            classifierSkipped = true
+            isClassifierReady = true
+            classifierReady?.resume()
+            classifierReady = nil
+            return
+        }
+
         // Only load classifier if smart routing is enabled
         // Note: No vendor keys required - classifier runs locally, proxy handles routing
         guard SettingsService.shared.smartRoutingEnabled else {

@@ -52,6 +52,7 @@ jobs:
           filters: |
             swift:
               - 'Sources/**'
+              - 'Tests/**'
               - 'Package.swift'
               - 'Package.resolved'
               - '.swiftpm/**'
@@ -92,11 +93,11 @@ jobs:
         if: steps.swift_should_build.outputs.should_build == 'true'
         working-directory: Web
         run: npm ci && npm run build
-      - name: Build (no code signing)
+      - name: Test (no code signing)
         if: steps.swift_should_build.outputs.should_build == 'true'
         run: |
           BUILD_NUMBER=$(git rev-list --count HEAD)
-          xcodebuild build \
+          xcodebuild test \
             -project Ticker.xcodeproj \
             -scheme Ticker \
             -destination 'platform=macOS' \
