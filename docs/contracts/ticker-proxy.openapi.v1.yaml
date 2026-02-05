@@ -1,0 +1,841 @@
+openapi: 3.0.3
+info:
+  title: Ticker Proxy API
+  version: "1.0"
+  description: |
+    LLM proxy with device key authentication, token budgets, and diagnostics.
+
+    ## Authentication
+
+    Two authentication patterns are used:
+
+    - **Header-auth**: `Authorization: Bearer <device_key>` + `X-Ticker-Device-Id: <uuid>`
+      - Used by: `/v1/auth/validate`, `/v1/llm/request`, `/v1/diagnostics/*`
+    - **Key-in-body**: JSON field `device_key` in request body
+      - Used by: `/v1/feedback`, `/v1/feedback/{feedback_id}/attachments*`
+
+    ## Correlation
+
+    All responses include `X-Ticker-Request-Id` header for request tracing.
+    Clients should treat `X-Ticker-Request-Id` as an opaque string.
+    Clients should not send `X-Ticker-Request-Id`; any supplied value is ignored.
+
+servers:
+  - url: https://ticker-proxy.fly.dev/v1
+    description: Production
+  - url: http://localhost:4000/v1
+    description: Local development
+
+components:
+  securitySchemes:
+    DeviceKeyAuth:
+      type: http
+      scheme: bearer
+      description: Device key passed in Authorization header
+
+  parameters:
+    TickerDeviceId:
+      name: X-Ticker-Device-Id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Unique device identifier (UUID)
+
+    TickerAppVersion:
+      name: X-Ticker-App-Version
+      in: header
+      required: false
+      schema:
+        type: string
+      description: App version for analytics (e.g., "2025.1.0")
+
+    TickerPlatform:
+      name: X-Ticker-Platform
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Platform identifier (e.g., "macOS")
+
+    TickerOsVersion:
+      name: X-Ticker-OS-Version
+      in: header
+      required: false
+      schema:
+        type: string
+      description: OS version for analytics
+
+  headers:
+    X-Ticker-Request-Id:
+      schema:
+        type: string
+        example: "b7c0c5d0c8bf4a6e8c4548ed21f8fdd2"
+      description: Server-generated request identifier for tracing (opaque)
+
+    X-Ticker-Provider:
+      schema:
+        type: string
+        example: "perplexity"
+      description: The resolved LLM provider used for this request (may differ from requested provider due to routing)
+
+    X-Ticker-Model:
+      schema:
+        type: string
+        example: "sonar"
+      description: The resolved model ID used for this request
+
+    Retry-After:
+      schema:
+        type: integer
+      description: Seconds until rate limit resets
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+              enum:
+                - rate_limit_exceeded
+                - token_budget_exceeded
+                - invalid_key
+                - key_revoked
+                - key_bound_elsewhere
+                - missing_auth
+                - invalid_auth
+                - missing_device_id
+                - invalid_device_id
+                - missing_key
+                - validation_error
+                - upstream_error
+                - storage_error
+                - internal_error
+                - not_found
+                - forbidden
+                - payload_too_large
+                - metadata_too_large
+                - too_many_attachments
+                - upload_not_found
+                - upload_too_large
+                - size_mismatch
+                - invalid_state
+            message:
+              type: string
+              description: Human-readable error message
+            details:
+              type: object
+              description: Additional error context
+              additionalProperties: true
+
+    Usage:
+      type: object
+      properties:
+        input_tokens:
+          type: integer
+          nullable: true
+        output_tokens:
+          type: integer
+          nullable: true
+        total_tokens:
+          type: integer
+          nullable: true
+
+    Message:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          description: Message role (system, user, assistant)
+        content:
+          $ref: '#/components/schemas/MessageContent'
+
+    MessageContent:
+      description: |
+        Message content - either a string (text-only) or an array of content parts (multimodal).
+      oneOf:
+        - type: string
+          description: Plain text content
+        - type: array
+          items:
+            $ref: '#/components/schemas/ContentPart'
+          minItems: 1
+          description: Array of content parts (text and/or images)
+
+    ContentPart:
+      description: A content part within a message (text or image).
+      oneOf:
+        - $ref: '#/components/schemas/TextPart'
+        - $ref: '#/components/schemas/ImagePart'
+
+    TextPart:
+      type: object
+      required:
+        - type
+        - text
+      properties:
+        type:
+          type: string
+          enum:
+            - text
+        text:
+          type: string
+          description: The text content
+
+    ImagePart:
+      type: object
+      required:
+        - type
+        - source
+      properties:
+        type:
+          type: string
+          enum:
+            - image
+        source:
+          $ref: '#/components/schemas/ImageSource'
+
+    ImageSource:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum:
+            - url
+            - base64
+          description: Source type (url for remote images, base64 for embedded)
+        url:
+          type: string
+          format: uri
+          description: Image URL (required when type is 'url')
+        media_type:
+          type: string
+          enum:
+            - image/jpeg
+            - image/png
+            - image/gif
+            - image/webp
+          description: MIME type (required when type is 'base64')
+        data:
+          type: string
+          description: Base64-encoded image data (required when type is 'base64')
+
+    Intent:
+      type: object
+      description: |
+        Client-side intent classification result. Used for intelligent routing
+        (e.g., search queries route to Perplexity). Unknown intent types are
+        ignored for forward compatibility.
+      properties:
+        type:
+          type: string
+          description: Classified intent type from MLX classifier
+          enum:
+            - search
+            - knowledge
+            - expand
+            - summarize
+            - rewrite
+            - extract
+            - ambiguous
+        confidence:
+          type: number
+          format: float
+          description: Classification confidence score (0-1)
+          minimum: 0
+          maximum: 1
+        source:
+          type: string
+          description: Classification source (e.g., "mlx")
+          example: "mlx"
+
+    LlmRequest:
+      type: object
+      required:
+        - messages
+      properties:
+        model:
+          type: string
+          description: |
+            Model identifier. Use "default" or omit to let proxy choose based on
+            provider and whether request contains images. Explicit model IDs are
+            passed through unchanged.
+          example: "default"
+          default: "default"
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+          minItems: 1
+        provider:
+          type: string
+          description: |
+            Preferred LLM provider. May be overridden by intent routing
+            (e.g., search intent forces perplexity).
+          enum:
+            - openai
+            - anthropic
+            - perplexity
+          default: openai
+        stream:
+          type: boolean
+          description: Enable SSE streaming response.
+          default: false
+        intent:
+          $ref: '#/components/schemas/Intent'
+
+    LlmResponse:
+      type: object
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        output_text:
+          type: string
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    AuthValidateResponse:
+      type: object
+      properties:
+        support_id:
+          type: string
+          description: User-visible support identifier
+        bound_device_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Device ID this key is bound to
+        limits:
+          type: object
+          properties:
+            reqs_per_min:
+              type: integer
+            tokens_per_day:
+              type: integer
+            tokens_per_month:
+              type: integer
+        usage:
+          type: object
+          properties:
+            reqs_this_minute:
+              type: integer
+            tokens_today:
+              type: integer
+            tokens_this_month:
+              type: integer
+            day_reset_at:
+              type: string
+              format: date-time
+            month_reset_at:
+              type: string
+              format: date-time
+
+    DiagnosticRequest:
+      type: object
+      additionalProperties: true
+      description: Structured diagnostic payload (max 64KB)
+
+    DiagnosticResponse:
+      type: object
+      properties:
+        diagnostic_id:
+          type: string
+          format: uuid
+
+    FeedbackRequest:
+      type: object
+      required:
+        - device_key
+        - type
+        - title
+      properties:
+        device_key:
+          type: string
+          description: Device key for authentication
+        type:
+          type: string
+          enum:
+            - bug
+            - feature
+        title:
+          type: string
+          maxLength: 500
+        description:
+          type: string
+          maxLength: 10000
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional context (max 64KB)
+        related_request_id:
+          type: string
+          description: Request ID related to this feedback
+
+    FeedbackResponse:
+      type: object
+      properties:
+        feedback_id:
+          type: string
+          description: Human-readable feedback ID (fb_...)
+          example: "fb_abc123"
+
+    AttachmentCreateRequest:
+      type: object
+      required:
+        - device_key
+        - filename
+        - content_type
+        - byte_size
+      properties:
+        device_key:
+          type: string
+        filename:
+          type: string
+        content_type:
+          type: string
+        byte_size:
+          type: integer
+          description: Expected file size in bytes (max 10MB)
+
+    AttachmentCreateResponse:
+      type: object
+      properties:
+        attachment_id:
+          type: string
+          format: uuid
+        upload:
+          type: object
+          properties:
+            url:
+              type: string
+              format: uri
+              description: Presigned PUT URL
+            headers:
+              type: object
+              additionalProperties:
+                type: string
+              description: Headers to include in PUT request
+            expires_at:
+              type: string
+              format: date-time
+
+    AttachmentCompleteRequest:
+      type: object
+      required:
+        - device_key
+      properties:
+        device_key:
+          type: string
+
+    AttachmentCompleteResponse:
+      type: object
+      properties:
+        attachment_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - uploaded
+        byte_size:
+          type: integer
+
+  responses:
+    Unauthorized:
+      description: Authentication failed
+      headers:
+        X-Ticker-Request-Id:
+          $ref: '#/components/headers/X-Ticker-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    BadRequest:
+      description: Request validation failed (missing/invalid device ID, invalid params)
+      headers:
+        X-Ticker-Request-Id:
+          $ref: '#/components/headers/X-Ticker-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    RateLimitedOrBudgetExceeded:
+      description: Rate limit or token budget exceeded
+      headers:
+        X-Ticker-Request-Id:
+          $ref: '#/components/headers/X-Ticker-Request-Id'
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            rate_limited:
+              summary: Request rate limit exceeded
+              value:
+                error:
+                  code: rate_limit_exceeded
+                  message: "Rate limit exceeded (20/min)"
+                  details:
+                    limit: 20
+                    reset_at: "2025-01-01T00:01:00Z"
+            token_budget:
+              summary: Token budget exceeded
+              value:
+                error:
+                  code: token_budget_exceeded
+                  message: "Token budget exceeded"
+                  details:
+                    scope: "day"
+                    limit: 100000
+                    used: 100500
+                    reset_at: "2025-01-02T00:00:00Z"
+
+    ValidationError:
+      description: Request validation failed
+      headers:
+        X-Ticker-Request-Id:
+          $ref: '#/components/headers/X-Ticker-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    NotFound:
+      description: Resource not found
+      headers:
+        X-Ticker-Request-Id:
+          $ref: '#/components/headers/X-Ticker-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    PayloadTooLarge:
+      description: Payload exceeds size limit
+      headers:
+        X-Ticker-Request-Id:
+          $ref: '#/components/headers/X-Ticker-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    UpstreamError:
+      description: LLM provider error
+      headers:
+        X-Ticker-Request-Id:
+          $ref: '#/components/headers/X-Ticker-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+paths:
+  /auth/validate:
+    post:
+      summary: Validate device key and get usage info
+      description: |
+        Validates the device key, binds to device on first use, and returns
+        current limits and usage information.
+      security:
+        - DeviceKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TickerDeviceId'
+        - $ref: '#/components/parameters/TickerAppVersion'
+        - $ref: '#/components/parameters/TickerPlatform'
+        - $ref: '#/components/parameters/TickerOsVersion'
+      responses:
+        '200':
+          description: Key validated successfully
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthValidateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimitedOrBudgetExceeded'
+
+  /llm/request:
+    post:
+      summary: Proxy LLM request
+      description: |
+        Proxies chat completion requests to the specified LLM provider.
+        Enforces token budgets and rate limits.
+
+        **Supported providers:** `openai`, `anthropic`, `perplexity`
+
+        **Vision support:** `openai` and `anthropic` support image inputs.
+        Pass content as an array of parts with `type: text` or `type: image`.
+        Returns 400 if images are sent to a provider that doesn't support vision.
+
+        **Streaming:** When `stream: true`, returns Server-Sent Events with:
+        - `event: delta` - Text chunk: `{"text": "..."}`
+        - `event: done` - Completion: `{"usage": {...}}`
+        - `event: error` - Error: `{"error": {...}}`
+      security:
+        - DeviceKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TickerDeviceId'
+        - $ref: '#/components/parameters/TickerAppVersion'
+        - $ref: '#/components/parameters/TickerPlatform'
+        - $ref: '#/components/parameters/TickerOsVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LlmRequest'
+      responses:
+        '200':
+          description: LLM response
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+            X-Ticker-Provider:
+              $ref: '#/components/headers/X-Ticker-Provider'
+            X-Ticker-Model:
+              $ref: '#/components/headers/X-Ticker-Model'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream when stream=true. Events are delta, done, or error.
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimitedOrBudgetExceeded'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
+
+  /diagnostics/event:
+    post:
+      summary: Store diagnostic event
+      description: |
+        Stores a structured diagnostic event. Payload must be JSON and under 64KB.
+        Events are retained for 30 days.
+      security:
+        - DeviceKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TickerDeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiagnosticRequest'
+      responses:
+        '200':
+          description: Event stored
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosticResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+
+  /diagnostics/crash:
+    post:
+      summary: Store crash report
+      description: |
+        Stores a crash report. Payload must be JSON and under 64KB.
+        Reports are retained for 30 days.
+      security:
+        - DeviceKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TickerDeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiagnosticRequest'
+      responses:
+        '200':
+          description: Crash report stored
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosticResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+
+  /feedback:
+    post:
+      summary: Submit feedback
+      description: |
+        Submit bug reports or feature requests. Device key is passed in the
+        request body (not header). Separate rate limit applies.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackRequest'
+      responses:
+        '200':
+          description: Feedback submitted
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimitedOrBudgetExceeded'
+
+  /feedback/{feedback_id}/attachments:
+    post:
+      summary: Create attachment and get upload URL
+      description: |
+        Creates a pending attachment and returns a presigned URL for upload.
+        Maximum 5 attachments per feedback, 10MB per file.
+      parameters:
+        - name: feedback_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Feedback ID (fb_...)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachmentCreateRequest'
+      responses:
+        '200':
+          description: Attachment created with upload URL
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentCreateResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not owner of feedback
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /feedback/{feedback_id}/attachments/{attachment_id}/complete:
+    post:
+      summary: Mark attachment upload complete
+      description: |
+        Marks the attachment as uploaded after the client finishes the PUT request.
+        Validates file size matches declared size and is under 10MB.
+      parameters:
+        - name: feedback_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: attachment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachmentCompleteRequest'
+      responses:
+        '200':
+          description: Attachment marked as uploaded
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentCompleteResponse'
+        '400':
+          description: Invalid state, upload not found, or size mismatch
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not owner of attachment
+          headers:
+            X-Ticker-Request-Id:
+              $ref: '#/components/headers/X-Ticker-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
