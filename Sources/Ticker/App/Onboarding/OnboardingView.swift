@@ -1,17 +1,21 @@
 import SwiftUI
 import ApplicationServices
+import CoreGraphics
 
 /// Onboarding view shown on first launch
 struct OnboardingView: View {
     @State private var step: OnboardingStep = .welcome
     @State private var hasAccessibility = false
     @State private var isPromptingAccessibility = false
+    @State private var hasScreenRecording = false
+    @State private var isPromptingScreenRecording = false
 
     var onComplete: () -> Void
 
     enum OnboardingStep {
         case welcome
         case accessibility
+        case screenRecording
         case complete
     }
 
@@ -19,7 +23,7 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             // Progress indicator
             HStack(spacing: 8) {
-                ForEach(0..<3, id: \.self) { index in
+                ForEach(0..<4, id: \.self) { index in
                     Circle()
                         .fill(stepIndex >= index ? Color.accentColor : Color.gray.opacity(0.3))
                         .frame(width: 8, height: 8)
@@ -35,6 +39,8 @@ struct OnboardingView: View {
                     welcomeStep
                 case .accessibility:
                     accessibilityStep
+                case .screenRecording:
+                    screenRecordingStep
                 case .complete:
                     completeStep
                 }
@@ -50,7 +56,8 @@ struct OnboardingView: View {
         switch step {
         case .welcome: return 0
         case .accessibility: return 1
-        case .complete: return 2
+        case .screenRecording: return 2
+        case .complete: return 3
         }
     }
 
@@ -129,18 +136,80 @@ struct OnboardingView: View {
 
             HStack(spacing: 12) {
                 Button("Skip for now") {
-                    withAnimation { step = .complete }
+                    withAnimation { step = .screenRecording }
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
 
                 Button(hasAccessibility ? "Continue" : "Continue") {
-                    withAnimation { step = .complete }
+                    withAnimation { step = .screenRecording }
                 }
                 .buttonStyle(.borderedProminent)
             }
         }
         .onAppear { checkAccessibility() }
+    }
+
+    // MARK: - Screen Recording Step
+
+    private var screenRecordingStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "rectangle.inset.filled.and.cursorarrow")
+                .font(.system(size: 48))
+                .foregroundColor(.accentColor)
+
+            Text("Screen Recording Permission")
+                .font(.system(size: 20, weight: .semibold))
+
+            Text("Ticker needs Screen Recording permission to capture screenshots when you press Cmd+;.")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            Text("After enabling, you may need to restart Ticker for it to take effect.")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            if hasScreenRecording {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text("Permission granted")
+                        .foregroundColor(.green)
+                }
+                .font(.system(size: 14, weight: .medium))
+            } else {
+                Button("Open System Settings") {
+                    guard !isPromptingScreenRecording else { return }
+                    isPromptingScreenRecording = true
+                    requestScreenRecording()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        isPromptingScreenRecording = false
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isPromptingScreenRecording)
+            }
+
+            Spacer()
+
+            HStack(spacing: 12) {
+                Button("Skip for now") {
+                    withAnimation { step = .complete }
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+
+                Button("Continue") {
+                    withAnimation { step = .complete }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .onAppear { checkScreenRecording() }
     }
 
     // MARK: - Complete Step
@@ -207,6 +276,22 @@ struct OnboardingView: View {
         Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
             if AXIsProcessTrusted() {
                 hasAccessibility = true
+                timer.invalidate()
+            }
+        }
+    }
+
+    private func checkScreenRecording() {
+        hasScreenRecording = CGPreflightScreenCaptureAccess()
+    }
+
+    private func requestScreenRecording() {
+        _ = CGRequestScreenCaptureAccess()
+
+        // Poll for permission change (may still require restart, but this keeps UI honest when it updates).
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+            if CGPreflightScreenCaptureAccess() {
+                hasScreenRecording = true
                 timer.invalidate()
             }
         }
