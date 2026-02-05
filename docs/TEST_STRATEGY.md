@@ -27,6 +27,7 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
    - Proxy → Provider
    - Response returned and rendered
    - Request correlation ID captured (`X-Ticker-Request-Id`, treated as an opaque string)
+   - First line of Think output is an editable `##` heading and UI titles derive from it
 
 4) **Schema snapshot tests**
    - Bridge message payload shapes

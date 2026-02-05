@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Cell } from '../types';
 import { PromptEditor } from './PromptEditor';
 import { useBlockStore } from '../store/blockStore';
+import { deriveCellTitle } from '../utils/cellTitle';
 
 interface CellOverlayProps {
   cell: Cell;
@@ -222,7 +223,7 @@ export function CellOverlay({
                 className="cell-overlay-ref-link"
                 onClick={() => handleReferenceClick(refCell.id)}
               >
-                {refCell.blockName || refCell.restatement || `Block ${refCell.id.slice(0, 4)}`}
+                {deriveCellTitle(refCell)}
               </button>
             ))}
           </div>

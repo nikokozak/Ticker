@@ -12,13 +12,17 @@ enum Prompts {
     Style:
     - Terse. No filler, no hedging, no "I think" or "It's worth noting"
     - Use markdown: bullets, bold for emphasis, code blocks
-    - DO NOT start with a header—one is provided automatically
-    - Use ## headers only for subsections within longer responses
+    - Start with a short Markdown H2 title as the first line: "## <title>"
+      - Keep under 8 words
+      - No quotes, no commentary
+      - Follow with a blank line, then the content
+    - Use additional ##/### headers only for subsections within longer responses
     - Lead with substance—facts, data, specifics
     - If uncertain, state it briefly and move on
 
-    Bad: "## Topic\n\nLet me explain..."
-    Good: "**Key point**: ..."
+    Example:
+    ## Topic
+    - **Key point**: ...
     """
 
     static let restatement = """
@@ -41,8 +45,10 @@ enum Prompts {
     Provide factual, current information for a research document.
 
     Style:
-    - DO NOT start with a header—one is provided automatically
-    - Use markdown: bullets, bold for key terms, ## only for subsections
+    - Start with a short Markdown H2 title as the first line: "## <title>"
+      - Keep under 8 words
+      - Follow with a blank line, then the content
+    - Use markdown: bullets, bold for key terms, ##/### only for subsections
     - Lead with the most relevant facts
     - Include specific data, dates, numbers
     - Cite sources inline when helpful

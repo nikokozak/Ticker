@@ -868,7 +868,7 @@ final class WebViewManager: NSObject {
                     ]
                 ))
 
-                // Also persist to database if we have a stream ID and persistence
+                // Also persist to database if we have persistence
                 if let persistence = self.persistence,
                    let cellUUID = UUID(uuidString: cellId) {
                     do {
