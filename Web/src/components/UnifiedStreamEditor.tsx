@@ -742,9 +742,7 @@ export function UnifiedStreamEditor({
       // Check if the cell is empty
       if (!isCellNodeEmpty(cellInfo.node)) continue;
 
-      if (IS_DEV) {
-        console.log('[UnifiedStreamEditor] Auto-resetting empty AI cell to text:', cellId);
-      }
+      debugLog('[UnifiedStreamEditor] Auto-resetting empty AI cell to text', { cellId });
 
       // Reset to text type in store
       updateBlock(cellId, {
