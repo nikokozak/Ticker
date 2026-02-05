@@ -9,7 +9,7 @@ Status:
 
 Contract + implementation notes live in:
 - `docs/GITHUB_BACKLOG_ALPHA.md` (Epic C/D acceptance criteria + integration notes)
-- `Ticker-Proxy/openapi/v1.yaml` (machine-readable API contract)
+- `docs/contracts/ticker-proxy.openapi.v1.yaml` (vendored machine-readable API contract; source of truth lives in `Ticker-Proxy/openapi/v1.yaml`)
 
 ## Goals (alpha)
 
@@ -42,6 +42,10 @@ This provides lightweight abuse detection and prevents casual key sharing.
 - The **machine-readable API contract** (OpenAPI/JSON schema) should live in the `ticker-proxy` repo (e.g., `openapi/v1.yaml`) and be treated as the source of truth for request/response shapes.
 - This repo (`Ticker`) should vendor a **pinned copy** of that contract for client development + snapshot tests, and update it only when the proxy contract changes.
 - Versioning is URL-based (`/v1/...`); prefer “proxy first, backwards compatible” changes when evolving endpoints during alpha.
+
+Vendored contract workflow:
+- Update pinned copy: `cp ../Ticker-Proxy/openapi/v1.yaml docs/contracts/ticker-proxy.openapi.v1.yaml`
+- Validate pinned copy: `cd tools/contracts && npm ci && node validate_proxy_openapi.mjs`
 
 Client integration reference:
 - `docs/GITHUB_BACKLOG_ALPHA.md` (Epic D integration notes + acceptance criteria)

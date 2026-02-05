@@ -165,7 +165,7 @@ For each Issue below:
   - Proxy can forward multimodal requests to at least one provider (OpenAI) and return streaming SSE deltas
   - Quotas/rate limits apply to vision requests the same as text requests
   - No user/editor content is stored server-side; request logs remain metadata-only
-  - Contract updated in `Ticker-Proxy/openapi/v1.yaml` (optional: vendor a pinned copy in `Ticker` for snapshot tests)
+  - Contract updated in `Ticker-Proxy/openapi/v1.yaml` and vendored into `Ticker` at `docs/contracts/ticker-proxy.openapi.v1.yaml` (CI validates the vendored copy)
 
 ---
 
