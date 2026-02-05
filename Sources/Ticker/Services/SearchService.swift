@@ -50,7 +50,7 @@ final class SearchService {
         // Add text results for current stream
         for textResult in currentTextResults {
             let title = textResult.blockName
-                ?? textResult.restatement
+                ?? extractFirstHeadingFromHtml(textResult.content)
                 ?? textResult.originalPrompt
                 ?? truncateHtml(textResult.content, maxLength: 50)
 
@@ -74,7 +74,7 @@ final class SearchService {
         // Add text results for other streams
         for textResult in otherTextResults {
             let title = textResult.blockName
-                ?? textResult.restatement
+                ?? extractFirstHeadingFromHtml(textResult.content)
                 ?? textResult.originalPrompt
                 ?? truncateHtml(textResult.content, maxLength: 50)
 
@@ -170,6 +170,33 @@ final class SearchService {
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
 
         return truncate(stripped, maxLength: maxLength)
+    }
+
+    private func extractFirstHeadingFromHtml(_ html: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: "<h[1-6][^>]*>([\\s\\S]*?)</h[1-6]>", options: [.caseInsensitive]) else {
+            return nil
+        }
+
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        guard let match = regex.firstMatch(in: html, options: [], range: range),
+              match.numberOfRanges >= 2,
+              let innerRange = Range(match.range(at: 1), in: html) else {
+            return nil
+        }
+
+        let innerHtml = String(html[innerRange])
+        let stripped = innerHtml
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return stripped.isEmpty ? nil : stripped
     }
 
     private func truncate(_ text: String, maxLength: Int) -> String {

@@ -318,7 +318,7 @@ final class PersistenceService {
 
             let sourceRows = try Row.fetchAll(db, sql: "SELECT * FROM sources WHERE stream_id = ? ORDER BY added_at", arguments: [id.uuidString])
             let cellRows = try Row.fetchAll(db, sql: """
-                SELECT id, stream_id, type, content, restatement, original_prompt, state, source_binding_json, metadata_json, created_at, updated_at, position, modifiers_json, versions_json, active_version_id, processing_config_json, references_json, block_name, source_app
+                SELECT id, stream_id, type, content, original_prompt, state, source_binding_json, metadata_json, created_at, updated_at, position, modifiers_json, versions_json, active_version_id, processing_config_json, references_json, block_name, source_app
                 FROM cells
                 WHERE stream_id = ?
                 ORDER BY position
@@ -348,7 +348,6 @@ final class PersistenceService {
                     sourceBinding = try JSONDecoder().decode(SourceBinding.self, from: Data(bindingJson.utf8))
                 }
 
-                let restatement: String? = row["restatement"]
                 let originalPrompt: String? = row["original_prompt"]
 
                 // Decode modifier stack fields
@@ -385,7 +384,6 @@ final class PersistenceService {
                     id: UUID(uuidString: row["id"])!,
                     streamId: UUID(uuidString: row["stream_id"])!,
                     content: row["content"],
-                    restatement: restatement,
                     originalPrompt: originalPrompt,
                     type: CellType(rawValue: row["type"]) ?? .text,
                     sourceBinding: sourceBinding,
@@ -569,11 +567,10 @@ final class PersistenceService {
 
             try db.execute(
                 sql: """
-                    INSERT INTO cells (id, stream_id, type, content, restatement, original_prompt, state, source_binding_json, metadata_json, created_at, updated_at, position, modifiers_json, versions_json, active_version_id, processing_config_json, references_json, block_name, source_app)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO cells (id, stream_id, type, content, original_prompt, state, source_binding_json, metadata_json, created_at, updated_at, position, modifiers_json, versions_json, active_version_id, processing_config_json, references_json, block_name, source_app)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         content = excluded.content,
-                        restatement = excluded.restatement,
                         original_prompt = CASE
                             WHEN excluded.type = 'aiResponse' AND excluded.original_prompt IS NULL
                             THEN cells.original_prompt
@@ -597,7 +594,6 @@ final class PersistenceService {
                     cell.streamId.uuidString,
                     cell.type.rawValue,
                     cell.content,
-                    cell.restatement,
                     cell.originalPrompt,
                     "idle",
                     bindingJson,
@@ -650,16 +646,6 @@ final class PersistenceService {
             try db.execute(
                 sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
                 arguments: [now, streamId.uuidString]
-            )
-        }
-    }
-
-    /// Update a cell's restatement
-    func updateCellRestatement(cellId: UUID, restatement: String) throws {
-        try dbQueue.write { db in
-            try db.execute(
-                sql: "UPDATE cells SET restatement = ?, updated_at = ? WHERE id = ?",
-                arguments: [restatement, Date().timeIntervalSince1970, cellId.uuidString]
             )
         }
     }
@@ -864,7 +850,7 @@ final class PersistenceService {
 
     /// Search cells by text, returning results split by current vs other streams.
     /// Each stream category gets its own limit to ensure cross-stream coverage.
-    /// Searches across content, originalPrompt, restatement, and blockName fields.
+    /// Searches across content, originalPrompt, and blockName fields.
     func textSearchCells(
         query: String,
         currentStreamId: UUID,
@@ -881,17 +867,16 @@ final class PersistenceService {
             // Search current stream
             let currentResults = try Row.fetchAll(db, sql: """
                 SELECT c.id, c.stream_id, s.title as stream_title,
-                       c.content, c.type, c.restatement, c.original_prompt, c.block_name
+                       c.content, c.type, c.original_prompt, c.block_name
                 FROM cells c
                 JOIN streams s ON c.stream_id = s.id
                 WHERE c.stream_id = ?
                   AND (c.content LIKE ? ESCAPE '\\' COLLATE NOCASE
                        OR c.original_prompt LIKE ? ESCAPE '\\' COLLATE NOCASE
-                       OR c.restatement LIKE ? ESCAPE '\\' COLLATE NOCASE
                        OR c.block_name LIKE ? ESCAPE '\\' COLLATE NOCASE)
                 ORDER BY c.updated_at DESC
                 LIMIT ?
-            """, arguments: [currentStreamId.uuidString, pattern, pattern, pattern, pattern, limitPerCategory])
+            """, arguments: [currentStreamId.uuidString, pattern, pattern, pattern, limitPerCategory])
             .map { row in
                 CellSearchResult(
                     cellId: UUID(uuidString: row["id"])!,
@@ -899,7 +884,6 @@ final class PersistenceService {
                     streamTitle: row["stream_title"],
                     content: row["content"],
                     cellType: row["type"],
-                    restatement: row["restatement"],
                     originalPrompt: row["original_prompt"],
                     blockName: row["block_name"]
                 )
@@ -908,17 +892,16 @@ final class PersistenceService {
             // Search other streams
             let otherResults = try Row.fetchAll(db, sql: """
                 SELECT c.id, c.stream_id, s.title as stream_title,
-                       c.content, c.type, c.restatement, c.original_prompt, c.block_name
+                       c.content, c.type, c.original_prompt, c.block_name
                 FROM cells c
                 JOIN streams s ON c.stream_id = s.id
                 WHERE c.stream_id != ?
                   AND (c.content LIKE ? ESCAPE '\\' COLLATE NOCASE
                        OR c.original_prompt LIKE ? ESCAPE '\\' COLLATE NOCASE
-                       OR c.restatement LIKE ? ESCAPE '\\' COLLATE NOCASE
                        OR c.block_name LIKE ? ESCAPE '\\' COLLATE NOCASE)
                 ORDER BY c.updated_at DESC
                 LIMIT ?
-            """, arguments: [currentStreamId.uuidString, pattern, pattern, pattern, pattern, limitPerCategory])
+            """, arguments: [currentStreamId.uuidString, pattern, pattern, pattern, limitPerCategory])
             .map { row in
                 CellSearchResult(
                     cellId: UUID(uuidString: row["id"])!,
@@ -926,7 +909,6 @@ final class PersistenceService {
                     streamTitle: row["stream_title"],
                     content: row["content"],
                     cellType: row["type"],
-                    restatement: row["restatement"],
                     originalPrompt: row["original_prompt"],
                     blockName: row["block_name"]
                 )
@@ -944,7 +926,6 @@ struct CellSearchResult {
     let streamTitle: String
     let content: String
     let cellType: String
-    let restatement: String?
     let originalPrompt: String?
     let blockName: String?
 }

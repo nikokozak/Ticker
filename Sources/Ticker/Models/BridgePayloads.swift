@@ -25,12 +25,6 @@ struct ModelSelectedPayload: Codable {
     let modelId: String
 }
 
-/// Restatement generated payload
-struct RestatementPayload: Codable {
-    let cellId: String
-    let restatement: String
-}
-
 /// Modifier created payload
 struct ModifierCreatedPayload: Codable {
     let cellId: String
@@ -177,10 +171,6 @@ extension BridgeService {
 
     func sendModelSelected(cellId: String, modelId: String) {
         send("modelSelected", payload: ModelSelectedPayload(cellId: cellId, modelId: modelId))
-    }
-
-    func sendRestatement(cellId: String, restatement: String) {
-        send("restatementGenerated", payload: RestatementPayload(cellId: cellId, restatement: restatement))
     }
 
     // MARK: - Modifier Streaming Convenience Methods

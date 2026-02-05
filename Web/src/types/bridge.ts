@@ -28,7 +28,6 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'modelSelected',
   'proxyAuthState',
   'quickPanelCellsAdded',
-  'restatementGenerated',
   'settingsLoaded',
   'sourceAdded',
   'sourceError',
