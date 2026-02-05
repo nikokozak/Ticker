@@ -10,7 +10,6 @@ import { Cell } from '../types/models';
 import { bridge } from '../types';
 import { extractFirstHeadingFromHtml } from '../utils/cellTitle';
 import { debugError, debugLog, debugWarn } from '../utils/debug';
-import { extractFirstHeadingFromHtml } from '../utils/cellTitle';
 
 interface CellEditorProps {
   content: string;
