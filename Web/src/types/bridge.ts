@@ -1,3 +1,5 @@
+import { debugLog } from '../utils/debug';
+
 /** Message structure for Swift ↔ JS communication */
 export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'aiChunk',
@@ -101,7 +103,7 @@ export const bridge: Bridge = {
   /** Called by Swift to deliver messages */
   receive(message: SwiftToWebBridgeMessage): void {
     // Debug: log all incoming messages
-    console.log('[Bridge.receive]', message.type, message.payload ? Object.keys(message.payload) : 'no payload');
+    debugLog('[Bridge.receive]', message.type, message.payload ? Object.keys(message.payload) : 'no payload');
 
     // Handle callback responses
     if (message.type === 'callback' && message.callbackId) {
@@ -113,7 +115,7 @@ export const bridge: Bridge = {
     }
 
     // Dispatch to message handlers
-    console.log('[Bridge.receive] Dispatching to', messageHandlers.size, 'handlers');
+    debugLog('[Bridge.receive] Dispatching to', messageHandlers.size, 'handlers');
     messageHandlers.forEach((handler) => handler(message));
   },
 
@@ -139,4 +141,4 @@ declare global {
 }
 
 window.bridge = bridge;
-console.log('[Bridge] window.bridge initialized');
+debugLog('[Bridge] window.bridge initialized');

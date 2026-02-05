@@ -1,8 +1,7 @@
 import { Extension } from '@tiptap/core';
 import { Plugin } from '@tiptap/pm/state';
 import { Fragment, Slice } from '@tiptap/pm/model';
-
-const IS_DEV = Boolean((import.meta as any).env?.DEV);
+import { IS_DEV, debugLog } from '../utils/debug';
 
 /**
  * CellClipboard
@@ -65,7 +64,7 @@ export const CellClipboard = Extension.create({
 
             const nextContent = rewriteFragment(slice.content);
             if (rewritten > 0 && IS_DEV) {
-              console.log(`[CellClipboard] Rewrote ${rewritten} pasted cellBlock id(s)`);
+              debugLog(`[CellClipboard] Rewrote ${rewritten} pasted cellBlock id(s)`);
             }
 
             return new Slice(nextContent, slice.openStart, slice.openEnd);
@@ -75,5 +74,4 @@ export const CellClipboard = Extension.create({
     ];
   },
 });
-
 

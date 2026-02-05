@@ -6,8 +6,7 @@ import { useBlockStore } from '../store/blockStore';
 import { bridge } from '../types';
 import { CellOverlay } from '../components/CellOverlay';
 import { buildImageBlock, extractImageURLs, extractImages, stripHtml } from '../utils/html';
-
-const IS_DEV = Boolean((import.meta as any).env?.DEV);
+import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 // Global drag state to coordinate between CellBlockViews
 let globalDraggedCellId: string | null = null;
@@ -31,13 +30,13 @@ function persistReorderToSwift() {
   const store = useBlockStore.getState();
   const { streamId, blockOrder } = store;
   if (!streamId) {
-    if (IS_DEV) console.warn('[CellBlockView] reorderBlocks: missing streamId in store; skipping persist');
+    debugWarn('[CellBlockView] reorderBlocks: missing streamId in store; skipping persist');
     return;
   }
 
   const orders = blockOrder.map((id, order) => ({ id, order }));
   if (IS_DEV) {
-    console.log('[CellBlockView] Persist reorderBlocks', {
+    debugLog('[CellBlockView] Persist reorderBlocks', {
       streamId,
       count: orders.length,
       head: orders.slice(0, 3),
@@ -383,7 +382,7 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
     } else {
       openOverlay(id);
     }
-    if (IS_DEV) console.log('[CellBlockView] Toggle overlay for cell:', id, 'next=', !showOverlay);
+    if (IS_DEV) debugLog('[CellBlockView] Toggle overlay for cell', { id, next: !showOverlay });
   }, [id, openOverlay, closeOverlay, showOverlay]);
 
   // === Drag reorder handlers (Slice 08) ===
@@ -416,13 +415,13 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
     startAutoscroll();
     scheduleIdleCleanup();
     if (IS_DEV) {
-      console.log('[CellBlockView] Drag start:', id);
+      debugLog('[CellBlockView] Drag start', { id });
     }
   }, [id]);
 
   const handleDragEnd = useCallback(() => {
     if (IS_DEV) {
-      console.log('[CellBlockView] Drag end, globalDraggedCellId:', globalDraggedCellId);
+      debugLog('[CellBlockView] Drag end', { globalDraggedCellId });
     }
 
     // Fallback persistence: if drop didn't fire (NodeView DOM churn can cause that),
@@ -502,7 +501,12 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
           schedulePersistReorder();
 
           if (IS_DEV) {
-            console.log('[CellBlockView] Reordered:', globalDraggedCellId, 'from', fromIdx, 'to', insertIdx, 'pos', position);
+            debugLog('[CellBlockView] Reordered', {
+              globalDraggedCellId,
+              fromIdx,
+              toIdx: insertIdx,
+              position,
+            });
           }
         }
       }

@@ -10,6 +10,7 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
 - Swift build succeeds (`xcodebuild ...`)
 - Web typecheck succeeds (`npm run typecheck`)
 - Bridge contract tests succeed (`node tools/contracts/check_bridge_contract.mjs`)
+- Prod console sanity: `./tickerctl.sh run-prod` + Web Inspector Console is quiet (no prompt/content/key logging)
 
 ## Smoke coverage (must-have before inviting users)
 

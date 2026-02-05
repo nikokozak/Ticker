@@ -6,6 +6,7 @@ import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
 import { useBlockStore } from './store/blockStore';
 import { isUnifiedEditorEnabled } from './utils/featureFlags';
+import { debugError, debugLog } from './utils/debug';
 
 type View = 'list' | 'stream' | 'settings';
 
@@ -36,8 +37,8 @@ export function App() {
       .then((result) => {
         setProxyAuthState(result.state);
       })
-      .catch((err) => {
-        console.error('Failed to load proxy auth:', err);
+      .catch(() => {
+        debugError('Failed to load proxy auth');
         setProxyAuthState('unregistered');
       });
   }, []);
@@ -64,7 +65,7 @@ export function App() {
           if (message.payload?.isNewStream && message.payload?.streamId) {
             const streamId = message.payload.streamId as string;
             const cellCount = (message.payload.cells as unknown[])?.length || 0;
-            console.log('[App] Quick Panel created new stream with cells:', streamId);
+            debugLog('[App] Quick Panel created new stream with cells', { streamId, cellCount });
 
             // Add to streams list so it appears when navigating back
             setStreams(prev => {
@@ -86,7 +87,7 @@ export function App() {
           break;
         case 'streamsChanged':
           // Quick Panel created a new stream - reload the list
-          console.log('[App] Streams changed, reloading list');
+          debugLog('[App] Streams changed, reloading list');
           bridge.send({ type: 'loadStreams' });
           break;
       }
