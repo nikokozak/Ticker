@@ -25,6 +25,7 @@ Rationale: GitHub asset URLs typically redirect; Sparkle update checks are more 
 - Rollback available: last 2–3 releases remain in appcast
 - Data safety verified: upgrading an existing `ticker.db` triggers a pre-migration backup (see `docs/DATA_MIGRATIONS.md`)
 - Manual QA: generate an AI response containing `![x](https://example.com/x.png)` → no image loads (and no external network request is triggered)
+- Manual QA: drag a PNG into a stream → image appears; drag a PDF → source appears
 
 ## Recommended flow (smoke test before publish)
 

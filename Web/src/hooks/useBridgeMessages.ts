@@ -158,20 +158,27 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
         }
       }
 
-      // Request for current stream ID (for native file drops)
-      if (message.type === 'requestCurrentStreamId') {
-        debugLog('[Bridge] requestCurrentStreamId, responding with streamId', { streamId });
-        bridge.send({
-          type: 'currentStreamId',
-          payload: { streamId }
-        });
+      // Native file-drop errors (Swift-side)
+      if (message.type === 'fileDropError' && message.payload?.error) {
+        toastStore.addToast(formatError(message.payload.error, 'File import failed.'), 'error');
       }
 
       // Image dropped via native drag-and-drop
       if (message.type === 'imageDropped') {
         debugLog('[useBridgeMessages] imageDropped', { hasAssetUrl: Boolean(message.payload?.assetUrl) });
+
+        const droppedStreamId = message.payload?.streamId as string | undefined;
+        if (droppedStreamId && droppedStreamId !== streamId) {
+          // A drop intended for a different stream; ignore.
+          return;
+        }
+
         if (message.payload?.assetUrl) {
           const assetUrl = message.payload.assetUrl as string;
+          if (!assetUrl.startsWith('ticker-asset://')) {
+            toastStore.addToast('Blocked unsafe image URL from native drop.', 'warning');
+            return;
+          }
 
           // In unified editor mode, insert via TipTap (handleUpdate will sync and persist)
           if (editorAPIRef.current?.insertImage) {
@@ -181,6 +188,10 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
             // Legacy mode: update store directly and persist
             const { focusedBlockId, blockOrder } = store;
             debugLog('[useBridgeMessages] Legacy mode inserting image', { hasFocusedBlockId: Boolean(focusedBlockId) });
+            if (blockOrder.length === 0) {
+              toastStore.addToast('Create a note cell first, then drop the image again.', 'info');
+              return;
+            }
 
             store.insertImageInFocusedBlock(assetUrl);
 

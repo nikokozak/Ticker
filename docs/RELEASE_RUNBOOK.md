@@ -150,6 +150,17 @@ grep -n \"assets/\" \"$APP_PATH/Contents/Resources/Resources/index.html\"
 
 You want `./assets/...` (not `/assets/...`). This is controlled by `Web/vite.config.ts` (`base: './'` for build).
 
+#### Quick sanity check: native drag & drop works
+
+Launch the Release build and drag files from Finder into the window:
+
+```bash
+open "$APP_PATH"
+```
+
+- Drag a PNG/JPG → image appears in the current stream editor.
+- Drag a PDF → source appears in the Sources panel.
+
 ### 3. Code sign with Developer ID
 
 ```bash

@@ -57,6 +57,17 @@ Legacy runner (still supported):
 If you hit SwiftPM/Sparkle artifact issues, run:
 - `./tickerctl.sh clean-derived-data -y`
 
+## Drag & drop (native → stream)
+
+You can drag files from Finder directly onto the app window:
+
+- **Images** (`png/jpg/webp/heic/...`): saved to local assets and inserted into the editor as `ticker-asset://...`.
+- **Documents** (`pdf/txt/md/...`): imported as Sources for the current stream.
+
+Notes:
+- Drops are routed to the **most recently opened stream**.
+- If no stream has been opened yet, Ticker shows an error toast (“Open a stream before dropping files.”).
+
 ## Local data (what exists on disk)
 
 Ticker stores user data under:

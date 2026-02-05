@@ -5,6 +5,11 @@ import WebKit
 /// Based on: https://stackoverflow.com/questions/25096910/receiving-nsdraggingdestination-messages-with-a-wkwebview
 class DroppableWebView: WKWebView {
     var onFilesDropped: (([URL]) -> Void)?
+    private static func debugLog(_ message: String) {
+#if DEBUG
+        print(message)
+#endif
+    }
 
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
@@ -37,7 +42,7 @@ class DroppableWebView: WKWebView {
             return super.performDragOperation(sender)
         }
 
-        print("DroppableWebView: Received \(urls.count) file(s)")
+        Self.debugLog("DroppableWebView: Received \(urls.count) file(s)")
         onFilesDropped?(urls)
         return true
     }
