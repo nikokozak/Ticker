@@ -19,7 +19,7 @@ Rationale: GitHub asset URLs typically redirect; Sparkle update checks are more 
 - `CHANGELOG.md` updated for the release
 - Tag created: `vYYYY.MM.patch`
 - Preflight checks pass:
-  - `./tickerctl.sh preflight-alpha`
+  - `./tickerctl.sh preflight-alpha` (contracts + web typecheck + swift tests)
 - Signed + notarized build produced (see `docs/MAC_DISTRIBUTION.md`)
 - Sparkle appcast updated and published
 - Rollback available: last 2–3 releases remain in appcast

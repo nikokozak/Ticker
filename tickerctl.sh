@@ -9,9 +9,10 @@ Usage: ./tickerctl.sh [command] [options]
 Commands:
   help [command]       Show help/manual (more verbose than --help)
   menu                 Interactive menu (default)
-  preflight-alpha      Run preflight checks (contract + web typecheck)
+  preflight-alpha      Run preflight checks (contracts + web typecheck + swift tests)
   contracts            Run bridge contract tests (if present in this checkout)
   web-typecheck        Run Web TypeScript typecheck
+  swift-test           Run Swift tests (xcodebuild test, no code signing)
   clean-derived-data    Delete repo-local Xcode DerivedData (fixes stale SPM artifacts)
   install-sparkle-tools  Install Sparkle CLI tools into ./tools/sparkle (from SwiftPM artifacts)
   build-dev            Build Debug app (unsigned)
@@ -127,9 +128,25 @@ preflight-alpha
 Runs cheap checks that catch “protocol breakage” before you ship:
 - Bridge contract tests (if present in this checkout)
 - Web TypeScript typecheck
+- Swift tests (xcodebuild test, no code signing; builds Web assets first)
 
 Run it:
   ./tickerctl.sh preflight-alpha
+EOF
+      return 0
+      ;;
+    swift-test)
+      cat <<'EOF'
+swift-test
+
+Runs the Swift XCTest suite with code signing disabled.
+
+Notes:
+- Builds Web assets first (matches CI); the app target expects bundled Web output.
+- Uses repo-local DerivedData by default: ./.build/xcode
+
+Run it:
+  ./tickerctl.sh swift-test
 EOF
       return 0
       ;;
@@ -346,14 +363,48 @@ cmd_web_typecheck() {
 
 cmd_contracts() {
   local script="$ROOT_DIR/tools/contracts/check_bridge_contract.mjs"
+  local tools_dir="$ROOT_DIR/tools/contracts"
   if [[ ! -f "$script" ]]; then
     echo "Bridge contract tests not found at: $script"
     echo "Tip: update to a commit that includes the contract tests, or skip this step."
     return 0
   fi
   require_cmd node
+  require_cmd npm
+  (cd "$tools_dir" && {
+    if [[ ! -d node_modules ]]; then
+      npm ci
+    fi
+  })
   echo "Bridge contract tests…"
   node "$script"
+}
+
+swift_test() {
+  require_cmd git
+  require_cmd xcodebuild
+
+  cd "$ROOT_DIR"
+
+  echo "Building web assets…"
+  build_web_assets
+
+  local build_num
+  build_num="$(build_number)"
+
+  xcodebuild test \
+    -project Ticker.xcodeproj \
+    -scheme Ticker \
+    -destination 'platform=macOS' \
+    -derivedDataPath "$DERIVED_DATA_PATH" \
+    CODE_SIGNING_ALLOWED=NO \
+    CURRENT_PROJECT_VERSION="$build_num" \
+    -quiet
+}
+
+cmd_swift_test() {
+  echo "Swift tests…"
+  swift_test
 }
 
 cmd_preflight_alpha() {
@@ -377,6 +428,7 @@ cmd_preflight_alpha() {
 
   cmd_contracts
   cmd_web_typecheck
+  cmd_swift_test
 }
 
 cmd_build_dev() {
@@ -1178,7 +1230,7 @@ cmd_menu() {
     "Build + Run Debug (dev)" \
     "Build Release (prod, unsigned)" \
     "Build + Run Release (prod, unsigned)" \
-    "Preflight (alpha): contract + web typecheck" \
+    "Preflight (alpha): contracts + web typecheck + swift tests" \
     "Clean DerivedData (fix stale SPM artifacts)" \
     "Release (alpha): build+sign+notarize+zip+Sparkle-sign" \
     "Release (alpha) + promote: publish + update appcast" \
@@ -1283,6 +1335,7 @@ main() {
   preflight-alpha) cmd_preflight_alpha "$@" ;;
   contracts) cmd_contracts ;;
   web-typecheck) cmd_web_typecheck ;;
+  swift-test) cmd_swift_test ;;
   clean-derived-data) cmd_clean_derived_data "$@" ;;
   install-sparkle-tools) cmd_install_sparkle_tools "$@" ;;
   build-dev) cmd_build_dev ;;

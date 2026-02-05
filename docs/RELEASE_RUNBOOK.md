@@ -105,6 +105,14 @@ Verify: `https://nikokozak.github.io/Ticker/appcast-alpha.xml` should return the
 
 ## Release Steps
 
+### 0.5 Automated preflight (required)
+
+If you’re using `./tickerctl.sh release-alpha`, this runs automatically, but it’s still useful to run explicitly before you start a long signing/notarization cycle:
+
+```bash
+./tickerctl.sh preflight-alpha
+```
+
 ### 0. Pre-release data safety check (recommended)
 
 Before shipping a build that includes schema changes, confirm that a pending migration creates a timestamped backup DB in:

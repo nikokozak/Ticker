@@ -52,9 +52,10 @@ Every PR includes:
 
 ## CI baseline (must exist)
 
-- Swift: `xcodebuild build -scheme Ticker -destination 'platform=OS X' -derivedDataPath .build/xcode`
-- Web: `cd Web && npm run typecheck`
-- Bridge contract: `node tools/contracts/check_bridge_contract.mjs`
+- Preferred single entry point: `./tickerctl.sh preflight-alpha`
+- Swift: `./tickerctl.sh swift-test` (runs `xcodebuild test`, no code signing)
+- Web: `./tickerctl.sh web-typecheck`
+- Bridge contract: `./tickerctl.sh contracts`
 
 ## Review checklist (fast but strict)
 
