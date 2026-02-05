@@ -8,6 +8,11 @@ final class PersistenceService {
     private let didDatabaseExistOnInit: Bool
 
     private static let databaseBackupRetentionCount = 5
+    private static func debugLog(_ message: String) {
+#if DEBUG
+        print(message)
+#endif
+    }
 
     init() throws {
         let fileManager = FileManager.default
@@ -208,7 +213,11 @@ final class PersistenceService {
                 try !migrator.hasCompletedMigrations(db)
             }
             if hasPendingMigrations {
-                try backupDatabaseBeforeMigration(retainingLast: Self.databaseBackupRetentionCount)
+                do {
+                    try backupDatabaseBeforeMigration(retainingLast: Self.databaseBackupRetentionCount)
+                } catch {
+                    Self.debugLog("PersistenceService: Failed to create pre-migration DB backup (continuing): \(error)")
+                }
             }
         }
 
@@ -256,7 +265,7 @@ final class PersistenceService {
             do {
                 try fileManager.removeItem(at: url)
             } catch {
-                print("PersistenceService: Failed to delete old DB backup at \(url.path): \(error)")
+                Self.debugLog("PersistenceService: Failed to delete old DB backup at \(url.path): \(error)")
             }
         }
     }

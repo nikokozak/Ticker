@@ -7,11 +7,12 @@ This document defines what Ticker collects and what it does **not** collect.
 - Default diagnostics **ON**, with clear disclosure and an in-app **opt-out** toggle.
 - Collect only what is necessary to debug reliability issues and manage cost.
 - Avoid collecting note/editor content by default.
+- Web UI should not emit console logs in prod/bundled builds; gate ad-hoc logs behind `import.meta.env.DEV` (see `Web/src/utils/debug.ts`).
 
 ## Data collected (by default)
 
 ### Proxy request metadata
-- Request IDs (`X-Ticker-Request-Id`)
+- Request IDs (`X-Ticker-Request-Id`, treated as an opaque string; Ticker should send a UUID per request)
 - Provider/model identifiers
 - Token counts (in/out)
 - Timing, status code, error codes
@@ -35,6 +36,7 @@ This document defines what Ticker collects and what it does **not** collect.
 - Full note corpus / full editor content
 - Clipboard contents
 - System-wide selection text captured via Accessibility
+- Quick Panel “ask” (ephemeral chat) history is not persisted to disk
 - Raw AI prompts/responses beyond what is required to fulfill the request (prefer redaction/minimization where practical)
 
 ## Retention
@@ -49,3 +51,7 @@ This document defines what Ticker collects and what it does **not** collect.
 - Settings toggle to disable diagnostics (opt-out).
 - Support bundle copying should never include raw device keys or note content.
 
+## Clarification: ephemeral chat vs saved notes
+
+- Quick Panel `⌥↵` “ask” mode is designed to be **in-memory only** and is not written into `ticker.db`.
+- Like any AI request, the text still has to be sent to the configured LLM provider (proxy/vendor) to receive a response.
