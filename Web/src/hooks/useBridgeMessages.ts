@@ -158,15 +158,6 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
         }
       }
 
-      // Request for current stream ID (for native file drops)
-      if (message.type === 'requestCurrentStreamId') {
-        debugLog('[Bridge] requestCurrentStreamId, responding with streamId', { streamId });
-        bridge.send({
-          type: 'currentStreamId',
-          payload: { streamId }
-        });
-      }
-
       // Native file-drop errors (Swift-side)
       if (message.type === 'fileDropError' && message.payload?.error) {
         toastStore.addToast(formatError(message.payload.error, 'File import failed.'), 'error');

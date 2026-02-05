@@ -5,14 +5,11 @@
       "proxyAuthState": {
         "requiredPayloadKeys": ["state"]
       },
-      "requestCurrentStreamId": {
-        "requiredPayloadKeys": []
+      "fileDropError": {
+        "requiredPayloadKeys": ["error"]
       },
       "imageDropped": {
-        "requiredPayloadKeys": ["relativePath", "fullPath", "assetUrl", "streamId"]
-      },
-      "imageDropError": {
-        "requiredPayloadKeys": ["error"]
+        "requiredPayloadKeys": ["relativePath", "assetUrl", "streamId"]
       },
       "sourceAdded": {
         "requiredPayloadKeys": ["source"]
@@ -108,7 +105,7 @@
         "requiredPayloadKeys": ["error", "requestId"]
       },
       "imageSaved": {
-        "requiredPayloadKeys": ["relativePath", "fullPath", "assetUrl", "requestId"]
+        "requiredPayloadKeys": ["relativePath", "assetUrl", "requestId"]
       },
       "assetPath": {
         "requiredPayloadKeys": ["relativePath", "fullPath"]
