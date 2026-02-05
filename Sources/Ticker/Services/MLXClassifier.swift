@@ -22,13 +22,13 @@ final class MLXClassifier: QueryClassifier {
         isLoading = true
 
         do {
-            print("MLXClassifier: Loading model \(modelId)...")
+            DebugLog.log("MLXClassifier: Loading model \(modelId)...")
             let loadedContainer = try await loadModelContainer(id: modelId)
             self.container = loadedContainer
-            print("MLXClassifier: Model loaded successfully")
+            DebugLog.log("MLXClassifier: Model loaded successfully")
         } catch {
             loadError = error
-            print("MLXClassifier: Failed to load model - \(error)")
+            DebugLog.log("MLXClassifier: Failed to load model (\(DebugLog.errorSummary(error)))")
             throw error
         }
 

@@ -87,9 +87,9 @@ final class HotkeyService {
                 callback: callback,
                 ref: ref
             )
-            print("[HotkeyService] Registered hotkey id=\(config.id)")
+            DebugLog.log("[HotkeyService] Registered hotkey id=\(config.id)")
         } else {
-            print("[HotkeyService] Failed to register hotkey id=\(config.id), status=\(status)")
+            DebugLog.log("[HotkeyService] Failed to register hotkey id=\(config.id), status=\(status)")
         }
     }
 

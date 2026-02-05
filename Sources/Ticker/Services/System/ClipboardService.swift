@@ -52,7 +52,7 @@ enum ClipboardService {
 
         // Only return if reasonable size
         guard pngData.count < maxSize else {
-            print("[ClipboardService] Image too large: \(pngData.count) bytes")
+            DebugLog.log("[ClipboardService] Image too large: \(pngData.count) bytes")
             return nil
         }
 

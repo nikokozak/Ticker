@@ -8,6 +8,8 @@ This document defines what Ticker collects and what it does **not** collect.
 - Collect only what is necessary to debug reliability issues and manage cost.
 - Avoid collecting note/editor content by default.
 - Web UI should not emit console logs in prod/bundled builds; gate ad-hoc logs behind `import.meta.env.DEV` (see `Web/src/utils/debug.ts`).
+- Avoid printing note content/prompts to console in Release builds.
+- For ad-hoc debugging, use `DebugLog.log(...)` (DEBUG only) and prefer `DebugLog.errorSummary(error)` over `error.localizedDescription`.
 
 ## Data collected (by default)
 

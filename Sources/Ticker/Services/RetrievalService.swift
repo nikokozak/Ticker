@@ -32,7 +32,7 @@ final class RetrievalService {
     func retrieve(query: String, streamId: UUID) async throws -> [RetrievedChunk] {
         // 1. Check if embedding service is configured
         guard embeddingService.isConfigured else {
-            print("RetrievalService: Embedding service not configured, skipping RAG")
+            DebugLog.log("RetrievalService: Embedding service not configured, skipping RAG")
             return []
         }
 
@@ -43,7 +43,7 @@ final class RetrievalService {
         let candidateChunks = try persistence.loadChunksWithEmbeddings(streamId: streamId)
 
         guard !candidateChunks.isEmpty else {
-            print("RetrievalService: No embedded chunks found for stream")
+            DebugLog.log("RetrievalService: No embedded chunks found for stream")
             return []
         }
 
@@ -80,7 +80,7 @@ final class RetrievalService {
             }
         }
 
-        print("RetrievalService: Retrieved \(selected.count) chunks (\(usedTokens) tokens) from \(candidateChunks.count) candidates")
+        DebugLog.log("RetrievalService: Retrieved \(selected.count) chunks (\(usedTokens) tokens) from \(candidateChunks.count) candidates")
         return selected
     }
 

@@ -529,7 +529,7 @@ final class ProxyLLMService: LLMProvider {
                     } else {
                         // Alpha: proxy only supports base64 images
                         // URL-based images (ticker-asset://, file://, etc.) are dropped
-                        print("[ProxyLLMService] Dropping non-base64 image URL (not supported in alpha): \(imageURL.prefix(50))...")
+                        DebugLog.log("[ProxyLLMService] Dropping non-base64 image URL (not supported in alpha)")
                     }
                 }
 

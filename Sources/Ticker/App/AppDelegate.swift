@@ -121,7 +121,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Alpha: avoid prompting on app launch. The onboarding flow (and in-context feature usage)
         // is responsible for presenting the permission prompt.
         if !AXIsProcessTrusted() {
-            print("[Ticker] Accessibility permission not yet granted")
+            DebugLog.log("[Ticker] Accessibility permission not yet granted")
         }
     }
 
@@ -350,7 +350,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // Only show panel if capture succeeded (exit code 0)
                 // User cancellation (ESC) returns exit code 1
                 guard terminatedProcess.terminationStatus == 0 else {
-                    print("[Screenshot] Capture cancelled or failed (exit code: \(terminatedProcess.terminationStatus))")
+                    DebugLog.log("[Screenshot] Capture cancelled or failed (exit code: \(terminatedProcess.terminationStatus))")
                     return
                 }
 
@@ -359,7 +359,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
                 // Verify clipboard actually has an image before showing panel
                 guard ClipboardService.hasImage() else {
-                    print("[Screenshot] No image in clipboard after capture")
+                    DebugLog.log("[Screenshot] No image in clipboard after capture")
                     return
                 }
 
@@ -370,7 +370,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do {
             try process.run()
         } catch {
-            print("Failed to run screencapture: \(error)")
+            DebugLog.log("[Screenshot] Failed to run screencapture (\(DebugLog.errorSummary(error)))")
         }
     }
 }

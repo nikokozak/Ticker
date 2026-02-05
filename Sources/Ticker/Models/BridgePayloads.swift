@@ -151,13 +151,13 @@ extension BridgeService {
             let encoder = JSONEncoder()
             let data = try encoder.encode(payload)
             guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                print("[Bridge] Failed to convert payload to dict for: \(type)")
+                DebugLog.log("[Bridge] Failed to convert payload to dict for: \(type)")
                 return
             }
             let message = BridgeMessage(type: type, payload: dict.mapValues { AnyCodable($0) })
             send(message)
         } catch {
-            print("[Bridge] Failed to encode payload for \(type): \(error)")
+            DebugLog.log("[Bridge] Failed to encode payload for \(type) (\(DebugLog.errorSummary(error)))")
         }
     }
 
