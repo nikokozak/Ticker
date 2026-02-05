@@ -56,3 +56,14 @@ Legacy runner (still supported):
 
 If you hit SwiftPM/Sparkle artifact issues, run:
 - `./tickerctl.sh clean-derived-data -y`
+
+## Local data (what exists on disk)
+
+Ticker stores user data under:
+- `~/Library/Application Support/Ticker/`
+
+Key items:
+- `ticker.db` — the SQLite database (streams, cells, sources metadata)
+- `backups/` — automatic pre-migration DB backups (created only when pending migrations are detected)
+
+If you need to restore data from a backup, follow the step-by-step instructions in `docs/ALPHA_SUPPORT.md`.

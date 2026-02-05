@@ -103,6 +103,13 @@ Verify: `https://nikokozak.github.io/Streams/appcast-alpha.xml` should return th
 
 ## Release Steps
 
+### 0. Pre-release data safety check (recommended)
+
+Before shipping a build that includes schema changes, confirm that a pending migration creates a timestamped backup DB in:
+- `~/Library/Application Support/Ticker/backups/`
+
+Restore instructions live in `docs/ALPHA_SUPPORT.md` (keep that document accurate; it’s the thing you’ll reach for during triage).
+
 ### 1. Update version numbers
 
 Edit `Ticker.xcodeproj/project.pbxproj`:
