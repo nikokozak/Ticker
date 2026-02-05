@@ -339,7 +339,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Capture screenshot using system tool, then show Quick Panel
+    @MainActor
     private func captureScreenshot() {
+        // Screen recording permission is required for capturing other apps' windows.
+        // Without it, macOS may redact capture output (e.g., Desktop only).
+        if !CGPreflightScreenCaptureAccess() {
+            DebugLog.log("[Screenshot] Screen recording permission missing; requesting access")
+            _ = CGRequestScreenCaptureAccess()
+
+            // Permission changes typically require the app to be restarted.
+            guard CGPreflightScreenCaptureAccess() else {
+                quickPanelManager?.showWithStatusMessage("Enable Screen Recording permission (restart Ticker)")
+                return
+            }
+        }
+
+        let pasteboardChangeCountBefore = ClipboardService.changeCount()
+
         // Use screencapture to capture to clipboard
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -356,6 +372,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
                 // Short delay to allow clipboard to update
                 try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1s
+
+                // Ensure the clipboard actually changed; otherwise we may be reading a stale image.
+                let pasteboardChangeCountAfter = ClipboardService.changeCount()
+                guard pasteboardChangeCountAfter != pasteboardChangeCountBefore else {
+                    DebugLog.log("[Screenshot] Clipboard did not change after capture; aborting attach")
+                    self?.quickPanelManager?.showWithStatusMessage("Screenshot didn't reach clipboard")
+                    return
+                }
 
                 // Verify clipboard actually has an image before showing panel
                 guard ClipboardService.hasImage() else {

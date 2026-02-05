@@ -159,6 +159,35 @@ final class QuickPanelManager: ObservableObject {
         show(with: capturedContext)
     }
 
+    /// Show the Quick Panel with an informational status message (no clipboard image attachment).
+    /// Useful for explaining why a screenshot capture couldn't proceed (e.g., missing permissions).
+    func showWithStatusMessage(_ message: String) {
+        if isVisible {
+            hide()
+        }
+
+        let capturedContext = selectionService.buildContext()
+        // Avoid implicitly attaching any pre-existing clipboard image — this mode is informational.
+        let contextWithoutClipboard = QuickPanelContext(
+            selectedText: capturedContext.selectedText,
+            activeApp: capturedContext.activeApp,
+            windowTitle: capturedContext.windowTitle,
+            panelPosition: capturedContext.panelPosition,
+            clipboardImage: nil
+        )
+
+        show(with: contextWithoutClipboard)
+        statusMessage = message
+
+        // Auto-clear after a short delay so it doesn't linger.
+        Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)  // 4s
+            if self.statusMessage == message {
+                self.statusMessage = nil
+            }
+        }
+    }
+
     /// Show the quick panel with specific context
     private func show(with capturedContext: QuickPanelContext) {
         self.context = capturedContext
