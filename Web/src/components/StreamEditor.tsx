@@ -208,7 +208,6 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
           type: cell.type,
           order: cell.order,
           originalPrompt: cell.originalPrompt,
-          restatement: cell.restatement,
           modelId: cell.modelId,
           processingConfig: cell.processingConfig,
           modifiers: cell.modifiers,
@@ -254,8 +253,8 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
 
     // Update cell state
     const updates = isNewCell
-      ? { type: 'aiResponse' as const, originalPrompt: prompt, content: imageBlock, restatement: undefined }
-      : { originalPrompt: prompt, content: imageBlock, restatement: undefined };
+      ? { type: 'aiResponse' as const, originalPrompt: prompt, content: imageBlock }
+      : { originalPrompt: prompt, content: imageBlock };
     store.updateBlock(cellId, updates);
 
     // Save cell (preserve sourceApp and references from Quick Panel)
@@ -425,7 +424,6 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
         type: cell.type,
         order: cell.order,
         originalPrompt: cell.originalPrompt,
-        restatement: cell.restatement,
         modelId: cell.modelId,
         processingConfig: newConfig,
         modifiers: cell.modifiers,

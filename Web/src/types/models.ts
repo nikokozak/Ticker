@@ -23,8 +23,6 @@ export interface Cell {
   id: string;
   streamId: string;
   content: string;
-  /** Display title/heading form of content (for text cells that were sent to AI) */
-  restatement?: string;
   /** Original user prompt (for aiResponse cells that transformed from text cells) */
   originalPrompt?: string;
   type: CellType;

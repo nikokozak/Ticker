@@ -240,7 +240,7 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
   // Canonical cell data from store (attrs can be stale)
   // NOTE: We access s.blocks.get(id) directly instead of s.getBlock(id) because
   // getBlock uses get() internally which bypasses Zustand's subscription tracking.
-  // This ensures re-renders when the cell data changes (e.g., restatement updates).
+  // This ensures re-renders when the cell data changes (e.g., model/live toggles).
   const cell = useBlockStore((s) => (id ? s.blocks.get(id) : undefined));
 
   // IMPORTANT: node.attrs can be stale for dynamic data (type/model/live) because we don't
@@ -293,7 +293,6 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
         type: cell.type,
         order: cell.order,
         originalPrompt: cell.originalPrompt,
-        restatement: cell.restatement,
         modelId: cell.modelId,
         processingConfig: nextConfig,
         references: cell.references,

@@ -77,9 +77,6 @@
           "retryAfter"
         ]
       },
-      "restatementGenerated": {
-        "requiredPayloadKeys": ["cellId", "restatement"]
-      },
       "modifierCreated": {
         "requiredPayloadKeys": ["cellId", "modifier"]
       },

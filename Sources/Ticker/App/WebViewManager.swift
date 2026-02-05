@@ -479,7 +479,6 @@ final class WebViewManager: NSObject {
                         id: cell.id,
                         streamId: cell.streamId,
                         content: cell.content,
-                        restatement: cell.restatement,
                         originalPrompt: cell.originalPrompt,
                         type: cell.type,
                         order: cell.order,
@@ -845,38 +844,6 @@ final class WebViewManager: NSObject {
                         ))
                     }
                 )
-            }
-
-            // Restatement is now included in the streamed response via the heading-enabled prompt (Option A),
-            // but we still emit a best-effort `restatementGenerated` message to satisfy the bridge contract
-            // and populate the legacy restatement field for search fallbacks.
-            let restatementCandidate = currentCell.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !restatementCandidate.isEmpty {
-                let maxLen = 80
-                let restatement = restatementCandidate.count > maxLen
-                    ? String(restatementCandidate.prefix(maxLen - 1)) + "…"
-                    : restatementCandidate
-
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-
-                    self.bridgeService.send(BridgeMessage(
-                        type: "restatementGenerated",
-                        payload: [
-                            "cellId": AnyCodable(cellId),
-                            "restatement": AnyCodable(restatement)
-                        ]
-                    ))
-
-                    if let persistence = self.persistence,
-                       let cellUUID = UUID(uuidString: cellId) {
-                        do {
-                            try persistence.updateCellRestatement(cellId: cellUUID, restatement: restatement)
-                        } catch {
-                            DebugLog.log("Failed to save restatement (\(DebugLog.errorSummary(error)))")
-                        }
-                    }
-                }
             }
 
         case "applyModifier":
@@ -1408,9 +1375,6 @@ final class WebViewManager: NSObject {
                     "createdAt": formatter.string(from: cell.createdAt),
                     "updatedAt": formatter.string(from: cell.updatedAt)
                 ]
-                if let restatement = cell.restatement {
-                    dict["restatement"] = restatement
-                }
                 if let originalPrompt = cell.originalPrompt {
                     dict["originalPrompt"] = originalPrompt
                 }
@@ -1650,7 +1614,6 @@ final class WebViewManager: NSObject {
         let typeRaw = payload["type"]?.value as? String ?? "text"
         let type = CellType(rawValue: typeRaw) ?? .text
         let order = payload["order"]?.value as? Int ?? 0
-        let restatement = payload["restatement"]?.value as? String
         let originalPrompt = payload["originalPrompt"]?.value as? String
 
         // Decode modifier stack fields
@@ -1744,7 +1707,6 @@ final class WebViewManager: NSObject {
             id: id,
             streamId: streamId,
             content: content,
-            restatement: restatement,
             originalPrompt: originalPrompt,
             type: type,
             sourceBinding: sourceBinding,

@@ -45,8 +45,6 @@ struct Cell: Identifiable, Codable {
     let id: UUID
     let streamId: UUID
     var content: String
-    /// Display title/heading form of content (for text cells that were sent to AI)
-    var restatement: String?
     /// Original user prompt (for aiResponse cells that transformed from text cells)
     var originalPrompt: String?
     var type: CellType
@@ -75,7 +73,6 @@ struct Cell: Identifiable, Codable {
         id: UUID = UUID(),
         streamId: UUID,
         content: String,
-        restatement: String? = nil,
         originalPrompt: String? = nil,
         type: CellType = .text,
         sourceBinding: SourceBinding? = nil,
@@ -94,7 +91,6 @@ struct Cell: Identifiable, Codable {
         self.id = id
         self.streamId = streamId
         self.content = content
-        self.restatement = restatement
         self.originalPrompt = originalPrompt
         self.type = type
         self.sourceBinding = sourceBinding
