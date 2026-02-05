@@ -8,6 +8,11 @@ final class PersistenceService {
     private let didDatabaseExistOnInit: Bool
 
     private static let databaseBackupRetentionCount = 5
+    private static func debugLog(_ message: String) {
+#if DEBUG
+        print(message)
+#endif
+    }
 
     init() throws {
         let fileManager = FileManager.default
@@ -153,12 +158,66 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v9_heading_in_content_titles") { db in
+            struct TitleRow: FetchableRecord, Decodable {
+                let id: String
+                let content: String
+                let restatement: String?
+            }
+
+            func escapeHtml(_ value: String) -> String {
+                value
+                    .replacingOccurrences(of: "&", with: "&amp;")
+                    .replacingOccurrences(of: "<", with: "&lt;")
+                    .replacingOccurrences(of: ">", with: "&gt;")
+                    .replacingOccurrences(of: "\"", with: "&quot;")
+                    .replacingOccurrences(of: "'", with: "&#39;")
+            }
+
+            func hasHeadingInContent(_ content: String) -> Bool {
+                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                let lower = trimmed.lowercased()
+                if lower.contains("<h1") || lower.contains("<h2") || lower.contains("<h3")
+                    || lower.contains("<h4") || lower.contains("<h5") || lower.contains("<h6") {
+                    return true
+                }
+                return lower.hasPrefix("# ") || lower.hasPrefix("## ") || lower.hasPrefix("### ")
+            }
+
+            let rows = try TitleRow.fetchAll(
+                db,
+                sql: """
+                SELECT id, content, restatement
+                FROM cells
+                WHERE restatement IS NOT NULL AND TRIM(restatement) <> ''
+                """
+            )
+
+            for row in rows {
+                guard !hasHeadingInContent(row.content) else { continue }
+                guard let restatement = row.restatement?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !restatement.isEmpty else { continue }
+
+                let heading = "<h2>\(escapeHtml(restatement))</h2>"
+                let newContent = heading + row.content
+
+                try db.execute(
+                    sql: "UPDATE cells SET content = ? WHERE id = ?",
+                    arguments: [newContent, row.id]
+                )
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
             }
             if hasPendingMigrations {
-                try backupDatabaseBeforeMigration(retainingLast: Self.databaseBackupRetentionCount)
+                do {
+                    try backupDatabaseBeforeMigration(retainingLast: Self.databaseBackupRetentionCount)
+                } catch {
+                    Self.debugLog("PersistenceService: Failed to create pre-migration DB backup (continuing): \(error)")
+                }
             }
         }
 

@@ -1,22 +1,14 @@
 import { useState, useEffect } from 'react';
 import { bridge } from '../types';
 import { isUnifiedEditorEnabled, setUnifiedEditorEnabled } from '../utils/featureFlags';
+import { debugError } from '../utils/debug';
 
 type Appearance = 'light' | 'dark' | 'system';
 type DefaultModel = 'openai' | 'anthropic';
 
 interface SettingsData {
-  hasOpenAIKey: boolean;
-  openaiKeyPreview?: string;
-  hasAnthropicKey: boolean;
-  anthropicKeyPreview?: string;
-  hasPerplexityKey: boolean;
-  perplexityKeyPreview?: string;
-  smartRoutingEnabled: boolean;
+  proxyOnlyMode?: boolean;
   defaultModel: DefaultModel;
-  classifierReady?: boolean;
-  classifierLoading?: boolean;
-  classifierError?: string;
   appearance: Appearance;
   diagnosticsEnabled: boolean;
 }
@@ -59,15 +51,6 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const [settings, setSettings] = useState<SettingsData | null>(null);
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [anthropicKey, setAnthropicKey] = useState('');
-  const [perplexityKey, setPerplexityKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [showAnthropicKey, setShowAnthropicKey] = useState(false);
-  const [showPerplexityKey, setShowPerplexityKey] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [anthropicSaved, setAnthropicSaved] = useState(false);
-  const [perplexitySaved, setPerplexitySaved] = useState(false);
   const [useUnifiedEditor, setUseUnifiedEditor] = useState(isUnifiedEditorEnabled());
 
   // Proxy auth state
@@ -107,12 +90,12 @@ export function Settings({ onClose }: SettingsProps) {
     // First, load cached state immediately (no network call)
     bridge.sendAsync<ProxyAuthStatus>('loadProxyAuth')
       .then(setProxyAuth)
-      .catch((err) => console.error('Failed to load proxy auth:', err));
+      .catch(() => debugError('Failed to load proxy auth'));
 
     // Then refresh from server to get fresh usage data
     bridge.sendAsync<ProxyAuthStatus>('refreshProxyAuth')
       .then(setProxyAuth)
-      .catch((err) => console.error('Failed to refresh proxy auth:', err));
+      .catch(() => debugError('Failed to refresh proxy auth'));
   }, []);
 
   // Validate device key
@@ -153,7 +136,7 @@ export function Settings({ onClose }: SettingsProps) {
       const result = await bridge.sendAsync<{ success: boolean; state: ProxyAuthState }>('clearProxyDeviceKey');
       setProxyAuth((prev) => (prev ? { ...prev, state: result.state, supportId: null, limits: null, usage: null } : null));
     } catch (err) {
-      console.error('Failed to clear device key:', err);
+      debugError('Failed to clear device key');
     }
   };
 
@@ -204,7 +187,7 @@ export function Settings({ onClose }: SettingsProps) {
       // Could show a toast here, but for simplicity just alert
       alert('Support bundle copied to clipboard');
     } catch (err) {
-      console.error('Failed to copy support bundle:', err);
+      debugError('Failed to copy support bundle');
       alert('Failed to copy support bundle');
     }
   };
@@ -267,64 +250,6 @@ export function Settings({ onClose }: SettingsProps) {
   const clearScreenshot = () => {
     setFeedbackScreenshot(null);
     setFeedbackScreenshotType('image/png');
-  };
-
-  const handleSaveOpenAI = () => {
-    bridge.send({
-      type: 'saveSettings',
-      payload: { openaiAPIKey: openaiKey },
-    });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-    setOpenaiKey(''); // Clear input after save
-    // Reload settings to update preview
-    setTimeout(() => bridge.send({ type: 'loadSettings' }), 100);
-  };
-
-  const handleSaveAnthropic = () => {
-    bridge.send({
-      type: 'saveSettings',
-      payload: { anthropicAPIKey: anthropicKey },
-    });
-    setAnthropicSaved(true);
-    setTimeout(() => setAnthropicSaved(false), 2000);
-    setAnthropicKey(''); // Clear input after save
-    setTimeout(() => bridge.send({ type: 'loadSettings' }), 100);
-  };
-
-  const handleSavePerplexity = () => {
-    bridge.send({
-      type: 'saveSettings',
-      payload: { perplexityAPIKey: perplexityKey },
-    });
-    setPerplexitySaved(true);
-    setTimeout(() => setPerplexitySaved(false), 2000);
-    setPerplexityKey(''); // Clear input after save
-    setTimeout(() => bridge.send({ type: 'loadSettings' }), 100);
-  };
-
-  const handleDeleteOpenAI = () => {
-    bridge.send({
-      type: 'saveSettings',
-      payload: { openaiAPIKey: '' },
-    });
-    setTimeout(() => bridge.send({ type: 'loadSettings' }), 100);
-  };
-
-  const handleDeleteAnthropic = () => {
-    bridge.send({
-      type: 'saveSettings',
-      payload: { anthropicAPIKey: '' },
-    });
-    setTimeout(() => bridge.send({ type: 'loadSettings' }), 100);
-  };
-
-  const handleDeletePerplexity = () => {
-    bridge.send({
-      type: 'saveSettings',
-      payload: { perplexityAPIKey: '' },
-    });
-    setTimeout(() => bridge.send({ type: 'loadSettings' }), 100);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -580,142 +505,6 @@ export function Settings({ onClose }: SettingsProps) {
         </section>
 
         <section className="settings-section">
-          <h2>API Keys</h2>
-
-          <div className="settings-field">
-            <label htmlFor="openai-key">OpenAI API Key</label>
-            <div className="settings-key-input">
-              <input
-                id="openai-key"
-                type={showKey ? 'text' : 'password'}
-                value={openaiKey}
-                onChange={(e) => setOpenaiKey(e.target.value)}
-                placeholder={settings?.openaiKeyPreview || 'sk-...'}
-                autoComplete="off"
-              />
-              {openaiKey && (
-                <button
-                  className="settings-toggle-visibility"
-                  onClick={() => setShowKey(!showKey)}
-                  type="button"
-                >
-                  {showKey ? 'Hide' : 'Show'}
-                </button>
-              )}
-              <button
-                className="settings-save-key"
-                onClick={handleSaveOpenAI}
-                disabled={!openaiKey}
-              >
-                {saved ? 'Saved!' : 'Save'}
-              </button>
-              {settings?.hasOpenAIKey && !openaiKey && (
-                <button
-                  className="settings-delete-key"
-                  onClick={handleDeleteOpenAI}
-                  type="button"
-                >
-                  Delete
-                </button>
-              )}
-            </div>
-            <p className="settings-hint">
-              {settings?.hasOpenAIKey
-                ? 'Key is configured. Enter a new key to replace it.'
-                : 'Required for AI features. Get one at platform.openai.com'}
-            </p>
-          </div>
-
-          <div className="settings-field">
-            <label htmlFor="anthropic-key">Anthropic API Key</label>
-            <div className="settings-key-input">
-              <input
-                id="anthropic-key"
-                type={showAnthropicKey ? 'text' : 'password'}
-                value={anthropicKey}
-                onChange={(e) => setAnthropicKey(e.target.value)}
-                placeholder={settings?.anthropicKeyPreview || 'sk-ant-...'}
-                autoComplete="off"
-              />
-              {anthropicKey && (
-                <button
-                  className="settings-toggle-visibility"
-                  onClick={() => setShowAnthropicKey(!showAnthropicKey)}
-                  type="button"
-                >
-                  {showAnthropicKey ? 'Hide' : 'Show'}
-                </button>
-              )}
-              <button
-                className="settings-save-key"
-                onClick={handleSaveAnthropic}
-                disabled={!anthropicKey}
-              >
-                {anthropicSaved ? 'Saved!' : 'Save'}
-              </button>
-              {settings?.hasAnthropicKey && !anthropicKey && (
-                <button
-                  className="settings-delete-key"
-                  onClick={handleDeleteAnthropic}
-                  type="button"
-                >
-                  Delete
-                </button>
-              )}
-            </div>
-            <p className="settings-hint">
-              {settings?.hasAnthropicKey
-                ? 'Key is configured. Enter a new key to replace it.'
-                : 'For Claude models. Get one at console.anthropic.com'}
-            </p>
-          </div>
-
-          <div className="settings-field">
-            <label htmlFor="perplexity-key">Perplexity API Key (Optional)</label>
-            <div className="settings-key-input">
-              <input
-                id="perplexity-key"
-                type={showPerplexityKey ? 'text' : 'password'}
-                value={perplexityKey}
-                onChange={(e) => setPerplexityKey(e.target.value)}
-                placeholder={settings?.perplexityKeyPreview || 'pplx-...'}
-                autoComplete="off"
-              />
-              {perplexityKey && (
-                <button
-                  className="settings-toggle-visibility"
-                  onClick={() => setShowPerplexityKey(!showPerplexityKey)}
-                  type="button"
-                >
-                  {showPerplexityKey ? 'Hide' : 'Show'}
-                </button>
-              )}
-              <button
-                className="settings-save-key"
-                onClick={handleSavePerplexity}
-                disabled={!perplexityKey}
-              >
-                {perplexitySaved ? 'Saved!' : 'Save'}
-              </button>
-              {settings?.hasPerplexityKey && !perplexityKey && (
-                <button
-                  className="settings-delete-key"
-                  onClick={handleDeletePerplexity}
-                  type="button"
-                >
-                  Delete
-                </button>
-              )}
-            </div>
-            <p className="settings-hint">
-              {settings?.hasPerplexityKey
-                ? 'Key is configured. Enables real-time search for current events.'
-                : 'Enables real-time search. Get one at perplexity.ai'}
-            </p>
-          </div>
-        </section>
-
-        <section className="settings-section">
           <h2>Default Model</h2>
           <div className="settings-field">
             <div className="settings-model-options">
@@ -727,7 +516,6 @@ export function Settings({ onClose }: SettingsProps) {
                     payload: { defaultModel: 'openai' },
                   });
                 }}
-                disabled={!settings?.hasOpenAIKey}
               >
                 <span className="settings-model-name">OpenAI</span>
                 <span className="settings-model-detail">GPT-4o</span>
@@ -740,54 +528,14 @@ export function Settings({ onClose }: SettingsProps) {
                     payload: { defaultModel: 'anthropic' },
                   });
                 }}
-                disabled={!settings?.hasAnthropicKey}
               >
                 <span className="settings-model-name">Anthropic</span>
                 <span className="settings-model-detail">Claude Sonnet</span>
               </button>
             </div>
             <p className="settings-hint">
-              Select the default AI provider for responses. Requires the corresponding API key to be configured.
+              Select the default AI provider for responses (requests are routed through Ticker Proxy).
             </p>
-          </div>
-        </section>
-
-        <section className="settings-section">
-          <h2>Smart Routing (Perplexity)</h2>
-          <div className="settings-field">
-            <label
-              className="settings-toggle-label"
-              title={!settings?.hasPerplexityKey ? 'Requires Perplexity API key' : undefined}
-            >
-              <input
-                type="checkbox"
-                checked={settings?.smartRoutingEnabled ?? false}
-                onChange={(e) => {
-                  bridge.send({
-                    type: 'saveSettings',
-                    payload: { smartRoutingEnabled: e.target.checked },
-                  });
-                }}
-                disabled={!settings?.hasPerplexityKey}
-              />
-              <span>Smart Routing</span>
-            </label>
-            <p className="settings-hint">
-              {settings?.hasPerplexityKey
-                ? 'When enabled, a local AI model analyzes your query to route it optimally: current events and real-time data go to Perplexity search, while knowledge questions go to GPT.'
-                : 'Requires Perplexity API key. When enabled, queries are automatically routed to the best AI backend.'}
-            </p>
-            {settings?.smartRoutingEnabled && settings?.hasPerplexityKey && (
-              <p className="settings-classifier-status">
-                {settings.classifierError ? (
-                  <span className="classifier-error">Classifier failed: {settings.classifierError}</span>
-                ) : settings.classifierLoading && !settings.classifierReady ? (
-                  <span className="classifier-loading">Loading local classifier...</span>
-                ) : settings.classifierReady ? (
-                  <span className="classifier-ready">Local classifier ready</span>
-                ) : null}
-              </p>
-            )}
           </div>
         </section>
 

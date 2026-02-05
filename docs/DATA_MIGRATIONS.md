@@ -18,6 +18,10 @@ Avoid:
   - Keep last N backups (alpha default: 5)
   - Store alongside the DB under Application Support
 
+### Before any content migration
+- Treat rewrites of `cells.content` as migrations (not “just a UI change”) and follow the same backup/rollback posture.
+- Example: `v9_heading_in_content_titles` prepends an `<h2>` heading derived from legacy `cells.restatement` when the cell content has no existing heading.
+
 ### Before any location migration
 - Copy the entire data directory to a timestamped backup.
 

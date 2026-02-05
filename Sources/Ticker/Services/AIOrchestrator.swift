@@ -1,14 +1,14 @@
 import Foundation
 
 /// Central orchestrator for AI services
-/// Manages LLM providers and routes requests based on intent classification
+/// Routes all LLM requests through Ticker Proxy (proxy-only mode for alpha).
+/// Intent classification is done locally via MLX and passed to proxy for routing.
 final class AIOrchestrator {
-    private var providers: [String: LLMProvider] = [:]
     private var classifier: QueryClassifier?
     private let settings: SettingsService
     private var retrievalService: RetrievalService?
 
-    /// Proxy service for routing through Ticker proxy when device key is active
+    /// Proxy service - the sole LLM provider in proxy-only mode
     private let proxyService: ProxyLLMService
 
     init(settings: SettingsService = .shared, retrievalService: RetrievalService? = nil) {
@@ -20,23 +20,6 @@ final class AIOrchestrator {
     /// Set the retrieval service for RAG
     func setRetrievalService(_ service: RetrievalService) {
         self.retrievalService = service
-    }
-
-    // MARK: - Provider Management
-
-    /// Register a provider
-    func register(_ provider: LLMProvider) {
-        providers[provider.id] = provider
-    }
-
-    /// Get a provider by ID
-    func provider(id: String) -> LLMProvider? {
-        providers[id]
-    }
-
-    /// Get all configured providers
-    var configuredProviders: [LLMProvider] {
-        providers.values.filter { $0.isConfigured }
     }
 
     /// Set the query classifier for intent-based routing
@@ -53,6 +36,8 @@ final class AIOrchestrator {
     ///   - streamId: Optional stream ID for RAG retrieval
     ///   - priorCells: Conversation history (each has "content", "type", optionally "imageURLs")
     ///   - sourceContext: Fallback source context (used if RAG unavailable)
+    ///   - systemPromptOverride: Optional system prompt override (used for ephemeral Quick Panel "ask" mode)
+    ///   - includeHeading: If true, use prompt that requires "## Heading" on first line (for think flow)
     ///   - onModelSelected: Called with the model ID when provider is selected
     func route(
         query: String,
@@ -60,36 +45,32 @@ final class AIOrchestrator {
         streamId: UUID? = nil,
         priorCells: [[String: Any]],
         sourceContext: String?,
+        systemPromptOverride: String? = nil,
+        includeHeading: Bool = false,
         onChunk: @escaping (String) -> Void,
         onComplete: @escaping () -> Void,
         onError: @escaping (Error) -> Void,
         onModelSelected: ((String) -> Void)? = nil
     ) async {
-        // Check if we should use proxy mode (device key is active)
-        let useProxy = await DeviceKeyService.shared.currentState.isUsable
+        // Proxy-only mode: all LLM traffic goes through the proxy.
+        // If device key is not active, the proxy will return an auth error.
 
         // Classify if we have a classifier and smart routing is enabled
         var intent: QueryIntent = .knowledge
+        var classificationResult: ClassificationResult?
         if settings.smartRoutingEnabled, let classifier {
             do {
                 let result = try await classifier.classify(query: query)
                 intent = result.intent
+                classificationResult = result
                 DebugLog.log("AIOrchestrator: classified as \(intent) (confidence: \(result.confidence))")
             } catch {
                 DebugLog.log("AIOrchestrator: classification failed, defaulting to knowledge (\(DebugLog.errorSummary(error)))")
             }
         }
 
-        // Select provider based on intent and proxy mode
-        let selectedProvider = selectProvider(for: intent, useProxy: useProxy)
-
-        guard let provider = selectedProvider else {
-            onError(OrchestratorError.noProviderAvailable)
-            return
-        }
-
-        // Notify caller which model is being used
-        onModelSelected?(provider.modelId)
+        // Always use proxy service - no vendor fallback
+        // Note: We don't call onModelSelected here; the proxy will tell us the resolved model via headers
 
         // Try RAG retrieval if available, otherwise use fallback source context
         var contextToUse = sourceContext
@@ -113,38 +94,21 @@ final class AIOrchestrator {
             query: query,
             queryImages: queryImages,
             priorCells: priorCells,
-            sourceContext: contextToUse
+            sourceContext: contextToUse,
+            classificationResult: classificationResult,
+            systemPromptOverride: systemPromptOverride,
+            includeHeading: includeHeading
         ).truncated()
 
-        // Stream the response
-        await provider.stream(
+        // Stream the response through proxy
+        // The proxy returns resolved provider/model in headers, which we pass to onModelSelected
+        await proxyService.stream(
             request: request,
-            onChunk: onChunk,
-            onComplete: onComplete,
-            onError: onError
-        )
-    }
-
-    /// Route using the provider protocol directly
-    func stream(
-        providerId: String,
-        request: LLMRequest,
-        onChunk: @escaping (String) -> Void,
-        onComplete: @escaping () -> Void,
-        onError: @escaping (Error) -> Void
-    ) async {
-        guard let provider = providers[providerId] else {
-            onError(OrchestratorError.providerNotFound(providerId))
-            return
-        }
-
-        guard provider.isConfigured else {
-            onError(LLMProviderError.notConfigured(provider.name))
-            return
-        }
-
-        await provider.stream(
-            request: request,
+            onModelSelected: { provider, model in
+                // Format as "provider/model" for display (e.g., "perplexity/sonar")
+                let displayModel = "\(provider)/\(model)"
+                onModelSelected?(displayModel)
+            },
             onChunk: onChunk,
             onComplete: onComplete,
             onError: onError
@@ -153,59 +117,35 @@ final class AIOrchestrator {
 
     // MARK: - Private
 
-    private func selectProvider(for intent: QueryIntent, useProxy: Bool = false) -> LLMProvider? {
-        // If proxy mode is active, always use proxy service
-        // The proxy handles routing to providers on the server side
-        if useProxy {
-            DebugLog.log("AIOrchestrator: using proxy mode")
-            return proxyService
-        }
-
-        switch intent {
-        case .search:
-            // Prefer Perplexity for search, fall back to default model
-            if let perplexity = providers["perplexity"], perplexity.isConfigured {
-                return perplexity
-            }
-            // Fall through to use default model
-            fallthrough
-
-        case .knowledge, .expand, .summarize, .rewrite, .extract, .ambiguous:
-            // Use the user's selected default model
-            let defaultModelId = settings.defaultModel.rawValue
-            if let defaultProvider = providers[defaultModelId], defaultProvider.isConfigured {
-                return defaultProvider
-            }
-            // Fall back to any configured provider (OpenAI first, then Anthropic)
-            if let openai = providers["openai"], openai.isConfigured {
-                return openai
-            }
-            if let anthropic = providers["anthropic"], anthropic.isConfigured {
-                return anthropic
-            }
-            // Last resort: return any configured provider
-            return configuredProviders.first
-        }
-    }
-
     private func buildRequest(
         for intent: QueryIntent,
         query: String,
         queryImages: [String],
         priorCells: [[String: Any]],
-        sourceContext: String?
+        sourceContext: String?,
+        classificationResult: ClassificationResult?,
+        systemPromptOverride: String? = nil,
+        includeHeading: Bool = false
     ) -> LLMRequest {
-        // Select appropriate system prompt based on intent
+        // Select appropriate system prompt based on intent and heading requirement
         let systemPrompt: String
         switch intent {
         case .search:
-            systemPrompt = Prompts.search
+            systemPrompt = includeHeading ? Prompts.searchWithHeading : Prompts.search
         case .summarize:
-            systemPrompt = Prompts.applyModifier // Could add specific summarize prompt
+            systemPrompt = Prompts.applyModifier // Modifiers never include heading
         case .expand, .rewrite, .extract:
             systemPrompt = Prompts.applyModifier
         case .knowledge, .ambiguous:
-            systemPrompt = Prompts.thinkingPartner
+            systemPrompt = includeHeading ? Prompts.thinkingPartnerWithHeading : Prompts.thinkingPartner
+        }
+
+        let resolvedSystemPrompt: String
+        if let override = systemPromptOverride?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty {
+            resolvedSystemPrompt = override
+        } else {
+            resolvedSystemPrompt = systemPrompt
         }
 
         // Build messages from conversation history with image support
@@ -238,11 +178,15 @@ final class AIOrchestrator {
         // Add current query with any attached images
         messages.append(LLMMessage(role: "user", content: query, imageURLs: queryImages))
 
+        // Build intent for proxy if classification result available
+        let llmIntent = classificationResult.map { LLMIntent(from: $0) }
+
         return LLMRequest(
-            systemPrompt: systemPrompt,
+            systemPrompt: resolvedSystemPrompt,
             messages: messages,
             temperature: 0.7,
-            maxTokens: 2048
+            maxTokens: 2048,
+            intent: llmIntent
         )
     }
 }
@@ -256,7 +200,7 @@ enum OrchestratorError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noProviderAvailable:
-            return "No AI provider is configured. Go to Settings to add an API key."
+            return "AI is not available. Please activate your device key in Settings."
         case .providerNotFound(let id):
             return "Provider '\(id)' not found"
         }

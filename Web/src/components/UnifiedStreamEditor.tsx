@@ -15,6 +15,8 @@ import { DOMSerializer, DOMParser, Node as ProseMirrorNode } from '@tiptap/pm/mo
 import { Selection, NodeSelection } from '@tiptap/pm/state';
 import { stripHtml, extractImages, buildImageBlock, extractImageURLs } from '../utils/html';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
+import { isCellNodeEmpty } from '../extensions/cellEmpty';
+import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 /** Save debounce delay in ms - matches Cell component */
 const SAVE_DEBOUNCE_MS = 500;
@@ -35,8 +37,6 @@ interface UnifiedStreamEditorProps {
   onClearPendingCell?: () => void;
   onClearPendingSource?: () => void;
 }
-
-const IS_DEV = Boolean((import.meta as any).env?.DEV);
 
 /**
  * Escape a string so it is safe to embed inside a double-quoted HTML attribute value.
@@ -96,9 +96,9 @@ function buildHtmlFromCells(cells: Cell[]): string {
   if (sortedCells.length === 0) {
     // This path should never be reached - callers must provide at least one UUID-backed cell.
     // initialCells always includes a bootstrap cell for empty streams.
-    if (IS_DEV) {
-      console.warn('[buildHtmlFromCells] Called with empty cells array - this indicates a bug. Callers should provide a bootstrap cell.');
-    }
+    debugWarn(
+      '[buildHtmlFromCells] Called with empty cells array - this indicates a bug. Callers should provide a bootstrap cell.'
+    );
     // Return empty string rather than a non-UUID placeholder that would break persistence.
     return '';
   }
@@ -147,7 +147,7 @@ function extractCellsFromDoc(editor: Editor): Partial<Cell>[] {
       const id: string | null = node.attrs.id ?? null;
       if (!id) {
         if (IS_DEV) {
-          console.warn('[UnifiedStreamEditor] cellBlock missing attrs.id; skipping during extract');
+          debugWarn('[UnifiedStreamEditor] cellBlock missing attrs.id; skipping during extract');
         }
         return;
       }
@@ -323,7 +323,7 @@ export function UnifiedStreamEditor({
     // Safety check: don't save if stream ID doesn't match
     if (currentStreamId !== stream.id) {
       if (IS_DEV) {
-        console.warn('[UnifiedStreamEditor] savePendingCells: streamId mismatch, skipping save');
+        debugWarn('[UnifiedStreamEditor] savePendingCells: streamId mismatch, skipping save');
       }
       return;
     }
@@ -335,7 +335,9 @@ export function UnifiedStreamEditor({
     let savedCount = 0;
 
     if (IS_DEV && !window.webkit?.messageHandlers?.bridge) {
-      console.warn('[UnifiedStreamEditor] window.webkit.messageHandlers.bridge missing; saveCell will be a no-op (running outside the macOS app?)');
+      debugWarn(
+        '[UnifiedStreamEditor] window.webkit.messageHandlers.bridge missing; saveCell will be a no-op (running outside the macOS app?)'
+      );
     }
 
     // Persist only the cells we saw edits for.
@@ -381,7 +383,7 @@ export function UnifiedStreamEditor({
     });
 
     if (IS_DEV) {
-      console.log(`[UnifiedStreamEditor] savePendingCells: saved=${savedCount} pendingRemaining=${pending.size}`);
+      debugLog('[UnifiedStreamEditor] savePendingCells', { savedCount, pendingRemaining: pending.size });
     }
   }, [stream.id]);
 
@@ -394,12 +396,12 @@ export function UnifiedStreamEditor({
       window.clearTimeout(saveTimeoutRef.current);
     }
     if (IS_DEV) {
-      console.log('[UnifiedStreamEditor] scheduleSave');
+      debugLog('[UnifiedStreamEditor] scheduleSave');
     }
     saveTimeoutRef.current = window.setTimeout(() => {
       saveTimeoutRef.current = null;
       if (IS_DEV) {
-        console.log('[UnifiedStreamEditor] scheduleSave: fired');
+        debugLog('[UnifiedStreamEditor] scheduleSave: fired');
       }
       savePendingCells();
     }, SAVE_DEBOUNCE_MS);
@@ -465,7 +467,7 @@ export function UnifiedStreamEditor({
     });
 
     if (IS_DEV) {
-      console.log('[UnifiedStreamEditor] Created new cell:', newId, 'after:', afterCellId);
+      debugLog('[UnifiedStreamEditor] Created new cell', { newId, afterCellId });
     }
 
     return newId;
@@ -490,7 +492,7 @@ export function UnifiedStreamEditor({
     });
 
     if (IS_DEV) {
-      console.log('[UnifiedStreamEditor] Deleted cell:', cellId);
+      debugLog('[UnifiedStreamEditor] Deleted cell', { cellId });
     }
   }, [deleteBlock]);
 
@@ -505,7 +507,7 @@ export function UnifiedStreamEditor({
     const originalPrompt = stripHtml(cell.content || '').trim();
     if (!originalPrompt) {
       if (IS_DEV) {
-        console.log('[UnifiedStreamEditor] handleThink: empty prompt, skipping');
+        debugLog('[UnifiedStreamEditor] handleThink: empty prompt, skipping');
       }
       return;
     }
@@ -548,7 +550,7 @@ export function UnifiedStreamEditor({
     });
 
     if (IS_DEV) {
-      console.log('[UnifiedStreamEditor] handleThink: dispatching AI request for cell:', cellId);
+      debugLog('[UnifiedStreamEditor] handleThink: dispatching AI request for cell', { cellId });
     }
 
     // Dispatch think request to Swift (Swift only understands "think").
@@ -594,7 +596,7 @@ export function UnifiedStreamEditor({
     const isReordering = useBlockStore.getState().isReordering;
 
     if (IS_DEV) {
-      console.log('[UnifiedStreamEditor] onUpdate: extracted', extractedCells.length, 'cells');
+      debugLog('[UnifiedStreamEditor] onUpdate: extracted cells', { count: extractedCells.length });
     }
 
     let hasChanges = false;
@@ -611,7 +613,7 @@ export function UnifiedStreamEditor({
     for (const existingId of blockOrder) {
       if (!docCellIds.has(existingId)) {
         if (IS_DEV) {
-          console.log('[UnifiedStreamEditor] Doc removed cellBlock, persisting delete:', existingId);
+          debugLog('[UnifiedStreamEditor] Doc removed cellBlock, persisting delete', { existingId });
         }
         handleDeleteCell(existingId);
       }
@@ -629,7 +631,7 @@ export function UnifiedStreamEditor({
         // Cell exists in doc but not in store.
         // Prefer to self-heal: treat doc as authoritative structure and create a minimal store block.
         if (IS_DEV) {
-          console.log('[UnifiedStreamEditor] Cell in doc but not in store; creating:', cellId);
+          debugLog('[UnifiedStreamEditor] Cell in doc but not in store; creating', { cellId });
         }
         const now = new Date().toISOString();
         const newCell: Cell = {
@@ -718,11 +720,70 @@ export function UnifiedStreamEditor({
       }
     }
 
+    // Slice 3: Auto-reset empty AI cells to text type.
+    // When an aiResponse cell becomes empty (all content deleted by user),
+    // reset it to a normal text cell. This removes the AI chrome and allows
+    // the user to start fresh.
+    const storeState = useBlockStore.getState();
+    for (const extracted of extractedCells) {
+      const cellId = extracted.id;
+      if (!cellId) continue;
+
+      const storeCell = storeState.getBlock(cellId);
+      if (!storeCell || storeCell.type !== 'aiResponse') continue;
+
+      // Don't reset while streaming or refreshing
+      if (storeState.isStreaming(cellId) || storeState.isRefreshing(cellId)) continue;
+
+      // Find the cellBlock node in the document
+      const cellInfo = findCellBlockById(editor.state.doc, cellId);
+      if (!cellInfo) continue;
+
+      // Check if the cell is empty
+      if (!isCellNodeEmpty(cellInfo.node)) continue;
+
+      if (IS_DEV) {
+        console.log('[UnifiedStreamEditor] Auto-resetting empty AI cell to text:', cellId);
+      }
+
+      // Reset to text type in store
+      updateBlock(cellId, {
+        type: 'text',
+        originalPrompt: undefined,
+        modelId: undefined,
+      });
+
+      // Persist the reset
+      bridge.send({
+        type: 'saveCell',
+        payload: {
+          id: cellId,
+          streamId: stream.id,
+          content: storeCell.content || '<p></p>',
+          type: 'text',
+          order: storeCell.order,
+          // Clear AI-specific fields
+          originalPrompt: undefined,
+          modelId: undefined,
+          // Preserve other fields
+          sourceApp: storeCell.sourceApp,
+          blockName: storeCell.blockName,
+          processingConfig: storeCell.processingConfig,
+        },
+      });
+
+      // Update baseline to prevent re-saving
+      baselineRef.current.set(cellId, {
+        content: storeCell.content || '<p></p>',
+        order: storeCell.order,
+      });
+    }
+
     // Schedule debounced save if there were changes (Slice 03)
     if (hasChanges) {
       scheduleSave();
     }
-  }, [getBlock, updateBlock, scheduleSave]);
+  }, [getBlock, updateBlock, scheduleSave, stream.id]);
 
   // Create the unified editor
   const editor = useEditor({
@@ -797,7 +858,7 @@ export function UnifiedStreamEditor({
   const replaceCellHtml = useCallback((cellId: string, html: string) => {
     if (!editor) {
       if (IS_DEV) {
-        console.warn('[UnifiedStreamEditor] replaceCellHtml: editor not ready');
+        debugWarn('[UnifiedStreamEditor] replaceCellHtml: editor not ready');
       }
       return;
     }
@@ -808,7 +869,7 @@ export function UnifiedStreamEditor({
     const result = findCellBlockById(doc, cellId);
     if (!result) {
       if (IS_DEV) {
-        console.warn('[UnifiedStreamEditor] replaceCellHtml: cell not found:', cellId);
+        debugWarn('[UnifiedStreamEditor] replaceCellHtml: cell not found', { cellId });
       }
       return;
     }
@@ -847,7 +908,7 @@ export function UnifiedStreamEditor({
     pendingSavesRef.current.delete(cellId);
 
     if (IS_DEV) {
-      console.log('[UnifiedStreamEditor] replaceCellHtml: updated cell:', cellId);
+      debugLog('[UnifiedStreamEditor] replaceCellHtml: updated cell', { cellId });
     }
   }, [editor]);
 
@@ -859,7 +920,7 @@ export function UnifiedStreamEditor({
   const insertCells = useCallback((cells: Cell[]) => {
     if (!editor) {
       if (IS_DEV) {
-        console.warn('[UnifiedStreamEditor] insertCells: editor not ready');
+        debugWarn('[UnifiedStreamEditor] insertCells: editor not ready');
       }
       return;
     }
@@ -915,7 +976,7 @@ export function UnifiedStreamEditor({
     }
 
     if (IS_DEV) {
-      console.log('[UnifiedStreamEditor] insertCells: inserted', cells.length, 'cells');
+      debugLog('[UnifiedStreamEditor] insertCells: inserted cells', { count: cells.length });
     }
   }, [editor, addBlock]);
 
@@ -926,7 +987,7 @@ export function UnifiedStreamEditor({
   const insertImage = useCallback((imageUrl: string) => {
     if (!editor) {
       if (IS_DEV) {
-        console.warn('[UnifiedStreamEditor] insertImage: editor not ready');
+        debugWarn('[UnifiedStreamEditor] insertImage: editor not ready');
       }
       return;
     }
@@ -987,7 +1048,9 @@ export function UnifiedStreamEditor({
     editor.chain().focus().setImage({ src: imageUrl }).run();
 
     if (IS_DEV) {
-      console.log('[UnifiedStreamEditor] insertImage: inserted image:', imageUrl);
+      debugLog('[UnifiedStreamEditor] insertImage: inserted image', {
+        isTickerAsset: typeof imageUrl === 'string' && imageUrl.startsWith('ticker-asset:'),
+      });
     }
   }, [editor]);
 
@@ -1029,7 +1092,7 @@ export function UnifiedStreamEditor({
       flushPendingSave();
 
       if (IS_DEV) {
-        console.log('[UnifiedStreamEditor] Initializing store for stream:', stream.id);
+        debugLog('[UnifiedStreamEditor] Initializing store for stream', { streamId: stream.id });
       }
 
       // Load stream data into store (bootstrap empty streams with 1 real cell)
@@ -1045,7 +1108,7 @@ export function UnifiedStreamEditor({
       }
 
       if (IS_DEV) {
-        console.log('[UnifiedStreamEditor] Seeded baseline with', baseline.size, 'cells');
+        debugLog('[UnifiedStreamEditor] Seeded baseline', { count: baseline.size });
       }
     }
   }, [stream.id, initialCells, loadStream, flushPendingSave]);

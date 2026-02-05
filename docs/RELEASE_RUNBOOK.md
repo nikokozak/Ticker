@@ -3,6 +3,7 @@
 Step-by-step guide to release a new Ticker alpha build with Sparkle auto-updates.
 
 If you want a “single entry point” that wraps the common dev/prod/release commands, use `./tickerctl.sh`.
+`./run.sh` is intended for local dev convenience only (not signing/notarization/release automation).
 
 ## Mental model (what each thing “means”)
 
@@ -70,7 +71,9 @@ Depending on the Sparkle archive layout, the tools may be under `tools/sparkle/S
 If not already done:
 
 > Recommended: use a separate worktree for `gh-pages` so you never mix source + appcast:
-> `git worktree add ../Streams-gh-pages gh-pages`
+> `git worktree add ../Ticker-gh-pages gh-pages`
+>
+> If you already have an older worktree name (e.g. `../Streams-gh-pages`), that’s fine — the key point is keeping `gh-pages` isolated.
 
 ```bash
 # Create orphan gh-pages branch
@@ -96,11 +99,18 @@ Then in GitHub repo **Settings > Pages**:
 - Branch: **gh-pages** / **/ (root)**
 - Save
 
-Verify: `https://nikokozak.github.io/Streams/appcast-alpha.xml` should return the XML.
+Verify: `https://nikokozak.github.io/Ticker/appcast-alpha.xml` should return the XML.
 
 ---
 
 ## Release Steps
+
+### 0. Pre-release data safety check (recommended)
+
+Before shipping a build that includes schema changes, confirm that a pending migration creates a timestamped backup DB in:
+- `~/Library/Application Support/Ticker/backups/`
+
+Restore instructions live in `docs/ALPHA_SUPPORT.md` (keep that document accurate; it’s the thing you’ll reach for during triage).
 
 ### 1. Update version numbers
 
@@ -141,6 +151,17 @@ grep -n \"assets/\" \"$APP_PATH/Contents/Resources/Resources/index.html\"
 ```
 
 You want `./assets/...` (not `/assets/...`). This is controlled by `Web/vite.config.ts` (`base: './'` for build).
+
+#### Quick sanity check: native drag & drop works
+
+Launch the Release build and drag files from Finder into the window:
+
+```bash
+open "$APP_PATH"
+```
+
+- Drag a PNG/JPG → image appears in the current stream editor.
+- Drag a PDF → source appears in the Sources panel.
 
 ### 3. Code sign with Developer ID
 
@@ -263,7 +284,7 @@ Add a new `<item>` entry at the top of the channel (keep previous 2-3 entries fo
       <sparkle:shortVersionString>YYYY.MM.patch</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure
-        url="https://github.com/nikokozak/Streams/releases/download/vYYYY.MM.patch/Ticker-YYYY.MM.patch.zip"
+        url="https://github.com/nikokozak/Ticker/releases/download/vYYYY.MM.patch/Ticker-YYYY.MM.patch.zip"
         type="application/octet-stream"
         sparkle:edSignature="BASE64_SIGNATURE_FROM_STEP_6"
         length="FILE_SIZE_FROM_STEP_5"
@@ -306,7 +327,7 @@ curl -L -I "https://github.com/.../releases/download/.../Ticker-....zip"
 
 - **Keep last 2-3 `<item>` entries** in appcast-alpha.xml
 - **Do not delete older release assets** from GitHub Releases
-- Users can manually download previous versions from: https://github.com/nikokozak/Streams/releases
+- Users can manually download previous versions from: https://github.com/nikokozak/Ticker/releases
 
 ---
 

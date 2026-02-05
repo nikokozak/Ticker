@@ -3,6 +3,7 @@ import { Cell as CellType } from '../types';
 import { CellEditor } from './CellEditor';
 import { useBlockStore } from '../store/blockStore';
 import { findByShortIdOrName } from '../utils/references';
+import { extractFirstHeadingFromHtml } from '../utils/cellTitle';
 
 interface CellProps {
   cell: CellType;
@@ -45,23 +46,6 @@ export function Cell({
   const [isFocused, setIsFocused] = useState(false);
   const saveTimeoutRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  // Does this cell have a restatement (dual-representation)?
-  // For text cells: shows as a heading when unfocused
-  // For AI cells: shows as a header above the response
-  const hasRestatement = Boolean(cell.restatement);
-
-  // Track when restatement first appears for animation
-  const [showRestatementAnim, setShowRestatementAnim] = useState(false);
-  const prevRestatementRef = useRef<string | undefined>(undefined);
-
-  useEffect(() => {
-    // If restatement just appeared, trigger animation
-    if (cell.restatement && !prevRestatementRef.current) {
-      setShowRestatementAnim(true);
-    }
-    prevRestatementRef.current = cell.restatement;
-  }, [cell.restatement]);
 
   // Handle clicks on cell references
   const handleReferenceClick = useCallback(
@@ -203,9 +187,9 @@ export function Cell({
   const refreshingClass = isRefreshing ? 'cell--refreshing' : '';
   const errorClass = error ? 'cell--error' : '';
 
-  // Show restatement view when: text cell, has restatement, not focused, not new
-  // AI cells always show content, with restatement as a header above
-  const showRestatementView = hasRestatement && !isFocused && !isNew && cell.type === 'text';
+  // Title view (for legacy list-style cells): show the first heading when present.
+  const headingTitle = extractFirstHeadingFromHtml(cell.content);
+  const showTitleView = Boolean(headingTitle) && !isFocused && !isNew && cell.type === 'text';
 
   const isAiCell = cell.type === 'aiResponse';
   const isLive = cell.processingConfig?.refreshTrigger === 'onStreamOpen';
@@ -213,7 +197,7 @@ export function Cell({
   return (
     <div
       ref={containerRef}
-      className={`cell ${cellTypeClass} ${streamingClass} ${refreshingClass} ${errorClass} ${hasRestatement ? 'cell--has-restatement' : ''}`}
+      className={`cell ${cellTypeClass} ${streamingClass} ${refreshingClass} ${errorClass}`}
       onBlur={handleBlur}
       onFocus={handleFocus}
       onClick={handleReferenceClick}
@@ -254,10 +238,10 @@ export function Cell({
         </div>
       )}
 
-      {showRestatementView ? (
-        // Display mode: show restatement as a heading
+      {showTitleView ? (
+        // Display mode: show the heading-derived title
         <div
-          className={`cell-restatement ${showRestatementAnim ? 'cell-restatement--animated' : ''}`}
+          className="cell-restatement"
           onClick={() => {
             setIsFocused(true);
             setTimeout(() => {
@@ -265,26 +249,13 @@ export function Cell({
             }, 0);
           }}
         >
-          {cell.restatement}
+          {headingTitle}
         </div>
       ) : (
-        // Edit mode: show original content with restatement header if applicable
         <>
-          {/* AI cells: always show restatement as header when present */}
-          {isAiCell && hasRestatement && (
-            <div className={`cell-restatement-header ${showRestatementAnim ? 'cell-restatement--animated' : ''}`}>
-              {cell.restatement}
-            </div>
-          )}
-          {/* Text cells: show animated restatement when it first appears */}
-          {!isAiCell && hasRestatement && showRestatementAnim && (
-            <div className="cell-restatement-inline cell-restatement--animated">
-              {cell.restatement}
-            </div>
-          )}
           <CellEditor
             content={localContent}
-            autoFocus={isNew || (hasRestatement && isFocused)}
+            autoFocus={isNew || isFocused}
             placeholder={isFirstEmptyCell ? 'Write your thoughts...' : ''}
             cellId={cell.id}
             streamId={cell.streamId}

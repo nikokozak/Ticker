@@ -289,6 +289,7 @@ final class QuickPanelManager: ObservableObject {
                 streamId: nil,  // Ephemeral - not tied to real stream
                 priorCells: priorCells,
                 sourceContext: contextForAI,
+                systemPromptOverride: Prompts.quickPanelChat,
                 onChunk: { [weak self] chunk in
                     Task { @MainActor in
                         guard let self = self, !self.isStreamingCancelled else { return }

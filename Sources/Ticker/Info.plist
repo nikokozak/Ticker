@@ -29,7 +29,7 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>SUFeedURL</key>
-	<string>https://nikokozak.github.io/Streams/appcast-alpha.xml</string>
+	<string>https://nikokozak.github.io/Ticker/appcast-alpha.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>jQJa8u8Ux3pOxkrC/37neh8rtOs8CDOyr/hzp0OaIKs=</string>
 </dict>

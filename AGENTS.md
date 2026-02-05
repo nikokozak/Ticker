@@ -10,6 +10,14 @@ It is intended for coding agents (Codex/Claude/GPT) so future sessions don’t h
 - Get GPT-5.2 review after each slice before moving on.
 - Do not expand scope without asking.
 
+## Proxy integration (alpha)
+
+- The canonical backlog + acceptance criteria live in `docs/GITHUB_BACKLOG_ALPHA.md` (Epic C for proxy, Epic D + D8 for Ticker integration, and C12 for vision).
+- Ticker is **proxy-only** for alpha: no local OpenAI/Anthropic/Perplexity calls and no vendor keys stored locally.
+- Device/serial keys are stored by `DeviceKeyService` under `~/Library/Application Support/Ticker/device.json` (never in localStorage; never log the key).
+- Vision (D8): keep it lightweight — send images as **base64 message parts** (do not rely on URL images or add upload endpoints unless explicitly scoped).
+- Current stabilization plan (Option A restatement + house-cleaning audit): `docs/ALPHA_STABILITY_PLAN.md`.
+
 ## Repo Orientation (high-level)
 
 - Swift app lives in `Sources/Ticker/` (WKWebView host + services).

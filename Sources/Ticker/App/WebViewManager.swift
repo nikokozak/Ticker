@@ -8,9 +8,7 @@ final class WebViewManager: NSObject {
     let bridgeService: BridgeService
     let persistence: PersistenceService?
     private let sourceService: SourceService?
-    private let aiService: AIService
-    private let anthropicService: AnthropicService
-    private let perplexityService: PerplexityService
+    private let proxyService: ProxyLLMService  // For proxy-mode AI operations
     let orchestrator: AIOrchestrator  // Exposed for Quick Panel ephemeral AI
     private let dependencyService: DependencyService
     private var processingService: ProcessingService?
@@ -27,6 +25,7 @@ final class WebViewManager: NSObject {
 
     // Asset management
     private let assetService = AssetService()
+    private var currentStreamIdForFileDrops: UUID?
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -45,20 +44,15 @@ final class WebViewManager: NSObject {
 
         self.webView = DroppableWebView(frame: .zero, configuration: config)
 
-        // Initialize services
-        self.aiService = AIService()
-        self.anthropicService = AnthropicService()
-        self.perplexityService = PerplexityService()
+        // Initialize proxy service (all AI operations go through proxy in alpha)
+        self.proxyService = ProxyLLMService()
 
         // Initialize RAG services
         self.embeddingService = EmbeddingService()
         self.chunkingService = ChunkingService()
 
-        // Initialize orchestrator and register providers
+        // Initialize orchestrator (proxy-only mode, no vendor provider registration)
         self.orchestrator = AIOrchestrator()
-        orchestrator.register(aiService)
-        orchestrator.register(anthropicService)
-        orchestrator.register(perplexityService)
 
         // Initialize dependency service
         self.dependencyService = DependencyService()
@@ -132,35 +126,20 @@ final class WebViewManager: NSObject {
 
     /// Handle files dropped via native macOS drag-and-drop
     private func handleDroppedFiles(_ urls: [URL]) {
-        DebugLog.log("handleDroppedFiles: received \(urls.count) file(s)")
+        guard let streamId = currentStreamIdForFileDrops else {
+            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                "error": AnyCodable("Open a stream before dropping files.")
+            ]))
+            return
+        }
 
-        // Get current stream ID from frontend
-        bridgeService.send(BridgeMessage(
-            type: "requestCurrentStreamId",
-            payload: nil
-        ))
-
-        // Store URLs temporarily and wait for stream ID response
-        pendingDroppedFiles = urls
-    }
-
-    private var pendingDroppedFiles: [URL] = []
-
-    /// Called by frontend with the current stream ID
-    private func processDroppedFiles(streamId: UUID) {
-        DebugLog.log("processDroppedFiles: streamId=\(streamId), files=\(pendingDroppedFiles.count)")
-        for url in pendingDroppedFiles {
-            // Check if this is an image file
+        for url in urls {
             if isImageFile(url) {
-                DebugLog.log("processDroppedFiles: processing image")
                 processDroppedImage(url, streamId: streamId)
             } else {
-                DebugLog.log("processDroppedFiles: processing document")
                 processDroppedDocument(url, streamId: streamId)
             }
         }
-
-        pendingDroppedFiles = []
     }
 
     /// Check if URL points to an image file
@@ -169,30 +148,38 @@ final class WebViewManager: NSObject {
         return imageExtensions.contains(url.pathExtension.lowercased())
     }
 
+    private func withSecurityScopedAccess<T>(_ url: URL, _ work: () throws -> T) rethrows -> T {
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStart {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try work()
+    }
+
     /// Process a dropped image - save to assets and notify frontend
     private func processDroppedImage(_ url: URL, streamId: UUID) {
         do {
-            let imageData = try Data(contentsOf: url)
-            DebugLog.log("Read image data: \(imageData.count) bytes")
-            let relativePath = try assetService.saveImage(data: imageData, streamId: streamId, filename: url.lastPathComponent)
-            let fullPath = assetService.assetURL(for: relativePath).path
-            DebugLog.log("Saved dropped image asset")
+            let imageData = try withSecurityScopedAccess(url) { try Data(contentsOf: url) }
+            let relativePath = try assetService.saveImage(
+                data: imageData,
+                streamId: streamId,
+                filename: url.lastPathComponent
+            )
 
-            // Use custom URL scheme that WKWebView can access
-            let assetUrl = "ticker-asset://\(fullPath)"
+            // Portable, privacy-preserving URL (no absolute user paths).
+            let assetUrl = "ticker-asset:///\(relativePath)"
 
-            // Send to frontend to insert into focused cell
             bridgeService.send(BridgeMessage(type: "imageDropped", payload: [
                 "relativePath": AnyCodable(relativePath),
-                "fullPath": AnyCodable(fullPath),
                 "assetUrl": AnyCodable(assetUrl),
                 "streamId": AnyCodable(streamId.uuidString)
             ]))
-            DebugLog.log("Sent imageDropped message")
         } catch {
-            DebugLog.log("Failed to save dropped image (\(DebugLog.errorSummary(error)))")
-            bridgeService.send(BridgeMessage(type: "imageDropError", payload: [
-                "error": AnyCodable(error.localizedDescription)
+            DebugLog.log("[WebViewManager] Failed to import dropped image (\(DebugLog.errorSummary(error)))")
+            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                "error": AnyCodable("Could not import that image.")
             ]))
         }
     }
@@ -200,16 +187,18 @@ final class WebViewManager: NSObject {
     /// Process a dropped document - add as source
     private func processDroppedDocument(_ url: URL, streamId: UUID) {
         guard let sourceService else {
-            DebugLog.log("Source service unavailable")
+            bridgeService.send(BridgeMessage(type: "sourceError", payload: [
+                "error": AnyCodable("Sources are unavailable right now.")
+            ]))
             return
         }
 
         do {
-            let source = try sourceService.addSource(from: url, to: streamId)
+            let source = try withSecurityScopedAccess(url) { try sourceService.addSource(from: url, to: streamId) }
             let sourcePayload = encodeSource(source)
             bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
         } catch {
-            DebugLog.log("Failed to add dropped file (\(DebugLog.errorSummary(error)))")
+            DebugLog.log("[WebViewManager] Failed to import dropped document (\(DebugLog.errorSummary(error)))")
             bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
         }
     }
@@ -236,17 +225,12 @@ final class WebViewManager: NSObject {
         }
     }
 
-    /// Load the MLX classifier in the background (only if smart routing enabled and Perplexity configured)
+    /// Load the MLX classifier in the background (only if smart routing enabled)
     private func loadMLXClassifier() {
-        // Only load classifier if smart routing is enabled and Perplexity is configured
+        // Only load classifier if smart routing is enabled
+        // Note: No vendor keys required - classifier runs locally, proxy handles routing
         guard SettingsService.shared.smartRoutingEnabled else {
             DebugLog.log("MLX classifier skipped: smart routing disabled")
-            classifierSkipped = true
-            return
-        }
-        guard let perplexityKey = SettingsService.shared.perplexityAPIKey,
-              !perplexityKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            DebugLog.log("MLX classifier skipped: Perplexity API key not configured")
             classifierSkipped = true
             return
         }
@@ -349,6 +333,7 @@ final class WebViewManager: NSObject {
                 DebugLog.log("[WebViewManager] Invalid loadStream payload")
                 return
             }
+            currentStreamIdForFileDrops = id
             do {
                 if let stream = try persistence.loadStream(id: id) {
                     // Build dependency graph for this stream
@@ -406,6 +391,7 @@ final class WebViewManager: NSObject {
             let title = (message.payload?["title"]?.value as? String) ?? "Untitled"
             do {
                 let stream = try persistence.createStream(title: title)
+                currentStreamIdForFileDrops = stream.id
                 let streamPayload = encodeStream(stream)
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
             } catch {
@@ -439,6 +425,9 @@ final class WebViewManager: NSObject {
             }
             do {
                 try persistence.deleteStream(id: id)
+                if currentStreamIdForFileDrops == id {
+                    currentStreamIdForFileDrops = nil
+                }
                 // Also delete stream assets (images, etc.)
                 try? assetService.deleteAssets(for: id)
                 // Reload streams list
@@ -818,11 +807,10 @@ final class WebViewManager: NSObject {
             Task { [weak self] in
                 guard let self else { return }
 
-                // Check if any AI is available (proxy mode or vendor keys)
+                // Proxy-only mode: all AI goes through proxy
                 let proxyUsable = await DeviceKeyService.shared.currentState.isUsable
-                let hasVendorKey = self.aiService.isConfigured || self.anthropicService.isConfigured
 
-                guard proxyUsable || hasVendorKey else {
+                guard proxyUsable else {
                     await MainActor.run {
                         onError(OrchestratorError.noProviderAvailable)
                     }
@@ -835,6 +823,7 @@ final class WebViewManager: NSObject {
                     streamId: streamIdForRAG,
                     priorCells: priorCells,
                     sourceContext: sourceContext,
+                    includeHeading: true,  // Think flow: model generates "## Heading" as first line
                     onChunk: onChunk,
                     onComplete: onComplete,
                     onError: onError,
@@ -848,26 +837,34 @@ final class WebViewManager: NSObject {
                 )
             }
 
-            // Generate restatement asynchronously (use original, not resolved, for better heading)
-            aiService.generateRestatement(for: currentCell) { [weak self] restatement in
-                guard let self, let restatement else { return }
+            // Restatement is now included in the streamed response via the heading-enabled prompt (Option A),
+            // but we still emit a best-effort `restatementGenerated` message to satisfy the bridge contract
+            // and populate the legacy restatement field for search fallbacks.
+            let restatementCandidate = currentCell.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !restatementCandidate.isEmpty {
+                let maxLen = 80
+                let restatement = restatementCandidate.count > maxLen
+                    ? String(restatementCandidate.prefix(maxLen - 1)) + "…"
+                    : restatementCandidate
 
-                // Send restatement to frontend
-                self.bridgeService.send(BridgeMessage(
-                    type: "restatementGenerated",
-                    payload: [
-                        "cellId": AnyCodable(cellId),
-                        "restatement": AnyCodable(restatement)
-                    ]
-                ))
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
 
-                // Also persist to database if we have a stream ID and persistence
-                if let persistence = self.persistence,
-                   let cellUUID = UUID(uuidString: cellId) {
-                    do {
-                        try persistence.updateCellRestatement(cellId: cellUUID, restatement: restatement)
-                    } catch {
-                        DebugLog.log("Failed to save restatement (\(DebugLog.errorSummary(error)))")
+                    self.bridgeService.send(BridgeMessage(
+                        type: "restatementGenerated",
+                        payload: [
+                            "cellId": AnyCodable(cellId),
+                            "restatement": AnyCodable(restatement)
+                        ]
+                    ))
+
+                    if let persistence = self.persistence,
+                       let cellUUID = UUID(uuidString: cellId) {
+                        do {
+                            try persistence.updateCellRestatement(cellId: cellUUID, restatement: restatement)
+                        } catch {
+                            DebugLog.log("Failed to save restatement (\(DebugLog.errorSummary(error)))")
+                        }
                     }
                 }
             }
@@ -883,20 +880,12 @@ final class WebViewManager: NSObject {
 
             DebugLog.log("[Modifier] Received request - cellId: \(cellId), promptLength=\(modifierPrompt.count)")
 
-            // Check if configured
-            guard aiService.isConfigured else {
-                DebugLog.log("[Modifier] Error: API not configured")
-                bridgeService.send(BridgeMessage(
-                    type: "modifierError",
-                    payload: ["cellId": AnyCodable(cellId), "error": AnyCodable("OpenAI API key not configured.")]
-                ))
-                return
-            }
+            // Proxy-only mode: always use proxy. If no device key, proxy will return auth error.
 
             // First, generate a short label for the modifier
             var modifierLabel = ""
             do {
-                modifierLabel = try await generateModifierLabel(prompt: modifierPrompt)
+                modifierLabel = try await proxyService.generateLabel(for: modifierPrompt)
                 DebugLog.log("[Modifier] Generated label")
             } catch {
                 DebugLog.log("[Modifier] Label generation failed (\(DebugLog.errorSummary(error))), using truncated prompt")
@@ -950,9 +939,9 @@ final class WebViewManager: NSObject {
                 ))
             }
 
-            // Apply the modifier using AI
-            DebugLog.log("[Modifier] Starting AI request")
-            aiService.applyModifier(
+            // Apply the modifier using proxy (proxy-only mode)
+            DebugLog.log("[Modifier] Starting AI request via proxy")
+            await proxyService.applyModifier(
                 currentContent: currentContent,
                 modifierPrompt: modifierPrompt,
                 onChunk: onChunk,
@@ -1279,18 +1268,6 @@ final class WebViewManager: NSObject {
                     ])
                 }
             }
-
-        case "currentStreamId":
-            // Response from frontend with current stream ID for file drops
-            guard let payload = message.payload,
-                  let streamIdValue = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdValue) else {
-                DebugLog.log("[WebViewManager] Invalid currentStreamId payload")
-                pendingDroppedFiles = []
-                return
-            }
-            processDroppedFiles(streamId: streamId)
-
         case "saveImage":
             // Save base64-encoded image data to stream's assets folder
             guard let payload = message.payload,
@@ -1311,12 +1288,10 @@ final class WebViewManager: NSObject {
 
             do {
                 let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
-                let fullPath = assetService.assetURL(for: relativePath).path
-                let assetUrl = "ticker-asset://\(fullPath)"
+                let assetUrl = "ticker-asset:///\(relativePath)"
 
                 bridgeService.send(BridgeMessage(type: "imageSaved", payload: [
                     "relativePath": AnyCodable(relativePath),
-                    "fullPath": AnyCodable(fullPath),
                     "assetUrl": AnyCodable(assetUrl),
                     "requestId": AnyCodable(requestId as Any)
                 ]))
@@ -1526,11 +1501,6 @@ final class WebViewManager: NSObject {
         return dict
     }
 
-    /// Generate a short label for a modifier prompt using AI
-    private func generateModifierLabel(prompt: String) async throws -> String {
-        return try await aiService.generateLabel(for: prompt)
-    }
-
     /// Get settings enriched with classifier state
     private func settingsWithClassifierState() -> [String: Any] {
         var settings = SettingsService.shared.allSettings()
@@ -1541,7 +1511,7 @@ final class WebViewManager: NSObject {
                 settings["classifierError"] = error.localizedDescription
             }
         } else if classifierSkipped {
-            // Classifier was intentionally skipped (smart routing disabled or no API key)
+            // Classifier was intentionally skipped (smart routing disabled by user)
             settings["classifierReady"] = false
             settings["classifierLoading"] = false
         } else {

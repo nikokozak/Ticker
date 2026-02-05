@@ -6,8 +6,7 @@ import { useBlockStore } from '../store/blockStore';
 import { bridge } from '../types';
 import { CellOverlay } from '../components/CellOverlay';
 import { buildImageBlock, extractImageURLs, extractImages, stripHtml } from '../utils/html';
-
-const IS_DEV = Boolean((import.meta as any).env?.DEV);
+import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 // Global drag state to coordinate between CellBlockViews
 let globalDraggedCellId: string | null = null;
@@ -31,13 +30,13 @@ function persistReorderToSwift() {
   const store = useBlockStore.getState();
   const { streamId, blockOrder } = store;
   if (!streamId) {
-    if (IS_DEV) console.warn('[CellBlockView] reorderBlocks: missing streamId in store; skipping persist');
+    debugWarn('[CellBlockView] reorderBlocks: missing streamId in store; skipping persist');
     return;
   }
 
   const orders = blockOrder.map((id, order) => ({ id, order }));
   if (IS_DEV) {
-    console.log('[CellBlockView] Persist reorderBlocks', {
+    debugLog('[CellBlockView] Persist reorderBlocks', {
       streamId,
       count: orders.length,
       head: orders.slice(0, 3),
@@ -239,7 +238,10 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
   const showOverlay = Boolean(id && overlayCellId === id);
 
   // Canonical cell data from store (attrs can be stale)
-  const cell = useBlockStore((s) => (id ? s.getBlock(id) : undefined));
+  // NOTE: We access s.blocks.get(id) directly instead of s.getBlock(id) because
+  // getBlock uses get() internally which bypasses Zustand's subscription tracking.
+  // This ensures re-renders when the cell data changes (e.g., restatement updates).
+  const cell = useBlockStore((s) => (id ? s.blocks.get(id) : undefined));
 
   // IMPORTANT: node.attrs can be stale for dynamic data (type/model/live) because we don't
   // always update node attrs when store changes. Use store as source of truth for UI chrome.
@@ -383,7 +385,7 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
     } else {
       openOverlay(id);
     }
-    if (IS_DEV) console.log('[CellBlockView] Toggle overlay for cell:', id, 'next=', !showOverlay);
+    if (IS_DEV) debugLog('[CellBlockView] Toggle overlay for cell', { id, next: !showOverlay });
   }, [id, openOverlay, closeOverlay, showOverlay]);
 
   // === Drag reorder handlers (Slice 08) ===
@@ -416,13 +418,13 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
     startAutoscroll();
     scheduleIdleCleanup();
     if (IS_DEV) {
-      console.log('[CellBlockView] Drag start:', id);
+      debugLog('[CellBlockView] Drag start', { id });
     }
   }, [id]);
 
   const handleDragEnd = useCallback(() => {
     if (IS_DEV) {
-      console.log('[CellBlockView] Drag end, globalDraggedCellId:', globalDraggedCellId);
+      debugLog('[CellBlockView] Drag end', { globalDraggedCellId });
     }
 
     // Fallback persistence: if drop didn't fire (NodeView DOM churn can cause that),
@@ -502,7 +504,12 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
           schedulePersistReorder();
 
           if (IS_DEV) {
-            console.log('[CellBlockView] Reordered:', globalDraggedCellId, 'from', fromIdx, 'to', insertIdx, 'pos', position);
+            debugLog('[CellBlockView] Reordered', {
+              globalDraggedCellId,
+              fromIdx,
+              toIdx: insertIdx,
+              position,
+            });
           }
         }
       }
@@ -620,6 +627,10 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
 
       {/* Thinking window overlay - shown during streaming/refreshing */}
       {showSpinner && <ThinkingWindow />}
+
+      {/* NOTE: Restatement is now part of the content (as ## heading), not a separate field.
+          The model outputs "## Heading\n\nBody" which becomes <h2>Heading</h2><p>Body</p> via markdownToHtml.
+          This makes the heading editable/deletable like normal content (Option A from ALPHA_STABILITY_PLAN.md). */}
 
       {/* Content area - editable */}
       <NodeViewContent className="cell-block-content" />

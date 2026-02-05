@@ -4,6 +4,7 @@ import { SuggestionOptions, SuggestionProps } from '@tiptap/suggestion';
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
 import { Cell } from '../types/models';
 import { getShortId } from '../utils/references';
+import { deriveCellTitle } from '../utils/cellTitle';
 
 interface SuggestionItem {
   id: string;
@@ -105,30 +106,25 @@ export function createReferenceSuggestion(
           // If no query, show all cells
           if (!lowerQuery) return true;
 
-          // Filter by blockName, short ID, content, or type
+          // Filter by title, blockName, short ID, content, or type
           const blockName = cell.blockName?.toLowerCase() || '';
           const shortId = getShortId(cell.id);
           const content = cell.content.replace(/<[^>]*>/g, '').toLowerCase();
           const cellType = cell.type.toLowerCase();
-          const restatement = cell.restatement?.toLowerCase() || '';
+          const title = deriveCellTitle(cell).toLowerCase();
 
           return (
+            title.includes(lowerQuery) ||
             blockName.includes(lowerQuery) ||
             shortId.includes(lowerQuery) ||
             content.includes(lowerQuery) ||
-            cellType.includes(lowerQuery) ||
-            restatement.includes(lowerQuery)
+            cellType.includes(lowerQuery)
           );
         })
         // Sort by order to maintain document order
         .sort((a, b) => a.order - b.order)
         .map((cell) => {
-          // Generate label: blockName > restatement > content preview > type fallback
-          const contentPreview = cell.content.replace(/<[^>]*>/g, '').slice(0, 40);
-          const label = cell.blockName ||
-            cell.restatement ||
-            contentPreview ||
-            (cell.type === 'aiResponse' ? 'AI Response' : 'Untitled');
+          const label = deriveCellTitle(cell);
 
           return {
             id: cell.id,

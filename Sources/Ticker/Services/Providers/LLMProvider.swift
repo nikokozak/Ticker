@@ -18,11 +18,13 @@ protocol LLMProvider {
     /// Stream a completion request
     /// - Parameters:
     ///   - request: The LLM request parameters
+    ///   - onModelSelected: Optional callback with resolved (provider, model) from proxy headers
     ///   - onChunk: Called for each streamed chunk of content
     ///   - onComplete: Called when streaming finishes
     ///   - onError: Called if an error occurs
     func stream(
         request: LLMRequest,
+        onModelSelected: ((String, String) -> Void)?,
         onChunk: @escaping (String) -> Void,
         onComplete: @escaping () -> Void,
         onError: @escaping (Error) -> Void
@@ -51,6 +53,29 @@ struct LLMMessage {
     var hasImages: Bool { !imageURLs.isEmpty }
 }
 
+/// Intent for proxy routing (matches proxy's expected schema)
+struct LLMIntent {
+    let type: String
+    let confidence: Float
+    let source: String
+
+    /// Convert ClassificationResult to LLMIntent
+    init(from result: ClassificationResult) {
+        self.type = result.intent.rawValue
+        self.confidence = result.confidence
+        self.source = "mlx"
+    }
+
+    /// Convert to dictionary for JSON serialization
+    func toDictionary() -> [String: Any] {
+        return [
+            "type": type,
+            "confidence": confidence,
+            "source": source
+        ]
+    }
+}
+
 /// A standardized request to an LLM provider
 struct LLMRequest {
     /// System prompt for the model
@@ -65,16 +90,21 @@ struct LLMRequest {
     /// Maximum tokens to generate (nil for provider default)
     var maxTokens: Int?
 
+    /// Optional intent for proxy routing (set by orchestrator when using smart routing)
+    var intent: LLMIntent?
+
     init(
         systemPrompt: String,
         messages: [LLMMessage],
         temperature: Double = 0.7,
-        maxTokens: Int? = nil
+        maxTokens: Int? = nil,
+        intent: LLMIntent? = nil
     ) {
         self.systemPrompt = systemPrompt
         self.messages = messages
         self.temperature = temperature
         self.maxTokens = maxTokens
+        self.intent = intent
     }
 
     /// Convenience initializer for text-only messages
@@ -139,7 +169,8 @@ struct LLMRequest {
                 systemPrompt: systemPrompt,
                 messages: [],
                 temperature: temperature,
-                maxTokens: maxTokens
+                maxTokens: maxTokens,
+                intent: intent
             )
         }
 
@@ -168,7 +199,8 @@ struct LLMRequest {
             systemPrompt: systemPrompt,
             messages: keptMessages,
             temperature: temperature,
-            maxTokens: maxTokens
+            maxTokens: maxTokens,
+            intent: intent
         )
     }
 }
@@ -207,6 +239,7 @@ struct ProxyQuotaDetails {
 /// Errors specific to proxy LLM requests
 enum ProxyLLMError: LocalizedError {
     case unreachable                                // Network error
+    case timeout(seconds: Int)                      // No response/first byte within timeout
     case invalidKey                                 // 401: key invalid/expired
     case keyBoundElsewhere(supportId: String?)      // 401: key bound to different device
     case rateLimited(retryAfter: Int?)              // 429: req/min exceeded
@@ -219,6 +252,8 @@ enum ProxyLLMError: LocalizedError {
         switch self {
         case .unreachable:
             return "AI unavailable. Check your connection."
+        case .timeout(let seconds):
+            return "AI request timed out after \(seconds)s. Please try again."
         case .invalidKey:
             return "Device key invalid or expired. Please re-enter in Settings."
         case .keyBoundElsewhere(let supportId):
@@ -247,6 +282,7 @@ enum ProxyLLMError: LocalizedError {
     var errorCode: String {
         switch self {
         case .unreachable: return "proxy_unreachable"
+        case .timeout: return "proxy_timeout"
         case .invalidKey: return "invalid_key"
         case .keyBoundElsewhere: return "key_bound_elsewhere"
         case .rateLimited: return "rate_limited"
