@@ -14,6 +14,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  bridge-contract:
+    name: bridge-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Bridge contract tests
+        run: node tools/contracts/check_bridge_contract.mjs
+
   swift-build:
     name: swift-build
     runs-on: macos-15
