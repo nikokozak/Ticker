@@ -9,6 +9,8 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
 
 - Swift build succeeds (`xcodebuild ...`)
 - Web typecheck succeeds (`npm run typecheck`)
+- Bridge contract tests succeed (`node tools/contracts/check_bridge_contract.mjs`)
+- Prod console sanity: `./tickerctl.sh run-prod` + Web Inspector Console is quiet (no prompt/content/key logging)
 
 ## Smoke coverage (must-have before inviting users)
 
@@ -24,7 +26,7 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
    - App → Proxy request
    - Proxy → Provider
    - Response returned and rendered
-   - Request correlation ID captured (`X-Ticker-Request-Id`)
+   - Request correlation ID captured (`X-Ticker-Request-Id`, treated as an opaque string)
 
 4) **Schema snapshot tests**
    - Bridge message payload shapes
@@ -34,4 +36,4 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
 
 - Prefer “cheap tests that catch breaking changes” over broad end-to-end automation at this stage.
 - Snapshot tests are especially valuable for avoiding accidental protocol breakage when iterating quickly.
-
+- When changing Swift↔Web bridge message types or payload keys, run the contract tests locally and ensure CI runs `bridge-contract`.

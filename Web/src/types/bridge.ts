@@ -1,9 +1,55 @@
+import { debugLog } from '../utils/debug';
+
 /** Message structure for Swift ↔ JS communication */
+export const SWIFT_TO_WEB_MESSAGE_TYPES = [
+  'aiChunk',
+  'aiComplete',
+  'aiError',
+  'assetPath',
+  'blockRefreshChunk',
+  'blockRefreshComplete',
+  'blockRefreshError',
+  'blockRefreshStart',
+  'blocksReordered',
+  'callback',
+  'cellDeleted',
+  'cellSaved',
+  'exportCanceled',
+  'exportComplete',
+  'exportError',
+  'imageDropError',
+  'imageDropped',
+  'imageSaveError',
+  'imageSaved',
+  'modifierChunk',
+  'modifierComplete',
+  'modifierCreated',
+  'modifierError',
+  'modelSelected',
+  'proxyAuthState',
+  'quickPanelCellsAdded',
+  'requestCurrentStreamId',
+  'restatementGenerated',
+  'settingsLoaded',
+  'sourceAdded',
+  'sourceError',
+  'sourceRemoveError',
+  'sourceRemoved',
+  'streamLoaded',
+  'streamTitleUpdated',
+  'streamsChanged',
+  'streamsLoaded',
+] as const;
+
+export type SwiftToWebMessageType = (typeof SWIFT_TO_WEB_MESSAGE_TYPES)[number];
+
 export interface BridgeMessage {
   type: string;
   payload?: Record<string, unknown>;
   callbackId?: string;
 }
+
+export type SwiftToWebBridgeMessage = Omit<BridgeMessage, 'type'> & { type: SwiftToWebMessageType };
 
 /** Callback registry for async responses */
 type CallbackFn = (payload: Record<string, unknown>) => void;
@@ -12,12 +58,12 @@ type CallbackFn = (payload: Record<string, unknown>) => void;
 export interface Bridge {
   send: (message: BridgeMessage) => void;
   sendAsync: <T>(type: string, payload?: Record<string, unknown>) => Promise<T>;
-  receive: (message: BridgeMessage) => void;
-  onMessage: (handler: (message: BridgeMessage) => void) => () => void;
+  receive: (message: SwiftToWebBridgeMessage) => void;
+  onMessage: (handler: (message: SwiftToWebBridgeMessage) => void) => () => void;
 }
 
 const callbacks = new Map<string, CallbackFn>();
-const messageHandlers = new Set<(message: BridgeMessage) => void>();
+const messageHandlers = new Set<(message: SwiftToWebBridgeMessage) => void>();
 
 let callbackId = 0;
 function nextCallbackId(): string {
@@ -55,9 +101,9 @@ export const bridge: Bridge = {
   },
 
   /** Called by Swift to deliver messages */
-  receive(message: BridgeMessage): void {
+  receive(message: SwiftToWebBridgeMessage): void {
     // Debug: log all incoming messages
-    console.log('[Bridge.receive]', message.type, message.payload ? Object.keys(message.payload) : 'no payload');
+    debugLog('[Bridge.receive]', message.type, message.payload ? Object.keys(message.payload) : 'no payload');
 
     // Handle callback responses
     if (message.type === 'callback' && message.callbackId) {
@@ -69,12 +115,12 @@ export const bridge: Bridge = {
     }
 
     // Dispatch to message handlers
-    console.log('[Bridge.receive] Dispatching to', messageHandlers.size, 'handlers');
+    debugLog('[Bridge.receive] Dispatching to', messageHandlers.size, 'handlers');
     messageHandlers.forEach((handler) => handler(message));
   },
 
   /** Subscribe to incoming messages */
-  onMessage(handler: (message: BridgeMessage) => void): () => void {
+  onMessage(handler: (message: SwiftToWebBridgeMessage) => void): () => void {
     messageHandlers.add(handler);
     return () => messageHandlers.delete(handler);
   },
@@ -95,4 +141,4 @@ declare global {
 }
 
 window.bridge = bridge;
-console.log('[Bridge] window.bridge initialized');
+debugLog('[Bridge] window.bridge initialized');

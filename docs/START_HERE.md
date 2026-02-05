@@ -42,6 +42,21 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 - Never ship a migration without a backup and a downgrade story.
 - Treat the proxy request ID as your primary debugging handle.
 
+## Running locally (when you come back in a month)
+
+Preferred entry point: `./tickerctl.sh` (menu + scripted commands).
+
+Common flows:
+- Dev (Debug + Vite): `./tickerctl.sh run-dev`
+- Prod-ish (Release + bundled web): `./tickerctl.sh run-prod`
+
+Legacy runner (still supported):
+- Dev: `./run.sh --dev`
+- Prod: `./run.sh --prod`
+
+If you hit SwiftPM/Sparkle artifact issues, run:
+- `./tickerctl.sh clean-derived-data -y`
+
 ## Drag & drop (native → stream)
 
 You can drag files from Finder directly onto the app window:
@@ -52,3 +67,14 @@ You can drag files from Finder directly onto the app window:
 Notes:
 - Drops are routed to the **most recently opened stream**.
 - If no stream has been opened yet, Ticker shows an error toast (“Open a stream before dropping files.”).
+
+## Local data (what exists on disk)
+
+Ticker stores user data under:
+- `~/Library/Application Support/Ticker/`
+
+Key items:
+- `ticker.db` — the SQLite database (streams, cells, sources metadata)
+- `backups/` — automatic pre-migration DB backups (created only when pending migrations are detected)
+
+If you need to restore data from a backup, follow the step-by-step instructions in `docs/ALPHA_SUPPORT.md`.

@@ -3,6 +3,7 @@
 Step-by-step guide to release a new Ticker alpha build with Sparkle auto-updates.
 
 If you want a “single entry point” that wraps the common dev/prod/release commands, use `./tickerctl.sh`.
+`./run.sh` is intended for local dev convenience only (not signing/notarization/release automation).
 
 ## Mental model (what each thing “means”)
 
@@ -101,6 +102,13 @@ Verify: `https://nikokozak.github.io/Streams/appcast-alpha.xml` should return th
 ---
 
 ## Release Steps
+
+### 0. Pre-release data safety check (recommended)
+
+Before shipping a build that includes schema changes, confirm that a pending migration creates a timestamped backup DB in:
+- `~/Library/Application Support/Ticker/backups/`
+
+Restore instructions live in `docs/ALPHA_SUPPORT.md` (keep that document accurate; it’s the thing you’ll reach for during triage).
 
 ### 1. Update version numbers
 

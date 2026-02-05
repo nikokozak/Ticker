@@ -7,11 +7,12 @@ This document defines what Ticker collects and what it does **not** collect.
 - Default diagnostics **ON**, with clear disclosure and an in-app **opt-out** toggle.
 - Collect only what is necessary to debug reliability issues and manage cost.
 - Avoid collecting note/editor content by default.
+- Web UI should not emit console logs in prod/bundled builds; gate ad-hoc logs behind `import.meta.env.DEV` (see `Web/src/utils/debug.ts`).
 
 ## Data collected (by default)
 
 ### Proxy request metadata
-- Request IDs (`X-Ticker-Request-Id`)
+- Request IDs (`X-Ticker-Request-Id`, treated as an opaque string; Ticker should send a UUID per request)
 - Provider/model identifiers
 - Token counts (in/out)
 - Timing, status code, error codes
@@ -48,4 +49,3 @@ This document defines what Ticker collects and what it does **not** collect.
 
 - Settings toggle to disable diagnostics (opt-out).
 - Support bundle copying should never include raw device keys or note content.
-
