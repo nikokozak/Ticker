@@ -29,7 +29,7 @@ final class ProxyLLMService: LLMProvider {
 
     private func debugLog(_ message: String) {
         guard proxyDebugEnabled else { return }
-        print("[ProxyLLMService] \(message)")
+        DebugLog.log("[ProxyLLMService] \(message)")
     }
 
     /// Proxy base URL - matches DeviceKeyService
@@ -389,7 +389,7 @@ final class ProxyLLMService: LLMProvider {
                 return nil
             }
 
-            debugLog("Restatement generated: \(trimmed.prefix(50))...")
+            debugLog("Restatement generated (len=\(trimmed.count))")
             return trimmed
 
         } catch {
@@ -468,7 +468,7 @@ final class ProxyLLMService: LLMProvider {
         }
 
         let label = outputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        debugLog("Label generated: \(label)")
+        debugLog("Label generated (len=\(label.count))")
         return label
     }
 
