@@ -6,11 +6,11 @@
 	objectVersion = 56;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		C1000001000000000001 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000001 /* GRDB */; };
-		C1000001000000000002 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000002 /* MLXLLM */; };
-		C1000001000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000003 /* Sparkle */; };
-		R1000001000000000001 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = F1000001000000000001 /* Resources */; };
+		/* Begin PBXBuildFile section */
+			C1000001000000000001 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000001 /* GRDB */; };
+			C1000001000000000002 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000002 /* MLXLLM */; };
+			C1000001000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000003 /* Sparkle */; };
+			R1000001000000000001 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = F1000001000000000001 /* Resources */; };
 		A1000001000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000001 /* AppDelegate.swift */; };
 		A1000001000000000002 /* AssetSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000002 /* AssetSchemeHandler.swift */; };
 		A100000100000000002B /* BundleSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002B /* BundleSchemeHandler.swift */; };
@@ -54,15 +54,27 @@
 		A1000001000000000028 /* HotkeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000028 /* HotkeyService.swift */; };
 		A1000001000000000029 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000029 /* KeychainService.swift */; };
 		A100000100000000002A /* SelectionReaderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002A /* SelectionReaderService.swift */; };
-		A100000100000000002C /* DeviceKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002C /* DeviceKeyService.swift */; };
-		A100000100000000002D /* ProxyLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002D /* ProxyLLMService.swift */; };
-		A100000100000000002E /* DebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002E /* DebugLog.swift */; };
-/* End PBXBuildFile section */
+			A100000100000000002C /* DeviceKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002C /* DeviceKeyService.swift */; };
+			A100000100000000002D /* ProxyLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002D /* ProxyLLMService.swift */; };
+			A100000100000000002E /* DebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002E /* DebugLog.swift */; };
+			A100000100000000002F /* DeviceKeyServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002F /* DeviceKeyServiceTests.swift */; };
+		/* End PBXBuildFile section */
 
-/* Begin PBXFileReference section */
-		E8A1B2C3D4E5F6A7B8C9D0E1 /* Ticker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ticker.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		E8A1B2C3D4E5F6A7B8C9D0E2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		E8A1B2C3D4E5F6A7B8C9D0E3 /* Ticker.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Ticker.entitlements; sourceTree = "<group>"; };
+		/* Begin PBXContainerItemProxy section */
+			T1000001000000000004 /* PBXContainerItemProxy */ = {
+				isa = PBXContainerItemProxy;
+				containerPortal = E8A1B2C3D4E5F6A7B8C9D001 /* Project object */;
+				proxyType = 1;
+				remoteGlobalIDString = E8A1B2C3D4E5F6A7B8C9D0E0;
+				remoteInfo = Ticker;
+			};
+		/* End PBXContainerItemProxy section */
+
+		/* Begin PBXFileReference section */
+			E8A1B2C3D4E5F6A7B8C9D0E1 /* Ticker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ticker.app; sourceTree = BUILT_PRODUCTS_DIR; };
+			E8A1B2C3D4E5F6A7B8C9D0E5 /* TickerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TickerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+			E8A1B2C3D4E5F6A7B8C9D0E2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+			E8A1B2C3D4E5F6A7B8C9D0E3 /* Ticker.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Ticker.entitlements; sourceTree = "<group>"; };
 		B1000001000000000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B1000001000000000002 /* AssetSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetSchemeHandler.swift; sourceTree = "<group>"; };
 		B100000100000000002B /* BundleSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleSchemeHandler.swift; sourceTree = "<group>"; };
@@ -106,34 +118,43 @@
 		B1000001000000000028 /* HotkeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyService.swift; sourceTree = "<group>"; };
 		B1000001000000000029 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		B100000100000000002A /* SelectionReaderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionReaderService.swift; sourceTree = "<group>"; };
-		B100000100000000002C /* DeviceKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyService.swift; sourceTree = "<group>"; };
-		B100000100000000002D /* ProxyLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyLLMService.swift; sourceTree = "<group>"; };
-		B100000100000000002E /* DebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLog.swift; sourceTree = "<group>"; };
-		F1000001000000000001 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
-/* End PBXFileReference section */
+			B100000100000000002C /* DeviceKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyService.swift; sourceTree = "<group>"; };
+			B100000100000000002D /* ProxyLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyLLMService.swift; sourceTree = "<group>"; };
+			B100000100000000002E /* DebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLog.swift; sourceTree = "<group>"; };
+			B100000100000000002F /* DeviceKeyServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyServiceTests.swift; sourceTree = "<group>"; };
+			F1000001000000000001 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
+		/* End PBXFileReference section */
 
-/* Begin PBXFrameworksBuildPhase section */
-		E8A1B2C3D4E5F6A7B8C9D0F1 /* Frameworks */ = {
+		/* Begin PBXFrameworksBuildPhase section */
+			E8A1B2C3D4E5F6A7B8C9D0F1 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				C1000001000000000001 /* GRDB in Frameworks */,
 				C1000001000000000002 /* MLXLLM in Frameworks */,
 				C1000001000000000003 /* Sparkle in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXFrameworksBuildPhase section */
+				);
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+			T1000001000000000002 /* Frameworks */ = {
+				isa = PBXFrameworksBuildPhase;
+				buildActionMask = 2147483647;
+				files = (
+				);
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+		/* End PBXFrameworksBuildPhase section */
 
-/* Begin PBXGroup section */
-		E8A1B2C3D4E5F6A7B8C9D100 = {
-			isa = PBXGroup;
-			children = (
-				E8A1B2C3D4E5F6A7B8C9D101 /* Sources */,
-				E8A1B2C3D4E5F6A7B8C9D102 /* Products */,
-			);
-			sourceTree = "<group>";
-		};
+		/* Begin PBXGroup section */
+			E8A1B2C3D4E5F6A7B8C9D100 = {
+				isa = PBXGroup;
+				children = (
+					E8A1B2C3D4E5F6A7B8C9D101 /* Sources */,
+					G1000001000000000009 /* Tests */,
+					E8A1B2C3D4E5F6A7B8C9D102 /* Products */,
+				);
+				sourceTree = "<group>";
+			};
 		E8A1B2C3D4E5F6A7B8C9D101 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -142,14 +163,15 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
-		E8A1B2C3D4E5F6A7B8C9D102 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				E8A1B2C3D4E5F6A7B8C9D0E1 /* Ticker.app */,
-			);
-			name = Products;
-			sourceTree = "<group>";
-		};
+			E8A1B2C3D4E5F6A7B8C9D102 /* Products */ = {
+				isa = PBXGroup;
+				children = (
+					E8A1B2C3D4E5F6A7B8C9D0E1 /* Ticker.app */,
+					E8A1B2C3D4E5F6A7B8C9D0E5 /* TickerTests.xctest */,
+				);
+				name = Products;
+				sourceTree = "<group>";
+			};
 		E8A1B2C3D4E5F6A7B8C9D103 /* Ticker */ = {
 			isa = PBXGroup;
 			children = (
@@ -258,22 +280,38 @@
 			path = Providers;
 			sourceTree = "<group>";
 		};
-		G1000001000000000008 /* System */ = {
-			isa = PBXGroup;
-			children = (
-				B1000001000000000026 /* ClipboardService.swift */,
+			G1000001000000000008 /* System */ = {
+				isa = PBXGroup;
+				children = (
+					B1000001000000000026 /* ClipboardService.swift */,
 				B1000001000000000027 /* CursorPositionService.swift */,
 				B1000001000000000028 /* HotkeyService.swift */,
 				B1000001000000000029 /* KeychainService.swift */,
 				B100000100000000002A /* SelectionReaderService.swift */,
 			);
-			path = System;
-			sourceTree = "<group>";
-		};
-/* End PBXGroup section */
+				path = System;
+				sourceTree = "<group>";
+			};
+			G1000001000000000009 /* Tests */ = {
+				isa = PBXGroup;
+				children = (
+					G100000100000000000A /* TickerTests */,
+				);
+				path = Tests;
+				sourceTree = "<group>";
+			};
+			G100000100000000000A /* TickerTests */ = {
+				isa = PBXGroup;
+				children = (
+					B100000100000000002F /* DeviceKeyServiceTests.swift */,
+				);
+				path = TickerTests;
+				sourceTree = "<group>";
+			};
+		/* End PBXGroup section */
 
-/* Begin PBXNativeTarget section */
-		E8A1B2C3D4E5F6A7B8C9D0E0 /* Ticker */ = {
+		/* Begin PBXNativeTarget section */
+			E8A1B2C3D4E5F6A7B8C9D0E0 /* Ticker */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = E8A1B2C3D4E5F6A7B8C9D110 /* Build configuration list for PBXNativeTarget "Ticker" */;
 			buildPhases = (
@@ -293,24 +331,44 @@
 				D1000001000000000003 /* Sparkle */,
 			);
 			productName = Ticker;
-			productReference = E8A1B2C3D4E5F6A7B8C9D0E1 /* Ticker.app */;
-			productType = "com.apple.product-type.application";
-		};
-/* End PBXNativeTarget section */
+				productReference = E8A1B2C3D4E5F6A7B8C9D0E1 /* Ticker.app */;
+				productType = "com.apple.product-type.application";
+			};
+			E8A1B2C3D4E5F6A7B8C9D0E4 /* TickerTests */ = {
+				isa = PBXNativeTarget;
+				buildConfigurationList = E8A1B2C3D4E5F6A7B8C9D120 /* Build configuration list for PBXNativeTarget "TickerTests" */;
+				buildPhases = (
+					T1000001000000000001 /* Sources */,
+					T1000001000000000002 /* Frameworks */,
+				);
+				buildRules = (
+				);
+				dependencies = (
+					T1000001000000000003 /* PBXTargetDependency */,
+				);
+				name = TickerTests;
+				productName = TickerTests;
+				productReference = E8A1B2C3D4E5F6A7B8C9D0E5 /* TickerTests.xctest */;
+				productType = "com.apple.product-type.bundle.unit-test";
+			};
+		/* End PBXNativeTarget section */
 
-/* Begin PBXProject section */
-		E8A1B2C3D4E5F6A7B8C9D001 /* Project object */ = {
-			isa = PBXProject;
+		/* Begin PBXProject section */
+			E8A1B2C3D4E5F6A7B8C9D001 /* Project object */ = {
+				isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
 				LastUpgradeCheck = 1500;
-				TargetAttributes = {
-					E8A1B2C3D4E5F6A7B8C9D0E0 = {
-						CreatedOnToolsVersion = 15.0;
+					TargetAttributes = {
+						E8A1B2C3D4E5F6A7B8C9D0E0 = {
+							CreatedOnToolsVersion = 15.0;
+						};
+						E8A1B2C3D4E5F6A7B8C9D0E4 = {
+							CreatedOnToolsVersion = 15.0;
+						};
 					};
 				};
-			};
 			buildConfigurationList = E8A1B2C3D4E5F6A7B8C9D004 /* Build configuration list for PBXProject "Ticker" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
@@ -328,11 +386,12 @@
 			productRefGroup = E8A1B2C3D4E5F6A7B8C9D102 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (
-				E8A1B2C3D4E5F6A7B8C9D0E0 /* Ticker */,
-			);
-		};
-/* End PBXProject section */
+				targets = (
+					E8A1B2C3D4E5F6A7B8C9D0E0 /* Ticker */,
+					E8A1B2C3D4E5F6A7B8C9D0E4 /* TickerTests */,
+				);
+			};
+		/* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		E8A1B2C3D4E5F6A7B8C9D0F2 /* Resources */ = {
@@ -370,8 +429,8 @@
 		};
 /* End PBXShellScriptBuildPhase section */
 
-/* Begin PBXSourcesBuildPhase section */
-		E8A1B2C3D4E5F6A7B8C9D0F0 /* Sources */ = {
+		/* Begin PBXSourcesBuildPhase section */
+			E8A1B2C3D4E5F6A7B8C9D0F0 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -422,14 +481,30 @@
 				A100000100000000002D /* ProxyLLMService.swift in Sources */,
 				A100000100000000002E /* DebugLog.swift in Sources */,
 			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXSourcesBuildPhase section */
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+			T1000001000000000001 /* Sources */ = {
+				isa = PBXSourcesBuildPhase;
+				buildActionMask = 2147483647;
+				files = (
+					A100000100000000002F /* DeviceKeyServiceTests.swift in Sources */,
+				);
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+		/* End PBXSourcesBuildPhase section */
 
-/* Begin XCBuildConfiguration section */
-		E8A1B2C3D4E5F6A7B8C9D005 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
+		/* Begin PBXTargetDependency section */
+			T1000001000000000003 /* PBXTargetDependency */ = {
+				isa = PBXTargetDependency;
+				target = E8A1B2C3D4E5F6A7B8C9D0E0 /* Ticker */;
+				targetProxy = T1000001000000000004 /* PBXContainerItemProxy */;
+			};
+		/* End PBXTargetDependency section */
+
+		/* Begin XCBuildConfiguration section */
+			E8A1B2C3D4E5F6A7B8C9D005 /* Debug */ = {
+				isa = XCBuildConfiguration;
+				buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -570,9 +645,9 @@
 			};
 			name = Debug;
 		};
-		E8A1B2C3D4E5F6A7B8C9D112 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
+			E8A1B2C3D4E5F6A7B8C9D112 /* Release */ = {
+				isa = XCBuildConfiguration;
+				buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Sources/Ticker/Ticker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -592,13 +667,39 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
+				};
+				name = Release;
 			};
-			name = Release;
-		};
-/* End XCBuildConfiguration section */
+			E8A1B2C3D4E5F6A7B8C9D121 /* Debug */ = {
+				isa = XCBuildConfiguration;
+				buildSettings = {
+					BUNDLE_LOADER = "$(TEST_HOST)";
+					CODE_SIGN_STYLE = Automatic;
+					GENERATE_INFOPLIST_FILE = YES;
+					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.appTests;
+					PRODUCT_NAME = "$(TARGET_NAME)";
+					SWIFT_VERSION = 5.0;
+					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ticker.app/Contents/MacOS/Ticker";
+				};
+				name = Debug;
+			};
+			E8A1B2C3D4E5F6A7B8C9D122 /* Release */ = {
+				isa = XCBuildConfiguration;
+				buildSettings = {
+					BUNDLE_LOADER = "$(TEST_HOST)";
+					CODE_SIGN_STYLE = Automatic;
+					GENERATE_INFOPLIST_FILE = YES;
+					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.appTests;
+					PRODUCT_NAME = "$(TARGET_NAME)";
+					SWIFT_VERSION = 5.0;
+					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ticker.app/Contents/MacOS/Ticker";
+				};
+				name = Release;
+			};
+		/* End XCBuildConfiguration section */
 
-/* Begin XCConfigurationList section */
-		E8A1B2C3D4E5F6A7B8C9D004 /* Build configuration list for PBXProject "Ticker" */ = {
+		/* Begin XCConfigurationList section */
+			E8A1B2C3D4E5F6A7B8C9D004 /* Build configuration list for PBXProject "Ticker" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				E8A1B2C3D4E5F6A7B8C9D005 /* Debug */,
@@ -607,16 +708,25 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		E8A1B2C3D4E5F6A7B8C9D110 /* Build configuration list for PBXNativeTarget "Ticker" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				E8A1B2C3D4E5F6A7B8C9D111 /* Debug */,
-				E8A1B2C3D4E5F6A7B8C9D112 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-/* End XCConfigurationList section */
+			E8A1B2C3D4E5F6A7B8C9D110 /* Build configuration list for PBXNativeTarget "Ticker" */ = {
+				isa = XCConfigurationList;
+				buildConfigurations = (
+					E8A1B2C3D4E5F6A7B8C9D111 /* Debug */,
+					E8A1B2C3D4E5F6A7B8C9D112 /* Release */,
+				);
+				defaultConfigurationIsVisible = 0;
+				defaultConfigurationName = Release;
+			};
+			E8A1B2C3D4E5F6A7B8C9D120 /* Build configuration list for PBXNativeTarget "TickerTests" */ = {
+				isa = XCConfigurationList;
+				buildConfigurations = (
+					E8A1B2C3D4E5F6A7B8C9D121 /* Debug */,
+					E8A1B2C3D4E5F6A7B8C9D122 /* Release */,
+				);
+				defaultConfigurationIsVisible = 0;
+				defaultConfigurationName = Release;
+			};
+		/* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
 		P1000001000000000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {

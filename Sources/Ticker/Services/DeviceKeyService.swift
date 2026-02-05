@@ -229,6 +229,9 @@ actor DeviceKeyService {
 
     // MARK: - State
 
+    private let fileManager: FileManager
+    private let fileURL: URL
+
     private var cachedData: DeviceKeyData?
     private(set) var currentState: ProxyAuthState = .unregistered
 
@@ -263,8 +266,12 @@ actor DeviceKeyService {
         return "https://ticker-proxy.fly.dev"
     }
 
-    private var fileURL: URL {
-        let fileManager = FileManager.default
+    init(fileURL: URL? = nil, fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        self.fileURL = fileURL ?? Self.defaultFileURL(fileManager: fileManager)
+    }
+
+    private static func defaultFileURL(fileManager: FileManager) -> URL {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         let tickerDir = appSupport.appendingPathComponent("Ticker", isDirectory: true)
@@ -278,7 +285,7 @@ actor DeviceKeyService {
 
     /// Ensure Application Support directory exists and is private to the user (best effort).
     /// `device.json` contains the plaintext device key, so we prefer restrictive permissions.
-    private func ensureDeviceDirectoryExists(fileManager: FileManager = .default) {
+    private func ensureDeviceDirectoryExists() {
         let dir = deviceDirectoryURL
         do {
             try fileManager.createDirectory(
@@ -297,7 +304,7 @@ actor DeviceKeyService {
 
     /// Stale temp files created by prior versions of `save(_:)` or interrupted writes.
     /// These can contain plaintext device keys and must be cleaned up on startup.
-    private func cleanupStaleDeviceTempFiles(fileManager: FileManager = .default) {
+    private func cleanupStaleDeviceTempFiles() {
         let dir = deviceDirectoryURL
 
         // Old implementation wrote to this fixed filename.
@@ -319,7 +326,7 @@ actor DeviceKeyService {
     }
 
     /// Best-effort permission hardening for the device file (contains plaintext device key).
-    private func hardenDeviceFilePermissions(fileManager: FileManager = .default) {
+    private func hardenDeviceFilePermissions() {
         try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
     }
 
@@ -843,10 +850,8 @@ actor DeviceKeyService {
             return cached
         }
 
-        let fileManager = FileManager.default
-
-        ensureDeviceDirectoryExists(fileManager: fileManager)
-        cleanupStaleDeviceTempFiles(fileManager: fileManager)
+        ensureDeviceDirectoryExists()
+        cleanupStaleDeviceTempFiles()
 
         // Try to load existing
         if let data = try? Data(contentsOf: fileURL) {
@@ -877,9 +882,7 @@ actor DeviceKeyService {
         encoder.outputFormatting = .prettyPrinted
 
         guard let encoded = try? encoder.encode(data) else { return }
-
-        let fileManager = FileManager.default
-        ensureDeviceDirectoryExists(fileManager: fileManager)
+        ensureDeviceDirectoryExists()
 
         // Write to a unique temp file in the same directory, then atomically replace.
         // This avoids leaving a fixed `device.json.tmp` file behind.
@@ -894,7 +897,7 @@ actor DeviceKeyService {
                 try fileManager.moveItem(at: tempURL, to: fileURL)
             }
 
-            hardenDeviceFilePermissions(fileManager: fileManager)
+            hardenDeviceFilePermissions()
         } catch {
             // Best-effort cleanup; temp file may contain plaintext key.
             try? fileManager.removeItem(at: tempURL)
@@ -902,7 +905,7 @@ actor DeviceKeyService {
             // Fallback: direct atomic write (system-managed temp). Still harden perms afterwards.
             do {
                 try encoded.write(to: fileURL, options: .atomic)
-                hardenDeviceFilePermissions(fileManager: fileManager)
+                hardenDeviceFilePermissions()
             } catch {
                 // If even fallback fails, we keep cachedData in memory; caller will still function
                 // for this session (but persistence is compromised).

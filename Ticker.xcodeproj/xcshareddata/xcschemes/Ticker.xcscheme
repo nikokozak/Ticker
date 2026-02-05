@@ -29,6 +29,27 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "E8A1B2C3D4E5F6A7B8C9D0E4"
+               BuildableName = "TickerTests.xctest"
+               BlueprintName = "TickerTests"
+               ReferencedContainer = "container:Ticker.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "E8A1B2C3D4E5F6A7B8C9D0E0"
+            BuildableName = "Ticker.app"
+            BlueprintName = "Ticker"
+            ReferencedContainer = "container:Ticker.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
