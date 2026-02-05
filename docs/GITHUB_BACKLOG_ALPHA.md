@@ -207,7 +207,7 @@ Implementation notes (source of truth for Epic D):
 #### Swift↔Web bridge messages to add (recommended contract)
 Web → Swift:
 - `loadProxyAuth`
-- `setProxyDeviceKey` `{ deviceKey }` (store in Keychain; validate)
+- `setProxyDeviceKey` `{ deviceKey }` (store in Application Support via `DeviceKeyService`; validate)
 - `clearProxyDeviceKey`
 - `validateProxyDeviceKey`
 - `proxyLlmRequest` `{ provider?, model, messages, stream, ... }` (used by “think” path)
@@ -234,12 +234,12 @@ Swift → Web:
   - Keep images small (downsample/compress); the proxy enforces a base64 payload size cap (currently ~20MB) and will reject oversized requests.
   - Avoid URL images for alpha even if some providers support them; base64 is the simplest path and avoids “provider fetch” failure modes.
 
-### D1 — Key entry + validation (Keychain)
+### D1 — Key entry + validation (device.json)
 - Labels: `alpha`, `type:feature`, `area:swift`, `area:web`, `p0`
 - AC:
   - Main window stream list is gated until a valid serial/device key is registered
   - Settings allows entering a device key and validating it against proxy
-  - Key stored in Keychain
+  - Key stored in `~/Library/Application Support/Ticker/device.json` (plaintext; best-effort restrictive permissions)
   - Never display/log raw key; show `support_id` instead
 
 ### D2 — Usage UI + limit messaging

@@ -32,7 +32,7 @@ This checklist is what “ready to invite users” means for Ticker alpha.
 - Logs retained for max 30 days; purge job in place
 
 ### In-app alpha support
-- Key entry + validation exists (Keychain storage)
+- Key entry + validation exists (device key stored locally in `~/Library/Application Support/Ticker/device.json`)
 - Settings shows usage + limits + reset timing
 - Clear UX for: offline, invalid key, quota exceeded, server errors
 - “Report bug / request feature” flow exists with optional attachments
