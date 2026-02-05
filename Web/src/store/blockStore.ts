@@ -5,6 +5,7 @@ import {
   resolveIdentifiers,
   findByShortIdOrName,
 } from '../utils/references';
+import { debugLog, debugWarn } from '../utils/debug';
 
 /** Streaming content accumulator for AI responses */
 interface StreamingBlock {
@@ -387,24 +388,24 @@ export const useBlockStore = create<BlockStore>((set, get) => ({
     let targetBlockId = focusedBlockId;
     if (!targetBlockId && blockOrder.length > 0) {
       targetBlockId = blockOrder[blockOrder.length - 1];
-      console.log('[BlockStore] No focused block, using last block:', targetBlockId);
+      debugLog('[BlockStore] No focused block, using last block', { targetBlockId });
     }
 
     if (!targetBlockId) {
-      console.warn('[BlockStore] insertImageInFocusedBlock: No blocks available');
+      debugWarn('[BlockStore] insertImageInFocusedBlock: No blocks available');
       return;
     }
 
     const block = blocks.get(targetBlockId);
     if (!block) {
-      console.warn('[BlockStore] insertImageInFocusedBlock: Block not found:', targetBlockId);
+      debugWarn('[BlockStore] insertImageInFocusedBlock: Block not found', { targetBlockId });
       return;
     }
 
     // If block is focused, use pendingImage to let CellEditor handle insertion
     // This prevents overwriting unsaved local state in Cell component
     if (targetBlockId === focusedBlockId) {
-      console.log('[BlockStore] Setting pending image for focused block:', targetBlockId);
+      debugLog('[BlockStore] Setting pending image for focused block', { targetBlockId });
       set({
         pendingImage: {
           cellId: targetBlockId,
@@ -422,7 +423,7 @@ export const useBlockStore = create<BlockStore>((set, get) => ({
       ? `${block.content}${imageHtml}`
       : imageHtml;
 
-    console.log('[BlockStore] Inserting image into block:', targetBlockId, 'new content length:', newContent.length);
+    debugLog('[BlockStore] Inserting image into block', { targetBlockId, newContentLength: newContent.length });
 
     const newBlocks = new Map(blocks);
     newBlocks.set(targetBlockId, {

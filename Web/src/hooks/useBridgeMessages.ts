@@ -3,6 +3,7 @@ import { SourceReference, Modifier, Cell, bridge } from '../types';
 import { markdownToHtml } from '../utils/markdown';
 import { useBlockStore } from '../store/blockStore';
 import { useToastStore } from '../store/toastStore';
+import { debugError, debugLog, debugWarn } from '../utils/debug';
 
 /**
  * EditorAPI - allows useBridgeMessages to update the TipTap document
@@ -41,12 +42,12 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
   }, [initialSources]);
 
   useEffect(() => {
-    console.log('[useBridgeMessages] Setting up message handler for streamId:', streamId);
+    debugLog('[useBridgeMessages] Setting up message handler for streamId', { streamId });
 
     const unsubscribe = bridge.onMessage((message) => {
       try {
       // Debug: log all messages to see what's coming through
-      console.log('[useBridgeMessages] Received:', message.type);
+      debugLog('[useBridgeMessages] Received', message.type);
 
       // IMPORTANT: Don't subscribe to the zustand store from this hook.
       // UnifiedStreamEditor updates store on every keystroke; subscribing here would cause
@@ -75,13 +76,17 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
         const cells = message.payload.cells as Cell[];
         const triggerAI = message.payload.triggerAI as string | undefined;
 
-        console.log('[QuickPanel] Cells added:', { streamId: addedStreamId, cellCount: cells.length, triggerAI });
+        debugLog('[QuickPanel] Cells added', {
+          streamId: addedStreamId,
+          cellCount: cells.length,
+          hasTriggerAI: Boolean(triggerAI),
+        });
 
         // Only process if this is for the current stream
         if (addedStreamId === streamId) {
           // In unified editor mode, use insertCells to update both TipTap and store
           if (editorAPIRef.current?.insertCells) {
-            console.log('[QuickPanel] Using insertCells for unified editor');
+            debugLog('[QuickPanel] Using insertCells for unified editor');
             editorAPIRef.current.insertCells(cells);
           } else {
             // Legacy mode: add each cell to the store directly
@@ -106,7 +111,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
           if (triggerAI) {
             const aiCell = cells.find(c => c.id === triggerAI);
             if (aiCell) {
-              console.log('[QuickPanel] Triggering AI for cell:', triggerAI);
+              debugLog('[QuickPanel] Triggering AI', { cellId: triggerAI });
               store.startStreaming(triggerAI);
 
               // Get prior cells for context (exclude the AI cell itself)
@@ -153,29 +158,40 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
         }
       }
 
-      // Request for current stream ID (for native file drops)
-      if (message.type === 'requestCurrentStreamId') {
-        console.log('[Bridge] requestCurrentStreamId, responding with:', streamId);
-        bridge.send({
-          type: 'currentStreamId',
-          payload: { streamId }
-        });
+      // Native file-drop errors (Swift-side)
+      if (message.type === 'fileDropError' && message.payload?.error) {
+        toastStore.addToast(formatError(message.payload.error, 'File import failed.'), 'error');
       }
 
       // Image dropped via native drag-and-drop
       if (message.type === 'imageDropped') {
-        console.log('[useBridgeMessages] imageDropped payload:', JSON.stringify(message.payload));
+        debugLog('[useBridgeMessages] imageDropped', { hasAssetUrl: Boolean(message.payload?.assetUrl) });
+
+        const droppedStreamId = message.payload?.streamId as string | undefined;
+        if (droppedStreamId && droppedStreamId !== streamId) {
+          // A drop intended for a different stream; ignore.
+          return;
+        }
+
         if (message.payload?.assetUrl) {
           const assetUrl = message.payload.assetUrl as string;
+          if (!assetUrl.startsWith('ticker-asset://')) {
+            toastStore.addToast('Blocked unsafe image URL from native drop.', 'warning');
+            return;
+          }
 
           // In unified editor mode, insert via TipTap (handleUpdate will sync and persist)
           if (editorAPIRef.current?.insertImage) {
-            console.log('[useBridgeMessages] Using insertImage for unified editor:', assetUrl);
+            debugLog('[useBridgeMessages] Using insertImage for unified editor');
             editorAPIRef.current.insertImage(assetUrl);
           } else {
             // Legacy mode: update store directly and persist
             const { focusedBlockId, blockOrder } = store;
-            console.log('[useBridgeMessages] Legacy mode inserting image:', assetUrl, 'focusedBlock:', focusedBlockId);
+            debugLog('[useBridgeMessages] Legacy mode inserting image', { hasFocusedBlockId: Boolean(focusedBlockId) });
+            if (blockOrder.length === 0) {
+              toastStore.addToast('Create a note cell first, then drop the image again.', 'info');
+              return;
+            }
 
             store.insertImageInFocusedBlock(assetUrl);
 
@@ -199,7 +215,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
             }
           }
         } else {
-          console.warn('[useBridgeMessages] imageDropped but no assetUrl in payload');
+          debugWarn('[useBridgeMessages] imageDropped but no assetUrl in payload');
         }
       }
 
@@ -226,7 +242,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
 
           // Update TipTap document if editorAPI is available (unified editor mode)
           if (editorAPIRef.current) {
-            console.log('[useBridgeMessages] aiComplete: updating TipTap document for cell:', cellId);
+            debugLog('[useBridgeMessages] aiComplete: updating TipTap document', { cellId });
             editorAPIRef.current.replaceCellHtml(cellId, finalContent);
           }
 
@@ -308,7 +324,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
       if (message.type === 'modifierCreated' && message.payload?.cellId && message.payload?.modifier) {
         const cellId = message.payload.cellId as string;
         const modifier = message.payload.modifier as Modifier;
-        console.log('[Modifier] Created:', { cellId, modifier });
+        debugLog('[Modifier] Created', { cellId, modifierId: modifier.id });
 
         // Add the modifier to the cell
         const cell = store.getBlock(cellId);
@@ -324,18 +340,18 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
       if (message.type === 'modifierChunk' && message.payload?.cellId && message.payload?.chunk) {
         const cellId = message.payload.cellId as string;
         const chunk = message.payload.chunk as string;
-        console.log('[Modifier] Chunk:', { cellId, chunkLength: chunk.length });
+        debugLog('[Modifier] Chunk', { cellId, chunkLength: chunk.length });
         store.appendModifyingContent(cellId, chunk);
       }
 
       if (message.type === 'modifierComplete' && message.payload?.cellId && message.payload?.modifierId) {
         const cellId = message.payload.cellId as string;
         const modifierId = message.payload.modifierId as string;
-        console.log('[Modifier] Complete:', { cellId, modifierId });
+        debugLog('[Modifier] Complete', { cellId, modifierId });
 
         const modifyingData = store.getModifyingData(cellId);
         if (!modifyingData) {
-          console.warn('[Modifier] Complete but no modifying data found for:', cellId);
+          debugWarn('[Modifier] Complete but no modifying data found', { cellId });
           return;
         }
 
@@ -355,7 +371,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
 
         // Update TipTap document if editorAPI is available (unified editor mode)
         if (editorAPIRef.current) {
-          console.log('[useBridgeMessages] modifierComplete: updating TipTap document for cell:', cellId);
+          debugLog('[useBridgeMessages] modifierComplete: updating TipTap document', { cellId });
           editorAPIRef.current.replaceCellHtml(cellId, htmlContent);
         }
 
@@ -396,7 +412,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
       // Block refresh updates (live blocks, cascade updates)
       if (message.type === 'blockRefreshStart' && message.payload?.cellId) {
         const cellId = message.payload.cellId as string;
-        console.log('[BlockRefresh] Start:', cellId);
+        debugLog('[BlockRefresh] Start', { cellId });
         store.startRefreshing(cellId);
       }
 
@@ -410,7 +426,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
         const cellId = message.payload.cellId as string;
         const rawContent = message.payload.content as string;
         const htmlContent = markdownToHtml(rawContent);
-        console.log('[BlockRefresh] Complete:', cellId);
+        debugLog('[BlockRefresh] Complete', { cellId });
 
         const cell = store.getBlock(cellId);
         if (cell) {
@@ -418,7 +434,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
 
           // Update TipTap document if editorAPI is available (unified editor mode)
           if (editorAPIRef.current) {
-            console.log('[useBridgeMessages] blockRefreshComplete: updating TipTap document for cell:', cellId);
+            debugLog('[useBridgeMessages] blockRefreshComplete: updating TipTap document', { cellId });
             editorAPIRef.current.replaceCellHtml(cellId, htmlContent);
           }
 
@@ -456,7 +472,11 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
           displayError = `${displayError} (Request ID: ${requestId})`;
         }
 
-        console.error('[BlockRefresh] Error:', cellId, displayError);
+        debugError('[BlockRefresh] Error', {
+          cellId,
+          errorCode,
+          hasRequestId: Boolean(requestId),
+        });
         toastStore.addToast(displayError, 'error');
         store.setError(cellId, displayError);
         store.completeRefreshing(cellId);
@@ -476,12 +496,12 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
 
       // exportCanceled is silent (user intentionally canceled)
       } catch (err) {
-        console.error('[useBridgeMessages] Error handling message:', message.type, err);
+        debugError('[useBridgeMessages] Error handling message', { type: message.type });
       }
     });
 
     return () => {
-      console.log('[useBridgeMessages] Cleaning up message handler for streamId:', streamId);
+      debugLog('[useBridgeMessages] Cleaning up message handler for streamId', { streamId });
       unsubscribe();
     };
   }, [streamId]);

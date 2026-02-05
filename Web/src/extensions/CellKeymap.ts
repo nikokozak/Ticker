@@ -1,8 +1,7 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection } from '@tiptap/pm/state';
 import { Node as ProseMirrorNode } from '@tiptap/pm/model';
-
-const IS_DEV = Boolean((import.meta as any).env?.DEV);
+import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 /**
  * Callbacks for cell lifecycle events.
@@ -71,7 +70,7 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
             const cellId: string | null = cellBlockNode.attrs.id ?? null;
             if (!cellId) {
               if (IS_DEV) {
-                console.warn('[CellKeymap] cellBlock missing attrs.id; refusing to do boundary ops');
+                debugWarn('[CellKeymap] cellBlock missing attrs.id; refusing to do boundary ops');
               }
               return false;
             }
@@ -92,7 +91,7 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
               if (callbacks?.onThink) {
                 if (IS_DEV) {
-                  console.log('[CellKeymap] Cmd+Enter - triggering AI think for cell:', cellId);
+                  debugLog('[CellKeymap] Cmd+Enter - triggering AI think for cell', { cellId });
                 }
                 callbacks.onThink(cellId);
                 return true;
@@ -112,7 +111,7 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
               }
 
               if (IS_DEV) {
-                console.log('[CellKeymap] Enter check:', {
+                debugLog('[CellKeymap] Enter check', {
                   cellId,
                   isAtCellEnd,
                 });
@@ -125,7 +124,7 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
 
               const newCellId = callbacks.onCreateCell(cellId);
               if (IS_DEV) {
-                console.log('[CellKeymap] Creating new cell after:', cellId, '→', newCellId);
+                debugLog('[CellKeymap] Creating new cell after', { cellId, newCellId });
               }
 
               // Insert new cellBlock after current one
@@ -158,7 +157,7 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
             // === BACKSPACE KEY ===
             if (event.key === 'Backspace') {
               if (IS_DEV) {
-                console.log('[CellKeymap] Backspace check:', {
+                debugLog('[CellKeymap] Backspace check', {
                   cellId,
                   isAtCellStart,
                 });
@@ -178,7 +177,7 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
               callbacks?.onDeleteCell?.(cellId);
 
               if (IS_DEV) {
-                console.log('[CellKeymap] Deleting empty cell:', cellId);
+                debugLog('[CellKeymap] Deleting empty cell', { cellId });
               }
 
               const tr = state.tr.delete(cellBlockPos, cellBlockPos + cellBlockNode.nodeSize);
