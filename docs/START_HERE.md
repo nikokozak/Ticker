@@ -57,6 +57,18 @@ Legacy runner (still supported):
 If you hit SwiftPM/Sparkle artifact issues, run:
 - `./tickerctl.sh clean-derived-data -y`
 
+## Quick Panel (capture + ephemeral chat)
+
+Quick Panel is the fast capture surface (hotkey-driven) and has two distinct modes:
+
+- **Save** (`↵`): saves captured context and/or your input into a stream.
+- **AI + Save** (`⌘↵`): saves, then triggers AI for the created cell.
+- **Ask (ephemeral)** (`⌥↵`): runs an in-memory chat turn that is **not** saved to the stream DB.
+
+Cancellation / escape behavior:
+- `Esc` cancels streaming + clears the ephemeral chat (if active).
+- Otherwise `Esc` clears input/context; a second `Esc` hides the panel.
+
 ## Drag & drop (native → stream)
 
 You can drag files from Finder directly onto the app window:

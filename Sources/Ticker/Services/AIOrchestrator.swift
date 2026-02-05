@@ -60,6 +60,7 @@ final class AIOrchestrator {
         streamId: UUID? = nil,
         priorCells: [[String: Any]],
         sourceContext: String?,
+        systemPromptOverride: String? = nil,
         onChunk: @escaping (String) -> Void,
         onComplete: @escaping () -> Void,
         onError: @escaping (Error) -> Void,
@@ -113,7 +114,8 @@ final class AIOrchestrator {
             query: query,
             queryImages: queryImages,
             priorCells: priorCells,
-            sourceContext: contextToUse
+            sourceContext: contextToUse,
+            systemPromptOverride: systemPromptOverride
         ).truncated()
 
         // Stream the response
@@ -193,7 +195,8 @@ final class AIOrchestrator {
         query: String,
         queryImages: [String],
         priorCells: [[String: Any]],
-        sourceContext: String?
+        sourceContext: String?,
+        systemPromptOverride: String? = nil
     ) -> LLMRequest {
         // Select appropriate system prompt based on intent
         let systemPrompt: String
@@ -206,6 +209,14 @@ final class AIOrchestrator {
             systemPrompt = Prompts.applyModifier
         case .knowledge, .ambiguous:
             systemPrompt = Prompts.thinkingPartner
+        }
+
+        let resolvedSystemPrompt: String
+        if let override = systemPromptOverride?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty {
+            resolvedSystemPrompt = override
+        } else {
+            resolvedSystemPrompt = systemPrompt
         }
 
         // Build messages from conversation history with image support
@@ -239,7 +250,7 @@ final class AIOrchestrator {
         messages.append(LLMMessage(role: "user", content: query, imageURLs: queryImages))
 
         return LLMRequest(
-            systemPrompt: systemPrompt,
+            systemPrompt: resolvedSystemPrompt,
             messages: messages,
             temperature: 0.7,
             maxTokens: 2048

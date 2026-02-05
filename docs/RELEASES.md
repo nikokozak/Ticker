@@ -26,6 +26,7 @@ Rationale: GitHub asset URLs typically redirect; Sparkle update checks are more 
 - Data safety verified: upgrading an existing `ticker.db` triggers a pre-migration backup (see `docs/DATA_MIGRATIONS.md`)
 - Manual QA: generate an AI response containing `![x](https://example.com/x.png)` → no image loads (and no external network request is triggered)
 - Manual QA: drag a PNG into a stream → image appears; drag a PDF → source appears
+- Manual QA: Quick Panel `⌥↵` ask mode produces a response but does not create/persist any stream cells
 
 ## Recommended flow (smoke test before publish)
 

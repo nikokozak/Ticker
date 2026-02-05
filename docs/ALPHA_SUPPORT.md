@@ -79,3 +79,15 @@ Common failures:
 - **“Open a stream before dropping files.”**: open any stream first (drops go to the most recently opened stream).
 - **“Could not import that image.”**: try re-exporting the image (some apps produce odd containers), or try a PNG/JPG.
 - **Source import fails**: capture the exact error toast text and include it in the bug report.
+
+## Quick Panel support notes
+
+When triaging Quick Panel bugs, always ask which mode was used:
+- `↵` save
+- `⌘↵` AI+save
+- `⌥↵` ask (ephemeral; not saved)
+
+Repro checklist for testers:
+- Was there captured context (selection or screenshot)?
+- Did streaming start, and did it stop when pressing `Esc`?
+- If using `⌥↵`: confirm no new stream/cell was created and nothing persisted after app restart.
