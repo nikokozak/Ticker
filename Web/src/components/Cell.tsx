@@ -207,12 +207,13 @@ export function Cell({
         <div className="cell-meta-badge">
           <span
             className="cell-meta-badge-label"
+            title={cell.modelId ? `Model: ${cell.modelId}` : 'AI'}
             onClick={(e) => {
               e.stopPropagation();
               onOpenOverlay?.();
             }}
           >
-            {cell.modelId || 'AI'}
+            AI
           </span>
           <button
             className={`cell-meta-live-toggle ${isLive ? 'cell-meta-live-toggle--active' : ''}`}

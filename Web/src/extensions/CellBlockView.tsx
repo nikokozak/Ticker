@@ -555,8 +555,8 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
       {/* Top-right AI metadata badge (model + live toggle) */}
       {isAiBlock && !showSpinner && (
         <div className="cell-meta-badge" contentEditable={false}>
-          <span className="cell-meta-badge-label" title={modelId || 'AI'}>
-            {modelId || 'AI'}
+          <span className="cell-meta-badge-label" title={modelId ? `Model: ${modelId}` : 'AI'}>
+            AI
           </span>
           <button
             className={`cell-meta-live-toggle ${isLive ? 'cell-meta-live-toggle--active' : ''}`}
