@@ -241,6 +241,20 @@ safe_delete_repo_dir() {
   fi
 }
 
+ensure_git_repo() {
+  local repo_dir="$1"
+  local purpose="${2:-repository}"
+
+  if ! git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "Invalid $purpose: not a usable git checkout at: $repo_dir" >&2
+    echo "If this is meant to be a git worktree, it may be broken (e.g. moved repo path)." >&2
+    echo "Fix by recreating the worktree from this repo:" >&2
+    echo "  mv \"$repo_dir\" \"${repo_dir}.broken\"   # or delete it if safe" >&2
+    echo "  git -C \"$ROOT_DIR\" worktree add -B gh-pages \"$repo_dir\" origin/gh-pages" >&2
+    exit 1
+  fi
+}
+
 sparkle_artifact_root_candidates() {
   local derived_data_path="${1:-}"
 
@@ -863,6 +877,7 @@ cmd_release_alpha() {
         echo "APPCAST_REPO_DIR not found: $APPCAST_REPO_DIR" >&2
         exit 1
       fi
+      ensure_git_repo "$APPCAST_REPO_DIR" "APPCAST_REPO_DIR (gh-pages worktree)"
       local appcast_path="$APPCAST_REPO_DIR/$APPCAST_FILENAME"
       if [[ ! -f "$appcast_path" ]]; then
         echo "Appcast file not found: $appcast_path" >&2
@@ -1087,15 +1102,16 @@ PY
       echo "Missing APPCAST_REPO_DIR (path to gh-pages worktree). Set it in tickerctl.local.sh." >&2
       exit 1
     fi
-    if [[ ! -d "$APPCAST_REPO_DIR" ]]; then
-      echo "APPCAST_REPO_DIR not found: $APPCAST_REPO_DIR" >&2
-      exit 1
-    fi
-    local appcast_path="$APPCAST_REPO_DIR/$APPCAST_FILENAME"
-    if [[ ! -f "$appcast_path" ]]; then
-      echo "Appcast file not found: $appcast_path" >&2
-      exit 1
-    fi
+      if [[ ! -d "$APPCAST_REPO_DIR" ]]; then
+        echo "APPCAST_REPO_DIR not found: $APPCAST_REPO_DIR" >&2
+        exit 1
+      fi
+      ensure_git_repo "$APPCAST_REPO_DIR" "APPCAST_REPO_DIR (gh-pages worktree)"
+      local appcast_path="$APPCAST_REPO_DIR/$APPCAST_FILENAME"
+      if [[ ! -f "$appcast_path" ]]; then
+        echo "Appcast file not found: $appcast_path" >&2
+        exit 1
+      fi
 
     echo "Updating appcast file: $appcast_path"
     python3 - <<PY
