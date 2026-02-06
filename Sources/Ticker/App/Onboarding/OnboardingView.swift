@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import ApplicationServices
 import CoreGraphics
 
@@ -50,6 +51,11 @@ struct OnboardingView: View {
         .frame(width: 420, height: 380)
         .padding(.horizontal, 32)
         .padding(.bottom, 24)
+        .onAppear { refreshPermissionState() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // When returning from System Settings, refresh permission state so the UI updates.
+            refreshPermissionState()
+        }
     }
 
     private var stepIndex: Int {
@@ -120,10 +126,10 @@ struct OnboardingView: View {
                 }
                 .font(.system(size: 14, weight: .medium))
             } else {
-                Button("Open System Settings") {
+                Button("Grant Access") {
                     guard !isPromptingAccessibility else { return }
                     isPromptingAccessibility = true
-                    requestAccessibility()
+                    grantAccessibilityAccess()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                         isPromptingAccessibility = false
                     }
@@ -182,10 +188,10 @@ struct OnboardingView: View {
                 }
                 .font(.system(size: 14, weight: .medium))
             } else {
-                Button("Open System Settings") {
+                Button("Grant Access") {
                     guard !isPromptingScreenRecording else { return }
                     isPromptingScreenRecording = true
-                    requestScreenRecording()
+                    grantScreenRecordingAccess()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                         isPromptingScreenRecording = false
                     }
@@ -293,6 +299,53 @@ struct OnboardingView: View {
             if CGPreflightScreenCaptureAccess() {
                 hasScreenRecording = true
                 timer.invalidate()
+            }
+        }
+    }
+
+    private func refreshPermissionState() {
+        hasAccessibility = AXIsProcessTrusted()
+        hasScreenRecording = CGPreflightScreenCaptureAccess()
+    }
+
+    private enum SystemSettingsPrivacyPane: String {
+        case accessibility = "Privacy_Accessibility"
+        case screenRecording = "Privacy_ScreenCapture"
+    }
+
+    /// Open System Settings directly to avoid cross-talk/ordering issues between permission prompts.
+    /// Falls back to the OS prompt-based APIs if deep-linking fails for any reason.
+    private func openSystemSettingsPrivacyPane(_ pane: SystemSettingsPrivacyPane) -> Bool {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane.rawValue)") else {
+            return false
+        }
+        return NSWorkspace.shared.open(url)
+    }
+
+    private func grantAccessibilityAccess() {
+        if !openSystemSettingsPrivacyPane(.accessibility) {
+            requestAccessibility()
+        } else {
+            // Poll so the UI updates when the user toggles the permission.
+            Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+                if AXIsProcessTrusted() {
+                    hasAccessibility = true
+                    timer.invalidate()
+                }
+            }
+        }
+    }
+
+    private func grantScreenRecordingAccess() {
+        if !openSystemSettingsPrivacyPane(.screenRecording) {
+            requestScreenRecording()
+        } else {
+            // Poll so the UI updates when the user toggles the permission.
+            Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+                if CGPreflightScreenCaptureAccess() {
+                    hasScreenRecording = true
+                    timer.invalidate()
+                }
             }
         }
     }
