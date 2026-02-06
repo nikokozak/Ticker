@@ -9,7 +9,7 @@ final class CursorPositionService {
     // MARK: - Permission
 
     var hasAccessibilityPermission: Bool {
-        AXIsProcessTrustedWithOptions(nil)
+        AXIsProcessTrusted()
     }
 
     func requestAccessibilityPermission() {
