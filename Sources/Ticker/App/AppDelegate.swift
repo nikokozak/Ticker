@@ -170,10 +170,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         // Cmd+Tab activates the app but does not trigger `applicationShouldHandleReopen`.
-        // If the app is active with no visible windows (common after we "hide to menu bar"),
-        // re-show the main window for parity with clicking the Dock icon.
-        let hasVisibleWindows = NSApp.windows.contains { $0.isVisible }
-        if !hasVisibleWindows {
+        // If the main window is currently hidden (common after we "hide to menu bar"),
+        // re-show it for parity with clicking the Dock icon.
+        //
+        // Note: Don't use "any visible windows" as the gate here — the Quick Panel (NSPanel)
+        // can be visible while the main window is still hidden, which would prevent us from
+        // restoring the main window on Cmd+Tab.
+        if onboardingWindow?.isVisible == true { return }
+        if mainWindow?.isVisible != true || mainWindow?.isMiniaturized == true {
             showMainWindow()
         }
     }
@@ -258,6 +262,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func showMainWindow() {
+        if mainWindow?.isMiniaturized == true {
+            mainWindow?.deminiaturize(nil)
+        }
         mainWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
