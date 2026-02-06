@@ -204,6 +204,12 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(isPromptingScreenRecording)
+
+                Button("Open System Settings") {
+                    _ = openSystemSettingsPrivacyPane(.screenRecording)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
             }
 
             Spacer()
@@ -353,10 +359,10 @@ struct OnboardingView: View {
             return
         }
 
-        let granted = requestScreenRecording()
-        if !granted {
-            _ = openSystemSettingsPrivacyPane(.screenRecording)
-        }
+        // Important: don't open System Settings ourselves here. macOS will show a system
+        // prompt with an "Open System Settings" button; opening both simultaneously is
+        // confusing and can make it look like Ticker isn't listed yet.
+        _ = requestScreenRecording()
     }
 
 }

@@ -127,7 +127,7 @@ final class QuickPanelManager: ObservableObject {
         }
 
         // Panel is hidden - show it
-        show(with: capturedContext)
+        show(with: capturedContext, showAccessibilityWarning: true)
     }
 
     /// Show after screenshot capture with status feedback
@@ -156,7 +156,7 @@ final class QuickPanelManager: ObservableObject {
             }
         }
 
-        show(with: capturedContext)
+        show(with: capturedContext, showAccessibilityWarning: false)
     }
 
     /// Show the Quick Panel with an informational status message (no clipboard image attachment).
@@ -176,7 +176,7 @@ final class QuickPanelManager: ObservableObject {
             clipboardImage: nil
         )
 
-        show(with: contextWithoutClipboard)
+        show(with: contextWithoutClipboard, showAccessibilityWarning: false)
         statusMessage = message
 
         // Auto-clear after a short delay so it doesn't linger.
@@ -189,7 +189,7 @@ final class QuickPanelManager: ObservableObject {
     }
 
     /// Show the quick panel with specific context
-    private func show(with capturedContext: QuickPanelContext) {
+    private func show(with capturedContext: QuickPanelContext, showAccessibilityWarning: Bool) {
         self.context = capturedContext
         resetState()
 
@@ -198,7 +198,7 @@ final class QuickPanelManager: ObservableObject {
 
         // If Accessibility isn't granted, just show a soft warning (don't prompt).
         // Onboarding is responsible for prompting; repeated system prompts here are jarring.
-        if !cursorService.hasAccessibilityPermission && !capturedContext.hasContent {
+        if showAccessibilityWarning && !cursorService.hasAccessibilityPermission && !capturedContext.hasContent {
             statusMessage = "Grant Accessibility permission to capture text selections"
         }
 

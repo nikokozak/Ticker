@@ -9,7 +9,10 @@ final class CursorPositionService {
     // MARK: - Permission
 
     var hasAccessibilityPermission: Bool {
-        AXIsProcessTrustedWithOptions(nil)
+        // Important: do NOT call AXIsProcessTrustedWithOptions(prompt: true) here.
+        // This getter is used in hot paths (Quick Panel show, screenshot attach) and we
+        // never want to surprise the user with a system permission prompt.
+        AXIsProcessTrusted()
     }
 
     func requestAccessibilityPermission() {
