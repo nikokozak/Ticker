@@ -6,14 +6,15 @@
 	objectVersion = 56;
 	objects = {
 
-		/* Begin PBXBuildFile section */
-			C1000001000000000001 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000001 /* GRDB */; };
-			C1000001000000000002 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000002 /* MLXLLM */; };
-			C1000001000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000003 /* Sparkle */; };
-			R1000001000000000001 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = F1000001000000000001 /* Resources */; };
-		A1000001000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000001 /* AppDelegate.swift */; };
-		A1000001000000000002 /* AssetSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000002 /* AssetSchemeHandler.swift */; };
-		A100000100000000002B /* BundleSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002B /* BundleSchemeHandler.swift */; };
+			/* Begin PBXBuildFile section */
+				C1000001000000000001 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000001 /* GRDB */; };
+				C1000001000000000002 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000002 /* MLXLLM */; };
+				C1000001000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000003 /* Sparkle */; };
+				R1000001000000000001 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = F1000001000000000001 /* Resources */; };
+				R1000001000000000002 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F1000001000000000002 /* Assets.xcassets */; };
+			A1000001000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000001 /* AppDelegate.swift */; };
+			A1000001000000000002 /* AssetSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000002 /* AssetSchemeHandler.swift */; };
+			A100000100000000002B /* BundleSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002B /* BundleSchemeHandler.swift */; };
 		A1000001000000000003 /* BridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000003 /* BridgeService.swift */; };
 		A1000001000000000004 /* DroppableWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000004 /* DroppableWebView.swift */; };
 		A1000001000000000005 /* WebViewManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000005 /* WebViewManager.swift */; };
@@ -70,11 +71,11 @@
 			};
 		/* End PBXContainerItemProxy section */
 
-		/* Begin PBXFileReference section */
-			E8A1B2C3D4E5F6A7B8C9D0E1 /* Ticker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ticker.app; sourceTree = BUILT_PRODUCTS_DIR; };
-			E8A1B2C3D4E5F6A7B8C9D0E5 /* TickerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TickerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-			E8A1B2C3D4E5F6A7B8C9D0E2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-			E8A1B2C3D4E5F6A7B8C9D0E3 /* Ticker.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Ticker.entitlements; sourceTree = "<group>"; };
+			/* Begin PBXFileReference section */
+				E8A1B2C3D4E5F6A7B8C9D0E1 /* Ticker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ticker.app; sourceTree = BUILT_PRODUCTS_DIR; };
+				E8A1B2C3D4E5F6A7B8C9D0E5 /* TickerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TickerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+				E8A1B2C3D4E5F6A7B8C9D0E2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+				E8A1B2C3D4E5F6A7B8C9D0E3 /* Ticker.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Ticker.entitlements; sourceTree = "<group>"; };
 		B1000001000000000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B1000001000000000002 /* AssetSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetSchemeHandler.swift; sourceTree = "<group>"; };
 		B100000100000000002B /* BundleSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleSchemeHandler.swift; sourceTree = "<group>"; };
@@ -121,9 +122,10 @@
 			B100000100000000002C /* DeviceKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyService.swift; sourceTree = "<group>"; };
 			B100000100000000002D /* ProxyLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyLLMService.swift; sourceTree = "<group>"; };
 			B100000100000000002E /* DebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLog.swift; sourceTree = "<group>"; };
-			B100000100000000002F /* DeviceKeyServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyServiceTests.swift; sourceTree = "<group>"; };
-			F1000001000000000001 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
-		/* End PBXFileReference section */
+				B100000100000000002F /* DeviceKeyServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyServiceTests.swift; sourceTree = "<group>"; };
+				F1000001000000000001 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
+				F1000001000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+			/* End PBXFileReference section */
 
 		/* Begin PBXFrameworksBuildPhase section */
 			E8A1B2C3D4E5F6A7B8C9D0F1 /* Frameworks */ = {
@@ -172,20 +174,21 @@
 				name = Products;
 				sourceTree = "<group>";
 			};
-		E8A1B2C3D4E5F6A7B8C9D103 /* Ticker */ = {
-			isa = PBXGroup;
-			children = (
-				G1000001000000000001 /* App */,
-				G1000001000000000002 /* Design */,
-				G1000001000000000003 /* Models */,
-				G1000001000000000004 /* Services */,
-				F1000001000000000001 /* Resources */,
-				E8A1B2C3D4E5F6A7B8C9D0E2 /* Info.plist */,
-				E8A1B2C3D4E5F6A7B8C9D0E3 /* Ticker.entitlements */,
-			);
-			path = Ticker;
-			sourceTree = "<group>";
-		};
+			E8A1B2C3D4E5F6A7B8C9D103 /* Ticker */ = {
+				isa = PBXGroup;
+				children = (
+					G1000001000000000001 /* App */,
+					G1000001000000000002 /* Design */,
+					G1000001000000000003 /* Models */,
+					G1000001000000000004 /* Services */,
+					F1000001000000000002 /* Assets.xcassets */,
+					F1000001000000000001 /* Resources */,
+					E8A1B2C3D4E5F6A7B8C9D0E2 /* Info.plist */,
+					E8A1B2C3D4E5F6A7B8C9D0E3 /* Ticker.entitlements */,
+				);
+				path = Ticker;
+				sourceTree = "<group>";
+			};
 		G1000001000000000001 /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -393,16 +396,17 @@
 			};
 		/* End PBXProject section */
 
-/* Begin PBXResourcesBuildPhase section */
-		E8A1B2C3D4E5F6A7B8C9D0F2 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				R1000001000000000001 /* Resources in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXResourcesBuildPhase section */
+	/* Begin PBXResourcesBuildPhase section */
+			E8A1B2C3D4E5F6A7B8C9D0F2 /* Resources */ = {
+				isa = PBXResourcesBuildPhase;
+				buildActionMask = 2147483647;
+				files = (
+					R1000001000000000001 /* Resources in Resources */,
+					R1000001000000000002 /* Assets.xcassets in Resources */,
+				);
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+	/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		S1000001000000000001 /* Build Web Assets */ = {
@@ -620,13 +624,14 @@
 			};
 			name = Release;
 		};
-		E8A1B2C3D4E5F6A7B8C9D111 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = Sources/Ticker/Ticker.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+			E8A1B2C3D4E5F6A7B8C9D111 /* Debug */ = {
+				isa = XCBuildConfiguration;
+				buildSettings = {
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					CODE_SIGN_ENTITLEMENTS = Sources/Ticker/Ticker.entitlements;
+					CODE_SIGN_STYLE = Automatic;
+					COMBINE_HIDPI_IMAGES = YES;
+					CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Sources/Ticker/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -645,13 +650,14 @@
 			};
 			name = Debug;
 		};
-			E8A1B2C3D4E5F6A7B8C9D112 /* Release */ = {
-				isa = XCBuildConfiguration;
-				buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = Sources/Ticker/Ticker.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				E8A1B2C3D4E5F6A7B8C9D112 /* Release */ = {
+					isa = XCBuildConfiguration;
+					buildSettings = {
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					CODE_SIGN_ENTITLEMENTS = Sources/Ticker/Ticker.entitlements;
+					CODE_SIGN_STYLE = Automatic;
+					COMBINE_HIDPI_IMAGES = YES;
+					CURRENT_PROJECT_VERSION = 1;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Sources/Ticker/Info.plist;
