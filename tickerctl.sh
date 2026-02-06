@@ -449,6 +449,27 @@ cmd_build_prod() {
   echo "Built: $DERIVED_DATA_PATH/Build/Products/Release/Ticker.app"
 }
 
+repair_release_swiftpm_artifacts_if_needed() {
+  local release_dd="$1"
+
+  # Sparkle is a SwiftPM binary target (XCFramework). If the artifact cache gets
+  # corrupted/stale, Xcode can fail with:
+  #   "There is no XCFramework found at .../Sparkle.xcframework"
+  #
+  # This commonly happens under the release DerivedData path, so we detect the
+  # specific "Sparkle artifact dir exists but xcframework is missing" condition
+  # and delete only the Sparkle artifact subtree. A subsequent build will re-fetch it.
+  local sparkle_root="$release_dd/SourcePackages/artifacts/sparkle"
+  local sparkle_xcframework="$sparkle_root/Sparkle/Sparkle.xcframework"
+
+  if [[ -d "$sparkle_root" && ! -d "$sparkle_xcframework" ]]; then
+    echo "Detected missing Sparkle.xcframework under release DerivedData:"
+    echo "  Expected: $sparkle_xcframework"
+    echo "Cleaning stale Sparkle SwiftPM artifacts…"
+    safe_delete_repo_dir "$sparkle_root"
+  fi
+}
+
 cmd_run_prod() {
   TICKER_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --prod
 }
@@ -959,6 +980,9 @@ PY
   DERIVED_DATA_PATH="$release_derived_data"
   local release_dd="$DERIVED_DATA_PATH"
 
+  echo "Release DerivedData: $release_dd"
+  repair_release_swiftpm_artifacts_if_needed "$release_dd"
+
   echo "Building web assets (Release)…"
   build_web_assets
 
@@ -966,7 +990,17 @@ PY
   build_num="$(build_number)"
 
   echo "Building Release (unsigned)…"
-  build_app Release "$version"
+  if ! build_app Release "$version"; then
+    local sparkle_xcframework="$release_dd/SourcePackages/artifacts/sparkle/Sparkle/Sparkle.xcframework"
+    if [[ ! -d "$sparkle_xcframework" ]]; then
+      echo "Release build failed and Sparkle.xcframework is missing."
+      echo "Auto-repair: cleaning release DerivedData and retrying once…"
+      cmd_clean_derived_data --release --derived-data "$release_dd" -y
+      build_app Release "$version"
+    else
+      exit 1
+    fi
+  fi
 
   local app_path="$release_dd/Build/Products/Release/Ticker.app"
   if [[ ! -d "$app_path" ]]; then
@@ -1231,7 +1265,7 @@ cmd_menu() {
     "Build Release (prod, unsigned)" \
     "Build + Run Release (prod, unsigned)" \
     "Preflight (alpha): contracts + web typecheck + swift tests" \
-    "Clean DerivedData (fix stale SPM artifacts)" \
+    "Clean DerivedData (dev/prod + release)" \
     "Release (alpha): build+sign+notarize+zip+Sparkle-sign" \
     "Release (alpha) + promote: publish + update appcast" \
     "Promote existing alpha (skip build): publish + update appcast" \
@@ -1266,7 +1300,29 @@ cmd_menu() {
       break
       ;;
     6)
-      cmd_clean_derived_data
+      echo "Clean which DerivedData?"
+      select dd in \
+        "Dev/Prod only (./.build/xcode)" \
+        "Release only (./.build/xcode-release)" \
+        "Both (recommended)"; do
+        case "$REPLY" in
+        1)
+          cmd_clean_derived_data
+          break
+          ;;
+        2)
+          cmd_clean_derived_data --release
+          break
+          ;;
+        3)
+          cmd_clean_derived_data --all
+          break
+          ;;
+        *)
+          echo "Invalid choice."
+          ;;
+        esac
+      done
       break
       ;;
     7)
