@@ -9,6 +9,8 @@ import { CellBlock } from '../extensions/CellBlock';
 import { CellClipboard } from '../extensions/CellClipboard';
 import { CellKeymap, CellKeymapCallbacks } from '../extensions/CellKeymap';
 import { SidePanel } from './SidePanel';
+import { ReferencePreview } from './ReferencePreview';
+import { createReferenceSuggestion } from './ReferenceSuggestion';
 import { useBlockStore } from '../store/blockStore';
 import { Editor } from '@tiptap/core';
 import { DOMSerializer, DOMParser, Node as ProseMirrorNode } from '@tiptap/pm/model';
@@ -16,6 +18,7 @@ import { Selection, NodeSelection } from '@tiptap/pm/state';
 import { stripHtml, extractImages, buildImageBlock, extractImageURLs } from '../utils/html';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { isCellNodeEmpty } from '../extensions/cellEmpty';
+import { extractFirstHeadingFromHtml } from '../utils/cellTitle';
 import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 /** Save debounce delay in ms - matches Cell component */
@@ -263,6 +266,34 @@ export function UnifiedStreamEditor({
   }, [stream.id, stream.cells]);
 
   const initialHtml = useMemo(() => buildHtmlFromCells(initialCells), [initialCells]);
+
+  // Reference suggestion config (shared with legacy CellEditor/PromptEditor).
+  // NOTE: Use store.getState() to avoid subscribing UnifiedStreamEditor to per-keystroke store churn.
+  const getCellsForReferenceSuggestion = useMemo(() => {
+    return (): Cell[] => {
+      const store = useBlockStore.getState();
+      const focusedId = store.focusedBlockId;
+      const blocks = store.getBlocksArray();
+
+      return blocks.filter((b) => {
+        // Exclude current cell to avoid self-references and cycles.
+        if (focusedId && b.id === focusedId) return false;
+        // Always include AI responses (even if content appears empty after HTML strip).
+        if (b.type === 'aiResponse') return true;
+        // Always include cells with a blockName or a heading-derived title.
+        if (b.blockName || extractFirstHeadingFromHtml(b.content)) return true;
+        // Exclude empty cells (spacing blocks).
+        const textContent = b.content.replace(/<[^>]*>/g, '').trim();
+        if (textContent.length === 0) return false;
+        return true;
+      });
+    };
+  }, []);
+
+  const referenceSuggestionConfig = useMemo(
+    () => createReferenceSuggestion(getCellsForReferenceSuggestion),
+    [getCellsForReferenceSuggestion]
+  );
 
   // Keep streamIdRef in sync
   useEffect(() => {
@@ -813,6 +844,7 @@ export function UnifiedStreamEditor({
         renderLabel({ node }) {
           return `@block-${node.attrs.shortId ?? node.attrs.id?.substring(0, 4).toLowerCase() ?? '????'}`;
         },
+        suggestion: referenceSuggestionConfig,
       }),
     ],
     content: initialHtml,
@@ -847,6 +879,63 @@ export function UnifiedStreamEditor({
       }
     },
   });
+
+  /**
+   * Scroll and focus a target cell by ID.
+   * Used by side panel navigation and @reference click/hover UX.
+   */
+  const scrollToCell = useCallback((cellId: string) => {
+    if (!editor) return;
+
+    const result = findCellBlockById(editor.state.doc, cellId);
+    if (!result) return;
+
+    // Scroll + place selection at the start of the cell content.
+    const cellContentStart = result.pos + 1;
+    const sel = Selection.findFrom(editor.state.doc.resolve(cellContentStart), 1, true);
+    if (!sel) return;
+    editor.view.dispatch(editor.state.tr.setSelection(sel).scrollIntoView());
+    editor.view.focus();
+
+    // Highlight the navigated-to cell wrapper (reuse legacy highlight CSS).
+    const el = document.querySelector(`[data-cell-id="${cellId}"]`);
+    if (!el) return;
+    el.classList.add('block-wrapper--highlighted');
+    window.setTimeout(() => {
+      el.classList.remove('block-wrapper--highlighted');
+    }, 2000);
+  }, [editor]);
+
+  /**
+   * Handle clicks on inline cell references (TipTap mention spans).
+   * Mirrors legacy behavior from Cell.tsx.
+   */
+  const handleReferenceClick = useCallback((e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (!target) return;
+
+    // Check if clicked on a cell-reference element (TipTap mention).
+    if (!(target.classList.contains('cell-reference') || target.closest('.cell-reference'))) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const refElement = target.classList.contains('cell-reference')
+      ? target
+      : target.closest('.cell-reference');
+    if (!refElement) return;
+
+    // TipTap mention stores identifier in data-id attribute.
+    const refId = refElement.getAttribute('data-id');
+    if (!refId) return;
+
+    const referencedCell = useBlockStore.getState().getBlockByRef(refId);
+    if (!referencedCell) return;
+
+    scrollToCell(referencedCell.id);
+  }, [scrollToCell]);
 
   /**
    * Replace the HTML content of a cell in the TipTap document.
@@ -1071,15 +1160,8 @@ export function UnifiedStreamEditor({
   }, [setSources]);
 
   const handleCellClickFromOutline = useCallback((cellId: string) => {
-    if (!editor) return;
-    const result = findCellBlockById(editor.state.doc, cellId);
-    if (!result) return;
-    const cellContentStart = result.pos + 1;
-    const sel = Selection.findFrom(editor.state.doc.resolve(cellContentStart), 1, true);
-    if (!sel) return;
-    editor.view.dispatch(editor.state.tr.setSelection(sel).scrollIntoView());
-    editor.view.focus();
-  }, [editor]);
+    scrollToCell(cellId);
+  }, [scrollToCell]);
 
   // Initialize store with stream data on mount and seed baseline
   useEffect(() => {
@@ -1211,7 +1293,7 @@ export function UnifiedStreamEditor({
       )}
 
       <div className="stream-body">
-        <div className="stream-content unified-editor-container">
+        <div className="stream-content unified-editor-container" onClick={handleReferenceClick}>
           {editor ? (
             <EditorContent editor={editor} />
           ) : (
@@ -1242,6 +1324,9 @@ export function UnifiedStreamEditor({
           onCellClick={handleCellClickFromOutline}
         />
       </div>
+
+      {/* Global reference preview tooltip */}
+      <ReferencePreview onScrollToCell={scrollToCell} />
     </div>
   );
 }
