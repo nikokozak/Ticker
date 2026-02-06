@@ -361,14 +361,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Screen recording permission is required for capturing other apps' windows.
         // Without it, macOS may redact capture output (e.g., Desktop only).
         if !CGPreflightScreenCaptureAccess() {
-            DebugLog.log("[Screenshot] Screen recording permission missing; requesting access")
-            _ = CGRequestScreenCaptureAccess()
-
-            // Permission changes typically require the app to be restarted.
-            guard CGPreflightScreenCaptureAccess() else {
-                quickPanelManager?.showWithStatusMessage("Enable Screen Recording permission (restart Ticker)")
-                return
-            }
+            DebugLog.log("[Screenshot] Screen recording permission missing")
+            quickPanelManager?.showWithStatusMessage("Enable Screen Recording permission (restart Ticker)")
+            return
         }
 
         let pasteboardChangeCountBefore = ClipboardService.changeCount()

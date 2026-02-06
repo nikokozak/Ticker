@@ -196,12 +196,10 @@ final class QuickPanelManager: ObservableObject {
         // Load available streams for picker
         loadAvailableStreams()
 
-        // Show accessibility warning if permission not granted and no context captured
-        if !cursorService.hasAccessibilityPermission {
-            if !capturedContext.hasContent {
-                statusMessage = "Grant Accessibility permission to capture text selections"
-            }
-            cursorService.requestAccessibilityPermission()
+        // If Accessibility isn't granted, just show a soft warning (don't prompt).
+        // Onboarding is responsible for prompting; repeated system prompts here are jarring.
+        if !cursorService.hasAccessibilityPermission && !capturedContext.hasContent {
+            statusMessage = "Grant Accessibility permission to capture text selections"
         }
 
         // Create panel if needed

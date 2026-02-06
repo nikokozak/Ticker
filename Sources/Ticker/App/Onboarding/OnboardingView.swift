@@ -179,6 +179,12 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
+            Text("If Ticker isn’t listed, click “+” and add Ticker manually.")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
             if hasScreenRecording {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
@@ -291,8 +297,9 @@ struct OnboardingView: View {
         hasScreenRecording = CGPreflightScreenCaptureAccess()
     }
 
-    private func requestScreenRecording() {
-        _ = CGRequestScreenCaptureAccess()
+    @discardableResult
+    private func requestScreenRecording() -> Bool {
+        let granted = CGRequestScreenCaptureAccess()
 
         // Poll for permission change (may still require restart, but this keeps UI honest when it updates).
         Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
@@ -301,6 +308,8 @@ struct OnboardingView: View {
                 timer.invalidate()
             }
         }
+
+        return granted
     }
 
     private func refreshPermissionState() {
@@ -337,16 +346,16 @@ struct OnboardingView: View {
     }
 
     private func grantScreenRecordingAccess() {
-        if !openSystemSettingsPrivacyPane(.screenRecording) {
-            requestScreenRecording()
-        } else {
-            // Poll so the UI updates when the user toggles the permission.
-            Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-                if CGPreflightScreenCaptureAccess() {
-                    hasScreenRecording = true
-                    timer.invalidate()
-                }
-            }
+        // Calling CGRequestScreenCaptureAccess is what registers Ticker with macOS so it
+        // shows up in the Screen Recording list. Deep-linking alone is not sufficient.
+        if CGPreflightScreenCaptureAccess() {
+            hasScreenRecording = true
+            return
+        }
+
+        let granted = requestScreenRecording()
+        if !granted {
+            _ = openSystemSettingsPrivacyPane(.screenRecording)
         }
     }
 
