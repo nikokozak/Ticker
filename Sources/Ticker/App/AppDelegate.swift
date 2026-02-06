@@ -26,7 +26,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var webViewManager: WebViewManager?
     private var onboardingWindow: NSWindow?
     private var didCompleteStartup = false
-    private var didOpenScreenRecordingSettingsThisSession = false
 
     // Menu bar (status item)
     private var statusItem: NSStatusItem?
@@ -362,14 +361,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Screen recording permission is required for capturing other apps' windows.
         // Without it, macOS may redact capture output (e.g., Desktop only).
         if !CGPreflightScreenCaptureAccess() {
-            DebugLog.log("[Screenshot] Screen recording permission missing; opening System Settings")
-            quickPanelManager?.showWithStatusMessage("Enable Screen Recording permission in System Settings (restart Ticker)")
+            DebugLog.log("[Screenshot] Screen recording permission missing; requesting access")
+            _ = CGRequestScreenCaptureAccess()
 
-            if !didOpenScreenRecordingSettingsThisSession {
-                didOpenScreenRecordingSettingsThisSession = true
-                _ = SystemSettingsService.openPrivacyPane(.screenRecording)
+            // Permission changes typically require the app to be restarted.
+            guard CGPreflightScreenCaptureAccess() else {
+                quickPanelManager?.showWithStatusMessage("Enable Screen Recording permission (restart Ticker)")
+                return
             }
-            return
         }
 
         let pasteboardChangeCountBefore = ClipboardService.changeCount()

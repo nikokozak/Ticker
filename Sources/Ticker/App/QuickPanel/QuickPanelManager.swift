@@ -199,8 +199,9 @@ final class QuickPanelManager: ObservableObject {
         // Show accessibility warning if permission not granted and no context captured
         if !cursorService.hasAccessibilityPermission {
             if !capturedContext.hasContent {
-                statusMessage = "Grant Accessibility permission in System Settings to capture text selections"
+                statusMessage = "Grant Accessibility permission to capture text selections"
             }
+            cursorService.requestAccessibilityPermission()
         }
 
         // Create panel if needed
