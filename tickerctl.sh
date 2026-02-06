@@ -58,6 +58,9 @@ Notes:
   - Dev/prod commands build unsigned (CODE_SIGNING_ALLOWED=NO).
   - Sparkle update testing requires an older build installed in /Applications
     and a newer build published in the appcast.
+  - release-alpha also uploads a stable-named zip asset (Ticker-alpha-latest.zip)
+    so you can link directly to the latest build:
+      https://github.com/<owner>/<repo>/releases/latest/download/Ticker-alpha-latest.zip
 EOF
 }
 
@@ -696,6 +699,7 @@ cmd_release_alpha() {
   local allow_dirty="false"
   local skip_build="false"
   local release_derived_data="$RELEASE_DERIVED_DATA_PATH_DEFAULT"
+  local stable_zip_name_default="Ticker-alpha-latest.zip"
   local -a remaining=()
 
   while [[ $# -gt 0 ]]; do
@@ -801,6 +805,14 @@ cmd_release_alpha() {
     local signature="$RELEASE_SIGNATURE"
     local length="$RELEASE_LENGTH"
     local bundle_build_num="$RELEASE_BUILD_NUM"
+    local stable_zip_name="${RELEASE_STABLE_ZIP_NAME:-$stable_zip_name_default}"
+    local stable_zip_path="${RELEASE_STABLE_ZIP_PATH:-$release_out_dir/$stable_zip_name}"
+
+    # Back-compat: old release.env files didn't track the stable zip fields.
+    # Recreate the stable-named artifact from the versioned zip if it's missing.
+    if [[ ! -f "$stable_zip_path" ]]; then
+      cp -f "$zip_path" "$stable_zip_path"
+    fi
 
     # Prefer metadata updates repo slug if config is empty.
     if [[ -z "$UPDATES_REPO_SLUG" && -n "${RELEASE_UPDATES_REPO_SLUG:-}" ]]; then
@@ -864,7 +876,7 @@ cmd_release_alpha() {
         fi
       fi
 
-      gh_cmd+=(--title "Ticker ${version}" --notes "Alpha release ${version}" "$zip_path")
+      gh_cmd+=(--title "Ticker ${version}" --notes "Alpha release ${version}" "$zip_path" "$stable_zip_path")
       "${gh_cmd[@]}"
     fi
 
@@ -1047,6 +1059,13 @@ PY
   local zip_path="$release_out_dir/$zip_name"
   (cd "$release_dd/Build/Products/Release" && ditto -c -k --sequesterRsrc --keepParent "Ticker.app" "$zip_path")
 
+  # Also publish a stable-named zip for direct downloads.
+  # This enables a URL like:
+  #   https://github.com/<owner>/<repo>/releases/latest/download/Ticker-alpha-latest.zip
+  local stable_zip_name="$stable_zip_name_default"
+  local stable_zip_path="$release_out_dir/$stable_zip_name"
+  cp -f "$zip_path" "$stable_zip_path"
+
   ensure_sparkle_bin
 
   echo "Signing update zip with Sparkle…"
@@ -1065,6 +1084,8 @@ PY
     printf 'RELEASE_BUILD_NUM=%q\n' "$bundle_build_num"
     printf 'RELEASE_ZIP_NAME=%q\n' "$zip_name"
     printf 'RELEASE_ZIP_PATH=%q\n' "$zip_path"
+    printf 'RELEASE_STABLE_ZIP_NAME=%q\n' "$stable_zip_name"
+    printf 'RELEASE_STABLE_ZIP_PATH=%q\n' "$stable_zip_path"
     printf 'RELEASE_SIGNATURE=%q\n' "$signature"
     printf 'RELEASE_LENGTH=%q\n' "$length"
     printf 'RELEASE_APP_PATH=%q\n' "$app_path"
@@ -1092,7 +1113,7 @@ PY
       fi
     fi
 
-    gh_cmd+=(--title "Ticker ${version}" --notes "Alpha release ${version}" "$zip_path")
+    gh_cmd+=(--title "Ticker ${version}" --notes "Alpha release ${version}" "$zip_path" "$stable_zip_path")
     "${gh_cmd[@]}"
   fi
 
