@@ -136,7 +136,8 @@ final class SelectionReaderService {
             activeApp: getActiveApp(),
             windowTitle: getActiveWindowTitle(),
             panelPosition: position,
-            clipboardImage: clipboardImageData
+            clipboardImage: clipboardImageData,
+            isScreenshot: false
         )
     }
 
@@ -164,6 +165,9 @@ struct QuickPanelContext {
     let panelPosition: CGPoint
     /// Clipboard image data (if no text selection and clipboard has image)
     let clipboardImage: Data?
+    /// True only when the image was captured via Ticker's screenshot hotkey (Cmd+;).
+    /// Used for UI styling (avoid transient "toast" messages).
+    let isScreenshot: Bool
 
     var hasSelection: Bool {
         selectedText != nil && !(selectedText?.isEmpty ?? true)

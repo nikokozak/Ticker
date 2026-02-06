@@ -11,14 +11,21 @@ Usage: ./run.sh [--dev|-d] [--prod|-p] [-h]
   -h          Show this help
 
 Notes:
-  - This script builds an unsigned app (`CODE_SIGNING_ALLOWED=NO`). Distribution builds
-    should follow the signing/notarization runbook.
+  - This script builds an unsigned app (`CODE_SIGNING_ALLOWED=NO`) but will optionally
+    codesign the built .app if `SIGN_IDENTITY` is set (recommended so macOS permissions
+    like Accessibility/Screen Recording stick across rebuilds).
+  - Distribution builds should follow the signing/notarization runbook.
   - Override build output location with DERIVED_DATA_PATH (or TICKER_DERIVED_DATA_PATH), e.g.:
       DERIVED_DATA_PATH=/tmp/ticker-xcode-build ./run.sh --prod
 EOF
 }
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_FILE="$ROOT_DIR/tickerctl.local.sh"
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
 DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-${TICKER_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}}"
 APP="$DERIVED_DATA_PATH/Build/Products"
@@ -45,6 +52,43 @@ while [[ $# -gt 0 ]]; do
     ;;
   esac
 done
+
+codesign_app_if_configured() {
+  local app_path="$1"
+
+  if [[ "${TICKER_DISABLE_CODESIGN:-}" == "1" ]]; then
+    return 0
+  fi
+
+  local identity="${SIGN_IDENTITY:-}"
+  if [[ -z "$identity" ]]; then
+    return 0
+  fi
+
+  if ! command -v codesign >/dev/null 2>&1; then
+    echo "Warning: SIGN_IDENTITY is set but codesign is not available; skipping codesign." >&2
+    return 0
+  fi
+
+  if [[ ! -d "$app_path" ]]; then
+    echo "Warning: expected app bundle not found at: $app_path (skipping codesign)" >&2
+    return 0
+  fi
+
+  echo "Code signing Ticker for stable macOS permissions..."
+  set +e
+  codesign --deep --force --sign "$identity" "$app_path" >/dev/null 2>&1
+  local status=$?
+  set -e
+
+  if (( status != 0 )); then
+    echo "Warning: codesign failed (SIGN_IDENTITY='$identity'). Permissions may re-prompt." >&2
+    return 0
+  fi
+
+  # Best-effort verification (non-fatal).
+  codesign --verify --deep "$app_path" >/dev/null 2>&1 || true
+}
 
 resolve_package_dependencies_if_needed() {
   local workspace_state="$DERIVED_DATA_PATH/SourcePackages/workspace-state.json"
@@ -127,6 +171,7 @@ run_dev() {
   local bin_path="$app_path/Contents/MacOS/Ticker"
 
   build_app "Debug"
+  codesign_app_if_configured "$app_path"
 
   echo "Cleaning up port 5173..."
   lsof -ti:5173 | xargs kill -9 2>/dev/null || true
@@ -158,6 +203,7 @@ run_prod() {
   (cd "$ROOT_DIR/Web" && npm run build)
 
   build_app "Release"
+  codesign_app_if_configured "$app_path"
 
   if [[ ! -d "$app_path" ]]; then
     echo "Error: expected app bundle not found at: $app_path" >&2

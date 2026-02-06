@@ -24,6 +24,7 @@ Commands:
   reset-proxy-soft     Clear Device Key but keep device_id (edits Application Support file)
   reset-proxy-hard     Delete device.json (new device_id on next launch)
   reset-accessibility  Reset Accessibility permission (TCC) for Ticker
+  reset-screen-recording  Reset Screen Recording permission (TCC) for Ticker
   reset-proxy-url      Clear proxy URL override (UserDefaults)
   reset-diagnostics    Clear diagnostics opt-out (UserDefaults; defaults to ON)
   reset-all            Convenience reset (onboarding + proxy-hard + proxy-url + diagnostics)
@@ -1258,6 +1259,17 @@ cmd_reset_accessibility() {
   echo "Done. Relaunch Ticker and re-grant Accessibility when prompted."
 }
 
+cmd_reset_screen_recording() {
+  require_cmd tccutil
+  echo "Reset Screen Recording permission for $APP_BUNDLE_ID."
+  if ! confirm_action "Run: tccutil reset ScreenCapture $APP_BUNDLE_ID ? [y/N] "; then
+    echo "Canceled."
+    return 0
+  fi
+  tccutil reset ScreenCapture "$APP_BUNDLE_ID"
+  echo "Done. Relaunch Ticker and re-grant Screen Recording when prompted."
+}
+
 cmd_reset_proxy_url() {
   require_cmd defaults
   echo "Clearing proxy URL override (UserDefaults key: TickerProxyURL) for $APP_BUNDLE_ID..."
@@ -1311,6 +1323,7 @@ cmd_menu() {
     "Reset: proxy (soft)" \
     "Reset: proxy (hard)" \
     "Reset: Accessibility permission" \
+    "Reset: Screen Recording permission" \
     "Reset: proxy URL override" \
     "Reset: diagnostics toggle" \
     "Reset: all (onboarding + proxy-hard + proxy-url + diagnostics)" \
@@ -1401,18 +1414,22 @@ cmd_menu() {
       break
       ;;
     15)
-      cmd_reset_proxy_url
+      cmd_reset_screen_recording
       break
       ;;
     16)
-      cmd_reset_diagnostics
+      cmd_reset_proxy_url
       break
       ;;
     17)
+      cmd_reset_diagnostics
+      break
+      ;;
+    18)
       cmd_reset_all
       break
       ;;
-    18) break ;;
+    19) break ;;
     *) echo "Invalid selection" ;;
     esac
   done
@@ -1440,6 +1457,7 @@ main() {
   reset-proxy-soft) cmd_reset_proxy_soft ;;
   reset-proxy-hard) cmd_reset_proxy_hard ;;
   reset-accessibility) cmd_reset_accessibility ;;
+  reset-screen-recording) cmd_reset_screen_recording ;;
   reset-proxy-url) cmd_reset_proxy_url ;;
   reset-diagnostics) cmd_reset_diagnostics ;;
   reset-all) cmd_reset_all ;;

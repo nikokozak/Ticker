@@ -127,7 +127,7 @@ final class QuickPanelManager: ObservableObject {
         }
 
         // Panel is hidden - show it
-        show(with: capturedContext)
+        show(with: capturedContext, showAccessibilityWarning: true)
     }
 
     /// Show after screenshot capture with status feedback
@@ -144,19 +144,12 @@ final class QuickPanelManager: ObservableObject {
                 activeApp: capturedContext.activeApp,
                 windowTitle: capturedContext.windowTitle,
                 panelPosition: capturedContext.panelPosition,
-                clipboardImage: imageData
+                clipboardImage: imageData,
+                isScreenshot: true
             )
-            statusMessage = "Screenshot attached"
-            // Auto-clear status after 2 seconds
-            Task {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                if self.statusMessage == "Screenshot attached" {
-                    self.statusMessage = nil
-                }
-            }
         }
 
-        show(with: capturedContext)
+        show(with: capturedContext, showAccessibilityWarning: false)
     }
 
     /// Show the Quick Panel with an informational status message (no clipboard image attachment).
@@ -173,10 +166,11 @@ final class QuickPanelManager: ObservableObject {
             activeApp: capturedContext.activeApp,
             windowTitle: capturedContext.windowTitle,
             panelPosition: capturedContext.panelPosition,
-            clipboardImage: nil
+            clipboardImage: nil,
+            isScreenshot: false
         )
 
-        show(with: contextWithoutClipboard)
+        show(with: contextWithoutClipboard, showAccessibilityWarning: false)
         statusMessage = message
 
         // Auto-clear after a short delay so it doesn't linger.
@@ -189,18 +183,17 @@ final class QuickPanelManager: ObservableObject {
     }
 
     /// Show the quick panel with specific context
-    private func show(with capturedContext: QuickPanelContext) {
+    private func show(with capturedContext: QuickPanelContext, showAccessibilityWarning: Bool) {
         self.context = capturedContext
         resetState()
 
         // Load available streams for picker
         loadAvailableStreams()
 
-        // Show accessibility warning if permission not granted and no context captured
-        if !cursorService.hasAccessibilityPermission {
-            if !capturedContext.hasContent {
-                statusMessage = "Grant Accessibility permission in System Settings to capture text selections"
-            }
+        // If Accessibility isn't granted, just show a soft warning (don't prompt).
+        // Onboarding is responsible for prompting; repeated system prompts here are jarring.
+        if showAccessibilityWarning && !cursorService.hasAccessibilityPermission && !capturedContext.hasContent {
+            statusMessage = "Grant Accessibility permission to capture text selections"
         }
 
         // Create panel if needed
