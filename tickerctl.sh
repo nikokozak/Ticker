@@ -1323,6 +1323,7 @@ cmd_menu() {
     "Reset: proxy (soft)" \
     "Reset: proxy (hard)" \
     "Reset: Accessibility permission" \
+    "Reset: Screen Recording permission" \
     "Reset: proxy URL override" \
     "Reset: diagnostics toggle" \
     "Reset: all (onboarding + proxy-hard + proxy-url + diagnostics)" \
@@ -1413,18 +1414,22 @@ cmd_menu() {
       break
       ;;
     15)
-      cmd_reset_proxy_url
+      cmd_reset_screen_recording
       break
       ;;
     16)
-      cmd_reset_diagnostics
+      cmd_reset_proxy_url
       break
       ;;
     17)
+      cmd_reset_diagnostics
+      break
+      ;;
+    18)
       cmd_reset_all
       break
       ;;
-    18) break ;;
+    19) break ;;
     *) echo "Invalid selection" ;;
     esac
   done
