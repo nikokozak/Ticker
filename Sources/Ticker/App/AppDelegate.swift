@@ -168,6 +168,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Cleanup
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // Cmd+Tab activates the app but does not trigger `applicationShouldHandleReopen`.
+        // If the app is active with no visible windows (common after we "hide to menu bar"),
+        // re-show the main window for parity with clicking the Dock icon.
+        let hasVisibleWindows = NSApp.windows.contains { $0.isVisible }
+        if !hasVisibleWindows {
+            showMainWindow()
+        }
+    }
+
     /// Don't quit when window is closed - hide to menu bar instead
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false

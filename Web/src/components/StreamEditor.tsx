@@ -522,7 +522,6 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
             {title}
           </h1>
         )}
-        <span className="stream-hint">Cmd+Enter to think with AI</span>
         <button
           onClick={() => setShowDeleteConfirm(true)}
           className="delete-stream-button"

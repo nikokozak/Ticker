@@ -1143,7 +1143,6 @@ export function UnifiedStreamEditor({
             {title}
           </h1>
         )}
-        <span className="stream-hint">Unified editor (auto-saves)</span>
         <div className="export-menu-container">
           <button
             onClick={() => setShowExportMenu(!showExportMenu)}

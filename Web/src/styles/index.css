@@ -348,12 +348,6 @@ body {
   outline: none;
 }
 
-.stream-hint {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  margin-left: auto;
-}
-
 /* Delete stream button */
 .delete-stream-button {
   background: transparent;
