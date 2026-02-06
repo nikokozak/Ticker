@@ -76,14 +76,18 @@ struct QuickPanelView: View {
     // MARK: - Context Badge
 
     private func contextBadge(context: QuickPanelContext) -> some View {
-        HStack(spacing: Spacing.xs) {
+        let isScreenshot = context.isScreenshot
+        let accentColor = isScreenshot ? Colors.successAccent : Colors.secondaryText
+        let backgroundColor = isScreenshot ? Colors.successAccent.opacity(0.15) : Colors.userMessageBackground
+
+        return HStack(spacing: Spacing.xs) {
             Image(systemName: context.hasImage ? "photo" : "text.quote")
                 .font(.system(size: 10))
-                .foregroundColor(Colors.secondaryText)
+                .foregroundColor(accentColor)
 
             Text(contextPreview(context))
                 .font(.system(size: 11))
-                .foregroundColor(Colors.secondaryText)
+                .foregroundColor(accentColor)
                 .lineLimit(1)
 
             Spacer()
@@ -109,11 +113,18 @@ struct QuickPanelView: View {
         }
         .padding(.horizontal, Spacing.sm)
         .padding(.vertical, Spacing.xs)
-        .background(Colors.userMessageBackground)
+        .background(backgroundColor)
+        .overlay(
+            RoundedRectangle(cornerRadius: Spacing.radiusSm)
+                .stroke(isScreenshot ? Colors.successAccent.opacity(0.35) : Color.clear, lineWidth: 1)
+        )
         .cornerRadius(Spacing.radiusSm)
     }
 
     private func contextPreview(_ context: QuickPanelContext) -> String {
+        if context.isScreenshot {
+            return "Screenshot attached"
+        }
         if let text = context.selectedText {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.count > 40 {

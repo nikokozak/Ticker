@@ -144,16 +144,9 @@ final class QuickPanelManager: ObservableObject {
                 activeApp: capturedContext.activeApp,
                 windowTitle: capturedContext.windowTitle,
                 panelPosition: capturedContext.panelPosition,
-                clipboardImage: imageData
+                clipboardImage: imageData,
+                isScreenshot: true
             )
-            statusMessage = "Screenshot attached"
-            // Auto-clear status after 2 seconds
-            Task {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                if self.statusMessage == "Screenshot attached" {
-                    self.statusMessage = nil
-                }
-            }
         }
 
         show(with: capturedContext, showAccessibilityWarning: false)
@@ -173,7 +166,8 @@ final class QuickPanelManager: ObservableObject {
             activeApp: capturedContext.activeApp,
             windowTitle: capturedContext.windowTitle,
             panelPosition: capturedContext.panelPosition,
-            clipboardImage: nil
+            clipboardImage: nil,
+            isScreenshot: false
         )
 
         show(with: contextWithoutClipboard, showAccessibilityWarning: false)
