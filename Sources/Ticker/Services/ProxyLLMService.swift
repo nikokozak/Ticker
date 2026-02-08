@@ -507,13 +507,14 @@ final class ProxyLLMService: LLMProvider {
         ]
 
         for msg in request.messages {
-            if msg.hasImages {
+            let imageURLs = sanitizeImageURLs(msg.imageURLs, forRole: msg.role)
+            if !imageURLs.isEmpty {
                 // Multimodal message
                 var content: [[String: Any]] = [
                     ["type": "text", "text": msg.content]
                 ]
 
-                for imageURL in msg.imageURLs {
+                for imageURL in imageURLs {
                     if imageURL.starts(with: "data:") {
                         // Parse data URL and convert to proxy format
                         if let (mediaType, base64Data) = parseDataURL(imageURL) {
@@ -541,6 +542,17 @@ final class ProxyLLMService: LLMProvider {
         }
 
         return messages
+    }
+
+    private func sanitizeImageURLs(_ imageURLs: [String], forRole role: String) -> [String] {
+        guard role == "user" else {
+            if !imageURLs.isEmpty {
+                debugLog("Dropping \(imageURLs.count) image(s) from non-user role=\(role)")
+            }
+            return []
+        }
+
+        return imageURLs.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     /// Parse a data URL into media type and base64 data
