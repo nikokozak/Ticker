@@ -1,7 +1,7 @@
 import { ReactRenderer } from '@tiptap/react';
 import tippy, { Instance as TippyInstance } from 'tippy.js';
 import { SuggestionOptions, SuggestionProps } from '@tiptap/suggestion';
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Cell } from '../types/models';
 import { getShortId } from '../utils/references';
 import { deriveCellTitle } from '../utils/cellTitle';
@@ -27,6 +27,7 @@ const SuggestionList = forwardRef<SuggestionListRef, SuggestionListProps>(
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
     const [keyboardPriority, setKeyboardPriority] = useState(false);
+    const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
     const selectItem = (index: number) => {
       const item = items[index];
@@ -41,7 +42,15 @@ const SuggestionList = forwardRef<SuggestionListRef, SuggestionListProps>(
       setSelectedIndex(0);
       setHoveredIndex(null);
       setKeyboardPriority(false);
+      itemRefs.current = itemRefs.current.slice(0, items.length);
     }, [items]);
+
+    useEffect(() => {
+      if (!keyboardPriority) return;
+      const activeElement = itemRefs.current[activeIndex];
+      if (!activeElement) return;
+      activeElement.scrollIntoView({ block: 'nearest' });
+    }, [keyboardPriority, activeIndex]);
 
     useImperativeHandle(ref, () => ({
       onKeyDown: (event: KeyboardEvent) => {
@@ -83,6 +92,9 @@ const SuggestionList = forwardRef<SuggestionListRef, SuggestionListProps>(
         {items.map((item, index) => (
           <button
             key={item.id}
+            ref={(element) => {
+              itemRefs.current[index] = element;
+            }}
             className={`reference-suggestion-item ${
               index === activeIndex ? 'reference-suggestion-item--active' : ''
             }`}
