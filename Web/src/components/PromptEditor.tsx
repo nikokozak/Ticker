@@ -6,7 +6,7 @@ import { useEffect, useMemo } from 'react';
 import { createReferenceSuggestion } from './ReferenceSuggestion';
 import { useBlockStore } from '../store/blockStore';
 import { Cell } from '../types/models';
-import { extractFirstHeadingFromHtml } from '../utils/cellTitle';
+import { filterReferenceSuggestionCells } from '../utils/referenceSuggestionCells';
 
 interface PromptEditorProps {
   content: string;
@@ -31,16 +31,7 @@ export function PromptEditor({
   const getCells = useMemo(() => {
     return (): Cell[] => {
       const blocks = useBlockStore.getState().getBlocksArray();
-      return blocks.filter((b) => {
-        if (cellId && b.id === cellId) return false;
-        // Always include AI responses (even if content appears empty after HTML strip)
-        if (b.type === 'aiResponse') return true;
-        // Always include cells with a blockName or a heading-derived title
-        if (b.blockName || extractFirstHeadingFromHtml(b.content)) return true;
-        const textContent = b.content.replace(/<[^>]*>/g, '').trim();
-        if (textContent.length === 0) return false;
-        return true;
-      });
+      return filterReferenceSuggestionCells(blocks, cellId);
     };
   }, [cellId]);
 

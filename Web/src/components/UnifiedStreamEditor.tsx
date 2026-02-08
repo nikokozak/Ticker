@@ -18,7 +18,7 @@ import { Selection, NodeSelection } from '@tiptap/pm/state';
 import { stripHtml, extractImages, buildImageBlock, extractImageURLs } from '../utils/html';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { isCellNodeEmpty } from '../extensions/cellEmpty';
-import { extractFirstHeadingFromHtml } from '../utils/cellTitle';
+import { filterReferenceSuggestionCells } from '../utils/referenceSuggestionCells';
 import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 /** Save debounce delay in ms - matches Cell component */
@@ -274,19 +274,7 @@ export function UnifiedStreamEditor({
       const store = useBlockStore.getState();
       const focusedId = store.focusedBlockId;
       const blocks = store.getBlocksArray();
-
-      return blocks.filter((b) => {
-        // Exclude current cell to avoid self-references and cycles.
-        if (focusedId && b.id === focusedId) return false;
-        // Always include AI responses (even if content appears empty after HTML strip).
-        if (b.type === 'aiResponse') return true;
-        // Always include cells with a blockName or a heading-derived title.
-        if (b.blockName || extractFirstHeadingFromHtml(b.content)) return true;
-        // Exclude empty cells (spacing blocks).
-        const textContent = b.content.replace(/<[^>]*>/g, '').trim();
-        if (textContent.length === 0) return false;
-        return true;
-      });
+      return filterReferenceSuggestionCells(blocks, focusedId);
     };
   }, []);
 

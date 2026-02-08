@@ -8,7 +8,7 @@ import { createReferenceSuggestion } from './ReferenceSuggestion';
 import { useBlockStore } from '../store/blockStore';
 import { Cell } from '../types/models';
 import { bridge } from '../types';
-import { extractFirstHeadingFromHtml } from '../utils/cellTitle';
+import { filterReferenceSuggestionCells } from '../utils/referenceSuggestionCells';
 import { debugError, debugLog, debugWarn } from '../utils/debug';
 
 interface CellEditorProps {
@@ -45,18 +45,7 @@ export function CellEditor({
   const getCells = useMemo(() => {
     return (): Cell[] => {
       const blocks = useBlockStore.getState().getBlocksArray();
-      return blocks.filter((b) => {
-        // Exclude current cell
-        if (cellId && b.id === cellId) return false;
-        // Always include AI responses (even if content appears empty after HTML strip)
-        if (b.type === 'aiResponse') return true;
-        // Always include cells with a blockName or a heading-derived title
-        if (b.blockName || extractFirstHeadingFromHtml(b.content)) return true;
-        // Exclude empty cells (spacing blocks)
-        const textContent = b.content.replace(/<[^>]*>/g, '').trim();
-        if (textContent.length === 0) return false;
-        return true;
-      });
+      return filterReferenceSuggestionCells(blocks, cellId);
     };
   }, [cellId]);
 
