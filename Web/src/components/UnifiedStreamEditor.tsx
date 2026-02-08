@@ -911,8 +911,20 @@ export function UnifiedStreamEditor({
    * Mirrors legacy behavior from Cell.tsx.
    */
   const handleReferenceClick = useCallback((e: React.MouseEvent) => {
+    // Only handle plain left-clicks; let modified clicks behave normally.
+    const isPlainPrimaryClick =
+      e.button === 0 &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.shiftKey;
+    if (!isPlainPrimaryClick) return;
+
     const target = e.target as HTMLElement;
     if (!target) return;
+
+    // PromptEditor has its own editing semantics; don't hijack mention clicks there.
+    if (target.closest('.prompt-editor-content')) return;
 
     // Check if clicked on a cell-reference element (TipTap mention).
     if (!(target.classList.contains('cell-reference') || target.closest('.cell-reference'))) {
