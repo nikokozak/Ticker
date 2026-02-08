@@ -753,11 +753,15 @@ final class WebViewManager: NSObject {
                         // Resolve references in prior cell content
                         cellDict["content"] = DependencyService.resolveReferencesInContent(content, cells: streamCells)
                     }
-                    if let type = cell["type"] as? String {
+                    let type = cell["type"] as? String
+                    if let type {
                         cellDict["type"] = type
                     }
-                    // Convert prior cell images to data URLs
-                    if let imageURLs = cell["imageURLs"] as? [String], !imageURLs.isEmpty {
+                    // Only user-role history should carry images to the model.
+                    // aiResponse maps to assistant role and OpenAI rejects assistant image parts.
+                    if type != "aiResponse",
+                       let imageURLs = cell["imageURLs"] as? [String],
+                       !imageURLs.isEmpty {
                         cellDict["imageURLs"] = assetService.assetsToDataURLs(imageURLs)
                     }
                     priorCells.append(cellDict)

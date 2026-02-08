@@ -168,15 +168,24 @@ final class AIOrchestrator {
         // Add prior cells as conversation history
         // Note: priorCells already excludes the current cell (filtered upstream)
         for cell in priorCells {
-            let role = (cell["type"] as? String) == "aiResponse" ? "assistant" : "user"
+            let role = roleForCellType(cell["type"] as? String)
             if let content = cell["content"] as? String, !content.isEmpty {
-                let imageURLs = cell["imageURLs"] as? [String] ?? []
+                let imageURLs = sanitizeImageURLs(
+                    cell["imageURLs"] as? [String] ?? [],
+                    forRole: role
+                )
                 messages.append(LLMMessage(role: role, content: content, imageURLs: imageURLs))
             }
         }
 
         // Add current query with any attached images
-        messages.append(LLMMessage(role: "user", content: query, imageURLs: queryImages))
+        messages.append(
+            LLMMessage(
+                role: "user",
+                content: query,
+                imageURLs: sanitizeImageURLs(queryImages, forRole: "user")
+            )
+        )
 
         // Build intent for proxy if classification result available
         let llmIntent = classificationResult.map { LLMIntent(from: $0) }
@@ -188,6 +197,15 @@ final class AIOrchestrator {
             maxTokens: 2048,
             intent: llmIntent
         )
+    }
+
+    private func roleForCellType(_ type: String?) -> String {
+        type == "aiResponse" ? "assistant" : "user"
+    }
+
+    private func sanitizeImageURLs(_ imageURLs: [String], forRole role: String) -> [String] {
+        guard role == "user" else { return [] }
+        return imageURLs.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 }
 
