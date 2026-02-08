@@ -33,6 +33,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // Quick Panel services
     private var hotkeyService: HotkeyService?
     private var quickPanelManager: QuickPanelManager?
+    private var didOpenScreenRecordingSettingsThisLaunch = false
 
     // Sparkle updater (lives for app lifetime)
     private let updaterController = SPUStandardUpdaterController(
@@ -355,6 +356,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    private func openScreenRecordingSystemSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
+            return
+        }
+        _ = NSWorkspace.shared.open(url)
+    }
+
     /// Capture screenshot using system tool, then show Quick Panel
     @MainActor
     private func captureScreenshot() {
@@ -362,7 +370,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Without it, macOS may redact capture output (e.g., Desktop only).
         if !CGPreflightScreenCaptureAccess() {
             DebugLog.log("[Screenshot] Screen recording permission missing")
-            quickPanelManager?.showWithStatusMessage("Enable Screen Recording permission (restart Ticker)")
+
+            // Requesting access registers Ticker with macOS so it appears in the Screen Recording list.
+            let granted = CGRequestScreenCaptureAccess()
+            if granted {
+                quickPanelManager?.showWithStatusMessage("Screen Recording enabled. Restart Ticker.")
+                return
+            }
+
+            // If access is denied/already denied, deep-link once per launch so users land in the right pane.
+            if !didOpenScreenRecordingSettingsThisLaunch {
+                didOpenScreenRecordingSettingsThisLaunch = true
+                openScreenRecordingSystemSettings()
+            }
+            quickPanelManager?.showWithStatusMessage("Enable Screen Recording in System Settings, then restart Ticker")
             return
         }
 

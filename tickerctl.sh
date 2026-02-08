@@ -16,15 +16,19 @@ Commands:
   clean-derived-data    Delete repo-local Xcode DerivedData (fixes stale SPM artifacts)
   install-sparkle-tools  Install Sparkle CLI tools into ./tools/sparkle (from SwiftPM artifacts)
   build-dev            Build Debug app (unsigned)
-  run-dev              Build Debug + run (starts Vite dev server)
+  run-dev              Build Debug + run stable lane (starts Vite dev server)
+  run-dev-qa           Build Debug + run QA lane (separate bundle ID for TCC isolation)
   build-prod           Build Release app (unsigned, bundles web UI)
-  run-prod             Build Release + run (bundled web UI)
+  run-prod             Build Release + run stable lane (bundled web UI)
+  run-prod-qa          Build Release + run QA lane (bundled web UI)
   release-alpha        Build+sign+notarize+zip+Sparkle-sign (+ optional publish/appcast)
   reset-onboarding     Clear onboarding completion flag (shows onboarding on next launch)
   reset-proxy-soft     Clear Device Key but keep device_id (edits Application Support file)
   reset-proxy-hard     Delete device.json (new device_id on next launch)
-  reset-accessibility  Reset Accessibility permission (TCC) for Ticker
-  reset-screen-recording  Reset Screen Recording permission (TCC) for Ticker
+  reset-accessibility  Reset Accessibility permission (TCC) for stable lane bundle ID
+  reset-accessibility-qa  Reset Accessibility permission (TCC) for QA lane bundle ID
+  reset-screen-recording  Reset Screen Recording permission (TCC) for stable lane bundle ID
+  reset-screen-recording-qa  Reset Screen Recording permission (TCC) for QA lane bundle ID
   reset-proxy-url      Clear proxy URL override (UserDefaults)
   reset-diagnostics    Clear diagnostics opt-out (UserDefaults; defaults to ON)
   reset-all            Convenience reset (onboarding + proxy-hard + proxy-url + diagnostics)
@@ -57,6 +61,8 @@ Config (optional):
 
 Notes:
   - Dev/prod commands build unsigned (CODE_SIGNING_ALLOWED=NO).
+  - `run-dev`/`run-prod` use stable lane (`io.ticker.app` by default).
+  - `run-dev-qa`/`run-prod-qa` use QA lane (`io.ticker.app.qa` by default).
   - Sparkle update testing requires an older build installed in /Applications
     and a newer build published in the appcast.
   - release-alpha also uploads a stable-named zip asset (Ticker-alpha-latest.zip)
@@ -73,6 +79,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
 fi
 
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.app}"
+QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.app.qa}"
 TICKER_APP_SUPPORT_DIR="${TICKER_APP_SUPPORT_DIR:-$HOME/Library/Application Support/Ticker}"
 TICKER_DEVICE_JSON_PATH="${TICKER_DEVICE_JSON_PATH:-$TICKER_APP_SUPPORT_DIR/device.json}"
 
@@ -459,6 +466,10 @@ cmd_run_dev() {
   TICKER_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --dev
 }
 
+cmd_run_dev_qa() {
+  TICKER_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --dev --qa
+}
+
 cmd_build_prod() {
   echo "Building web assets…"
   build_web_assets
@@ -490,6 +501,10 @@ repair_release_swiftpm_artifacts_if_needed() {
 
 cmd_run_prod() {
   TICKER_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --prod
+}
+
+cmd_run_prod_qa() {
+  TICKER_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --prod --qa
 }
 
 cmd_clean_derived_data() {
@@ -1248,26 +1263,38 @@ cmd_reset_proxy_hard() {
   echo "Deleted. Relaunch Ticker to re-register."
 }
 
-cmd_reset_accessibility() {
+reset_tcc_permission() {
+  local service="$1"
+  local bundle_id="$2"
+  local description="$3"
+
   require_cmd tccutil
-  echo "Reset Accessibility permission for $APP_BUNDLE_ID."
-  if ! confirm_action "Run: tccutil reset Accessibility $APP_BUNDLE_ID ? [y/N] "; then
+  echo "Reset $description for $bundle_id."
+  if ! confirm_action "Run: tccutil reset $service $bundle_id ? [y/N] "; then
     echo "Canceled."
     return 0
   fi
-  tccutil reset Accessibility "$APP_BUNDLE_ID"
-  echo "Done. Relaunch Ticker and re-grant Accessibility when prompted."
+  tccutil reset "$service" "$bundle_id"
+}
+
+cmd_reset_accessibility() {
+  reset_tcc_permission "Accessibility" "$APP_BUNDLE_ID" "Accessibility permission (stable lane)"
+  echo "Done. Relaunch stable lane and re-grant Accessibility when prompted."
+}
+
+cmd_reset_accessibility_qa() {
+  reset_tcc_permission "Accessibility" "$QA_APP_BUNDLE_ID" "Accessibility permission (QA lane)"
+  echo "Done. Relaunch QA lane and re-grant Accessibility when prompted."
 }
 
 cmd_reset_screen_recording() {
-  require_cmd tccutil
-  echo "Reset Screen Recording permission for $APP_BUNDLE_ID."
-  if ! confirm_action "Run: tccutil reset ScreenCapture $APP_BUNDLE_ID ? [y/N] "; then
-    echo "Canceled."
-    return 0
-  fi
-  tccutil reset ScreenCapture "$APP_BUNDLE_ID"
-  echo "Done. Relaunch Ticker and re-grant Screen Recording when prompted."
+  reset_tcc_permission "ScreenCapture" "$APP_BUNDLE_ID" "Screen Recording permission (stable lane)"
+  echo "Done. Relaunch stable lane and re-grant Screen Recording when prompted."
+}
+
+cmd_reset_screen_recording_qa() {
+  reset_tcc_permission "ScreenCapture" "$QA_APP_BUNDLE_ID" "Screen Recording permission (QA lane)"
+  echo "Done. Relaunch QA lane and re-grant Screen Recording when prompted."
 }
 
 cmd_reset_proxy_url() {
@@ -1298,6 +1325,7 @@ cmd_reset_all() {
   cmd_reset_diagnostics
   echo "Done."
   echo "Optional: reset Accessibility via: ./tickerctl.sh reset-accessibility"
+  echo "Optional: reset QA Accessibility via: ./tickerctl.sh reset-accessibility-qa"
 }
 
 cmd_versions() {
@@ -1309,10 +1337,12 @@ cmd_versions() {
 cmd_menu() {
   PS3="Select an action: "
   select choice in \
-    "Build Debug (dev)" \
-    "Build + Run Debug (dev)" \
-    "Build Release (prod, unsigned)" \
-    "Build + Run Release (prod, unsigned)" \
+    "Build Debug (dev, stable lane)" \
+    "Build + Run Debug (dev, stable lane)" \
+    "Build + Run Debug (dev, QA lane)" \
+    "Build Release (prod, unsigned, stable lane)" \
+    "Build + Run Release (prod, stable lane)" \
+    "Build + Run Release (prod, QA lane)" \
     "Preflight (alpha): contracts + web typecheck + swift tests" \
     "Clean DerivedData (dev/prod + release)" \
     "Release (alpha): build+sign+notarize+zip+Sparkle-sign" \
@@ -1322,8 +1352,10 @@ cmd_menu() {
     "Reset: onboarding" \
     "Reset: proxy (soft)" \
     "Reset: proxy (hard)" \
-    "Reset: Accessibility permission" \
-    "Reset: Screen Recording permission" \
+    "Reset: Accessibility permission (stable lane)" \
+    "Reset: Accessibility permission (QA lane)" \
+    "Reset: Screen Recording permission (stable lane)" \
+    "Reset: Screen Recording permission (QA lane)" \
     "Reset: proxy URL override" \
     "Reset: diagnostics toggle" \
     "Reset: all (onboarding + proxy-hard + proxy-url + diagnostics)" \
@@ -1338,18 +1370,26 @@ cmd_menu() {
       break
       ;;
     3)
-      cmd_build_prod
+      cmd_run_dev_qa
       break
       ;;
     4)
-      cmd_run_prod
+      cmd_build_prod
       break
       ;;
     5)
-      cmd_preflight_alpha
+      cmd_run_prod
       break
       ;;
     6)
+      cmd_run_prod_qa
+      break
+      ;;
+    7)
+      cmd_preflight_alpha
+      break
+      ;;
+    8)
       echo "Clean which DerivedData?"
       select dd in \
         "Dev/Prod only (./.build/xcode)" \
@@ -1375,61 +1415,69 @@ cmd_menu() {
       done
       break
       ;;
-    7)
+    9)
       echo "Enter marketing version (e.g. 2025.12.1):"
       read -r v
       cmd_release_alpha --version "$v"
       break
       ;;
-    8)
+    10)
       echo "Enter marketing version (e.g. 2025.12.1):"
       read -r v
       cmd_release_alpha --version "$v" --promote
       break
       ;;
-    9)
+    11)
       echo "Enter marketing version (e.g. 2025.12.1):"
       read -r v
       cmd_release_alpha --version "$v" --skip-build --promote
       break
       ;;
-    10)
+    12)
       cmd_versions
       break
       ;;
-    11)
+    13)
       cmd_reset_onboarding
       break
       ;;
-    12)
+    14)
       cmd_reset_proxy_soft
       break
       ;;
-    13)
+    15)
       cmd_reset_proxy_hard
       break
       ;;
-    14)
+    16)
       cmd_reset_accessibility
       break
       ;;
-    15)
-      cmd_reset_screen_recording
-      break
-      ;;
-    16)
-      cmd_reset_proxy_url
-      break
-      ;;
     17)
-      cmd_reset_diagnostics
+      cmd_reset_accessibility_qa
       break
       ;;
     18)
+      cmd_reset_screen_recording
+      break
+      ;;
+    19)
+      cmd_reset_screen_recording_qa
+      break
+      ;;
+    20)
+      cmd_reset_proxy_url
+      break
+      ;;
+    21)
+      cmd_reset_diagnostics
+      break
+      ;;
+    22)
       cmd_reset_all
       break
       ;;
-    19) break ;;
+    23) break ;;
     *) echo "Invalid selection" ;;
     esac
   done
@@ -1450,14 +1498,18 @@ main() {
   install-sparkle-tools) cmd_install_sparkle_tools "$@" ;;
   build-dev) cmd_build_dev ;;
   run-dev) cmd_run_dev ;;
+  run-dev-qa) cmd_run_dev_qa ;;
   build-prod) cmd_build_prod ;;
   run-prod) cmd_run_prod ;;
+  run-prod-qa) cmd_run_prod_qa ;;
   release-alpha) cmd_release_alpha "$@" ;;
   reset-onboarding) cmd_reset_onboarding ;;
   reset-proxy-soft) cmd_reset_proxy_soft ;;
   reset-proxy-hard) cmd_reset_proxy_hard ;;
   reset-accessibility) cmd_reset_accessibility ;;
+  reset-accessibility-qa) cmd_reset_accessibility_qa ;;
   reset-screen-recording) cmd_reset_screen_recording ;;
+  reset-screen-recording-qa) cmd_reset_screen_recording_qa ;;
   reset-proxy-url) cmd_reset_proxy_url ;;
   reset-diagnostics) cmd_reset_diagnostics ;;
   reset-all) cmd_reset_all ;;

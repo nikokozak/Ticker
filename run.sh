@@ -4,16 +4,20 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ./run.sh [--dev|-d] [--prod|-p] [-h]
+Usage: ./run.sh [--dev|-d] [--prod|-p] [--qa|--stable] [-h]
 
   -d, --dev   (default) Build Debug + run Vite dev server (app loads http://localhost:5173)
   -p, --prod  Build Release + run bundled web UI (no dev server)
+      --qa    Run in QA lane (separate bundle ID / install path for TCC isolation)
+      --stable  Run in stable lane (default)
   -h          Show this help
 
 Notes:
   - This script builds an unsigned app (`CODE_SIGNING_ALLOWED=NO`) but will optionally
-    codesign the built .app if `SIGN_IDENTITY` is set (recommended so macOS permissions
-    like Accessibility/Screen Recording stick across rebuilds).
+    codesign the installed lane app if `SIGN_IDENTITY` is set (recommended so macOS
+    permissions like Accessibility/Screen Recording stick across rebuilds).
+  - Stable lane installs to `~/Applications/Ticker.app` by default.
+  - QA lane installs to `~/Applications/Ticker QA.app` by default.
   - Distribution builds should follow the signing/notarization runbook.
   - Override build output location with DERIVED_DATA_PATH (or TICKER_DERIVED_DATA_PATH), e.g.:
       DERIVED_DATA_PATH=/tmp/ticker-xcode-build ./run.sh --prod
@@ -29,8 +33,14 @@ fi
 DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-${TICKER_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}}"
 APP="$DERIVED_DATA_PATH/Build/Products"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.app}"
+QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.app.qa}"
+QA_APP_DISPLAY_NAME="${QA_APP_DISPLAY_NAME:-Ticker QA}"
+STABLE_APP_INSTALL_PATH="${STABLE_APP_INSTALL_PATH:-$HOME/Applications/Ticker.app}"
+QA_APP_INSTALL_PATH="${QA_APP_INSTALL_PATH:-$HOME/Applications/Ticker QA.app}"
 
 MODE="dev"
+LANE="stable"
 while [[ $# -gt 0 ]]; do
   case "$1" in
   -d | --dev)
@@ -39,6 +49,14 @@ while [[ $# -gt 0 ]]; do
     ;;
   -p | --prod)
     MODE="prod"
+    shift
+    ;;
+  --qa)
+    LANE="qa"
+    shift
+    ;;
+  --stable)
+    LANE="stable"
     shift
     ;;
   -h | --help)
@@ -53,6 +71,30 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+lane_bundle_id() {
+  if [[ "$LANE" == "qa" ]]; then
+    echo "$QA_APP_BUNDLE_ID"
+  else
+    echo "$APP_BUNDLE_ID"
+  fi
+}
+
+lane_display_name() {
+  if [[ "$LANE" == "qa" ]]; then
+    echo "$QA_APP_DISPLAY_NAME"
+  else
+    echo "Ticker"
+  fi
+}
+
+lane_install_path() {
+  if [[ "$LANE" == "qa" ]]; then
+    echo "$QA_APP_INSTALL_PATH"
+  else
+    echo "$STABLE_APP_INSTALL_PATH"
+  fi
+}
+
 codesign_app_if_configured() {
   local app_path="$1"
 
@@ -62,6 +104,7 @@ codesign_app_if_configured() {
 
   local identity="${SIGN_IDENTITY:-}"
   if [[ -z "$identity" ]]; then
+    echo "Warning: SIGN_IDENTITY is not set; TCC permissions may re-prompt across rebuilds." >&2
     return 0
   fi
 
@@ -88,6 +131,32 @@ codesign_app_if_configured() {
 
   # Best-effort verification (non-fatal).
   codesign --verify --deep "$app_path" >/dev/null 2>&1 || true
+}
+
+install_lane_app() {
+  local source_app="$1"
+  local target_app="$2"
+
+  if [[ ! -d "$source_app" ]]; then
+    echo "Error: built app not found at: $source_app" >&2
+    return 1
+  fi
+
+  if [[ -z "$target_app" || "$target_app" == "/" || "$target_app" == "$HOME" ]]; then
+    echo "Error: refusing to install app to unsafe path: '$target_app'" >&2
+    return 1
+  fi
+
+  local target_parent
+  target_parent="$(dirname "$target_app")"
+  mkdir -p "$target_parent"
+
+  if [[ -d "$target_app" ]]; then
+    rm -rf "$target_app"
+  fi
+
+  # Preserve bundle structure/metadata as-is.
+  ditto "$source_app" "$target_app"
 }
 
 resolve_package_dependencies_if_needed() {
@@ -132,6 +201,10 @@ build_app() {
     build_number="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
     extra_build_settings+=("CURRENT_PROJECT_VERSION=$build_number")
   fi
+  if [[ "$LANE" == "qa" ]]; then
+    extra_build_settings+=("PRODUCT_BUNDLE_IDENTIFIER=$QA_APP_BUNDLE_ID")
+    extra_build_settings+=("INFOPLIST_KEY_CFBundleDisplayName=$QA_APP_DISPLAY_NAME")
+  fi
 
   local log_path
   log_path="$(mktemp -t ticker-xcodebuild.XXXXXX.log)"
@@ -167,11 +240,15 @@ build_app() {
 }
 
 run_dev() {
-  local app_path="$APP/Debug/Ticker.app"
-  local bin_path="$app_path/Contents/MacOS/Ticker"
+  local built_app_path="$APP/Debug/Ticker.app"
+  local launch_app_path
+  launch_app_path="$(lane_install_path)"
+  local bin_path="$launch_app_path/Contents/MacOS/Ticker"
 
+  echo "Lane: $LANE (bundle id: $(lane_bundle_id), name: $(lane_display_name))"
   build_app "Debug"
-  codesign_app_if_configured "$app_path"
+  install_lane_app "$built_app_path" "$launch_app_path"
+  codesign_app_if_configured "$launch_app_path"
 
   echo "Cleaning up port 5173..."
   lsof -ti:5173 | xargs kill -9 2>/dev/null || true
@@ -185,16 +262,19 @@ run_dev() {
 
   if [[ ! -x "$bin_path" ]]; then
     echo "Error: expected app executable not found at: $bin_path" >&2
-    echo "Build output should be at: $app_path" >&2
+    echo "Build output should be at: $built_app_path" >&2
+    echo "Installed app should be at: $launch_app_path" >&2
     exit 1
   fi
 
-  echo "Running Ticker (dev)..."
+  echo "Running $(lane_display_name) (dev) from: $launch_app_path"
   "$bin_path"
 }
 
 run_prod() {
-  local app_path="$APP/Release/Ticker.app"
+  local built_app_path="$APP/Release/Ticker.app"
+  local launch_app_path
+  launch_app_path="$(lane_install_path)"
 
   echo "Building bundled Web assets..."
   if [[ ! -d "$ROOT_DIR/Web/node_modules" ]]; then
@@ -202,16 +282,18 @@ run_prod() {
   fi
   (cd "$ROOT_DIR/Web" && npm run build)
 
+  echo "Lane: $LANE (bundle id: $(lane_bundle_id), name: $(lane_display_name))"
   build_app "Release"
-  codesign_app_if_configured "$app_path"
+  install_lane_app "$built_app_path" "$launch_app_path"
+  codesign_app_if_configured "$launch_app_path"
 
-  if [[ ! -d "$app_path" ]]; then
-    echo "Error: expected app bundle not found at: $app_path" >&2
+  if [[ ! -d "$launch_app_path" ]]; then
+    echo "Error: expected installed app bundle not found at: $launch_app_path" >&2
     exit 1
   fi
 
-  echo "Launching Ticker (prod)..."
-  open "$app_path"
+  echo "Launching $(lane_display_name) (prod) from: $launch_app_path"
+  open "$launch_app_path"
 }
 
 case "$MODE" in
