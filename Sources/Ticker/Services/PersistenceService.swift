@@ -14,9 +14,8 @@ final class PersistenceService {
 #endif
     }
 
-    init() throws {
-        let fileManager = FileManager.default
-        let databaseURL = Self.databaseURL(fileManager: fileManager)
+    init(databaseURL: URL? = nil, fileManager: FileManager = .default) throws {
+        let databaseURL = databaseURL ?? Self.databaseURL(fileManager: fileManager)
         self.databaseURL = databaseURL
         self.didDatabaseExistOnInit = fileManager.fileExists(atPath: databaseURL.path)
 
@@ -481,42 +480,38 @@ final class PersistenceService {
     /// Also bumps the order of the trailing empty cell if one exists
     func getInsertionOrderForQuickPanel(streamId: UUID) throws -> Int {
         try dbQueue.write { db in
-            // Find the last cell - check if it's empty
-            let lastCell = try Row.fetchOne(db, sql: """
-                SELECT id, position, content
-                FROM cells
-                WHERE stream_id = ?
-                ORDER BY position DESC
-                LIMIT 1
-            """, arguments: [streamId.uuidString])
+            try getInsertionOrderForQuickPanel(streamId: streamId, insertionCount: 1, db: db)
+        }
+    }
 
-            guard let lastCell = lastCell else {
-                // No cells - start at 0
-                return 0
+    /// Insert a batch of Quick Panel cells atomically at the next insertion point.
+    /// Returns the persisted cells with finalized sequential order values.
+    func insertQuickPanelCells(streamId: UUID, cells: [Cell]) throws -> [Cell] {
+        guard !cells.isEmpty else { return [] }
+
+        return try dbQueue.write { db in
+            let insertionOrder = try getInsertionOrderForQuickPanel(
+                streamId: streamId,
+                insertionCount: cells.count,
+                db: db
+            )
+
+            var persisted: [Cell] = []
+            persisted.reserveCapacity(cells.count)
+
+            for (offset, baseCell) in cells.enumerated() {
+                var cell = baseCell
+                cell.order = insertionOrder + offset
+                try saveCell(cell, in: db, updateStreamTimestamp: false)
+                persisted.append(cell)
             }
 
-            let lastContent = lastCell["content"] as? String ?? ""
-            let lastOrder = lastCell["position"] as? Int ?? 0
+            try db.execute(
+                sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
+                arguments: [Date().timeIntervalSince1970, streamId.uuidString]
+            )
 
-            // Check if last cell is empty (no content or just empty HTML tags)
-            let trimmedContent = lastContent
-                .replacingOccurrences(of: "<p>", with: "")
-                .replacingOccurrences(of: "</p>", with: "")
-                .replacingOccurrences(of: "<br>", with: "")
-                .replacingOccurrences(of: "&nbsp;", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if trimmedContent.isEmpty {
-                // Last cell is empty - bump its order and insert at its old position
-                let lastCellId = lastCell["id"] as? String ?? ""
-                try db.execute(sql: """
-                    UPDATE cells SET position = position + 10 WHERE id = ?
-                """, arguments: [lastCellId])
-                return lastOrder
-            } else {
-                // Last cell has content - insert after it
-                return lastOrder + 1
-            }
+            return persisted
         }
     }
 
@@ -524,99 +519,161 @@ final class PersistenceService {
 
     func saveCell(_ cell: Cell) throws {
         try dbQueue.write { db in
-            let bindingJson: String?
-            if let binding = cell.sourceBinding {
-                bindingJson = String(data: try JSONEncoder().encode(binding), encoding: .utf8)
-            } else {
-                bindingJson = nil
-            }
+            try saveCell(cell, in: db, updateStreamTimestamp: true)
+        }
+    }
 
-            let metadataJson = "{}"  // Simplified for now
+    private func saveCell(_ cell: Cell, in db: Database, updateStreamTimestamp: Bool) throws {
+        let bindingJson: String?
+        if let binding = cell.sourceBinding {
+            bindingJson = String(data: try JSONEncoder().encode(binding), encoding: .utf8)
+        } else {
+            bindingJson = nil
+        }
 
-            // Encode modifier stack fields
-            let modifiersJson: String?
-            if let modifiers = cell.modifiers {
-                modifiersJson = String(data: try JSONEncoder().encode(modifiers), encoding: .utf8)
-            } else {
-                modifiersJson = nil
-            }
+        let metadataJson = "{}"  // Simplified for now
 
-            let versionsJson: String?
-            if let versions = cell.versions {
-                versionsJson = String(data: try JSONEncoder().encode(versions), encoding: .utf8)
-            } else {
-                versionsJson = nil
-            }
+        // Encode modifier stack fields
+        let modifiersJson: String?
+        if let modifiers = cell.modifiers {
+            modifiersJson = String(data: try JSONEncoder().encode(modifiers), encoding: .utf8)
+        } else {
+            modifiersJson = nil
+        }
 
-            let activeVersionIdStr = cell.activeVersionId?.uuidString
+        let versionsJson: String?
+        if let versions = cell.versions {
+            versionsJson = String(data: try JSONEncoder().encode(versions), encoding: .utf8)
+        } else {
+            versionsJson = nil
+        }
 
-            // Encode processing fields
-            let processingConfigJson: String?
-            if let processingConfig = cell.processingConfig {
-                processingConfigJson = String(data: try JSONEncoder().encode(processingConfig), encoding: .utf8)
-            } else {
-                processingConfigJson = nil
-            }
+        let activeVersionIdStr = cell.activeVersionId?.uuidString
 
-            let referencesJson: String?
-            if let references = cell.references {
-                referencesJson = String(data: try JSONEncoder().encode(references), encoding: .utf8)
-            } else {
-                referencesJson = nil
-            }
+        // Encode processing fields
+        let processingConfigJson: String?
+        if let processingConfig = cell.processingConfig {
+            processingConfigJson = String(data: try JSONEncoder().encode(processingConfig), encoding: .utf8)
+        } else {
+            processingConfigJson = nil
+        }
 
-            try db.execute(
-                sql: """
-                    INSERT INTO cells (id, stream_id, type, content, original_prompt, state, source_binding_json, metadata_json, created_at, updated_at, position, modifiers_json, versions_json, active_version_id, processing_config_json, references_json, block_name, source_app)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        content = excluded.content,
-                        original_prompt = CASE
-                            WHEN excluded.type = 'aiResponse' AND excluded.original_prompt IS NULL
-                            THEN cells.original_prompt
-                            ELSE excluded.original_prompt
-                        END,
-                        type = excluded.type,
-                        state = excluded.state,
-                        source_binding_json = excluded.source_binding_json,
-                        updated_at = excluded.updated_at,
-                        position = excluded.position,
-                        modifiers_json = excluded.modifiers_json,
-                        versions_json = excluded.versions_json,
-                        active_version_id = excluded.active_version_id,
-                        processing_config_json = excluded.processing_config_json,
-                        references_json = excluded.references_json,
-                        block_name = excluded.block_name,
-                        source_app = excluded.source_app
-                """,
-                arguments: [
-                    cell.id.uuidString,
-                    cell.streamId.uuidString,
-                    cell.type.rawValue,
-                    cell.content,
-                    cell.originalPrompt,
-                    "idle",
-                    bindingJson,
-                    metadataJson,
-                    cell.createdAt.timeIntervalSince1970,
-                    cell.updatedAt.timeIntervalSince1970,
-                    cell.order,
-                    modifiersJson,
-                    versionsJson,
-                    activeVersionIdStr,
-                    processingConfigJson,
-                    referencesJson,
-                    cell.blockName,
-                    cell.sourceApp
-                ]
-            )
+        let referencesJson: String?
+        if let references = cell.references {
+            referencesJson = String(data: try JSONEncoder().encode(references), encoding: .utf8)
+        } else {
+            referencesJson = nil
+        }
 
+        try db.execute(
+            sql: """
+                INSERT INTO cells (id, stream_id, type, content, original_prompt, state, source_binding_json, metadata_json, created_at, updated_at, position, modifiers_json, versions_json, active_version_id, processing_config_json, references_json, block_name, source_app)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    content = excluded.content,
+                    original_prompt = CASE
+                        WHEN excluded.type = 'aiResponse' AND excluded.original_prompt IS NULL
+                        THEN cells.original_prompt
+                        ELSE excluded.original_prompt
+                    END,
+                    type = excluded.type,
+                    state = excluded.state,
+                    source_binding_json = excluded.source_binding_json,
+                    updated_at = excluded.updated_at,
+                    position = excluded.position,
+                    modifiers_json = excluded.modifiers_json,
+                    versions_json = excluded.versions_json,
+                    active_version_id = excluded.active_version_id,
+                    processing_config_json = excluded.processing_config_json,
+                    references_json = excluded.references_json,
+                    block_name = excluded.block_name,
+                    source_app = excluded.source_app
+            """,
+            arguments: [
+                cell.id.uuidString,
+                cell.streamId.uuidString,
+                cell.type.rawValue,
+                cell.content,
+                cell.originalPrompt,
+                "idle",
+                bindingJson,
+                metadataJson,
+                cell.createdAt.timeIntervalSince1970,
+                cell.updatedAt.timeIntervalSince1970,
+                cell.order,
+                modifiersJson,
+                versionsJson,
+                activeVersionIdStr,
+                processingConfigJson,
+                referencesJson,
+                cell.blockName,
+                cell.sourceApp
+            ]
+        )
+
+        if updateStreamTimestamp {
             // Update stream's updated_at
             try db.execute(
                 sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
                 arguments: [Date().timeIntervalSince1970, cell.streamId.uuidString]
             )
         }
+    }
+
+    private func getInsertionOrderForQuickPanel(
+        streamId: UUID,
+        insertionCount: Int,
+        db: Database
+    ) throws -> Int {
+        precondition(insertionCount > 0)
+
+        struct LastQuickPanelCell: FetchableRecord, Decodable {
+            let id: String
+            let position: Int
+            let content: String
+        }
+
+        // Find the last cell - check if it's empty.
+        let lastCell = try LastQuickPanelCell.fetchOne(db, sql: """
+            SELECT id, position, content
+            FROM cells
+            WHERE stream_id = ?
+            ORDER BY position DESC
+            LIMIT 1
+        """, arguments: [streamId.uuidString])
+
+        guard let lastCell else {
+            // No cells - start at 0.
+            return 0
+        }
+
+        if isQuickPanelEmptyCellContent(lastCell.content) {
+            // Keep a trailing empty cell at the end by shifting it exactly by the insertion batch size.
+            try db.execute(
+                sql: "UPDATE cells SET position = position + ? WHERE id = ?",
+                arguments: [insertionCount, lastCell.id]
+            )
+            return lastCell.position
+        }
+
+        // Last cell has meaningful content - append after it.
+        return lastCell.position + 1
+    }
+
+    private func isQuickPanelEmptyCellContent(_ html: String) -> Bool {
+        // Images and other embedded media count as meaningful content even if text is empty.
+        let lowered = html.lowercased()
+        if lowered.contains("<img") || lowered.contains("<video") || lowered.contains("<audio")
+            || lowered.contains("<iframe") || lowered.contains("<object") || lowered.contains("<embed") {
+            return false
+        }
+
+        let textOnly = lowered
+            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return textOnly.isEmpty
     }
 
     /// Fetch a single cell's content by ID (used for asset cleanup)

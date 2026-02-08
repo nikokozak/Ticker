@@ -105,3 +105,134 @@ final class DeviceKeyServiceTests: XCTestCase {
     }
 }
 
+final class PersistenceServiceQuickPanelTests: XCTestCase {
+    func test_insertQuickPanelCells_insertsAdjacentPairBeforeTrailingEmptyCell() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Test Stream")
+            try service.saveStream(stream)
+
+            let leading = Cell(
+                streamId: stream.id,
+                content: "<p>Existing note</p>",
+                type: .text,
+                order: 0
+            )
+            let trailingEmpty = Cell(
+                streamId: stream.id,
+                content: "<p></p>",
+                type: .text,
+                order: 1
+            )
+
+            try service.saveCell(leading)
+            try service.saveCell(trailingEmpty)
+
+            let context = Cell(
+                streamId: stream.id,
+                content: "<p><img src=\"ticker-asset:///stream/s1.png\" alt=\"Screenshot\"></p>",
+                type: .quote,
+                order: 0
+            )
+            let note = Cell(
+                streamId: stream.id,
+                content: "<p>A quick note</p>",
+                type: .text,
+                order: 0
+            )
+
+            let inserted = try service.insertQuickPanelCells(streamId: stream.id, cells: [context, note])
+            XCTAssertEqual(inserted.count, 2)
+            XCTAssertEqual(inserted[0].order, 1)
+            XCTAssertEqual(inserted[1].order, 2)
+
+            guard let loaded = try service.loadStream(id: stream.id) else {
+                XCTFail("Expected stream to load")
+                return
+            }
+
+            let sorted = loaded.cells.sorted { $0.order < $1.order }
+            XCTAssertEqual(sorted.map(\.id), [leading.id, context.id, note.id, trailingEmpty.id])
+            XCTAssertEqual(sorted.map(\.order), [0, 1, 2, 3])
+        }
+    }
+
+    func test_insertQuickPanelCells_repeatedCapturesKeepEachPairAdjacent() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Repeated Captures")
+            try service.saveStream(stream)
+
+            let base = Cell(
+                streamId: stream.id,
+                content: "<p>Start</p>",
+                type: .text,
+                order: 0
+            )
+            let trailingEmpty = Cell(
+                streamId: stream.id,
+                content: "<p></p>",
+                type: .text,
+                order: 1
+            )
+            try service.saveCell(base)
+            try service.saveCell(trailingEmpty)
+
+            var capturePairs: [(quoteId: UUID, noteId: UUID)] = []
+
+            for idx in 0..<3 {
+                let quote = Cell(
+                    streamId: stream.id,
+                    content: "<p><img src=\"ticker-asset:///stream/capture-\(idx).png\" alt=\"Screenshot\"></p>",
+                    type: .quote,
+                    order: 0
+                )
+                let note = Cell(
+                    streamId: stream.id,
+                    content: "<p>Capture \(idx)</p>",
+                    type: .text,
+                    order: 0
+                )
+                let inserted = try service.insertQuickPanelCells(streamId: stream.id, cells: [quote, note])
+                XCTAssertEqual(inserted[0].order + 1, inserted[1].order)
+                capturePairs.append((quoteId: quote.id, noteId: note.id))
+            }
+
+            guard let loaded = try service.loadStream(id: stream.id) else {
+                XCTFail("Expected stream to load")
+                return
+            }
+
+            let sorted = loaded.cells.sorted { $0.order < $1.order }
+            let ordersById = Dictionary(uniqueKeysWithValues: sorted.map { ($0.id, $0.order) })
+
+            for pair in capturePairs {
+                guard let quoteOrder = ordersById[pair.quoteId], let noteOrder = ordersById[pair.noteId] else {
+                    XCTFail("Missing persisted capture pair")
+                    return
+                }
+                XCTAssertEqual(quoteOrder + 1, noteOrder)
+            }
+
+            XCTAssertEqual(sorted.last?.id, trailingEmpty.id)
+        }
+    }
+
+    private func withTempPersistenceService(_ body: (PersistenceService) throws -> Void) throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+
+        var service: PersistenceService? = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        defer {
+            service = nil
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        guard let service else {
+            XCTFail("Expected persistence service")
+            return
+        }
+
+        try body(service)
+    }
+}

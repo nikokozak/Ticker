@@ -391,20 +391,15 @@ final class QuickPanelManager: ObservableObject {
             // Get target stream (may create new one)
             let (streamId, isNewStream) = try getTargetStreamId()
 
-            // Get insertion order - inserts before trailing empty cell if one exists
-            // This bumps the empty cell's order, so we only call it once
-            var nextOrder = try persistence.getInsertionOrderForQuickPanel(streamId: streamId)
-
-            var cellsToAdd: [Cell] = []
+            var pendingCells: [Cell] = []
             var contextCellId: UUID?
+            var triggerAICellId: UUID?
 
             // 1. If we have context (selection or image), create a quote cell
             if let ctx = context, ctx.hasContent {
-                let contextCell = createContextCell(from: ctx, streamId: streamId, order: nextOrder)
-                cellsToAdd.append(contextCell)
+                let contextCell = createContextCell(from: ctx, streamId: streamId)
+                pendingCells.append(contextCell)
                 contextCellId = contextCell.id
-                try persistence.saveCell(contextCell)
-                nextOrder += 1
             }
 
             // 2. If we have input text
@@ -418,31 +413,25 @@ final class QuickPanelManager: ObservableObject {
                         content: "",  // Will be filled by AI
                         originalPrompt: trimmedInput,
                         type: .aiResponse,
-                        order: nextOrder,
+                        order: 0,  // Final order assigned atomically at persistence time.
                         references: contextCellId.map { [$0] }
                     )
-                    cellsToAdd.append(aiCell)
-                    try persistence.saveCell(aiCell)
-
-                    // Notify frontend to trigger AI on this cell
-                    notifyFrontend(streamId: streamId, cells: cellsToAdd, triggerAI: aiCell.id, isNewStream: isNewStream)
+                    pendingCells.append(aiCell)
+                    triggerAICellId = aiCell.id
                 } else {
                     // Create plain text cell
                     let textCell = Cell(
                         streamId: streamId,
                         content: "<p>\(escapeHtml(trimmedInput))</p>",
                         type: .text,
-                        order: nextOrder
+                        order: 0  // Final order assigned atomically at persistence time.
                     )
-                    cellsToAdd.append(textCell)
-                    try persistence.saveCell(textCell)
-
-                    notifyFrontend(streamId: streamId, cells: cellsToAdd, triggerAI: nil, isNewStream: isNewStream)
+                    pendingCells.append(textCell)
                 }
-            } else {
-                // Context only - just notify
-                notifyFrontend(streamId: streamId, cells: cellsToAdd, triggerAI: nil, isNewStream: isNewStream)
             }
+
+            let persistedCells = try persistence.insertQuickPanelCells(streamId: streamId, cells: pendingCells)
+            notifyFrontend(streamId: streamId, cells: persistedCells, triggerAI: triggerAICellId, isNewStream: isNewStream)
 
             // Success - hide panel
             hide()
@@ -514,7 +503,7 @@ final class QuickPanelManager: ObservableObject {
     }
 
     /// Create a quote cell from captured context
-    private func createContextCell(from ctx: QuickPanelContext, streamId: UUID, order: Int) -> Cell {
+    private func createContextCell(from ctx: QuickPanelContext, streamId: UUID) -> Cell {
         var content = ""
 
         // Build source attribution: "App — Window Title" or just "App"
@@ -550,7 +539,7 @@ final class QuickPanelManager: ObservableObject {
             streamId: streamId,
             content: content,
             type: .quote,
-            order: order,
+            order: 0,  // Final order assigned atomically at persistence time.
             sourceApp: ctx.activeApp
         )
     }
