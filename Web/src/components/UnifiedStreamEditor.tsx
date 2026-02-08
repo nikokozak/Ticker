@@ -19,6 +19,7 @@ import { stripHtml, extractImages, buildImageBlock, extractImageURLs } from '../
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { isCellNodeEmpty } from '../extensions/cellEmpty';
 import { filterReferenceSuggestionCells } from '../utils/referenceSuggestionCells';
+import { hasInternalCellDragType } from '../utils/cellDrag';
 import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 /** Save debounce delay in ms - matches Cell component */
@@ -847,6 +848,20 @@ export function UnifiedStreamEditor({
         blur: () => {
           flushPendingSave();
           return false;
+        },
+        dragover: (_view, event) => {
+          if (!hasInternalCellDragType((event as DragEvent).dataTransfer)) return false;
+          event.preventDefault();
+          return true;
+        },
+        drop: (_view, event) => {
+          const dragEvent = event as DragEvent;
+          const isInternalDrop = hasInternalCellDragType(dragEvent.dataTransfer);
+          const isReordering = useBlockStore.getState().isReordering;
+          if (!isInternalDrop && !isReordering) return false;
+          dragEvent.preventDefault();
+          dragEvent.stopPropagation();
+          return true;
         },
       },
     },
