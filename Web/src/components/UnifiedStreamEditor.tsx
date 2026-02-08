@@ -1032,23 +1032,41 @@ export function UnifiedStreamEditor({
     for (const cell of cells) {
       const normalizedContent = cell.content && cell.content.trim().length > 0 ? cell.content : '<p></p>';
 
-      addBlock({
-        id: cell.id,
-        streamId: cell.streamId,
-        content: normalizedContent,
-        type: cell.type,
-        order: cell.order,
-        sourceBinding: cell.sourceBinding || null,
-        originalPrompt: cell.originalPrompt,
-        modelId: cell.modelId,
-        references: cell.references,
-        sourceApp: cell.sourceApp,
-        blockName: cell.blockName,
-        processingConfig: cell.processingConfig,
-        modifiers: cell.modifiers,
-        createdAt: cell.createdAt || new Date().toISOString(),
-        updatedAt: cell.updatedAt || new Date().toISOString(),
-      });
+      const existing = useBlockStore.getState().getBlock(cell.id);
+      if (!existing) {
+        addBlock({
+          id: cell.id,
+          streamId: cell.streamId,
+          content: normalizedContent,
+          type: cell.type,
+          order: cell.order,
+          sourceBinding: cell.sourceBinding || null,
+          originalPrompt: cell.originalPrompt,
+          modelId: cell.modelId,
+          references: cell.references,
+          sourceApp: cell.sourceApp,
+          blockName: cell.blockName,
+          processingConfig: cell.processingConfig,
+          modifiers: cell.modifiers,
+          createdAt: cell.createdAt || new Date().toISOString(),
+          updatedAt: cell.updatedAt || new Date().toISOString(),
+        });
+      } else {
+        // If handleUpdate self-healed this cell first, enrich it with full metadata
+        // without inserting a duplicate ID into blockOrder.
+        updateBlock(cell.id, {
+          content: normalizedContent,
+          type: cell.type,
+          sourceBinding: cell.sourceBinding || null,
+          originalPrompt: cell.originalPrompt,
+          modelId: cell.modelId,
+          references: cell.references,
+          sourceApp: cell.sourceApp,
+          blockName: cell.blockName,
+          processingConfig: cell.processingConfig,
+          modifiers: cell.modifiers,
+        });
+      }
 
       // Add to baseline so we don't trigger redundant saves.
       // IMPORTANT: use the store's post-insert order (blockStore renormalizes orders),
@@ -1058,12 +1076,13 @@ export function UnifiedStreamEditor({
         content: normalizedContent,
         order: inserted?.order ?? cell.order,
       });
+      pendingSavesRef.current.delete(cell.id);
     }
 
     if (IS_DEV) {
       debugLog('[UnifiedStreamEditor] insertCells: inserted cells', { count: cells.length });
     }
-  }, [editor, addBlock]);
+  }, [editor, addBlock, updateBlock]);
 
   /**
    * Insert an image at the current cursor position.

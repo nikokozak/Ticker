@@ -2319,17 +2319,12 @@ body {
   transition: background-color 0.1s ease;
 }
 
-.reference-suggestion-item:hover,
-.reference-suggestion-item--selected {
-  background: var(--color-surface);
-}
-
-.reference-suggestion-item--selected {
+.reference-suggestion-item--active {
   background: var(--color-text);
   color: var(--color-bg);
 }
 
-.reference-suggestion-item--selected .reference-suggestion-id {
+.reference-suggestion-item--active .reference-suggestion-id {
   color: rgba(255, 255, 255, 0.7);
 }
 

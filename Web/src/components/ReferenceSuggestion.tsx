@@ -25,6 +25,8 @@ interface SuggestionListRef {
 const SuggestionList = forwardRef<SuggestionListRef, SuggestionListProps>(
   ({ items, command }, ref) => {
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+    const [keyboardPriority, setKeyboardPriority] = useState(false);
 
     const selectItem = (index: number) => {
       const item = items[index];
@@ -33,30 +35,38 @@ const SuggestionList = forwardRef<SuggestionListRef, SuggestionListProps>(
       }
     };
 
+    const activeIndex = keyboardPriority ? selectedIndex : (hoveredIndex ?? selectedIndex);
+
     useEffect(() => {
       setSelectedIndex(0);
+      setHoveredIndex(null);
+      setKeyboardPriority(false);
     }, [items]);
 
     useImperativeHandle(ref, () => ({
       onKeyDown: (event: KeyboardEvent) => {
+        if (items.length === 0) return false;
+
         if (event.key === 'ArrowUp') {
           setSelectedIndex((prev) => (prev + items.length - 1) % items.length);
+          setKeyboardPriority(true);
           return true;
         }
 
         if (event.key === 'ArrowDown') {
           setSelectedIndex((prev) => (prev + 1) % items.length);
+          setKeyboardPriority(true);
           return true;
         }
 
         if (event.key === 'Enter') {
-          selectItem(selectedIndex);
+          selectItem(activeIndex);
           return true;
         }
 
         return false;
       },
-    }));
+    }), [items.length, activeIndex]);
 
     if (items.length === 0) {
       return (
@@ -74,9 +84,23 @@ const SuggestionList = forwardRef<SuggestionListRef, SuggestionListProps>(
           <button
             key={item.id}
             className={`reference-suggestion-item ${
-              index === selectedIndex ? 'reference-suggestion-item--selected' : ''
+              index === activeIndex ? 'reference-suggestion-item--active' : ''
             }`}
+            onMouseEnter={() => {
+              setHoveredIndex(index);
+            }}
+            onMouseMove={() => {
+              setHoveredIndex(index);
+              if (keyboardPriority) {
+                setKeyboardPriority(false);
+              }
+            }}
+            onMouseLeave={() => {
+              setHoveredIndex((prev) => (prev === index ? null : prev));
+            }}
             onClick={() => selectItem(index)}
+            type="button"
+            aria-selected={index === activeIndex}
           >
             <span className="reference-suggestion-label">{item.label}</span>
             <span className="reference-suggestion-id">@block-{item.shortId}</span>
@@ -123,6 +147,10 @@ export function createReferenceSuggestion(
         })
         // Sort by order to maintain document order
         .sort((a, b) => a.order - b.order)
+        // Guard against duplicated IDs in store ordering.
+        .filter((cell, index, sorted) =>
+          sorted.findIndex((candidate) => candidate.id === cell.id) === index
+        )
         .map((cell) => {
           const label = deriveCellTitle(cell);
 
