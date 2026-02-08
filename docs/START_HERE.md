@@ -50,12 +50,23 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 Preferred entry point: `./tickerctl.sh` (menu + scripted commands).
 
 Common flows:
-- Dev (Debug + Vite): `./tickerctl.sh run-dev`
-- Prod-ish (Release + bundled web): `./tickerctl.sh run-prod`
+- Dev (Debug + Vite, stable lane): `./tickerctl.sh run-dev`
+- Dev (Debug + Vite, QA lane): `./tickerctl.sh run-dev-qa`
+- Prod-ish (Release + bundled web, stable lane): `./tickerctl.sh run-prod`
+- Prod-ish (Release + bundled web, QA lane): `./tickerctl.sh run-prod-qa`
+
+Permission debugging note:
+- Stable lane uses bundle ID `io.ticker.app` (default).
+- QA lane uses bundle ID `io.ticker.app.qa` (default) so TCC resets don't disrupt stable daily-dev permissions.
+- Reset only the lane you are testing:
+  - `./tickerctl.sh reset-accessibility` / `./tickerctl.sh reset-screen-recording`
+  - `./tickerctl.sh reset-accessibility-qa` / `./tickerctl.sh reset-screen-recording-qa`
 
 Legacy runner (still supported):
 - Dev: `./run.sh --dev`
+- Dev (QA lane): `./run.sh --dev --qa`
 - Prod: `./run.sh --prod`
+- Prod (QA lane): `./run.sh --prod --qa`
 
 If you hit SwiftPM/Sparkle artifact issues, run:
 - `./tickerctl.sh clean-derived-data -y`
