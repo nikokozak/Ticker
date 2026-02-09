@@ -539,10 +539,11 @@ body {
 }
 
 .stream-content {
+  --stream-end-scroll-space: clamp(180px, 45vh, 520px);
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xxl) var(--spacing-xxl);
+  padding: var(--spacing-md) var(--spacing-xl) calc(var(--spacing-xxl) + var(--stream-end-scroll-space)) var(--spacing-xxl);
 }
 
 /* ==================== Block Wrapper ==================== */
@@ -2986,7 +2987,7 @@ body {
    ============================================ */
 
 .unified-editor-container {
-  padding: var(--spacing-lg);
+  padding: var(--spacing-lg) var(--spacing-lg) calc(var(--spacing-lg) + var(--stream-end-scroll-space)) var(--spacing-lg);
 }
 
 .unified-editor-content {
