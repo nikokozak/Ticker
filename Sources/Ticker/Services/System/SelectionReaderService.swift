@@ -281,8 +281,8 @@ struct QuickPanelContext {
     let panelPosition: CGPoint
     /// Clipboard image data (if no text selection and clipboard has image)
     let clipboardImage: Data?
-    /// True only when the image was captured via Ticker's screenshot hotkey (Cmd+;).
-    /// Used for UI styling (avoid transient "toast" messages).
+    /// True only for explicit app-initiated screenshot mode (currently deprecated).
+    /// Clipboard-derived images should keep this false.
     let isScreenshot: Bool
 
     var hasSelection: Bool {

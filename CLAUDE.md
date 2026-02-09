@@ -272,7 +272,7 @@ Global capture panel accessible via **Cmd+L** from any app. Captures selected te
 
 **Hotkeys:**
 - `Cmd+L` — Toggle Quick Panel (captures selection before opening)
-- `Cmd+;` — Screenshot mode (triggers screencapture, then opens panel)
+- `Cmd+;` — Deprecated screenshot hotkey (shows guidance to use macOS screenshot-to-clipboard + `Cmd+L`)
 
 **Input Modes:**
 | Context | Action | Result |
