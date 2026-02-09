@@ -59,8 +59,8 @@ Permission debugging note:
 - Stable lane uses bundle ID `io.ticker.app` (default).
 - QA lane uses bundle ID `io.ticker.app.qa` (default) so TCC resets don't disrupt stable daily-dev permissions.
 - Reset only the lane you are testing:
-  - `./tickerctl.sh reset-accessibility` / `./tickerctl.sh reset-screen-recording`
-  - `./tickerctl.sh reset-accessibility-qa` / `./tickerctl.sh reset-screen-recording-qa`
+  - `./tickerctl.sh reset-accessibility`
+  - `./tickerctl.sh reset-accessibility-qa`
 
 Legacy runner (still supported):
 - Dev: `./run.sh --dev`

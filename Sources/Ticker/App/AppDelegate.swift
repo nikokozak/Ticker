@@ -33,7 +33,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // Quick Panel services
     private var hotkeyService: HotkeyService?
     private var quickPanelManager: QuickPanelManager?
-    private var didOpenScreenRecordingSettingsThisLaunch = false
 
     // Sparkle updater (lives for app lifetime)
     private let updaterController = SPUStandardUpdaterController(
@@ -350,10 +349,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.triggerQuickPanelToggle()
         }
 
-        // Register Screenshot hotkey (Cmd+;)
+        // Register deprecated screenshot hotkey (Cmd+;).
+        // We keep the binding for discoverability while app-initiated capture is disabled.
         hotkeyService?.register(config: .screenshot) { [weak self] in
             Task { @MainActor in
-                self?.captureScreenshot()
+                self?.handleDeprecatedScreenshotHotkey()
             }
         }
 
@@ -365,78 +365,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func openScreenRecordingSystemSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
-            return
-        }
-        _ = NSWorkspace.shared.open(url)
-    }
-
-    /// Capture screenshot using system tool, then show Quick Panel
+    /// Deprecated until we migrate to a Sequoia-style picker flow.
+    /// Users can still attach screenshots by capturing to clipboard with macOS, then pressing Cmd+L.
     @MainActor
-    private func captureScreenshot() {
-        // Screen recording permission is required for capturing other apps' windows.
-        // Without it, macOS may redact capture output (e.g., Desktop only).
-        if !CGPreflightScreenCaptureAccess() {
-            DebugLog.log("[Screenshot] Screen recording permission missing")
-
-            // Requesting access registers Ticker with macOS so it appears in the Screen Recording list.
-            let granted = CGRequestScreenCaptureAccess()
-            if granted {
-                quickPanelManager?.showWithStatusMessage("Screen Recording enabled. Restart Ticker.")
-                return
-            }
-
-            // If access is denied/already denied, deep-link once per launch so users land in the right pane.
-            if !didOpenScreenRecordingSettingsThisLaunch {
-                didOpenScreenRecordingSettingsThisLaunch = true
-                openScreenRecordingSystemSettings()
-            }
-            quickPanelManager?.showWithStatusMessage("Enable Screen Recording in System Settings, then restart Ticker")
-            return
-        }
-
-        let pasteboardChangeCountBefore = ClipboardService.changeCount()
-
-        // Use screencapture to capture to clipboard
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = ["-ic"]  // Interactive, clipboard
-
-        process.terminationHandler = { [weak self] terminatedProcess in
-            Task { @MainActor in
-                // Only show panel if capture succeeded (exit code 0)
-                // User cancellation (ESC) returns exit code 1
-                guard terminatedProcess.terminationStatus == 0 else {
-                    DebugLog.log("[Screenshot] Capture cancelled or failed (exit code: \(terminatedProcess.terminationStatus))")
-                    return
-                }
-
-                // Short delay to allow clipboard to update
-                try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1s
-
-                // Ensure the clipboard actually changed; otherwise we may be reading a stale image.
-                let pasteboardChangeCountAfter = ClipboardService.changeCount()
-                guard pasteboardChangeCountAfter != pasteboardChangeCountBefore else {
-                    DebugLog.log("[Screenshot] Clipboard did not change after capture; aborting attach")
-                    self?.quickPanelManager?.showWithStatusMessage("Screenshot didn't reach clipboard")
-                    return
-                }
-
-                // Verify clipboard actually has an image before showing panel
-                guard ClipboardService.hasImage() else {
-                    DebugLog.log("[Screenshot] No image in clipboard after capture")
-                    return
-                }
-
-                self?.quickPanelManager?.showAfterScreenshot()
-            }
-        }
-
-        do {
-            try process.run()
-        } catch {
-            DebugLog.log("[Screenshot] Failed to run screencapture (\(DebugLog.errorSummary(error)))")
-        }
+    private func handleDeprecatedScreenshotHotkey() {
+        quickPanelManager?.showWithStatusMessage(
+            "Screenshot mode is deprecated. Use macOS screenshot shortcuts, then press Cmd+L."
+        )
     }
 }
