@@ -1,7 +1,7 @@
 import { ReactRenderer } from '@tiptap/react';
 import tippy, { Instance as TippyInstance } from 'tippy.js';
 import { SuggestionOptions, SuggestionProps } from '@tiptap/suggestion';
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Cell } from '../types/models';
 import { getShortId } from '../utils/references';
 import { deriveCellTitle } from '../utils/cellTitle';
@@ -25,6 +25,9 @@ interface SuggestionListRef {
 const SuggestionList = forwardRef<SuggestionListRef, SuggestionListProps>(
   ({ items, command }, ref) => {
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+    const [keyboardPriority, setKeyboardPriority] = useState(false);
+    const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
     const selectItem = (index: number) => {
       const item = items[index];
@@ -33,30 +36,46 @@ const SuggestionList = forwardRef<SuggestionListRef, SuggestionListProps>(
       }
     };
 
+    const activeIndex = keyboardPriority ? selectedIndex : (hoveredIndex ?? selectedIndex);
+
     useEffect(() => {
       setSelectedIndex(0);
+      setHoveredIndex(null);
+      setKeyboardPriority(false);
+      itemRefs.current = itemRefs.current.slice(0, items.length);
     }, [items]);
+
+    useEffect(() => {
+      if (!keyboardPriority) return;
+      const activeElement = itemRefs.current[activeIndex];
+      if (!activeElement) return;
+      activeElement.scrollIntoView({ block: 'nearest' });
+    }, [keyboardPriority, activeIndex]);
 
     useImperativeHandle(ref, () => ({
       onKeyDown: (event: KeyboardEvent) => {
+        if (items.length === 0) return false;
+
         if (event.key === 'ArrowUp') {
           setSelectedIndex((prev) => (prev + items.length - 1) % items.length);
+          setKeyboardPriority(true);
           return true;
         }
 
         if (event.key === 'ArrowDown') {
           setSelectedIndex((prev) => (prev + 1) % items.length);
+          setKeyboardPriority(true);
           return true;
         }
 
         if (event.key === 'Enter') {
-          selectItem(selectedIndex);
+          selectItem(activeIndex);
           return true;
         }
 
         return false;
       },
-    }));
+    }), [items.length, activeIndex]);
 
     if (items.length === 0) {
       return (
@@ -73,10 +92,27 @@ const SuggestionList = forwardRef<SuggestionListRef, SuggestionListProps>(
         {items.map((item, index) => (
           <button
             key={item.id}
+            ref={(element) => {
+              itemRefs.current[index] = element;
+            }}
             className={`reference-suggestion-item ${
-              index === selectedIndex ? 'reference-suggestion-item--selected' : ''
+              index === activeIndex ? 'reference-suggestion-item--active' : ''
             }`}
+            onMouseEnter={() => {
+              setHoveredIndex(index);
+            }}
+            onMouseMove={() => {
+              setHoveredIndex(index);
+              if (keyboardPriority) {
+                setKeyboardPriority(false);
+              }
+            }}
+            onMouseLeave={() => {
+              setHoveredIndex((prev) => (prev === index ? null : prev));
+            }}
             onClick={() => selectItem(index)}
+            type="button"
+            aria-selected={index === activeIndex}
           >
             <span className="reference-suggestion-label">{item.label}</span>
             <span className="reference-suggestion-id">@block-{item.shortId}</span>
@@ -123,6 +159,10 @@ export function createReferenceSuggestion(
         })
         // Sort by order to maintain document order
         .sort((a, b) => a.order - b.order)
+        // Guard against duplicated IDs in store ordering.
+        .filter((cell, index, sorted) =>
+          sorted.findIndex((candidate) => candidate.id === cell.id) === index
+        )
         .map((cell) => {
           const label = deriveCellTitle(cell);
 

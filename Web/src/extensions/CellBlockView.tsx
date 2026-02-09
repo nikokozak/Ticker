@@ -6,6 +6,7 @@ import { useBlockStore } from '../store/blockStore';
 import { bridge } from '../types';
 import { CellOverlay } from '../components/CellOverlay';
 import { buildImageBlock, extractImageURLs, extractImages, stripHtml } from '../utils/html';
+import { INTERNAL_CELL_DRAG_MIME, INTERNAL_CELL_DRAG_TEXT } from '../utils/cellDrag';
 import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 // Global drag state to coordinate between CellBlockViews
@@ -395,9 +396,10 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
     lastPointerY = e.clientY;
 
     // WKWebView/WebKit often requires setData to treat the gesture as a "real" drag.
-    // Legacy `BlockWrapper` does this; without it, drop/dragend can be flaky.
+    // Use an internal MIME marker + opaque text token so failed drops can't inject UUIDs.
     try {
-      e.dataTransfer.setData('text/plain', id);
+      e.dataTransfer.setData(INTERNAL_CELL_DRAG_MIME, id);
+      e.dataTransfer.setData('text/plain', INTERNAL_CELL_DRAG_TEXT);
     } catch {
       // ignore
     }

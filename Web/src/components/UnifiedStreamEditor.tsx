@@ -9,6 +9,8 @@ import { CellBlock } from '../extensions/CellBlock';
 import { CellClipboard } from '../extensions/CellClipboard';
 import { CellKeymap, CellKeymapCallbacks } from '../extensions/CellKeymap';
 import { SidePanel } from './SidePanel';
+import { ReferencePreview } from './ReferencePreview';
+import { createReferenceSuggestion } from './ReferenceSuggestion';
 import { useBlockStore } from '../store/blockStore';
 import { Editor } from '@tiptap/core';
 import { DOMSerializer, DOMParser, Node as ProseMirrorNode } from '@tiptap/pm/model';
@@ -16,6 +18,8 @@ import { Selection, NodeSelection } from '@tiptap/pm/state';
 import { stripHtml, extractImages, buildImageBlock, extractImageURLs } from '../utils/html';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { isCellNodeEmpty } from '../extensions/cellEmpty';
+import { filterReferenceSuggestionCells } from '../utils/referenceSuggestionCells';
+import { hasInternalCellDragType } from '../utils/cellDrag';
 import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 /** Save debounce delay in ms - matches Cell component */
@@ -263,6 +267,22 @@ export function UnifiedStreamEditor({
   }, [stream.id, stream.cells]);
 
   const initialHtml = useMemo(() => buildHtmlFromCells(initialCells), [initialCells]);
+
+  // Reference suggestion config (shared with legacy CellEditor/PromptEditor).
+  // NOTE: Use store.getState() to avoid subscribing UnifiedStreamEditor to per-keystroke store churn.
+  const getCellsForReferenceSuggestion = useMemo(() => {
+    return (): Cell[] => {
+      const store = useBlockStore.getState();
+      const focusedId = store.focusedBlockId;
+      const blocks = store.getBlocksArray();
+      return filterReferenceSuggestionCells(blocks, focusedId);
+    };
+  }, []);
+
+  const referenceSuggestionConfig = useMemo(
+    () => createReferenceSuggestion(getCellsForReferenceSuggestion),
+    [getCellsForReferenceSuggestion]
+  );
 
   // Keep streamIdRef in sync
   useEffect(() => {
@@ -813,6 +833,7 @@ export function UnifiedStreamEditor({
         renderLabel({ node }) {
           return `@block-${node.attrs.shortId ?? node.attrs.id?.substring(0, 4).toLowerCase() ?? '????'}`;
         },
+        suggestion: referenceSuggestionConfig,
       }),
     ],
     content: initialHtml,
@@ -827,6 +848,20 @@ export function UnifiedStreamEditor({
         blur: () => {
           flushPendingSave();
           return false;
+        },
+        dragover: (_view, event) => {
+          if (!hasInternalCellDragType((event as DragEvent).dataTransfer)) return false;
+          event.preventDefault();
+          return true;
+        },
+        drop: (_view, event) => {
+          const dragEvent = event as DragEvent;
+          const isInternalDrop = hasInternalCellDragType(dragEvent.dataTransfer);
+          const isReordering = useBlockStore.getState().isReordering;
+          if (!isInternalDrop && !isReordering) return false;
+          dragEvent.preventDefault();
+          dragEvent.stopPropagation();
+          return true;
         },
       },
     },
@@ -847,6 +882,75 @@ export function UnifiedStreamEditor({
       }
     },
   });
+
+  /**
+   * Scroll and focus a target cell by ID.
+   * Used by side panel navigation and @reference click/hover UX.
+   */
+  const scrollToCell = useCallback((cellId: string) => {
+    if (!editor) return;
+
+    const result = findCellBlockById(editor.state.doc, cellId);
+    if (!result) return;
+
+    // Scroll + place selection at the start of the cell content.
+    const cellContentStart = result.pos + 1;
+    const sel = Selection.findFrom(editor.state.doc.resolve(cellContentStart), 1, true);
+    if (!sel) return;
+    editor.view.dispatch(editor.state.tr.setSelection(sel).scrollIntoView());
+    editor.view.focus();
+
+    // Highlight the navigated-to cell wrapper (reuse legacy highlight CSS).
+    const el = document.querySelector(`[data-cell-id="${cellId}"]`);
+    if (!el) return;
+    el.classList.add('block-wrapper--highlighted');
+    window.setTimeout(() => {
+      el.classList.remove('block-wrapper--highlighted');
+    }, 2000);
+  }, [editor]);
+
+  /**
+   * Handle clicks on inline cell references (TipTap mention spans).
+   * Mirrors legacy behavior from Cell.tsx.
+   */
+  const handleReferenceClick = useCallback((e: React.MouseEvent) => {
+    // Only handle plain left-clicks; let modified clicks behave normally.
+    const isPlainPrimaryClick =
+      e.button === 0 &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.shiftKey;
+    if (!isPlainPrimaryClick) return;
+
+    const target = e.target as HTMLElement;
+    if (!target) return;
+
+    // PromptEditor has its own editing semantics; don't hijack mention clicks there.
+    if (target.closest('.prompt-editor-content')) return;
+
+    // Check if clicked on a cell-reference element (TipTap mention).
+    if (!(target.classList.contains('cell-reference') || target.closest('.cell-reference'))) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const refElement = target.classList.contains('cell-reference')
+      ? target
+      : target.closest('.cell-reference');
+    if (!refElement) return;
+
+    // TipTap mention stores identifier in data-id attribute.
+    const refId = refElement.getAttribute('data-id');
+    if (!refId) return;
+
+    const referencedCell = useBlockStore.getState().getBlockByRef(refId);
+    if (!referencedCell) return;
+
+    scrollToCell(referencedCell.id);
+  }, [scrollToCell]);
 
   /**
    * Replace the HTML content of a cell in the TipTap document.
@@ -943,23 +1047,41 @@ export function UnifiedStreamEditor({
     for (const cell of cells) {
       const normalizedContent = cell.content && cell.content.trim().length > 0 ? cell.content : '<p></p>';
 
-      addBlock({
-        id: cell.id,
-        streamId: cell.streamId,
-        content: normalizedContent,
-        type: cell.type,
-        order: cell.order,
-        sourceBinding: cell.sourceBinding || null,
-        originalPrompt: cell.originalPrompt,
-        modelId: cell.modelId,
-        references: cell.references,
-        sourceApp: cell.sourceApp,
-        blockName: cell.blockName,
-        processingConfig: cell.processingConfig,
-        modifiers: cell.modifiers,
-        createdAt: cell.createdAt || new Date().toISOString(),
-        updatedAt: cell.updatedAt || new Date().toISOString(),
-      });
+      const existing = useBlockStore.getState().getBlock(cell.id);
+      if (!existing) {
+        addBlock({
+          id: cell.id,
+          streamId: cell.streamId,
+          content: normalizedContent,
+          type: cell.type,
+          order: cell.order,
+          sourceBinding: cell.sourceBinding || null,
+          originalPrompt: cell.originalPrompt,
+          modelId: cell.modelId,
+          references: cell.references,
+          sourceApp: cell.sourceApp,
+          blockName: cell.blockName,
+          processingConfig: cell.processingConfig,
+          modifiers: cell.modifiers,
+          createdAt: cell.createdAt || new Date().toISOString(),
+          updatedAt: cell.updatedAt || new Date().toISOString(),
+        });
+      } else {
+        // If handleUpdate self-healed this cell first, enrich it with full metadata
+        // without inserting a duplicate ID into blockOrder.
+        updateBlock(cell.id, {
+          content: normalizedContent,
+          type: cell.type,
+          sourceBinding: cell.sourceBinding || null,
+          originalPrompt: cell.originalPrompt,
+          modelId: cell.modelId,
+          references: cell.references,
+          sourceApp: cell.sourceApp,
+          blockName: cell.blockName,
+          processingConfig: cell.processingConfig,
+          modifiers: cell.modifiers,
+        });
+      }
 
       // Add to baseline so we don't trigger redundant saves.
       // IMPORTANT: use the store's post-insert order (blockStore renormalizes orders),
@@ -969,12 +1091,13 @@ export function UnifiedStreamEditor({
         content: normalizedContent,
         order: inserted?.order ?? cell.order,
       });
+      pendingSavesRef.current.delete(cell.id);
     }
 
     if (IS_DEV) {
       debugLog('[UnifiedStreamEditor] insertCells: inserted cells', { count: cells.length });
     }
-  }, [editor, addBlock]);
+  }, [editor, addBlock, updateBlock]);
 
   /**
    * Insert an image at the current cursor position.
@@ -1071,15 +1194,8 @@ export function UnifiedStreamEditor({
   }, [setSources]);
 
   const handleCellClickFromOutline = useCallback((cellId: string) => {
-    if (!editor) return;
-    const result = findCellBlockById(editor.state.doc, cellId);
-    if (!result) return;
-    const cellContentStart = result.pos + 1;
-    const sel = Selection.findFrom(editor.state.doc.resolve(cellContentStart), 1, true);
-    if (!sel) return;
-    editor.view.dispatch(editor.state.tr.setSelection(sel).scrollIntoView());
-    editor.view.focus();
-  }, [editor]);
+    scrollToCell(cellId);
+  }, [scrollToCell]);
 
   // Initialize store with stream data on mount and seed baseline
   useEffect(() => {
@@ -1211,7 +1327,7 @@ export function UnifiedStreamEditor({
       )}
 
       <div className="stream-body">
-        <div className="stream-content unified-editor-container">
+        <div className="stream-content unified-editor-container" onClick={handleReferenceClick}>
           {editor ? (
             <EditorContent editor={editor} />
           ) : (
@@ -1242,6 +1358,9 @@ export function UnifiedStreamEditor({
           onCellClick={handleCellClickFromOutline}
         />
       </div>
+
+      {/* Global reference preview tooltip */}
+      <ReferencePreview onScrollToCell={scrollToCell} />
     </div>
   );
 }

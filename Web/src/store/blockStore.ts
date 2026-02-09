@@ -173,17 +173,26 @@ export const useBlockStore = create<BlockStore>((set, get) => ({
     const newBlocks = new Map(blocks);
     newBlocks.set(block.id, block);
 
+    // Keep blockOrder unique by ID even if callers re-add an existing block.
+    // This prevents duplicated rendering/suggestion entries.
+    const existingIndex = blockOrder.indexOf(block.id);
+    const dedupedOrder = blockOrder.filter((id) => id !== block.id);
+
     let newOrder: string[];
     if (afterId) {
-      const afterIndex = blockOrder.indexOf(afterId);
+      const afterIndex = dedupedOrder.indexOf(afterId);
       if (afterIndex !== -1) {
-        newOrder = [...blockOrder];
+        newOrder = [...dedupedOrder];
         newOrder.splice(afterIndex + 1, 0, block.id);
       } else {
-        newOrder = [...blockOrder, block.id];
+        newOrder = [...dedupedOrder, block.id];
       }
+    } else if (existingIndex !== -1) {
+      newOrder = [...dedupedOrder];
+      const insertIndex = Math.min(existingIndex, dedupedOrder.length);
+      newOrder.splice(insertIndex, 0, block.id);
     } else {
-      newOrder = [...blockOrder, block.id];
+      newOrder = [...dedupedOrder, block.id];
     }
 
     // Update order property on all blocks
