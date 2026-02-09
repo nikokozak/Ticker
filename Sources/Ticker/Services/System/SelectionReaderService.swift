@@ -6,6 +6,8 @@ import ApplicationServices
 final class SelectionReaderService {
 
     private let cursorService: CursorPositionService
+    private let maxSelectionReadAttempts = 2
+    private let selectionReadRetryDelay: TimeInterval = 0.02
 
     init(cursorService: CursorPositionService? = nil) {
         self.cursorService = cursorService ?? CursorPositionService()
@@ -20,46 +22,156 @@ final class SelectionReaderService {
             return nil
         }
 
-        // Get system-wide accessibility element
-        let systemWide = AXUIElementCreateSystemWide()
+        for attempt in 1...maxSelectionReadAttempts {
+            guard let focusedElement = getFocusedElement() else {
+                return nil
+            }
 
-        // Get focused application
-        var focusedApp: CFTypeRef?
-        let appResult = AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedApplicationAttribute as CFString,
-            &focusedApp
-        )
+            let selectionResult = extractSelectedText(from: focusedElement)
+            if let text = selectionResult.text {
+                return text
+            }
 
-        guard appResult == .success, let app = focusedApp else {
-            return nil
-        }
+            if attempt == maxSelectionReadAttempts || !shouldRetrySelectionRead(for: selectionResult.error) {
+                break
+            }
 
-        // Get focused element from the application
-        var focusedElement: CFTypeRef?
-        let elementResult = AXUIElementCopyAttributeValue(
-            app as! AXUIElement,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedElement
-        )
-
-        guard elementResult == .success, let element = focusedElement else {
-            return nil
-        }
-
-        // Try to get selected text directly
-        var selectedText: CFTypeRef?
-        let textResult = AXUIElementCopyAttributeValue(
-            element as! AXUIElement,
-            kAXSelectedTextAttribute as CFString,
-            &selectedText
-        )
-
-        if textResult == .success, let text = selectedText as? String, !text.isEmpty {
-            return text
+            Thread.sleep(forTimeInterval: selectionReadRetryDelay)
         }
 
         return nil
+    }
+
+    private func getFocusedElement() -> AXUIElement? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedElementValue: CFTypeRef?
+        let focusedElementResult = AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElementValue
+        )
+
+        guard focusedElementResult == .success, let focusedElementValue else {
+            return nil
+        }
+
+        guard CFGetTypeID(focusedElementValue) == AXUIElementGetTypeID() else {
+            return nil
+        }
+
+        return unsafeBitCast(focusedElementValue, to: AXUIElement.self)
+    }
+
+    private func extractSelectedText(from element: AXUIElement) -> (text: String?, error: AXError?) {
+        // Primary path: direct selected text attribute.
+        var selectedTextValue: CFTypeRef?
+        let selectedTextResult = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            &selectedTextValue
+        )
+
+        if let selectedText = normalizeAxTextValue(selectedTextValue) {
+            return (selectedText, nil)
+        }
+
+        // Fallback for apps that expose only selected range + string-for-range.
+        if let selectedTextForRange = selectedTextFromRange(element: element) {
+            return (selectedTextForRange, nil)
+        }
+
+        if selectedTextResult == .success {
+            return (nil, nil)
+        }
+
+        return (nil, selectedTextResult)
+    }
+
+    private func selectedTextFromRange(element: AXUIElement) -> String? {
+        var selectedRangeValue: CFTypeRef?
+        let selectedRangeResult = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &selectedRangeValue
+        )
+
+        guard selectedRangeResult == .success,
+              let selectedRangeValue,
+              CFGetTypeID(selectedRangeValue) == AXValueGetTypeID() else {
+            return nil
+        }
+
+        let selectedRangeAxValue = unsafeBitCast(selectedRangeValue, to: AXValue.self)
+
+        var selectedRange = CFRange()
+        guard AXValueGetType(selectedRangeAxValue) == .cfRange,
+              AXValueGetValue(selectedRangeAxValue, .cfRange, &selectedRange),
+              selectedRange.length > 0 else {
+            return nil
+        }
+
+        if let textForRange = textForRangeAttribute(
+            element: element,
+            attribute: kAXStringForRangeParameterizedAttribute as CFString,
+            rangeValue: selectedRangeAxValue
+        ) {
+            return textForRange
+        }
+
+        if let attributedTextForRange = textForRangeAttribute(
+            element: element,
+            attribute: kAXAttributedStringForRangeParameterizedAttribute as CFString,
+            rangeValue: selectedRangeAxValue
+        ) {
+            return attributedTextForRange
+        }
+
+        return nil
+    }
+
+    private func textForRangeAttribute(
+        element: AXUIElement,
+        attribute: CFString,
+        rangeValue: AXValue
+    ) -> String? {
+        var rangeTextValue: CFTypeRef?
+        let rangeTextResult = AXUIElementCopyParameterizedAttributeValue(
+            element,
+            attribute,
+            rangeValue,
+            &rangeTextValue
+        )
+
+        guard rangeTextResult == .success else {
+            return nil
+        }
+
+        return normalizeAxTextValue(rangeTextValue)
+    }
+
+    private func normalizeAxTextValue(_ value: CFTypeRef?) -> String? {
+        if let text = value as? String, !text.isEmpty {
+            return text
+        }
+
+        if let attributedText = value as? NSAttributedString, !attributedText.string.isEmpty {
+            return attributedText.string
+        }
+
+        return nil
+    }
+
+    private func shouldRetrySelectionRead(for error: AXError?) -> Bool {
+        guard let error else {
+            return false
+        }
+
+        switch error {
+        case .cannotComplete, .failure:
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - Active App Information
@@ -95,14 +207,18 @@ final class SelectionReaderService {
             &focusedWindow
         )
 
-        guard windowResult == .success, let window = focusedWindow else {
+        guard windowResult == .success,
+              let focusedWindow,
+              CFGetTypeID(focusedWindow) == AXUIElementGetTypeID() else {
             return nil
         }
+
+        let window = unsafeBitCast(focusedWindow, to: AXUIElement.self)
 
         // Get window title
         var titleValue: CFTypeRef?
         let titleResult = AXUIElementCopyAttributeValue(
-            window as! AXUIElement,
+            window,
             kAXTitleAttribute as CFString,
             &titleValue
         )

@@ -271,13 +271,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func toggleQuickPanel() {
-        Task { @MainActor in
-            quickPanelManager?.toggle()
-        }
+        triggerQuickPanelToggle()
     }
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    private func triggerQuickPanelToggle() {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { [weak self] in
+                self?.quickPanelManager?.toggle()
+            }
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            self?.quickPanelManager?.toggle()
+        }
     }
 
     private func setupMainWindow() {
@@ -336,9 +347,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Register Quick Panel hotkey (Cmd+L)
         hotkeyService?.register(config: .quickPanel) { [weak self] in
-            Task { @MainActor in
-                self?.quickPanelManager?.toggle()
-            }
+            self?.triggerQuickPanelToggle()
         }
 
         // Register Screenshot hotkey (Cmd+;)
