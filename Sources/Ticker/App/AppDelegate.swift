@@ -3,6 +3,7 @@ import SwiftUI
 import WebKit
 import ApplicationServices
 import Sparkle
+import UniformTypeIdentifiers
 
 // Notification for appearance changes
 extension Notification.Name {
@@ -27,6 +28,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var onboardingWindow: NSWindow?
     private var didCompleteStartup = false
     private let libraryService = LibraryService.shared
+    private var tickerNextEditorWindow: NSWindow?
+    private var tickerNextEditorTextView: NSTextView?
+    private var tickerNextCurrentNote: TickerMarkdownNote?
 
     // Menu bar (status item)
     private var statusItem: NSStatusItem?
@@ -149,6 +153,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         if SettingsService.tickerNextMode {
             appMenu.addItem(NSMenuItem.separator())
+            let openEditorItem = NSMenuItem(
+                title: "Open Ticker Next Editor",
+                action: #selector(openTickerNextEditor),
+                keyEquivalent: "0"
+            )
+            openEditorItem.target = self
+            appMenu.addItem(openEditorItem)
+
+            let newNoteItem = NSMenuItem(
+                title: "New Note",
+                action: #selector(createTickerNextNote),
+                keyEquivalent: "n"
+            )
+            newNoteItem.target = self
+            appMenu.addItem(newNoteItem)
+
+            let openNoteItem = NSMenuItem(
+                title: "Open Note...",
+                action: #selector(openTickerNextNote),
+                keyEquivalent: "o"
+            )
+            openNoteItem.target = self
+            appMenu.addItem(openNoteItem)
+
+            let saveNoteItem = NSMenuItem(
+                title: "Save Note",
+                action: #selector(saveTickerNextNote),
+                keyEquivalent: "s"
+            )
+            saveNoteItem.target = self
+            appMenu.addItem(saveNoteItem)
+
             let setLibraryFolderItem = NSMenuItem(
                 title: "Set Library Folder...",
                 action: #selector(selectLibraryFolder),
@@ -295,9 +331,86 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do {
             if let selectedURL = try libraryService.selectLibraryRootInteractively() {
                 DebugLog.log("[TickerNext] Selected library folder at \(selectedURL.path)")
+                _ = try bootstrapTickerNextLibrary()
             }
         } catch {
             DebugLog.log("[TickerNext] Failed to select library folder (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    @objc private func openTickerNextEditor() {
+        guard SettingsService.tickerNextMode else { return }
+        _ = ensureTickerNextEditorTextView()
+    }
+
+    @objc private func createTickerNextNote() {
+        guard SettingsService.tickerNextMode else { return }
+        do {
+            _ = try ensureLibraryFolderSelected()
+            let createdNote = try libraryService.withLibraryRootAccess { rootURL in
+                try libraryService.createNote(in: rootURL, title: "Untitled")
+            }
+            if let createdNote {
+                showTickerNextNote(createdNote)
+                DebugLog.log("[TickerNext] Created note at \(createdNote.url.path)")
+            }
+        } catch {
+            DebugLog.log("[TickerNext] Failed to create note (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    @objc private func openTickerNextNote() {
+        guard SettingsService.tickerNextMode else { return }
+        do {
+            guard let rootURL = try ensureLibraryFolderSelected() else { return }
+
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = false
+            panel.canChooseFiles = true
+            if let markdownType = UTType(filenameExtension: "md") {
+                panel.allowedContentTypes = [markdownType]
+            }
+            panel.allowsMultipleSelection = false
+            panel.directoryURL = rootURL
+            panel.prompt = "Open Note"
+            panel.message = "Choose a Markdown note."
+
+            guard panel.runModal() == .OK, let selectedURL = panel.url else {
+                return
+            }
+
+            let loadedNote = try libraryService.withLibraryRootAccess { _ in
+                try libraryService.loadNote(at: selectedURL)
+            }
+            if let loadedNote {
+                showTickerNextNote(loadedNote)
+                DebugLog.log("[TickerNext] Opened note at \(loadedNote.url.path)")
+            }
+        } catch {
+            DebugLog.log("[TickerNext] Failed to open note (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    @objc private func saveTickerNextNote() {
+        guard SettingsService.tickerNextMode else { return }
+        do {
+            if tickerNextCurrentNote == nil {
+                createTickerNextNote()
+            }
+            guard var currentNote = tickerNextCurrentNote else { return }
+
+            guard let textView = tickerNextEditorTextView else { return }
+            currentNote.body = textView.string
+
+            _ = try ensureLibraryFolderSelected()
+            _ = try libraryService.withLibraryRootAccess { _ in
+                try libraryService.saveNote(currentNote)
+            }
+
+            tickerNextCurrentNote = currentNote
+            DebugLog.log("[TickerNext] Saved note at \(currentNote.url.path)")
+        } catch {
+            DebugLog.log("[TickerNext] Failed to save note (\(DebugLog.errorSummary(error)))")
         }
     }
 
@@ -318,10 +431,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard SettingsService.tickerNextMode else { return }
 
         do {
-            if let rootPath = try libraryService.withLibraryRootAccess({ rootURL in
-                try libraryService.ensureLibraryStructure(at: rootURL)
-                return rootURL.path
-            }) {
+            if let rootPath = try bootstrapTickerNextLibrary() {
                 DebugLog.log("[TickerNext] Library structure ready at \(rootPath)")
             }
         } catch {
@@ -411,5 +521,67 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         quickPanelManager?.showWithStatusMessage(
             "Screenshot mode is deprecated. Use macOS screenshot shortcuts, then press Cmd+L."
         )
+    }
+
+    private func ensureLibraryFolderSelected() throws -> URL? {
+        if let rootURL = try libraryService.resolveLibraryRootURL() {
+            return rootURL
+        }
+        return try libraryService.selectLibraryRootInteractively()
+    }
+
+    private func bootstrapTickerNextLibrary() throws -> String? {
+        try libraryService.withLibraryRootAccess { rootURL in
+            try libraryService.ensureLibraryStructure(at: rootURL)
+            return rootURL.path
+        }
+    }
+
+    @discardableResult
+    private func ensureTickerNextEditorTextView() -> NSTextView {
+        if let existingTextView = tickerNextEditorTextView, let existingWindow = tickerNextEditorWindow {
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return existingTextView
+        }
+
+        let textView = NSTextView(frame: .zero)
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.allowsUndo = true
+        textView.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+
+        let scrollView = NSScrollView(frame: .zero)
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.documentView = textView
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 640),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Ticker Next Editor"
+        window.contentView = scrollView
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+
+        tickerNextEditorWindow = window
+        tickerNextEditorTextView = textView
+        NSApp.activate(ignoringOtherApps: true)
+
+        return textView
+    }
+
+    private func showTickerNextNote(_ note: TickerMarkdownNote) {
+        let textView = ensureTickerNextEditorTextView()
+        tickerNextCurrentNote = note
+        textView.string = note.body
+        tickerNextEditorWindow?.title = note.url.lastPathComponent
     }
 }

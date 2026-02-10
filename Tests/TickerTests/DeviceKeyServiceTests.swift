@@ -343,3 +343,58 @@ final class LibraryServiceFrontMatterTests: XCTestCase {
         try markdown.write(to: url, atomically: true, encoding: .utf8)
     }
 }
+
+final class LibraryServiceNoteFileTests: XCTestCase {
+    func test_createLoadSaveNote_roundtripPreservesFrontMatterAndBody() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let suiteName = "LibraryServiceNoteFileTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        try service.ensureLibraryStructure(at: tempDir)
+
+        let created = try service.createNote(in: tempDir, title: "Daily Draft")
+        XCTAssertEqual(created.url.lastPathComponent, "daily-draft.md")
+        XCTAssertEqual(created.frontMatter.tickerKind, .note)
+        XCTAssertTrue(fileManager.fileExists(atPath: created.url.path))
+
+        var loaded = try service.loadNote(at: created.url)
+        XCTAssertEqual(loaded.frontMatter.tickerID, created.frontMatter.tickerID)
+        XCTAssertEqual(loaded.body, "")
+
+        loaded.body = "# Daily Draft\n\nBody content."
+        try service.saveNote(loaded)
+
+        let reloaded = try service.loadNote(at: created.url)
+        XCTAssertEqual(reloaded.frontMatter.tickerID, created.frontMatter.tickerID)
+        XCTAssertEqual(reloaded.frontMatter.tickerKind, .note)
+        XCTAssertEqual(reloaded.body, "# Daily Draft\n\nBody content.")
+    }
+
+    func test_createNote_sameTitleUsesDeterministicCollisionSuffixes() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let suiteName = "LibraryServiceCollisionTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        try service.ensureLibraryStructure(at: tempDir)
+
+        let first = try service.createNote(in: tempDir, title: "Meeting Notes")
+        let second = try service.createNote(in: tempDir, title: "Meeting Notes")
+        let third = try service.createNote(in: tempDir, title: "Meeting Notes")
+
+        XCTAssertEqual(first.url.lastPathComponent, "meeting-notes.md")
+        XCTAssertEqual(second.url.lastPathComponent, "meeting-notes-2.md")
+        XCTAssertEqual(third.url.lastPathComponent, "meeting-notes-3.md")
+    }
+}

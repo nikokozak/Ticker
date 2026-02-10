@@ -326,6 +326,58 @@ final class LibraryService {
         }
     }
 
+    func createNote(
+        in rootURL: URL,
+        title: String,
+        kind: TickerNoteKind = .note,
+        tickerPDFID: UUID? = nil,
+        directoryRelativePath: String? = nil
+    ) throws -> TickerMarkdownNote {
+        try ensureLibraryStructure(at: rootURL)
+
+        let parentDirectoryURL: URL
+        if let directoryRelativePath, !directoryRelativePath.isEmpty {
+            parentDirectoryURL = rootURL.appendingPathComponent(directoryRelativePath, isDirectory: true)
+            try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
+        } else {
+            parentDirectoryURL = rootURL
+        }
+
+        let noteURL = uniqueMarkdownURL(forTitle: title, in: parentDirectoryURL)
+        let frontMatter = TickerNoteFrontMatter(
+            tickerID: UUID(),
+            tickerKind: kind,
+            tickerPDFID: tickerPDFID,
+            createdAt: Date()
+        )
+        let markdown = TickerMarkdownFrontMatterCodec.serialize(frontMatter: frontMatter, body: "")
+        try markdown.write(to: noteURL, atomically: true, encoding: .utf8)
+
+        return TickerMarkdownNote(url: noteURL, frontMatter: frontMatter, body: "")
+    }
+
+    func loadNote(at noteURL: URL) throws -> TickerMarkdownNote {
+        let markdown = try String(contentsOf: noteURL, encoding: .utf8)
+        let parsed = TickerMarkdownFrontMatterCodec.parse(markdown)
+
+        let frontMatter = parsed.frontMatter ?? TickerNoteFrontMatter(
+            tickerID: UUID(),
+            tickerKind: .note,
+            tickerPDFID: nil,
+            createdAt: Date()
+        )
+
+        return TickerMarkdownNote(url: noteURL, frontMatter: frontMatter, body: parsed.body)
+    }
+
+    func saveNote(_ note: TickerMarkdownNote) throws {
+        let markdown = TickerMarkdownFrontMatterCodec.serialize(
+            frontMatter: note.frontMatter,
+            body: note.body
+        )
+        try markdown.write(to: note.url, atomically: true, encoding: .utf8)
+    }
+
     func markdownFileURLs(in rootURL: URL) throws -> [URL] {
         guard let enumerator = fileManager.enumerator(
             at: rootURL,
@@ -376,5 +428,45 @@ final class LibraryService {
     func fixDuplicateTickerIDs(in rootURL: URL) throws -> DuplicateTickerIDFixResult {
         let notes = try scanMarkdownNotes(in: rootURL)
         return try TickerNoteDuplicateResolver.fixDuplicateTickerIDs(in: notes)
+    }
+
+    private func uniqueMarkdownURL(forTitle title: String, in directoryURL: URL) -> URL {
+        let baseSlug = slugify(title)
+        var index = 1
+
+        while true {
+            let fileName: String
+            if index == 1 {
+                fileName = "\(baseSlug).md"
+            } else {
+                fileName = "\(baseSlug)-\(index).md"
+            }
+
+            let candidateURL = directoryURL.appendingPathComponent(fileName)
+            if !fileManager.fileExists(atPath: candidateURL.path) {
+                return candidateURL
+            }
+            index += 1
+        }
+    }
+
+    private func slugify(_ title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercased = trimmed.lowercased()
+
+        let mapped = lowercased.map { character -> Character in
+            if character.isLetter || character.isNumber {
+                return character
+            }
+            return "-"
+        }
+
+        var slug = String(mapped)
+        while slug.contains("--") {
+            slug = slug.replacingOccurrences(of: "--", with: "-")
+        }
+        slug = slug.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+
+        return slug.isEmpty ? "untitled" : slug
     }
 }
