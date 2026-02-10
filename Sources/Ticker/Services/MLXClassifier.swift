@@ -21,14 +21,8 @@ final class MLXClassifier: QueryClassifier {
         guard !isLoading else { return }
         isLoading = true
 
-        do {
-            DebugLog.log("MLXClassifier: Loading model \(modelId)...")
-            DebugLog.log("MLXClassifier: Model loaded successfully")
-        } catch {
-            loadError = error
-            DebugLog.log("MLXClassifier: Failed to load model (\(DebugLog.errorSummary(error)))")
-            throw error
-        }
+        DebugLog.log("MLXClassifier: Loading model \(modelId)...")
+        DebugLog.log("MLXClassifier: Model loaded successfully")
 
         isLoading = false
     }
