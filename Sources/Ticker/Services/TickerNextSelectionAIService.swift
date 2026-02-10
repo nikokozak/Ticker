@@ -1,24 +1,33 @@
 import Foundation
 
 enum TickerNextSelectionAIAction: String {
-    case rewrite
+    case send
+    case sendWithPrompt = "send_with_prompt"
     case proofread
     case summarize
 
     func modifierPrompt(customInstruction: String?) throws -> String {
         switch self {
-        case .rewrite:
+        case .send:
+            return """
+            Respond directly to the text.
+            If it is a question, answer it.
+            If it is an instruction, execute it.
+            Return only the resulting text.
+            """
+
+        case .sendWithPrompt:
             guard let customInstruction = customInstruction?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !customInstruction.isEmpty else {
-                throw TickerNextSelectionAIServiceError.missingRewriteInstruction
+                throw TickerNextSelectionAIServiceError.missingSendInstruction
             }
 
             return """
-            Rewrite the text to satisfy this instruction:
+            Apply this instruction to the text:
             \(customInstruction)
 
             Preserve factual meaning unless the instruction explicitly requests a change.
-            Return only the rewritten text.
+            Return only the transformed text.
             """
 
         case .proofread:
@@ -38,13 +47,13 @@ enum TickerNextSelectionAIAction: String {
 }
 
 enum TickerNextSelectionAIServiceError: LocalizedError {
-    case missingRewriteInstruction
+    case missingSendInstruction
     case emptyModelResponse
 
     var errorDescription: String? {
         switch self {
-        case .missingRewriteInstruction:
-            return "Rewrite requires an instruction."
+        case .missingSendInstruction:
+            return "Send with Prompt requires an instruction."
         case .emptyModelResponse:
             return "AI returned an empty response."
         }

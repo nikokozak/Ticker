@@ -77,6 +77,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         guard !didCompleteStartup else { return }
         didCompleteStartup = true
         setupMainWindow()
+        bootstrapTickerNextProxyAuthIfNeeded()
         setupQuickPanel()
         bootstrapTickerNextLibraryIfConfigured()
         requestAccessibilityPermissionIfNeeded()
@@ -684,6 +685,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         }
     }
 
+    private func bootstrapTickerNextProxyAuthIfNeeded() {
+        guard SettingsService.tickerNextMode else { return }
+        Task {
+            await DeviceKeyService.shared.initialize()
+        }
+    }
+
     private func setupMainWindow() {
         // Position window to cover right 3/8 of screen
         let screen = NSScreen.main ?? NSScreen.screens.first!
@@ -1166,14 +1174,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
 
         let selectedText = buffer.substring(with: selectedRange)
 
-        let rewriteInstruction: String?
-        if action == .rewrite {
-            guard let instruction = promptForTickerNextRewriteInstruction() else {
+        let customInstruction: String?
+        if action == .sendWithPrompt {
+            guard let instruction = promptForTickerNextSendInstruction() else {
                 return
             }
-            rewriteInstruction = instruction
+            customInstruction = instruction
         } else {
-            rewriteInstruction = nil
+            customInstruction = nil
         }
 
         tickerNextAIRequestInFlight = true
@@ -1182,10 +1190,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
 
         Task {
             do {
+                await self.ensureTickerNextProxyAuthReadyForAI()
                 let replacement = try await tickerNextSelectionAIService.transformSelection(
                     selectedText,
                     action: action,
-                    customInstruction: rewriteInstruction
+                    customInstruction: customInstruction
                 )
 
                 await MainActor.run {
@@ -1206,6 +1215,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
                 self.tickerNextEditorTextView?.isEditable = true
                 self.tickerNextEditorWindow?.title = self.tickerNextCurrentNote?.url.lastPathComponent ?? "Ticker Next Editor"
             }
+        }
+    }
+
+    private func ensureTickerNextProxyAuthReadyForAI() async {
+        let authSnapshot = await DeviceKeyService.shared.loadProxyAuth()
+        if authSnapshot.state == .unregistered || authSnapshot.state == .validating {
+            await DeviceKeyService.shared.initialize()
         }
     }
 
@@ -1240,16 +1256,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         textView.didChangeText()
     }
 
-    private func promptForTickerNextRewriteInstruction() -> String? {
+    private func promptForTickerNextSendInstruction() -> String? {
         let alert = NSAlert()
-        alert.messageText = "Rewrite Selection"
-        alert.informativeText = "Describe how the selected text should be rewritten."
+        alert.messageText = "Send with Prompt"
+        alert.informativeText = "Describe how the selected text should be transformed."
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Rewrite")
+        alert.addButton(withTitle: "Send")
         alert.addButton(withTitle: "Cancel")
 
         let promptField = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 22))
-        promptField.placeholderString = "e.g. Make this more concise and technical."
+        promptField.placeholderString = "e.g. Turn this into a concise executive summary."
         alert.accessoryView = promptField
 
         let response = alert.runModal()

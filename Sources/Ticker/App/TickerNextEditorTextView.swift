@@ -12,9 +12,6 @@ protocol TickerNextEditorTextViewActionHandling: AnyObject {
 }
 
 final class TickerNextEditorTextView: NSTextView {
-    private static let aiMenuTag = 31_001
-    private static let aiSeparatorTag = 31_002
-
     weak var actionHandler: TickerNextEditorTextViewActionHandling?
 
     override func mouseDown(with event: NSEvent) {
@@ -28,61 +25,51 @@ final class TickerNextEditorTextView: NSTextView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        let menu = super.menu(for: event) ?? NSMenu(title: "Context")
-        removeTickerNextAIMenuItems(from: menu)
-
         let hasSelection = selectedRange().length > 0
+        let menu = NSMenu(title: "Context")
 
-        let aiMenuItem = NSMenuItem(title: "AI", action: nil, keyEquivalent: "")
-        aiMenuItem.tag = Self.aiMenuTag
-        let aiSubmenu = NSMenu(title: "AI")
+        let send = NSMenuItem(title: "Send", action: #selector(handleSend), keyEquivalent: "")
+        send.target = self
+        send.isEnabled = hasSelection
+        menu.addItem(send)
 
-        let rewrite = NSMenuItem(title: "Rewrite...", action: #selector(handleRewrite), keyEquivalent: "")
-        rewrite.target = self
-        rewrite.isEnabled = hasSelection
-        aiSubmenu.addItem(rewrite)
+        let sendWithPrompt = NSMenuItem(title: "Send with Prompt...", action: #selector(handleSendWithPrompt), keyEquivalent: "")
+        sendWithPrompt.target = self
+        sendWithPrompt.isEnabled = hasSelection
+        menu.addItem(sendWithPrompt)
 
-        let proofread = NSMenuItem(title: "Proofread", action: #selector(handleProofread), keyEquivalent: "")
-        proofread.target = self
-        proofread.isEnabled = hasSelection
-        aiSubmenu.addItem(proofread)
+        menu.addItem(NSMenuItem.separator())
 
-        let summarize = NSMenuItem(title: "Summarize", action: #selector(handleSummarize), keyEquivalent: "")
-        summarize.target = self
-        summarize.isEnabled = hasSelection
-        aiSubmenu.addItem(summarize)
+        let cut = NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "")
+        cut.target = nil
+        cut.isEnabled = hasSelection && isEditable
+        menu.addItem(cut)
 
-        aiMenuItem.submenu = aiSubmenu
+        let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "")
+        copy.target = nil
+        copy.isEnabled = hasSelection
+        menu.addItem(copy)
 
-        if !menu.items.isEmpty {
-            let separator = NSMenuItem.separator()
-            separator.tag = Self.aiSeparatorTag
-            menu.addItem(separator)
-        }
-        menu.addItem(aiMenuItem)
+        let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "")
+        paste.target = nil
+        paste.isEnabled = isEditable
+        menu.addItem(paste)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let selectAll = NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "")
+        selectAll.target = nil
+        menu.addItem(selectAll)
 
         return menu
     }
 
-    @objc private func handleRewrite() {
-        actionHandler?.tickerNextEditorTextView(self, didRequestAction: .rewrite)
+    @objc private func handleSend() {
+        actionHandler?.tickerNextEditorTextView(self, didRequestAction: .send)
     }
 
-    @objc private func handleProofread() {
-        actionHandler?.tickerNextEditorTextView(self, didRequestAction: .proofread)
-    }
-
-    @objc private func handleSummarize() {
-        actionHandler?.tickerNextEditorTextView(self, didRequestAction: .summarize)
-    }
-
-    private func removeTickerNextAIMenuItems(from menu: NSMenu) {
-        for index in stride(from: menu.items.count - 1, through: 0, by: -1) {
-            let item = menu.items[index]
-            if item.tag == Self.aiMenuTag || item.tag == Self.aiSeparatorTag {
-                menu.removeItem(at: index)
-            }
-        }
+    @objc private func handleSendWithPrompt() {
+        actionHandler?.tickerNextEditorTextView(self, didRequestAction: .sendWithPrompt)
     }
 
     private func utf16OffsetForEvent(_ event: NSEvent) -> Int? {
