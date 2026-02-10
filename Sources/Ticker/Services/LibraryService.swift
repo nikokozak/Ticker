@@ -326,6 +326,48 @@ final class LibraryService {
         }
     }
 
+    func inboxNoteURL(in rootURL: URL) -> URL {
+        rootURL.appendingPathComponent("Inbox.md")
+    }
+
+    func ensureInboxNote(in rootURL: URL) throws -> TickerMarkdownNote {
+        try ensureLibraryStructure(at: rootURL)
+        let inboxURL = inboxNoteURL(in: rootURL)
+        return try loadNote(at: inboxURL)
+    }
+
+    func saveImageAsset(data: Data, in rootURL: URL, fileExtension: String = "png") throws -> URL {
+        try ensureLibraryStructure(at: rootURL)
+        let fileName = "\(UUID().uuidString.lowercased()).\(fileExtension)"
+        let imageURL = rootURL
+            .appendingPathComponent("Assets", isDirectory: true)
+            .appendingPathComponent("Images", isDirectory: true)
+            .appendingPathComponent(fileName)
+        try data.write(to: imageURL, options: [.atomic])
+        return imageURL
+    }
+
+    func relativePath(from baseURL: URL, to targetURL: URL) -> String {
+        let baseComponents = baseURL.standardizedFileURL.pathComponents
+        let targetComponents = targetURL.standardizedFileURL.pathComponents
+
+        var sharedPrefixCount = 0
+        while sharedPrefixCount < baseComponents.count &&
+                sharedPrefixCount < targetComponents.count &&
+                baseComponents[sharedPrefixCount] == targetComponents[sharedPrefixCount] {
+            sharedPrefixCount += 1
+        }
+
+        let upwardTraversal = Array(repeating: "..", count: baseComponents.count - sharedPrefixCount)
+        let targetRemainder = Array(targetComponents.dropFirst(sharedPrefixCount))
+        let relativeComponents = upwardTraversal + targetRemainder
+
+        if relativeComponents.isEmpty {
+            return "."
+        }
+        return relativeComponents.joined(separator: "/")
+    }
+
     func createNote(
         in rootURL: URL,
         title: String,

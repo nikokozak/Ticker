@@ -50,6 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupStatusItem()
         setupMenuBar()
         setupAppearanceObserver()
+        setupTickerNextObservers()
 
         // Alpha: proxy-only onboarding (no vendor API keys).
         if SettingsService.shared.needsOnboarding {
@@ -523,6 +524,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
     }
 
+    private func setupTickerNextObservers() {
+        guard SettingsService.tickerNextMode else { return }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleTickerNextCaptureAppend(_:)),
+            name: .tickerNextDidAppendCaptureToNote,
+            object: nil
+        )
+    }
+
+    @objc private func handleTickerNextCaptureAppend(_ notification: Notification) {
+        guard let notePath = notification.userInfo?[TickerNextQuickCaptureUserInfoKey.notePath] as? String,
+              let appendedMarkdown = notification.userInfo?[TickerNextQuickCaptureUserInfoKey.appendedMarkdown] as? String else {
+            return
+        }
+
+        guard tickerNextCurrentNote?.url.path == notePath else { return }
+        guard let textView = tickerNextEditorTextView else { return }
+
+        let updatedBody = appendMarkdownBlock(appendedMarkdown, to: textView.string)
+        textView.string = updatedBody
+        tickerNextCurrentNote?.body = updatedBody
+    }
+
     private func ensureLibraryFolderSelected() throws -> URL? {
         if let rootURL = try libraryService.resolveLibraryRootURL() {
             return rootURL
@@ -581,7 +606,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showTickerNextNote(_ note: TickerMarkdownNote) {
         let textView = ensureTickerNextEditorTextView()
         tickerNextCurrentNote = note
+        SettingsService.shared.tickerNextCurrentNotePath = note.url.path
         textView.string = note.body
         tickerNextEditorWindow?.title = note.url.lastPathComponent
+    }
+
+    private func appendMarkdownBlock(_ block: String, to body: String) -> String {
+        if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return block
+        }
+
+        var updatedBody = body
+        if !updatedBody.hasSuffix("\n") {
+            updatedBody += "\n"
+        }
+        if !updatedBody.hasSuffix("\n\n") {
+            updatedBody += "\n"
+        }
+        updatedBody += block
+        return updatedBody
     }
 }

@@ -34,8 +34,12 @@ struct QuickPanelView: View {
                 statusView(status)
             }
 
-            // Stream destination picker
-            streamDestinationPicker
+            // Destination picker
+            if SettingsService.tickerNextMode {
+                tickerNextDestinationPicker
+            } else {
+                streamDestinationPicker
+            }
 
             // Context badge (if text/image was captured)
             if let context = manager.context, context.hasContent {
@@ -194,6 +198,66 @@ struct QuickPanelView: View {
         return "Select stream..."
     }
 
+    private var tickerNextDestinationPicker: some View {
+        Menu {
+            Button(action: { manager.selectTickerNextCaptureDestination(.inbox) }) {
+                HStack {
+                    Text("Inbox")
+                    if manager.tickerNextCaptureDestination == .inbox {
+                        Spacer()
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+
+            Button(action: { manager.selectTickerNextCaptureDestination(.currentNote) }) {
+                HStack {
+                    Text(tickerNextCurrentNoteLabel)
+                    if manager.tickerNextCaptureDestination == .currentNote {
+                        Spacer()
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+            .disabled(manager.tickerNextCurrentNoteName == nil)
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "tray.and.arrow.down")
+                    .font(.system(size: 11))
+                    .foregroundColor(Colors.secondaryText)
+                Text(tickerNextDestinationTitle)
+                    .font(.system(size: 11))
+                    .foregroundColor(Colors.secondaryText)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9))
+                    .foregroundColor(Colors.tertiaryText)
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(Colors.hoverBackground)
+            .cornerRadius(Spacing.radiusSm)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private var tickerNextCurrentNoteLabel: String {
+        if let name = manager.tickerNextCurrentNoteName {
+            return "Current note (\(name))"
+        }
+        return "Current note unavailable"
+    }
+
+    private var tickerNextDestinationTitle: String {
+        switch manager.tickerNextCaptureDestination {
+        case .inbox:
+            return "Inbox"
+        case .currentNote:
+            return manager.tickerNextCurrentNoteName ?? "Inbox"
+        }
+    }
+
     // MARK: - Ephemeral Conversation Response Area
 
     private var responseArea: some View {
@@ -335,7 +399,7 @@ struct QuickPanelView: View {
                 .font(.system(size: 9))
                 .foregroundColor(Colors.secondaryText.opacity(0.6))
 
-            Text("⌘↵ AI+save")
+            Text(SettingsService.tickerNextMode ? "⌘↵ save+AI soon" : "⌘↵ AI+save")
                 .font(.system(size: 9))
                 .foregroundColor(Colors.secondaryText.opacity(0.6))
 

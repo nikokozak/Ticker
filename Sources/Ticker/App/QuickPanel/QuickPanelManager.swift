@@ -32,6 +32,16 @@ struct EphemeralConversation: Equatable {
     }
 }
 
+enum TickerNextCaptureDestination: String, Equatable {
+    case inbox
+    case currentNote
+}
+
+enum TickerNextQuickCaptureUserInfoKey {
+    static let notePath = "notePath"
+    static let appendedMarkdown = "appendedMarkdown"
+}
+
 /// Manages the Quick Panel lifecycle, positioning, and state
 /// Coordinates between services (cursor, selection) and the panel window
 @MainActor
@@ -46,6 +56,9 @@ final class QuickPanelManager: ObservableObject {
     @Published var error: String?
     @Published var statusMessage: String?  // Temporary feedback (success/info messages)
     @Published var ephemeralConversation = EphemeralConversation()
+    @Published var tickerNextCaptureDestination: TickerNextCaptureDestination = .inbox
+    @Published private(set) var tickerNextCurrentNotePath: String?
+    @Published private(set) var tickerNextCurrentNoteName: String?
 
     // Stream selection
     @Published private(set) var availableStreams: [StreamSummary] = []
@@ -59,6 +72,7 @@ final class QuickPanelManager: ObservableObject {
     private weak var bridgeService: BridgeService?
     private var assetService: AssetService?
     private weak var orchestrator: AIOrchestrator?
+    private let libraryService: LibraryService
 
     // MARK: - Streaming Task
 
@@ -82,13 +96,15 @@ final class QuickPanelManager: ObservableObject {
 
     init(
         persistence: PersistenceService? = nil,
-        bridgeService: BridgeService? = nil
+        bridgeService: BridgeService? = nil,
+        libraryService: LibraryService = .shared
     ) {
         let cursor = CursorPositionService()
         self.cursorService = cursor
         self.selectionService = SelectionReaderService(cursorService: cursor)
         self.persistence = persistence
         self.bridgeService = bridgeService
+        self.libraryService = libraryService
     }
 
     /// Configure services after initialization (for dependency injection)
@@ -191,8 +207,13 @@ final class QuickPanelManager: ObservableObject {
         self.context = capturedContext
         resetState()
 
-        // Load available streams for picker
-        loadAvailableStreams()
+        if SettingsService.tickerNextMode {
+            tickerNextCaptureDestination = .inbox
+            refreshTickerNextCurrentNoteState()
+        } else {
+            // Load available streams for picker
+            loadAvailableStreams()
+        }
 
         // If Accessibility isn't granted, just show a soft warning (don't prompt).
         // Onboarding is responsible for prompting; repeated system prompts here are jarring.
@@ -253,6 +274,18 @@ final class QuickPanelManager: ObservableObject {
     func updateAppearance(_ appearance: NSAppearance?) {
         currentAppearance = appearance
         panel?.appearance = appearance
+    }
+
+    func selectTickerNextCaptureDestination(_ destination: TickerNextCaptureDestination) {
+        refreshTickerNextCurrentNoteState()
+
+        if destination == .currentNote, tickerNextCurrentNotePath == nil {
+            tickerNextCaptureDestination = .inbox
+            statusMessage = "No current note. Saving to Inbox."
+            return
+        }
+
+        tickerNextCaptureDestination = destination
     }
 
     // MARK: - Input Handling
@@ -406,11 +439,6 @@ final class QuickPanelManager: ObservableObject {
 
     /// Add captured content and/or input to the active stream
     private func addToStream(triggerAI: Bool) async {
-        guard let persistence = persistence else {
-            error = "Persistence not configured"
-            return
-        }
-
         let hasContext = context?.hasContent == true
         let hasInput = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
@@ -422,6 +450,25 @@ final class QuickPanelManager: ObservableObject {
 
         isLoading = true
         error = nil
+        defer { isLoading = false }
+
+        if SettingsService.tickerNextMode {
+            do {
+                let shouldHide = try addToTickerNextNote(triggerAI: triggerAI)
+                if shouldHide {
+                    hide()
+                }
+            } catch {
+                self.error = error.localizedDescription
+                DebugLog.log("[QuickPanel] TickerNext save failed (\(DebugLog.errorSummary(error)))")
+            }
+            return
+        }
+
+        guard let persistence = persistence else {
+            error = "Persistence not configured"
+            return
+        }
 
         do {
             // Get target stream (may create new one)
@@ -476,8 +523,149 @@ final class QuickPanelManager: ObservableObject {
             self.error = error.localizedDescription
             DebugLog.log("[QuickPanel] Error adding to stream (\(DebugLog.errorSummary(error)))")
         }
+    }
 
-        isLoading = false
+    private func refreshTickerNextCurrentNoteState() {
+        guard SettingsService.tickerNextMode else {
+            tickerNextCurrentNotePath = nil
+            tickerNextCurrentNoteName = nil
+            return
+        }
+
+        guard let notePath = SettingsService.shared.tickerNextCurrentNotePath,
+              FileManager.default.fileExists(atPath: notePath) else {
+            tickerNextCurrentNotePath = nil
+            tickerNextCurrentNoteName = nil
+            return
+        }
+
+        tickerNextCurrentNotePath = notePath
+        tickerNextCurrentNoteName = URL(fileURLWithPath: notePath).lastPathComponent
+    }
+
+    /// Saves capture text/image to Ticker Next markdown notes.
+    /// Returns whether the panel should hide on completion.
+    private func addToTickerNextNote(triggerAI: Bool) throws -> Bool {
+        refreshTickerNextCurrentNoteState()
+
+        if try libraryService.resolveLibraryRootURL() == nil {
+            guard try libraryService.selectLibraryRootInteractively() != nil else {
+                throw QuickPanelError.tickerNextLibraryNotConfigured
+            }
+        }
+
+        if triggerAI {
+            statusMessage = "AI+save for Ticker Next is not implemented yet. Saved as note."
+        }
+
+        let saveResult = try libraryService.withLibraryRootAccess { rootURL in
+            try libraryService.ensureLibraryStructure(at: rootURL)
+
+            let selectedDestination = tickerNextCaptureDestination
+            var usedInboxFallback = false
+            let targetURL: URL
+
+            if selectedDestination == .currentNote {
+                let rootPath = rootURL.standardizedFileURL.path
+                if let currentPath = tickerNextCurrentNotePath,
+                   currentPath.hasPrefix(rootPath),
+                   FileManager.default.fileExists(atPath: currentPath) {
+                    targetURL = URL(fileURLWithPath: currentPath)
+                } else {
+                    targetURL = libraryService.inboxNoteURL(in: rootURL)
+                    usedInboxFallback = true
+                }
+            } else {
+                targetURL = libraryService.inboxNoteURL(in: rootURL)
+            }
+
+            var note: TickerMarkdownNote
+            if targetURL.lastPathComponent == "Inbox.md" {
+                note = try libraryService.ensureInboxNote(in: rootURL)
+            } else {
+                note = try libraryService.loadNote(at: targetURL)
+            }
+
+            let appendedBlock = try buildTickerNextCaptureBlock(rootURL: rootURL, noteURL: note.url)
+            note.body = appendMarkdownBlock(appendedBlock, to: note.body)
+            try libraryService.saveNote(note)
+
+            NotificationCenter.default.post(
+                name: .tickerNextDidAppendCaptureToNote,
+                object: nil,
+                userInfo: [
+                    TickerNextQuickCaptureUserInfoKey.notePath: note.url.path,
+                    TickerNextQuickCaptureUserInfoKey.appendedMarkdown: appendedBlock
+                ]
+            )
+
+            return (note, usedInboxFallback)
+        }
+
+        guard let (savedNote, usedInboxFallback) = saveResult else {
+            throw QuickPanelError.tickerNextLibraryNotConfigured
+        }
+
+        if usedInboxFallback {
+            statusMessage = "Current note unavailable. Saved to Inbox."
+            return false
+        }
+
+        DebugLog.log("[QuickPanel] Saved capture to \(savedNote.url.path)")
+        return triggerAI ? false : true
+    }
+
+    private func buildTickerNextCaptureBlock(rootURL: URL, noteURL: URL) throws -> String {
+        var sections: [String] = []
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        sections.append("_Captured \(timestamp)_")
+
+        if let ctx = context {
+            if let selectedText = ctx.selectedText, !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                sections.append(markdownQuote(selectedText))
+            } else if let imageData = ctx.clipboardImage {
+                let imageURL = try libraryService.saveImageAsset(data: imageData, in: rootURL)
+                let imagePath = libraryService.relativePath(
+                    from: noteURL.deletingLastPathComponent(),
+                    to: imageURL
+                )
+                sections.append("![](\(imagePath))")
+            }
+
+            if let source = buildPlainSourceAttribution(app: ctx.activeApp, windowTitle: ctx.windowTitle) {
+                sections.append("_Source: \(source)_")
+            }
+        }
+
+        let trimmedInput = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedInput.isEmpty {
+            sections.append(trimmedInput)
+        }
+
+        return sections.joined(separator: "\n\n")
+    }
+
+    private func appendMarkdownBlock(_ block: String, to body: String) -> String {
+        if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return block
+        }
+
+        var updatedBody = body
+        if !updatedBody.hasSuffix("\n") {
+            updatedBody += "\n"
+        }
+        if !updatedBody.hasSuffix("\n\n") {
+            updatedBody += "\n"
+        }
+        updatedBody += block
+        return updatedBody
+    }
+
+    private func markdownQuote(_ text: String) -> String {
+        text
+            .split(whereSeparator: \.isNewline)
+            .map { "> \($0)" }
+            .joined(separator: "\n")
     }
 
     /// Load available streams for the picker
@@ -593,6 +781,24 @@ final class QuickPanelManager: ObservableObject {
         case let (app?, _):
             return app
         case let (nil, title?) where !title.isEmpty:
+            return title
+        default:
+            return nil
+        }
+    }
+
+    /// Build source attribution in plain text for markdown note captures.
+    private func buildPlainSourceAttribution(app: String?, windowTitle: String?) -> String? {
+        let trimmedApp = app?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTitle = windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch (trimmedApp, trimmedTitle) {
+        case let (app?, title?) where !app.isEmpty && !title.isEmpty:
+            let truncatedTitle = title.count > 60 ? String(title.prefix(57)) + "..." : title
+            return "\(app) - \(truncatedTitle)"
+        case let (app?, _ ) where !app.isEmpty:
+            return app
+        case let (_, title?) where !title.isEmpty:
             return title
         default:
             return nil
@@ -728,6 +934,7 @@ final class QuickPanelManager: ObservableObject {
 enum QuickPanelError: Error, LocalizedError {
     case persistenceNotConfigured
     case noActiveStream
+    case tickerNextLibraryNotConfigured
 
     var errorDescription: String? {
         switch self {
@@ -735,6 +942,8 @@ enum QuickPanelError: Error, LocalizedError {
             return "Database not configured"
         case .noActiveStream:
             return "No active stream"
+        case .tickerNextLibraryNotConfigured:
+            return "Set a Ticker Next library folder before saving captures"
         }
     }
 }
@@ -744,4 +953,5 @@ enum QuickPanelError: Error, LocalizedError {
 extension Notification.Name {
     static let quickPanelDidShow = Notification.Name("QuickPanelDidShow")
     static let quickPanelDidHide = Notification.Name("QuickPanelDidHide")
+    static let tickerNextDidAppendCaptureToNote = Notification.Name("TickerNextDidAppendCaptureToNote")
 }
