@@ -620,5 +620,18 @@ final class LibraryServicePDFImportTests: XCTestCase {
         XCTAssertEqual(match?.urlString, url)
         XCTAssertEqual(match?.pdfID, pdfID)
         XCTAssertEqual(match?.highlightID, highlightID)
+
+        let matchAtStart = TickerPDFLinkCodec.match(in: text, containingUTF16Offset: linkRange.location)
+        XCTAssertEqual(matchAtStart?.urlString, url)
+
+        let matchAtEnd = TickerPDFLinkCodec.match(in: text, containingUTF16Offset: NSMaxRange(linkRange))
+        XCTAssertEqual(matchAtEnd?.urlString, url)
+
+        let markdownSnippet = "[Example](\(url))"
+        let firstMatch = TickerPDFLinkCodec.firstMatch(in: markdownSnippet)
+        XCTAssertEqual(firstMatch?.urlString, url)
+
+        let outsideMatch = TickerPDFLinkCodec.match(in: text, containingUTF16Offset: NSMaxRange(linkRange) + 1)
+        XCTAssertNil(outsideMatch)
     }
 }

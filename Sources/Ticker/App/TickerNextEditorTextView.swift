@@ -5,6 +5,10 @@ protocol TickerNextEditorTextViewActionHandling: AnyObject {
         _ textView: TickerNextEditorTextView,
         didRequestAction action: TickerNextSelectionAIAction
     )
+    func tickerNextEditorTextView(
+        _ textView: TickerNextEditorTextView,
+        didCommandClickAtUTF16Offset offset: Int
+    ) -> Bool
 }
 
 final class TickerNextEditorTextView: NSTextView {
@@ -12,6 +16,16 @@ final class TickerNextEditorTextView: NSTextView {
     private static let aiSeparatorTag = 31_002
 
     weak var actionHandler: TickerNextEditorTextViewActionHandling?
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command),
+           let utf16Offset = utf16OffsetForEvent(event),
+           actionHandler?.tickerNextEditorTextView(self, didCommandClickAtUTF16Offset: utf16Offset) == true {
+            return
+        }
+
+        super.mouseDown(with: event)
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event) ?? NSMenu(title: "Context")
@@ -69,5 +83,27 @@ final class TickerNextEditorTextView: NSTextView {
                 menu.removeItem(at: index)
             }
         }
+    }
+
+    private func utf16OffsetForEvent(_ event: NSEvent) -> Int? {
+        guard let layoutManager,
+              let textContainer else {
+            return nil
+        }
+
+        let pointInView = convert(event.locationInWindow, from: nil)
+        let pointInContainer = NSPoint(
+            x: pointInView.x - textContainerOrigin.x,
+            y: pointInView.y - textContainerOrigin.y
+        )
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        let usedRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        guard usedRect.contains(pointInContainer) else {
+            return nil
+        }
+
+        let glyphIndex = layoutManager.glyphIndex(for: pointInContainer, in: textContainer)
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        return min(max(0, charIndex), (string as NSString).length)
     }
 }

@@ -174,14 +174,44 @@ enum TickerPDFLinkCodec {
         return (pdfID, highlightID)
     }
 
-    static func match(in text: String, containingUTF16Offset offset: Int) -> TickerPDFLinkMatch? {
+    static func firstMatch(in text: String) -> TickerPDFLinkMatch? {
         let nsText = text as NSString
         let fullRange = NSRange(location: 0, length: nsText.length)
+        guard let match = linkRegex.firstMatch(in: text, options: [], range: fullRange) else {
+            return nil
+        }
+
+        let range = match.range(at: 0)
+        let urlString = nsText.substring(with: range)
+        guard let parsed = parse(urlString: urlString) else {
+            return nil
+        }
+
+        return TickerPDFLinkMatch(
+            urlString: urlString,
+            range: range,
+            pdfID: parsed.pdfID,
+            highlightID: parsed.highlightID
+        )
+    }
+
+    static func match(in text: String, containingUTF16Offset offset: Int) -> TickerPDFLinkMatch? {
+        guard offset >= 0 else {
+            return nil
+        }
+
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        let clampedOffset = min(offset, nsText.length)
         let matches = linkRegex.matches(in: text, options: [], range: fullRange)
 
         for match in matches {
             let range = match.range(at: 0)
-            guard NSLocationInRange(offset, range) else { continue }
+            let lowerBound = range.location
+            let upperBound = NSMaxRange(range)
+            guard clampedOffset >= lowerBound && clampedOffset <= upperBound else {
+                continue
+            }
             let urlString = nsText.substring(with: range)
             guard let parsed = parse(urlString: urlString) else { continue }
             return TickerPDFLinkMatch(
