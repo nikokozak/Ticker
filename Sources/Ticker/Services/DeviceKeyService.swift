@@ -266,12 +266,13 @@ actor DeviceKeyService {
         return "https://ticker-proxy.fly.dev"
     }
 
-    init(fileURL: URL? = nil, fileManager: FileManager = .default) {
-        self.fileManager = fileManager
-        self.fileURL = fileURL ?? Self.defaultFileURL(fileManager: fileManager)
+    init(fileURL: URL? = nil) {
+        self.fileManager = .default
+        self.fileURL = fileURL ?? Self.defaultFileURL()
     }
 
-    private static func defaultFileURL(fileManager: FileManager) -> URL {
+    private static func defaultFileURL() -> URL {
+        let fileManager = FileManager.default
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         let tickerDir = appSupport.appendingPathComponent("Ticker", isDirectory: true)
