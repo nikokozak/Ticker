@@ -314,7 +314,8 @@ final class LibraryServiceFrontMatterTests: XCTestCase {
 
         XCTAssertEqual(result.rewrittenIDsByFile.count, 1)
         XCTAssertEqual(result.retainedFiles.map(\.lastPathComponent), ["01-retained.md"])
-        XCTAssertNotNil(result.rewrittenIDsByFile[rewrittenURL])
+        let rewrittenFileNames = Set(result.rewrittenIDsByFile.keys.map(\.lastPathComponent))
+        XCTAssertEqual(rewrittenFileNames, Set(["02-rewritten.md"]))
 
         let retainedParsed = TickerMarkdownFrontMatterCodec.parse(try String(contentsOf: retainedURL, encoding: .utf8))
         let rewrittenParsed = TickerMarkdownFrontMatterCodec.parse(try String(contentsOf: rewrittenURL, encoding: .utf8))

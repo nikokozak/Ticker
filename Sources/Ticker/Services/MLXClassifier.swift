@@ -1,11 +1,11 @@
 import Foundation
-import MLXLLM
-import MLXLMCommon
 
-/// MLX-based local query classifier using a small LLM
+/// Heuristic query classifier used for smart routing.
+///
+/// This intentionally avoids heavyweight local model dependencies so the app and tests
+/// remain buildable on current Swift/Xcode toolchains.
 final class MLXClassifier: QueryClassifier {
-    private var container: ModelContainer?
-    private let modelId = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+    private let modelId = "heuristic"
 
     // MARK: - QueryClassifier State
 
@@ -13,18 +13,16 @@ final class MLXClassifier: QueryClassifier {
     private(set) var loadError: Error?
 
     var isReady: Bool {
-        container != nil
+        true
     }
 
 
     func prepare() async throws {
-        guard container == nil, !isLoading else { return }
+        guard !isLoading else { return }
         isLoading = true
 
         do {
             DebugLog.log("MLXClassifier: Loading model \(modelId)...")
-            let loadedContainer = try await loadModelContainer(id: modelId)
-            self.container = loadedContainer
             DebugLog.log("MLXClassifier: Model loaded successfully")
         } catch {
             loadError = error
@@ -36,26 +34,12 @@ final class MLXClassifier: QueryClassifier {
     }
 
     func classify(query: String) async throws -> ClassificationResult {
-        guard let container else {
-            throw ClassifierError.modelNotLoaded
-        }
-
-        let session = ChatSession(
-            container,
-            instructions: Prompts.classifier,
-            generateParameters: GenerateParameters(
-                maxTokens: 10,
-                temperature: 0.1  // Low temperature for deterministic classification
-            )
-        )
-
-        let output = try await session.respond(to: query)
-        let cleanedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cleanedOutput = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let intent = parseIntent(from: cleanedOutput, query: query)
 
         return ClassificationResult(
             intent: intent,
-            confidence: intent == .ambiguous ? 0.5 : 0.9,
+            confidence: intent == .ambiguous ? 0.5 : 0.8,
             reasoning: cleanedOutput
         )
     }
@@ -100,19 +84,5 @@ final class MLXClassifier: QueryClassifier {
         }
 
         return .ambiguous
-    }
-}
-
-enum ClassifierError: LocalizedError {
-    case modelNotLoaded
-    case generationFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .modelNotLoaded:
-            return "Classification model not loaded"
-        case .generationFailed(let reason):
-            return "Generation failed: \(reason)"
-        }
     }
 }
