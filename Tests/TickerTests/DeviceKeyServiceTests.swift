@@ -236,3 +236,109 @@ final class PersistenceServiceQuickPanelTests: XCTestCase {
         try body(service)
     }
 }
+
+final class LibraryServiceFrontMatterTests: XCTestCase {
+    func test_frontMatterRoundtrip_preservesBodyAndRecognizedKeys() {
+        let tickerID = UUID()
+        let tickerPDFID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 1_717_171_700)
+        let body = "# Heading\n\nParagraph one.\nParagraph two.\n"
+
+        let frontMatter = TickerNoteFrontMatter(
+            tickerID: tickerID,
+            tickerKind: .pdfNote,
+            tickerPDFID: tickerPDFID,
+            createdAt: createdAt
+        )
+
+        let serialized = TickerMarkdownFrontMatterCodec.serialize(frontMatter: frontMatter, body: body)
+        let parsed = TickerMarkdownFrontMatterCodec.parse(serialized)
+
+        XCTAssertEqual(parsed.frontMatter, frontMatter)
+        XCTAssertEqual(parsed.body, body)
+    }
+
+    func test_detectDuplicateTickerIDs_groupsDeterministically() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let duplicateID = UUID()
+        let distinctID = UUID()
+
+        let fileA = tempDir.appendingPathComponent("01-a.md")
+        let fileB = tempDir.appendingPathComponent("02-b.md")
+        let fileC = tempDir.appendingPathComponent("03-c.md")
+
+        try writeNote(fileA, id: duplicateID, body: "A body")
+        try writeNote(fileB, id: duplicateID, body: "B body")
+        try writeNote(fileC, id: distinctID, body: "C body")
+
+        let suiteName = "LibraryServiceFrontMatterTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        let notes = try service.scanMarkdownNotes(in: tempDir)
+        let duplicates = TickerNoteDuplicateResolver.detectDuplicateTickerIDs(in: notes)
+
+        XCTAssertEqual(duplicates.count, 1)
+        XCTAssertEqual(duplicates[0].tickerID, duplicateID)
+        XCTAssertEqual(duplicates[0].fileURLs.map(\.lastPathComponent), ["01-a.md", "02-b.md"])
+    }
+
+    func test_fixDuplicateTickerIDs_rewritesOnlyConflictingFollowers() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let duplicateID = UUID()
+        let uniqueID = UUID()
+
+        let retainedURL = tempDir.appendingPathComponent("01-retained.md")
+        let rewrittenURL = tempDir.appendingPathComponent("02-rewritten.md")
+        let uniqueURL = tempDir.appendingPathComponent("03-unique.md")
+
+        try writeNote(retainedURL, id: duplicateID, body: "retained body")
+        try writeNote(rewrittenURL, id: duplicateID, body: "rewritten body")
+        try writeNote(uniqueURL, id: uniqueID, body: "unique body")
+
+        let suiteName = "LibraryServiceFixTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        let result = try service.fixDuplicateTickerIDs(in: tempDir)
+
+        XCTAssertEqual(result.rewrittenIDsByFile.count, 1)
+        XCTAssertEqual(result.retainedFiles.map(\.lastPathComponent), ["01-retained.md"])
+        XCTAssertNotNil(result.rewrittenIDsByFile[rewrittenURL])
+
+        let retainedParsed = TickerMarkdownFrontMatterCodec.parse(try String(contentsOf: retainedURL, encoding: .utf8))
+        let rewrittenParsed = TickerMarkdownFrontMatterCodec.parse(try String(contentsOf: rewrittenURL, encoding: .utf8))
+        let uniqueParsed = TickerMarkdownFrontMatterCodec.parse(try String(contentsOf: uniqueURL, encoding: .utf8))
+
+        XCTAssertEqual(retainedParsed.frontMatter?.tickerID, duplicateID)
+        XCTAssertNotEqual(rewrittenParsed.frontMatter?.tickerID, duplicateID)
+        XCTAssertEqual(uniqueParsed.frontMatter?.tickerID, uniqueID)
+
+        XCTAssertEqual(retainedParsed.body, "retained body")
+        XCTAssertEqual(rewrittenParsed.body, "rewritten body")
+        XCTAssertEqual(uniqueParsed.body, "unique body")
+    }
+
+    private func writeNote(_ url: URL, id: UUID, body: String) throws {
+        let markdown = TickerMarkdownFrontMatterCodec.serialize(
+            frontMatter: TickerNoteFrontMatter(
+                tickerID: id,
+                tickerKind: .note,
+                tickerPDFID: nil,
+                createdAt: nil
+            ),
+            body: body
+        )
+        try markdown.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
