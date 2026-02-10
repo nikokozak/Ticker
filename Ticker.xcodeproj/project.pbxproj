@@ -55,10 +55,14 @@
 		A1000001000000000029 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000029 /* KeychainService.swift */; };
 		A100000100000000002A /* SelectionReaderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002A /* SelectionReaderService.swift */; };
 			A100000100000000002C /* DeviceKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002C /* DeviceKeyService.swift */; };
-			A100000100000000002D /* ProxyLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002D /* ProxyLLMService.swift */; };
-			A100000100000000002E /* DebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002E /* DebugLog.swift */; };
-			A1000001000000000030 /* LibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000030 /* LibraryService.swift */; };
-			A100000100000000002F /* DeviceKeyServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002F /* DeviceKeyServiceTests.swift */; };
+		A100000100000000002D /* ProxyLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002D /* ProxyLLMService.swift */; };
+		A100000100000000002E /* DebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002E /* DebugLog.swift */; };
+		A1000001000000000030 /* LibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000030 /* LibraryService.swift */; };
+		A1000001000000000031 /* TickerNextEditorTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000031 /* TickerNextEditorTextView.swift */; };
+		A1000001000000000032 /* TickerNextAuthorshipService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000032 /* TickerNextAuthorshipService.swift */; };
+		A1000001000000000033 /* TickerNextSelectionAIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000033 /* TickerNextSelectionAIService.swift */; };
+		A1000001000000000034 /* TickerNextAuthorshipServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000034 /* TickerNextAuthorshipServiceTests.swift */; };
+		A100000100000000002F /* DeviceKeyServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002F /* DeviceKeyServiceTests.swift */; };
 		/* End PBXBuildFile section */
 
 		/* Begin PBXContainerItemProxy section */
@@ -120,10 +124,14 @@
 		B1000001000000000029 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		B100000100000000002A /* SelectionReaderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionReaderService.swift; sourceTree = "<group>"; };
 			B100000100000000002C /* DeviceKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyService.swift; sourceTree = "<group>"; };
-			B100000100000000002D /* ProxyLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyLLMService.swift; sourceTree = "<group>"; };
-			B100000100000000002E /* DebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLog.swift; sourceTree = "<group>"; };
-			B1000001000000000030 /* LibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryService.swift; sourceTree = "<group>"; };
-				B100000100000000002F /* DeviceKeyServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyServiceTests.swift; sourceTree = "<group>"; };
+		B100000100000000002D /* ProxyLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyLLMService.swift; sourceTree = "<group>"; };
+		B100000100000000002E /* DebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLog.swift; sourceTree = "<group>"; };
+		B1000001000000000030 /* LibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryService.swift; sourceTree = "<group>"; };
+		B1000001000000000031 /* TickerNextEditorTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TickerNextEditorTextView.swift; sourceTree = "<group>"; };
+		B1000001000000000032 /* TickerNextAuthorshipService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TickerNextAuthorshipService.swift; sourceTree = "<group>"; };
+		B1000001000000000033 /* TickerNextSelectionAIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TickerNextSelectionAIService.swift; sourceTree = "<group>"; };
+		B1000001000000000034 /* TickerNextAuthorshipServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TickerNextAuthorshipServiceTests.swift; sourceTree = "<group>"; };
+		B100000100000000002F /* DeviceKeyServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyServiceTests.swift; sourceTree = "<group>"; };
 				F1000001000000000001 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
 				F1000001000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 			/* End PBXFileReference section */
@@ -193,6 +201,7 @@
 			isa = PBXGroup;
 			children = (
 				B1000001000000000001 /* AppDelegate.swift */,
+				B1000001000000000031 /* TickerNextEditorTextView.swift */,
 				B1000001000000000002 /* AssetSchemeHandler.swift */,
 				B100000100000000002B /* BundleSchemeHandler.swift */,
 				B1000001000000000003 /* BridgeService.swift */,
@@ -246,6 +255,8 @@
 				B100000100000000002D /* ProxyLLMService.swift */,
 				B100000100000000002E /* DebugLog.swift */,
 				B1000001000000000030 /* LibraryService.swift */,
+				B1000001000000000032 /* TickerNextAuthorshipService.swift */,
+				B1000001000000000033 /* TickerNextSelectionAIService.swift */,
 				B1000001000000000020 /* QueryClassifier.swift */,
 				B1000001000000000021 /* RAGMigrationService.swift */,
 				B1000001000000000022 /* RetrievalService.swift */,
@@ -304,14 +315,15 @@
 				path = Tests;
 				sourceTree = "<group>";
 			};
-			G100000100000000000A /* TickerTests */ = {
-				isa = PBXGroup;
-				children = (
-					B100000100000000002F /* DeviceKeyServiceTests.swift */,
-				);
-				path = TickerTests;
-				sourceTree = "<group>";
-			};
+		G100000100000000000A /* TickerTests */ = {
+			isa = PBXGroup;
+			children = (
+				B100000100000000002F /* DeviceKeyServiceTests.swift */,
+				B1000001000000000034 /* TickerNextAuthorshipServiceTests.swift */,
+			);
+			path = TickerTests;
+			sourceTree = "<group>";
+		};
 		/* End PBXGroup section */
 
 		/* Begin PBXNativeTarget section */
@@ -447,6 +459,7 @@
 				A1000001000000000007 /* QuickPanelManager.swift in Sources */,
 				A1000001000000000008 /* QuickPanelView.swift in Sources */,
 				A1000001000000000009 /* QuickPanelWindow.swift in Sources */,
+				A1000001000000000031 /* TickerNextEditorTextView.swift in Sources */,
 				A100000100000000000A /* Colors.swift in Sources */,
 				A100000100000000000B /* Spacing.swift in Sources */,
 				A100000100000000000C /* BridgePayloads.swift in Sources */,
@@ -484,6 +497,8 @@
 				A100000100000000002D /* ProxyLLMService.swift in Sources */,
 				A100000100000000002E /* DebugLog.swift in Sources */,
 				A1000001000000000030 /* LibraryService.swift in Sources */,
+				A1000001000000000032 /* TickerNextAuthorshipService.swift in Sources */,
+				A1000001000000000033 /* TickerNextSelectionAIService.swift in Sources */,
 			);
 				runOnlyForDeploymentPostprocessing = 0;
 			};
@@ -492,6 +507,7 @@
 				buildActionMask = 2147483647;
 				files = (
 					A100000100000000002F /* DeviceKeyServiceTests.swift in Sources */,
+					A1000001000000000034 /* TickerNextAuthorshipServiceTests.swift in Sources */,
 				);
 				runOnlyForDeploymentPostprocessing = 0;
 			};

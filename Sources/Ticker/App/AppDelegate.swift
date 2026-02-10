@@ -22,7 +22,7 @@ struct TickerApp {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDelegate, TickerNextEditorTextViewActionHandling {
     private var mainWindow: NSWindow?
     private var webViewManager: WebViewManager?
     private var onboardingWindow: NSWindow?
@@ -31,6 +31,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var tickerNextEditorWindow: NSWindow?
     private var tickerNextEditorTextView: NSTextView?
     private var tickerNextCurrentNote: TickerMarkdownNote?
+    private let tickerNextSelectionAIService = TickerNextSelectionAIService()
+    private let tickerNextDocMetadataStore = TickerNextDocMetadataStore()
+    private var tickerNextAuthorshipSpans: [TickerNextAuthorshipSpan] = []
+    private var tickerNextPreviousEditorBody = ""
+    private var tickerNextPendingAIInsertion: (range: NSRange, source: String)?
+    private var tickerNextSuppressTextDidChange = false
+    private var tickerNextAIRequestInFlight = false
 
     // Menu bar (status item)
     private var statusItem: NSStatusItem?
@@ -404,11 +411,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             currentNote.body = textView.string
 
             _ = try ensureLibraryFolderSelected()
-            _ = try libraryService.withLibraryRootAccess { _ in
+            _ = try libraryService.withLibraryRootAccess { rootURL in
                 try libraryService.saveNote(currentNote)
+                try tickerNextDocMetadataStore.saveSpans(
+                    tickerNextAuthorshipSpans,
+                    for: currentNote,
+                    libraryRootURL: rootURL
+                )
             }
 
             tickerNextCurrentNote = currentNote
+            tickerNextPreviousEditorBody = currentNote.body
             DebugLog.log("[TickerNext] Saved note at \(currentNote.url.path)")
         } catch {
             DebugLog.log("[TickerNext] Failed to save note (\(DebugLog.errorSummary(error)))")
@@ -544,8 +557,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let textView = tickerNextEditorTextView else { return }
 
         let updatedBody = appendMarkdownBlock(appendedMarkdown, to: textView.string)
+        tickerNextSuppressTextDidChange = true
         textView.string = updatedBody
-        tickerNextCurrentNote?.body = updatedBody
+        tickerNextSuppressTextDidChange = false
+        syncTickerNextEditorStateAfterTextChange(newBody: updatedBody)
     }
 
     private func ensureLibraryFolderSelected() throws -> URL? {
@@ -570,13 +585,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return existingTextView
         }
 
-        let textView = NSTextView(frame: .zero)
+        let textView = TickerNextEditorTextView(frame: .zero)
         textView.isRichText = false
         textView.importsGraphics = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDataDetectionEnabled = false
         textView.allowsUndo = true
         textView.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        textView.delegate = self
+        textView.actionHandler = self
 
         let scrollView = NSScrollView(frame: .zero)
         scrollView.hasVerticalScroller = true
@@ -607,8 +624,261 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let textView = ensureTickerNextEditorTextView()
         tickerNextCurrentNote = note
         SettingsService.shared.tickerNextCurrentNotePath = note.url.path
+        tickerNextPendingAIInsertion = nil
+        tickerNextAIRequestInFlight = false
+        loadTickerNextAuthorshipSpans(for: note)
+        tickerNextSuppressTextDidChange = true
         textView.string = note.body
+        tickerNextSuppressTextDidChange = false
+        tickerNextPreviousEditorBody = note.body
+        applyTickerNextAuthorshipStyling()
         tickerNextEditorWindow?.title = note.url.lastPathComponent
+    }
+
+    func textDidChange(_ notification: Notification) {
+        guard !tickerNextSuppressTextDidChange else { return }
+        guard let textView = notification.object as? NSTextView,
+              textView == tickerNextEditorTextView else {
+            return
+        }
+
+        syncTickerNextEditorStateAfterTextChange(newBody: textView.string)
+    }
+
+    func tickerNextEditorTextView(
+        _ textView: TickerNextEditorTextView,
+        didRequestAction action: TickerNextSelectionAIAction
+    ) {
+        guard textView == tickerNextEditorTextView else { return }
+        runTickerNextSelectionAIAction(action)
+    }
+
+    private func syncTickerNextEditorStateAfterTextChange(newBody: String) {
+        let oldBody = tickerNextPreviousEditorBody
+
+        if oldBody != newBody,
+           let edit = TickerNextTextEditDetector.detectSingleEdit(from: oldBody, to: newBody) {
+            tickerNextAuthorshipSpans = TickerNextAuthorshipSpanTransformer.applyUserEdit(
+                spans: tickerNextAuthorshipSpans,
+                edit: edit
+            )
+        }
+
+        var shouldPersist = false
+        if let pending = tickerNextPendingAIInsertion {
+            tickerNextAuthorshipSpans = TickerNextAuthorshipSpanTransformer.addAIInsertion(
+                range: pending.range,
+                source: pending.source,
+                to: tickerNextAuthorshipSpans
+            )
+            tickerNextPendingAIInsertion = nil
+            shouldPersist = true
+        }
+
+        let textLength = (newBody as NSString).length
+        tickerNextAuthorshipSpans = TickerNextAuthorshipSpanTransformer.clamped(
+            spans: tickerNextAuthorshipSpans,
+            toUTF16Length: textLength
+        )
+
+        tickerNextPreviousEditorBody = newBody
+        tickerNextCurrentNote?.body = newBody
+        applyTickerNextAuthorshipStyling()
+
+        if shouldPersist {
+            persistTickerNextCurrentNoteAndMetadata()
+        }
+    }
+
+    private func runTickerNextSelectionAIAction(_ action: TickerNextSelectionAIAction) {
+        guard !tickerNextAIRequestInFlight else { return }
+        guard let textView = tickerNextEditorTextView else { return }
+
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length > 0 else {
+            NSSound.beep()
+            return
+        }
+
+        let buffer = textView.string as NSString
+        guard NSMaxRange(selectedRange) <= buffer.length else {
+            NSSound.beep()
+            return
+        }
+
+        let selectedText = buffer.substring(with: selectedRange)
+
+        let rewriteInstruction: String?
+        if action == .rewrite {
+            guard let instruction = promptForTickerNextRewriteInstruction() else {
+                return
+            }
+            rewriteInstruction = instruction
+        } else {
+            rewriteInstruction = nil
+        }
+
+        tickerNextAIRequestInFlight = true
+        textView.isEditable = false
+        tickerNextEditorWindow?.title = "Ticker Next Editor (AI...)"
+
+        Task {
+            do {
+                let replacement = try await tickerNextSelectionAIService.transformSelection(
+                    selectedText,
+                    action: action,
+                    customInstruction: rewriteInstruction
+                )
+
+                await MainActor.run {
+                    self.applyTickerNextAIReplacement(
+                        with: replacement,
+                        replacing: selectedRange,
+                        source: action.rawValue
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    self.presentTickerNextAIActionError(error)
+                }
+            }
+
+            await MainActor.run {
+                self.tickerNextAIRequestInFlight = false
+                self.tickerNextEditorTextView?.isEditable = true
+                self.tickerNextEditorWindow?.title = self.tickerNextCurrentNote?.url.lastPathComponent ?? "Ticker Next Editor"
+            }
+        }
+    }
+
+    private func applyTickerNextAIReplacement(
+        with replacement: String,
+        replacing range: NSRange,
+        source: String
+    ) {
+        guard let textView = tickerNextEditorTextView else { return }
+
+        let bufferLength = (textView.string as NSString).length
+        let safeLocation = min(max(0, range.location), bufferLength)
+        let safeLength = min(max(0, range.length), bufferLength - safeLocation)
+        let safeRange = NSRange(location: safeLocation, length: safeLength)
+        guard safeRange.length > 0 else { return }
+
+        let insertedLength = (replacement as NSString).length
+        let undoManager = textView.undoManager
+        undoManager?.beginUndoGrouping()
+        defer { undoManager?.endUndoGrouping() }
+
+        guard textView.shouldChangeText(in: safeRange, replacementString: replacement) else {
+            return
+        }
+
+        textView.textStorage?.replaceCharacters(in: safeRange, with: replacement)
+        textView.setSelectedRange(NSRange(location: safeRange.location + insertedLength, length: 0))
+        tickerNextPendingAIInsertion = (
+            range: NSRange(location: safeRange.location, length: insertedLength),
+            source: source
+        )
+        textView.didChangeText()
+    }
+
+    private func promptForTickerNextRewriteInstruction() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Rewrite Selection"
+        alert.informativeText = "Describe how the selected text should be rewritten."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rewrite")
+        alert.addButton(withTitle: "Cancel")
+
+        let promptField = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 22))
+        promptField.placeholderString = "e.g. Make this more concise and technical."
+        alert.accessoryView = promptField
+
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return nil }
+
+        let prompt = promptField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else {
+            NSSound.beep()
+            return nil
+        }
+        return prompt
+    }
+
+    private func presentTickerNextAIActionError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "AI action failed"
+        alert.informativeText = DebugLog.errorSummary(error)
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+
+    private func loadTickerNextAuthorshipSpans(for note: TickerMarkdownNote) {
+        do {
+            let spans = try libraryService.withLibraryRootAccess { rootURL in
+                try tickerNextDocMetadataStore.loadSpans(for: note, libraryRootURL: rootURL)
+            } ?? []
+
+            tickerNextAuthorshipSpans = TickerNextAuthorshipSpanTransformer.clamped(
+                spans: spans,
+                toUTF16Length: (note.body as NSString).length
+            )
+        } catch {
+            tickerNextAuthorshipSpans = []
+            DebugLog.log("[TickerNext] Failed to load authorship metadata (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    private func applyTickerNextAuthorshipStyling() {
+        guard let textView = tickerNextEditorTextView,
+              let layoutManager = textView.layoutManager else {
+            return
+        }
+
+        let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+        layoutManager.removeTemporaryAttribute(.font, forCharacterRange: fullRange)
+        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
+
+        guard !tickerNextAuthorshipSpans.isEmpty else { return }
+
+        let pointSize = textView.font?.pointSize ?? 14
+        let aiFont = NSFont.monospacedSystemFont(ofSize: pointSize, weight: .medium)
+        let aiColor = NSColor.labelColor.withAlphaComponent(0.8)
+
+        for span in tickerNextAuthorshipSpans {
+            guard span.lengthUTF16 > 0 else { continue }
+            let maxLength = fullRange.length - span.startUTF16
+            guard span.startUTF16 >= 0, maxLength > 0 else { continue }
+            let appliedRange = NSRange(
+                location: span.startUTF16,
+                length: min(span.lengthUTF16, maxLength)
+            )
+            layoutManager.addTemporaryAttribute(.font, value: aiFont, forCharacterRange: appliedRange)
+            layoutManager.addTemporaryAttribute(.foregroundColor, value: aiColor, forCharacterRange: appliedRange)
+        }
+    }
+
+    private func persistTickerNextCurrentNoteAndMetadata() {
+        guard var note = tickerNextCurrentNote else { return }
+        if let textView = tickerNextEditorTextView {
+            note.body = textView.string
+        }
+
+        do {
+            _ = try ensureLibraryFolderSelected()
+            _ = try libraryService.withLibraryRootAccess { rootURL in
+                try libraryService.saveNote(note)
+                try tickerNextDocMetadataStore.saveSpans(
+                    tickerNextAuthorshipSpans,
+                    for: note,
+                    libraryRootURL: rootURL
+                )
+            }
+            tickerNextCurrentNote = note
+            tickerNextPreviousEditorBody = note.body
+        } catch {
+            DebugLog.log("[TickerNext] Failed to persist note metadata (\(DebugLog.errorSummary(error)))")
+        }
     }
 
     private func appendMarkdownBlock(_ block: String, to body: String) -> String {
