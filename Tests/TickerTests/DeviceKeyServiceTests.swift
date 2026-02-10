@@ -398,3 +398,44 @@ final class LibraryServiceNoteFileTests: XCTestCase {
         XCTAssertEqual(third.url.lastPathComponent, "meeting-notes-3.md")
     }
 }
+
+final class LibraryServiceCaptureAssetTests: XCTestCase {
+    func test_ensureInboxNote_returnsInboxFrontMatterAndPersistsFile() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let suiteName = "LibraryServiceCaptureAssetTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        let inbox = try service.ensureInboxNote(in: tempDir)
+
+        XCTAssertEqual(inbox.frontMatter.tickerKind, .inbox)
+        XCTAssertEqual(inbox.url.lastPathComponent, "Inbox.md")
+        XCTAssertTrue(fileManager.fileExists(atPath: inbox.url.path))
+    }
+
+    func test_saveImageAsset_and_relativePath_forNestedNote() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let suiteName = "LibraryServiceCaptureAssetPathTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        try service.ensureLibraryStructure(at: tempDir)
+
+        let note = try service.createNote(in: tempDir, title: "Research", directoryRelativePath: "ProjectA")
+        let imageURL = try service.saveImageAsset(data: Data([0x01, 0x02, 0x03]), in: tempDir)
+        let relativePath = service.relativePath(from: note.url.deletingLastPathComponent(), to: imageURL)
+
+        XCTAssertTrue(fileManager.fileExists(atPath: imageURL.path))
+        XCTAssertTrue(relativePath.hasPrefix("../Assets/Images/"))
+    }
+}

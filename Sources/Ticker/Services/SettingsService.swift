@@ -27,6 +27,7 @@ final class SettingsService {
         static let hasCompletedKeychainMigration = "has_completed_keychain_migration"
         static let hasCompletedOnboarding = "has_completed_onboarding"
         static let diagnosticsEnabled = "diagnostics_enabled"
+        static let tickerNextCurrentNotePath = "ticker_next_current_note_path"
         // Legacy keys (for migration)
         static let legacyOpenaiAPIKey = "openai_api_key"
         static let legacyAnthropicAPIKey = "anthropic_api_key"
@@ -236,6 +237,14 @@ final class SettingsService {
             return defaults.bool(forKey: Keys.diagnosticsEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.diagnosticsEnabled) }
+    }
+
+    // MARK: - Ticker Next Session
+
+    /// Path of the currently open Ticker Next note (if any).
+    var tickerNextCurrentNotePath: String? {
+        get { defaults.string(forKey: Keys.tickerNextCurrentNotePath) }
+        set { defaults.set(newValue, forKey: Keys.tickerNextCurrentNotePath) }
     }
 
     // MARK: - Settings Dictionary (for bridge)
