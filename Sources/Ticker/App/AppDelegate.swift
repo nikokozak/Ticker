@@ -185,6 +185,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
             openNoteItem.target = self
             appMenu.addItem(openNoteItem)
 
+            let importPDFItem = NSMenuItem(
+                title: "Import PDF...",
+                action: #selector(importTickerNextPDF),
+                keyEquivalent: "i"
+            )
+            importPDFItem.target = self
+            appMenu.addItem(importPDFItem)
+
             let saveNoteItem = NSMenuItem(
                 title: "Save Note",
                 action: #selector(saveTickerNextNote),
@@ -396,6 +404,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
             }
         } catch {
             DebugLog.log("[TickerNext] Failed to open note (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    @objc private func importTickerNextPDF() {
+        guard SettingsService.tickerNextMode else { return }
+        do {
+            _ = try ensureLibraryFolderSelected()
+
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = false
+            panel.canChooseFiles = true
+            panel.allowsMultipleSelection = false
+            panel.allowedContentTypes = [.pdf]
+            panel.prompt = "Import PDF"
+            panel.message = "Choose a PDF to copy into the Ticker Next library."
+
+            guard panel.runModal() == .OK, let selectedURL = panel.url else {
+                return
+            }
+
+            let didAccessSelectedPDF = selectedURL.startAccessingSecurityScopedResource()
+            defer {
+                if didAccessSelectedPDF {
+                    selectedURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            let imported = try libraryService.withLibraryRootAccess { rootURL in
+                try libraryService.importPDF(at: selectedURL, in: rootURL)
+            }
+
+            if let imported {
+                showTickerNextNote(imported.note)
+                DebugLog.log("[TickerNext] Imported PDF at \(imported.importedURL.path)")
+            }
+        } catch {
+            DebugLog.log("[TickerNext] Failed to import PDF (\(DebugLog.errorSummary(error)))")
         }
     }
 
