@@ -11,14 +11,12 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.24.0"),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm/", from: "2.29.2")
     ],
     targets: [
         .executableTarget(
             name: "Ticker",
             dependencies: [
-                .product(name: "GRDB", package: "GRDB.swift"),
-                .product(name: "MLXLLM", package: "mlx-swift-lm")
+                .product(name: "GRDB", package: "GRDB.swift")
             ],
             resources: [
                 .copy("Resources")
