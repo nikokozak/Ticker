@@ -61,8 +61,8 @@ Config (optional):
 
 Notes:
   - Dev/prod commands build unsigned (CODE_SIGNING_ALLOWED=NO).
-  - `run-dev`/`run-prod` use stable lane (`io.ticker.app` by default).
-  - `run-dev-qa`/`run-prod-qa` use QA lane (`io.ticker.app.qa` by default).
+  - `run-dev`/`run-prod` use stable lane (`io.ticker.next` by default).
+  - `run-dev-qa`/`run-prod-qa` use QA lane (`io.ticker.next.qa` by default).
   - Sparkle update testing requires an older build installed in /Applications
     and a newer build published in the appcast.
   - release-alpha also uploads a stable-named zip asset (Ticker-alpha-latest.zip)
@@ -78,8 +78,8 @@ if [[ -f "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
 
-APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.app}"
-QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.app.qa}"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.next}"
+QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.next.qa}"
 TICKER_APP_SUPPORT_DIR="${TICKER_APP_SUPPORT_DIR:-$HOME/Library/Application Support/Ticker}"
 TICKER_DEVICE_JSON_PATH="${TICKER_DEVICE_JSON_PATH:-$TICKER_APP_SUPPORT_DIR/device.json}"
 
@@ -1222,7 +1222,7 @@ cmd_reset_onboarding() {
   require_cmd defaults
   echo "Resetting onboarding for $APP_BUNDLE_ID..."
   defaults delete "$APP_BUNDLE_ID" has_completed_onboarding >/dev/null 2>&1 || true
-  echo "Done. Relaunch Ticker to see onboarding."
+  echo "Done. Relaunch Ticker Next to see onboarding."
 }
 
 cmd_reset_proxy_soft() {
@@ -1260,7 +1260,7 @@ cmd_reset_proxy_hard() {
     return 0
   fi
   rm -f "$TICKER_DEVICE_JSON_PATH"
-  echo "Deleted. Relaunch Ticker to re-register."
+  echo "Deleted. Relaunch Ticker Next to re-register."
 }
 
 reset_tcc_permission() {

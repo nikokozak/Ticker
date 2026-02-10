@@ -657,11 +657,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         guard SettingsService.tickerNextMode else { return }
 
         do {
-            if let rootPath = try bootstrapTickerNextLibrary() {
-                DebugLog.log("[TickerNext] Library structure ready at \(rootPath)")
+            var resolvedRootURL: URL?
+            if let existingRootURL = try libraryService.withLibraryRootAccess({ rootURL -> URL in
+                try libraryService.ensureLibraryStructure(at: rootURL)
+                return rootURL
+            }) {
+                resolvedRootURL = existingRootURL
+            } else {
+                resolvedRootURL = try libraryService.selectLibraryRootInteractively()
             }
+
+            guard let resolvedRootURL else {
+                showTickerNextStartupPlaceholder(
+                    "Choose a library folder from Ticker Next > Set Library Folder... to get started."
+                )
+                return
+            }
+
+            DebugLog.log("[TickerNext] Library structure ready at \(resolvedRootURL.path)")
+            try showTickerNextStartupNote(in: resolvedRootURL)
         } catch {
             DebugLog.log("[TickerNext] Failed to bootstrap library structure (\(DebugLog.errorSummary(error)))")
+            showTickerNextStartupPlaceholder(
+                "Ticker Next could not open the library. Use Ticker Next > Set Library Folder... and try again."
+            )
         }
     }
 
@@ -684,15 +703,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
             defer: false
         )
 
-        mainWindow?.title = "Ticker"
+        mainWindow?.title = SettingsService.tickerNextMode ? "Ticker Next Editor" : "Ticker"
         mainWindow?.minSize = NSSize(width: 300, height: 400)
         mainWindow?.delegate = self  // Handle close to hide instead of quit
         mainWindow?.level = .floating  // Always on top
         mainWindow?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        webViewManager = WebViewManager()
-        mainWindow?.contentView = webViewManager?.webView
-        webViewManager?.load()
+        if SettingsService.tickerNextMode {
+            webViewManager = nil
+
+            let textView = TickerNextEditorTextView(frame: .zero)
+            configureTickerNextEditorTextView(textView)
+            let scrollView = makeTickerNextEditorScrollView(with: textView)
+
+            mainWindow?.contentView = scrollView
+            tickerNextEditorWindow = mainWindow
+            tickerNextEditorTextView = textView
+        } else {
+            webViewManager = WebViewManager()
+            mainWindow?.contentView = webViewManager?.webView
+            webViewManager?.load()
+        }
 
         mainWindow?.makeKeyAndOrderFront(nil)
     }
@@ -798,21 +829,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         }
 
         let textView = TickerNextEditorTextView(frame: .zero)
-        textView.isRichText = false
-        textView.importsGraphics = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDataDetectionEnabled = false
-        textView.allowsUndo = true
-        textView.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-        textView.delegate = self
-        textView.actionHandler = self
-
-        let scrollView = NSScrollView(frame: .zero)
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.borderType = .noBorder
-        scrollView.documentView = textView
+        configureTickerNextEditorTextView(textView)
+        let scrollView = makeTickerNextEditorScrollView(with: textView)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 860, height: 640),
@@ -830,6 +848,88 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         NSApp.activate(ignoringOtherApps: true)
 
         return textView
+    }
+
+    private func configureTickerNextEditorTextView(_ textView: TickerNextEditorTextView) {
+        let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        let textColor = NSColor.labelColor
+        let backgroundColor = NSColor.textBackgroundColor
+
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.importsGraphics = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.allowsUndo = true
+        textView.drawsBackground = true
+        textView.font = font
+        textView.textColor = textColor
+        textView.backgroundColor = backgroundColor
+        textView.insertionPointColor = textColor
+        textView.autoresizingMask = [.width]
+        textView.textContainerInset = NSSize(width: 12, height: 12)
+        textView.typingAttributes = [
+            .font: font,
+            .foregroundColor: textColor
+        ]
+
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        if let textContainer = textView.textContainer {
+            textContainer.widthTracksTextView = true
+            textContainer.heightTracksTextView = false
+            textContainer.containerSize = NSSize(
+                width: CGFloat.greatestFiniteMagnitude,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+        }
+
+        textView.delegate = self
+        textView.actionHandler = self
+    }
+
+    private func makeTickerNextEditorScrollView(with textView: NSTextView) -> NSScrollView {
+        let scrollView = NSScrollView(frame: .zero)
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = NSColor.textBackgroundColor
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    private func showTickerNextStartupNote(in rootURL: URL) throws {
+        if let notePath = SettingsService.shared.tickerNextCurrentNotePath,
+           !notePath.isEmpty {
+            let noteURL = URL(fileURLWithPath: notePath)
+            if FileManager.default.fileExists(atPath: noteURL.path) {
+                let note = try libraryService.loadNote(at: noteURL)
+                showTickerNextNote(note)
+                return
+            }
+        }
+
+        let inboxNote = try libraryService.ensureInboxNote(in: rootURL)
+        showTickerNextNote(inboxNote)
+    }
+
+    private func showTickerNextStartupPlaceholder(_ message: String) {
+        let textView = ensureTickerNextEditorTextView()
+        tickerNextCurrentNote = nil
+        tickerNextAuthorshipSpans = []
+        tickerNextPreviousEditorBody = ""
+        tickerNextPendingAIInsertion = nil
+        tickerNextAIRequestInFlight = false
+        tickerNextSuppressTextDidChange = true
+        textView.string = message
+        tickerNextSuppressTextDidChange = false
+        applyTickerNextAuthorshipStyling()
+        tickerNextEditorWindow?.title = "Ticker Next Editor"
     }
 
     private func showTickerNextNote(_ note: TickerMarkdownNote) {
@@ -1194,13 +1294,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         }
 
         let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+        let baseFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        let baseColor = NSColor.labelColor
+
+        textView.font = baseFont
+        textView.textColor = baseColor
+        textView.insertionPointColor = baseColor
+        textView.typingAttributes = [
+            .font: baseFont,
+            .foregroundColor: baseColor
+        ]
+
         layoutManager.removeTemporaryAttribute(.font, forCharacterRange: fullRange)
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
+        layoutManager.addTemporaryAttribute(.font, value: baseFont, forCharacterRange: fullRange)
+        layoutManager.addTemporaryAttribute(.foregroundColor, value: baseColor, forCharacterRange: fullRange)
 
         guard !tickerNextAuthorshipSpans.isEmpty else { return }
 
-        let pointSize = textView.font?.pointSize ?? 14
-        let aiFont = NSFont.monospacedSystemFont(ofSize: pointSize, weight: .medium)
+        let aiFont = NSFont.monospacedSystemFont(ofSize: baseFont.pointSize, weight: .medium)
         let aiColor = NSColor.labelColor.withAlphaComponent(0.8)
 
         for span in tickerNextAuthorshipSpans {

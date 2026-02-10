@@ -16,8 +16,8 @@ Notes:
   - This script builds an unsigned app (`CODE_SIGNING_ALLOWED=NO`) but will optionally
     codesign the installed lane app if `SIGN_IDENTITY` is set (recommended so macOS
     permissions like Accessibility/Screen Recording stick across rebuilds).
-  - Stable lane installs to `~/Applications/Ticker.app` by default.
-  - QA lane installs to `~/Applications/Ticker QA.app` by default.
+  - Stable lane installs to `~/Applications/Ticker Next.app` by default.
+  - QA lane installs to `~/Applications/Ticker Next QA.app` by default.
   - Distribution builds should follow the signing/notarization runbook.
   - Override build output location with DERIVED_DATA_PATH (or TICKER_DERIVED_DATA_PATH), e.g.:
       DERIVED_DATA_PATH=/tmp/ticker-xcode-build ./run.sh --prod
@@ -33,11 +33,11 @@ fi
 DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-${TICKER_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}}"
 APP="$DERIVED_DATA_PATH/Build/Products"
-APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.app}"
-QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.app.qa}"
-QA_APP_DISPLAY_NAME="${QA_APP_DISPLAY_NAME:-Ticker QA}"
-STABLE_APP_INSTALL_PATH="${STABLE_APP_INSTALL_PATH:-$HOME/Applications/Ticker.app}"
-QA_APP_INSTALL_PATH="${QA_APP_INSTALL_PATH:-$HOME/Applications/Ticker QA.app}"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.next}"
+QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.next.qa}"
+QA_APP_DISPLAY_NAME="${QA_APP_DISPLAY_NAME:-Ticker Next QA}"
+STABLE_APP_INSTALL_PATH="${STABLE_APP_INSTALL_PATH:-$HOME/Applications/Ticker Next.app}"
+QA_APP_INSTALL_PATH="${QA_APP_INSTALL_PATH:-$HOME/Applications/Ticker Next QA.app}"
 
 MODE="dev"
 LANE="stable"
@@ -83,7 +83,7 @@ lane_display_name() {
   if [[ "$LANE" == "qa" ]]; then
     echo "$QA_APP_DISPLAY_NAME"
   else
-    echo "Ticker"
+    echo "Ticker Next"
   fi
 }
 
@@ -118,7 +118,7 @@ codesign_app_if_configured() {
     return 0
   fi
 
-  echo "Code signing Ticker for stable macOS permissions..."
+  echo "Code signing app for stable macOS permissions..."
   set +e
   codesign --deep --force --sign "$identity" "$app_path" >/dev/null 2>&1
   local status=$?
@@ -190,7 +190,7 @@ resolve_package_dependencies_if_needed() {
 build_app() {
   local configuration="$1"
 
-  echo "Building Ticker ($configuration)..."
+  echo "Building Ticker Next ($configuration)..."
   cd "$ROOT_DIR"
 
   resolve_package_dependencies_if_needed
