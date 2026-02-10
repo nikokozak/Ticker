@@ -216,9 +216,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
             let openHighlightLinkItem = NSMenuItem(
                 title: "Open Highlight Link at Cursor",
                 action: #selector(openTickerNextHighlightLinkAtCursor),
-                keyEquivalent: ""
+                keyEquivalent: "j"
             )
             openHighlightLinkItem.target = self
+            openHighlightLinkItem.keyEquivalentModifierMask = [.command, .shift]
             appMenu.addItem(openHighlightLinkItem)
 
             let saveNoteItem = NSMenuItem(
@@ -570,21 +571,44 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
 
         let body = textView.string
         let selectionRange = textView.selectedRange()
-
-        var parsedLink: (pdfID: UUID, highlightID: UUID)?
-        if let match = TickerPDFLinkCodec.match(in: body, containingUTF16Offset: selectionRange.location) {
-            parsedLink = (match.pdfID, match.highlightID)
-        } else if selectionRange.length > 0 {
-            let selectedText = (body as NSString).substring(with: selectionRange)
-            parsedLink = TickerPDFLinkCodec.parse(urlString: selectedText.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-
-        guard let parsedLink else {
+        guard let parsedLink = resolveTickerNextHighlightLink(
+            in: body,
+            selectionRange: selectionRange,
+            preferredUTF16Offset: selectionRange.location
+        ) else {
             NSSound.beep()
             return
         }
 
         openTickerNextPDFHighlight(pdfID: parsedLink.pdfID, highlightID: parsedLink.highlightID)
+    }
+
+    private func resolveTickerNextHighlightLink(
+        in body: String,
+        selectionRange: NSRange,
+        preferredUTF16Offset: Int?
+    ) -> (pdfID: UUID, highlightID: UUID)? {
+        if let preferredUTF16Offset,
+           let match = TickerPDFLinkCodec.match(
+               in: body,
+               containingUTF16Offset: preferredUTF16Offset
+           ) {
+            return (match.pdfID, match.highlightID)
+        }
+
+        let nsBody = body as NSString
+        if selectionRange.length > 0,
+           NSMaxRange(selectionRange) <= nsBody.length {
+            let selectedText = nsBody.substring(with: selectionRange)
+            if let match = TickerPDFLinkCodec.firstMatch(in: selectedText) {
+                return (match.pdfID, match.highlightID)
+            }
+            return TickerPDFLinkCodec.parse(
+                urlString: selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+
+        return nil
     }
 
     @objc private func saveTickerNextNote() {
@@ -968,6 +992,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
     ) {
         guard textView == tickerNextEditorTextView else { return }
         runTickerNextSelectionAIAction(action)
+    }
+
+    func tickerNextEditorTextView(
+        _ textView: TickerNextEditorTextView,
+        didCommandClickAtUTF16Offset offset: Int
+    ) -> Bool {
+        guard textView == tickerNextEditorTextView else { return false }
+        guard let parsedLink = resolveTickerNextHighlightLink(
+            in: textView.string,
+            selectionRange: textView.selectedRange(),
+            preferredUTF16Offset: offset
+        ) else {
+            return false
+        }
+
+        openTickerNextPDFHighlight(pdfID: parsedLink.pdfID, highlightID: parsedLink.highlightID)
+        return true
     }
 
     private func syncTickerNextEditorStateAfterTextChange(newBody: String) {
