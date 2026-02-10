@@ -25,6 +25,13 @@ struct TickerMarkdownNote: Equatable {
     var body: String
 }
 
+struct TickerImportedPDF: Equatable {
+    var pdfID: UUID
+    var sourceURL: URL
+    var importedURL: URL
+    var note: TickerMarkdownNote
+}
+
 struct DuplicateTickerIDGroup: Equatable {
     var tickerID: UUID
     var fileURLs: [URL]
@@ -345,6 +352,43 @@ final class LibraryService {
             .appendingPathComponent(fileName)
         try data.write(to: imageURL, options: [.atomic])
         return imageURL
+    }
+
+    func importPDF(
+        at sourceURL: URL,
+        in rootURL: URL,
+        companionDirectoryRelativePath: String? = nil
+    ) throws -> TickerImportedPDF {
+        try ensureLibraryStructure(at: rootURL)
+
+        let pdfID = UUID()
+        let destinationURL = rootURL
+            .appendingPathComponent("Assets", isDirectory: true)
+            .appendingPathComponent("PDFs", isDirectory: true)
+            .appendingPathComponent("\(pdfID.uuidString.lowercased()).pdf")
+
+        try fileManager.copyItem(at: sourceURL, to: destinationURL)
+
+        do {
+            let title = sourceURL.deletingPathExtension().lastPathComponent
+            let note = try createNote(
+                in: rootURL,
+                title: title.isEmpty ? "Imported PDF" : title,
+                kind: .pdfNote,
+                tickerPDFID: pdfID,
+                directoryRelativePath: companionDirectoryRelativePath
+            )
+
+            return TickerImportedPDF(
+                pdfID: pdfID,
+                sourceURL: sourceURL,
+                importedURL: destinationURL,
+                note: note
+            )
+        } catch {
+            try? fileManager.removeItem(at: destinationURL)
+            throw error
+        }
     }
 
     func relativePath(from baseURL: URL, to targetURL: URL) -> String {

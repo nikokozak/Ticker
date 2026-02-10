@@ -439,3 +439,38 @@ final class LibraryServiceCaptureAssetTests: XCTestCase {
         XCTAssertTrue(relativePath.hasPrefix("../Assets/Images/"))
     }
 }
+
+final class LibraryServicePDFImportTests: XCTestCase {
+    func test_importPDF_copiesAssetAndCreatesLinkedPDFNote() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let libraryRoot = tempDir.appendingPathComponent("Library", isDirectory: true)
+        let sourceRoot = tempDir.appendingPathComponent("Source", isDirectory: true)
+        try fileManager.createDirectory(at: libraryRoot, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
+
+        let sourcePDFURL = sourceRoot.appendingPathComponent("paper.pdf")
+        let samplePDF = Data("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n".utf8)
+        try samplePDF.write(to: sourcePDFURL, options: [.atomic])
+
+        let suiteName = "LibraryServicePDFImportTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        let imported = try service.importPDF(at: sourcePDFURL, in: libraryRoot)
+
+        XCTAssertTrue(fileManager.fileExists(atPath: imported.importedURL.path))
+        XCTAssertEqual(imported.importedURL.pathExtension.lowercased(), "pdf")
+        XCTAssertTrue(imported.importedURL.path.contains("/Assets/PDFs/"))
+        XCTAssertEqual(imported.note.frontMatter.tickerKind, .pdfNote)
+        XCTAssertEqual(imported.note.frontMatter.tickerPDFID, imported.pdfID)
+
+        let loaded = try service.loadNote(at: imported.note.url)
+        XCTAssertEqual(loaded.frontMatter.tickerKind, .pdfNote)
+        XCTAssertEqual(loaded.frontMatter.tickerPDFID, imported.pdfID)
+    }
+}
