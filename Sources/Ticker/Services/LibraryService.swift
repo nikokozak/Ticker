@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CryptoKit
 
 enum TickerNoteKind: String, Equatable {
     case note
@@ -30,6 +31,39 @@ struct TickerImportedPDF: Equatable {
     var sourceURL: URL
     var importedURL: URL
     var note: TickerMarkdownNote
+}
+
+struct TickerPDFFingerprint: Codable, Equatable {
+    var fileSize: Int64
+    var modificationTimestamp: TimeInterval
+    var sha256Hex: String
+
+    private enum CodingKeys: String, CodingKey {
+        case fileSize = "file_size"
+        case modificationTimestamp = "modification_timestamp"
+        case sha256Hex = "sha256_hex"
+    }
+}
+
+struct TickerPDFMetadata: Codable, Equatable {
+    var schemaVersion: Int
+    var pdfID: UUID
+    var fingerprint: TickerPDFFingerprint
+    var updatedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case pdfID = "pdf_id"
+        case fingerprint
+        case updatedAt = "updated_at"
+    }
+}
+
+enum TickerPDFDriftStatus: Equatable {
+    case matches
+    case missingFile
+    case missingMetadata(current: TickerPDFFingerprint)
+    case drifted(expected: TickerPDFFingerprint, current: TickerPDFFingerprint)
 }
 
 struct DuplicateTickerIDGroup: Equatable {
@@ -362,14 +396,14 @@ final class LibraryService {
         try ensureLibraryStructure(at: rootURL)
 
         let pdfID = UUID()
-        let destinationURL = rootURL
-            .appendingPathComponent("Assets", isDirectory: true)
-            .appendingPathComponent("PDFs", isDirectory: true)
-            .appendingPathComponent("\(pdfID.uuidString.lowercased()).pdf")
+        let destinationURL = importedPDFURL(for: pdfID, in: rootURL)
 
         try fileManager.copyItem(at: sourceURL, to: destinationURL)
 
         do {
+            let fingerprint = try computePDFFingerprint(at: destinationURL)
+            try savePDFMetadata(pdfID: pdfID, fingerprint: fingerprint, in: rootURL)
+
             let title = sourceURL.deletingPathExtension().lastPathComponent
             let note = try createNote(
                 in: rootURL,
@@ -387,8 +421,94 @@ final class LibraryService {
             )
         } catch {
             try? fileManager.removeItem(at: destinationURL)
+            try? fileManager.removeItem(at: pdfMetadataURL(for: pdfID, in: rootURL))
             throw error
         }
+    }
+
+    func importedPDFURL(for pdfID: UUID, in rootURL: URL) -> URL {
+        rootURL
+            .appendingPathComponent("Assets", isDirectory: true)
+            .appendingPathComponent("PDFs", isDirectory: true)
+            .appendingPathComponent("\(pdfID.uuidString.lowercased()).pdf")
+    }
+
+    func computePDFFingerprint(at pdfURL: URL) throws -> TickerPDFFingerprint {
+        let fileData = try Data(contentsOf: pdfURL, options: [.mappedIfSafe])
+        let digest = SHA256.hash(data: fileData)
+        let sha256Hex = digest.map { String(format: "%02x", $0) }.joined()
+
+        let resourceValues = try pdfURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let fileSize = Int64(resourceValues.fileSize ?? fileData.count)
+        let modificationTimestamp = (resourceValues.contentModificationDate ?? Date.distantPast).timeIntervalSince1970
+
+        return TickerPDFFingerprint(
+            fileSize: fileSize,
+            modificationTimestamp: modificationTimestamp,
+            sha256Hex: sha256Hex
+        )
+    }
+
+    func savePDFMetadata(
+        pdfID: UUID,
+        fingerprint: TickerPDFFingerprint,
+        in rootURL: URL
+    ) throws {
+        let metadata = TickerPDFMetadata(
+            schemaVersion: 1,
+            pdfID: pdfID,
+            fingerprint: fingerprint,
+            updatedAt: Date()
+        )
+        let metadataURL = pdfMetadataURL(for: pdfID, in: rootURL)
+        try fileManager.createDirectory(at: metadataURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(metadata)
+        try data.write(to: metadataURL, options: [.atomic])
+    }
+
+    func loadPDFMetadata(pdfID: UUID, in rootURL: URL) throws -> TickerPDFMetadata? {
+        let metadataURL = pdfMetadataURL(for: pdfID, in: rootURL)
+        guard fileManager.fileExists(atPath: metadataURL.path) else {
+            return nil
+        }
+
+        let data = try Data(contentsOf: metadataURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(TickerPDFMetadata.self, from: data)
+    }
+
+    func inspectPDFDrift(
+        for pdfID: UUID,
+        in rootURL: URL
+    ) throws -> TickerPDFDriftStatus {
+        let importedURL = importedPDFURL(for: pdfID, in: rootURL)
+        guard fileManager.fileExists(atPath: importedURL.path) else {
+            return .missingFile
+        }
+
+        let currentFingerprint = try computePDFFingerprint(at: importedURL)
+        guard let metadata = try loadPDFMetadata(pdfID: pdfID, in: rootURL) else {
+            return .missingMetadata(current: currentFingerprint)
+        }
+
+        if metadata.fingerprint == currentFingerprint {
+            return .matches
+        }
+
+        return .drifted(expected: metadata.fingerprint, current: currentFingerprint)
+    }
+
+    private func pdfMetadataURL(for pdfID: UUID, in rootURL: URL) -> URL {
+        rootURL
+            .appendingPathComponent(".ticker", isDirectory: true)
+            .appendingPathComponent("meta", isDirectory: true)
+            .appendingPathComponent("pdfs", isDirectory: true)
+            .appendingPathComponent("\(pdfID.uuidString.lowercased()).json")
     }
 
     func relativePath(from baseURL: URL, to targetURL: URL) -> String {

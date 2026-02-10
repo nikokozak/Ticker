@@ -473,4 +473,90 @@ final class LibraryServicePDFImportTests: XCTestCase {
         XCTAssertEqual(loaded.frontMatter.tickerKind, .pdfNote)
         XCTAssertEqual(loaded.frontMatter.tickerPDFID, imported.pdfID)
     }
+
+    func test_importPDF_persistsPDFMetadataAndMatchesInitialFingerprint() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let libraryRoot = tempDir.appendingPathComponent("Library", isDirectory: true)
+        let sourceRoot = tempDir.appendingPathComponent("Source", isDirectory: true)
+        try fileManager.createDirectory(at: libraryRoot, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
+
+        let sourcePDFURL = sourceRoot.appendingPathComponent("whitepaper.pdf")
+        let samplePDF = Data("%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<<>>\n%%EOF\n".utf8)
+        try samplePDF.write(to: sourcePDFURL, options: [.atomic])
+
+        let suiteName = "LibraryServicePDFMetadataTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        let imported = try service.importPDF(at: sourcePDFURL, in: libraryRoot)
+
+        let metadata = try service.loadPDFMetadata(pdfID: imported.pdfID, in: libraryRoot)
+        XCTAssertNotNil(metadata)
+
+        let driftStatus = try service.inspectPDFDrift(for: imported.pdfID, in: libraryRoot)
+        if case .matches = driftStatus {
+            XCTAssertTrue(true)
+        } else {
+            XCTFail("Expected .matches after import, got \(driftStatus)")
+        }
+    }
+
+    func test_inspectPDFDrift_reportsMissingMetadataAndDriftAfterMutation() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let libraryRoot = tempDir.appendingPathComponent("Library", isDirectory: true)
+        let sourceRoot = tempDir.appendingPathComponent("Source", isDirectory: true)
+        try fileManager.createDirectory(at: libraryRoot, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
+
+        let sourcePDFURL = sourceRoot.appendingPathComponent("spec.pdf")
+        let originalPDF = Data("%PDF-1.4\n1 0 obj\n<< /Type /Page >>\nendobj\ntrailer\n<<>>\n%%EOF\n".utf8)
+        try originalPDF.write(to: sourcePDFURL, options: [.atomic])
+
+        let suiteName = "LibraryServicePDFDriftTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        let imported = try service.importPDF(at: sourcePDFURL, in: libraryRoot)
+
+        let metadataURL = libraryRoot
+            .appendingPathComponent(".ticker", isDirectory: true)
+            .appendingPathComponent("meta", isDirectory: true)
+            .appendingPathComponent("pdfs", isDirectory: true)
+            .appendingPathComponent("\(imported.pdfID.uuidString.lowercased()).json")
+
+        try fileManager.removeItem(at: metadataURL)
+
+        let missingMetadataStatus = try service.inspectPDFDrift(for: imported.pdfID, in: libraryRoot)
+        switch missingMetadataStatus {
+        case .missingMetadata(let current):
+            XCTAssertGreaterThan(current.fileSize, 0)
+        default:
+            XCTFail("Expected .missingMetadata, got \(missingMetadataStatus)")
+        }
+
+        let reloadedFingerprint = try service.computePDFFingerprint(at: imported.importedURL)
+        try service.savePDFMetadata(pdfID: imported.pdfID, fingerprint: reloadedFingerprint, in: libraryRoot)
+
+        let mutatedPDF = Data("%PDF-1.4\n1 0 obj\n<< /Type /Page /Rotate 90 >>\nendobj\ntrailer\n<<>>\n%%EOF\n".utf8)
+        try mutatedPDF.write(to: imported.importedURL, options: [.atomic])
+
+        let driftStatus = try service.inspectPDFDrift(for: imported.pdfID, in: libraryRoot)
+        switch driftStatus {
+        case .drifted(let expected, let current):
+            XCTAssertNotEqual(expected.sha256Hex, current.sha256Hex)
+        default:
+            XCTFail("Expected .drifted, got \(driftStatus)")
+        }
+    }
 }

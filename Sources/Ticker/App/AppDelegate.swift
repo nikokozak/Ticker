@@ -678,6 +678,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         tickerNextPreviousEditorBody = note.body
         applyTickerNextAuthorshipStyling()
         tickerNextEditorWindow?.title = note.url.lastPathComponent
+        checkTickerNextPDFDriftIfNeeded(for: note)
     }
 
     func textDidChange(_ notification: Notification) {
@@ -924,6 +925,60 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         } catch {
             DebugLog.log("[TickerNext] Failed to persist note metadata (\(DebugLog.errorSummary(error)))")
         }
+    }
+
+    private func checkTickerNextPDFDriftIfNeeded(for note: TickerMarkdownNote) {
+        guard note.frontMatter.tickerKind == .pdfNote,
+              let pdfID = note.frontMatter.tickerPDFID else {
+            return
+        }
+
+        do {
+            let status = try libraryService.withLibraryRootAccess { rootURL in
+                try libraryService.inspectPDFDrift(for: pdfID, in: rootURL)
+            }
+
+            guard let status else { return }
+
+            switch status {
+            case .matches:
+                return
+
+            case .missingFile:
+                presentTickerNextPDFDriftWarning(
+                    title: "Linked PDF Missing",
+                    message: "Ticker Next cannot find the imported PDF file linked to this note."
+                )
+
+            case .missingMetadata(let current):
+                _ = try libraryService.withLibraryRootAccess { rootURL in
+                    try libraryService.savePDFMetadata(pdfID: pdfID, fingerprint: current, in: rootURL)
+                }
+                DebugLog.log("[TickerNext] Bootstrapped missing PDF metadata for \(pdfID.uuidString.lowercased())")
+
+            case .drifted(let expected, let current):
+                let message = """
+                The linked PDF has changed since import.
+
+                Stored: \(expected.fileSize) bytes
+                Current: \(current.fileSize) bytes
+                """
+                presentTickerNextPDFDriftWarning(
+                    title: "Linked PDF Has Changed",
+                    message: message
+                )
+            }
+        } catch {
+            DebugLog.log("[TickerNext] PDF drift check failed (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    private func presentTickerNextPDFDriftWarning(title: String, message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        alert.runModal()
     }
 
     private func appendMarkdownBlock(_ block: String, to body: String) -> String {
