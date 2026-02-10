@@ -3,11 +3,10 @@
 This file captures repository-specific workflow, conventions, and environment pitfalls discovered during active work.
 It is intended for coding agents (Codex/Claude/GPT) so future sessions don’t have to rediscover these constraints.
 
-## Follow CLAUDE.md
+## Collaboration Workflow
 
-`CLAUDE.md` is the authoritative collaboration/workflow guide for this repo. In particular:
+For this repo, use a strict small-slice workflow. In particular:
 - Work in small, verifiable slices.
-- Get GPT-5.2 review after each slice before moving on.
 - Do not expand scope without asking.
 
 ## Proxy integration (alpha)
@@ -71,7 +70,7 @@ Scripts use `set -euo pipefail`. In bash with `set -u`, expanding empty arrays c
 
 UX polish slices (toast hardening, drag reorder, overlay focus, thinking window, side panel focus) were completed in this phase. Cell-level error overlay/state-machine work remains explicitly deferred unless re-approved.
 
-## Collaboration Notes (Claude + GPT)
+## Collaboration Notes
 
 - Keep changes small and verifiable; describe assumptions vs facts; avoid scope creep.
 - When handing off, include: what changed, why, how to verify, and any known risks/edge cases.

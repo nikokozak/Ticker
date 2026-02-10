@@ -16,6 +16,9 @@ final class SettingsService {
     /// This includes EmbeddingService (RAG is disabled for alpha).
     static let proxyOnlyMode = true
 
+    /// Ticker Next mode scaffold: enables native-library migration slices while legacy surfaces still exist.
+    static let tickerNextMode = true
+
     // UserDefaults keys (non-sensitive settings)
     private enum Keys {
         static let smartRoutingEnabled = "smart_routing_enabled"
@@ -241,6 +244,7 @@ final class SettingsService {
     func allSettings() -> [String: Any] {
         [
             "proxyOnlyMode": Self.proxyOnlyMode,
+            "tickerNextMode": Self.tickerNextMode,
             "smartRoutingEnabled": smartRoutingEnabled,
             "defaultModel": defaultModel.rawValue,
             "appearance": appearance.rawValue,

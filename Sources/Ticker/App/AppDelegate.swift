@@ -26,6 +26,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var webViewManager: WebViewManager?
     private var onboardingWindow: NSWindow?
     private var didCompleteStartup = false
+    private let libraryService = LibraryService.shared
 
     // Menu bar (status item)
     private var statusItem: NSStatusItem?
@@ -61,6 +62,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         didCompleteStartup = true
         setupMainWindow()
         setupQuickPanel()
+        bootstrapTickerNextLibraryIfConfigured()
         requestAccessibilityPermissionIfNeeded()
         // Apply initial appearance after Quick Panel is set up
         Task { @MainActor in
@@ -144,6 +146,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         checkForUpdatesItem.target = updaterController
         appMenu.addItem(checkForUpdatesItem)
+
+        if SettingsService.tickerNextMode {
+            appMenu.addItem(NSMenuItem.separator())
+            let setLibraryFolderItem = NSMenuItem(
+                title: "Set Library Folder...",
+                action: #selector(selectLibraryFolder),
+                keyEquivalent: ""
+            )
+            setLibraryFolderItem.target = self
+            appMenu.addItem(setLibraryFolderItem)
+        }
 
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Quit Ticker", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -277,6 +290,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.terminate(nil)
     }
 
+    @objc private func selectLibraryFolder() {
+        guard SettingsService.tickerNextMode else { return }
+        do {
+            if let selectedURL = try libraryService.selectLibraryRootInteractively() {
+                DebugLog.log("[TickerNext] Selected library folder at \(selectedURL.path)")
+            }
+        } catch {
+            DebugLog.log("[TickerNext] Failed to select library folder (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
     private func triggerQuickPanelToggle() {
         if Thread.isMainThread {
             MainActor.assumeIsolated { [weak self] in
@@ -287,6 +311,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         Task { @MainActor [weak self] in
             self?.quickPanelManager?.toggle()
+        }
+    }
+
+    private func bootstrapTickerNextLibraryIfConfigured() {
+        guard SettingsService.tickerNextMode else { return }
+
+        do {
+            if let rootPath = try libraryService.withLibraryRootAccess({ rootURL in
+                try libraryService.ensureLibraryStructure(at: rootURL)
+                return rootURL.path
+            }) {
+                DebugLog.log("[TickerNext] Library structure ready at \(rootPath)")
+            }
+        } catch {
+            DebugLog.log("[TickerNext] Failed to bootstrap library structure (\(DebugLog.errorSummary(error)))")
         }
     }
 
