@@ -49,13 +49,47 @@ struct TickerPDFMetadata: Codable, Equatable {
     var schemaVersion: Int
     var pdfID: UUID
     var fingerprint: TickerPDFFingerprint
+    var highlights: [TickerPDFHighlightAnchor]
     var updatedAt: Date
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
         case pdfID = "pdf_id"
         case fingerprint
+        case highlights
         case updatedAt = "updated_at"
+    }
+
+    init(
+        schemaVersion: Int,
+        pdfID: UUID,
+        fingerprint: TickerPDFFingerprint,
+        highlights: [TickerPDFHighlightAnchor],
+        updatedAt: Date
+    ) {
+        self.schemaVersion = schemaVersion
+        self.pdfID = pdfID
+        self.fingerprint = fingerprint
+        self.highlights = highlights
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        pdfID = try container.decode(UUID.self, forKey: .pdfID)
+        fingerprint = try container.decode(TickerPDFFingerprint.self, forKey: .fingerprint)
+        highlights = try container.decodeIfPresent([TickerPDFHighlightAnchor].self, forKey: .highlights) ?? []
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(pdfID, forKey: .pdfID)
+        try container.encode(fingerprint, forKey: .fingerprint)
+        try container.encode(highlights, forKey: .highlights)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 }
 
@@ -64,6 +98,102 @@ enum TickerPDFDriftStatus: Equatable {
     case missingFile
     case missingMetadata(current: TickerPDFFingerprint)
     case drifted(expected: TickerPDFFingerprint, current: TickerPDFFingerprint)
+}
+
+struct TickerPDFHighlightRect: Codable, Equatable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+
+    init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    init(_ rect: CGRect) {
+        self.x = rect.origin.x
+        self.y = rect.origin.y
+        self.width = rect.size.width
+        self.height = rect.size.height
+    }
+
+    var cgRect: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
+    }
+}
+
+struct TickerPDFHighlightAnchor: Codable, Equatable {
+    var id: UUID
+    var pageIndex: Int
+    var selectedText: String
+    var rects: [TickerPDFHighlightRect]
+    var createdAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case pageIndex = "page_index"
+        case selectedText = "selected_text"
+        case rects
+        case createdAt = "created_at"
+    }
+}
+
+struct TickerPDFLinkMatch: Equatable {
+    var urlString: String
+    var range: NSRange
+    var pdfID: UUID
+    var highlightID: UUID
+}
+
+enum TickerPDFLinkCodec {
+    private static let linkPattern = #"ticker-pdf://([0-9a-fA-F-]{36})#hl=([0-9a-fA-F-]{36})"#
+    private static let linkRegex = try! NSRegularExpression(pattern: linkPattern, options: [])
+
+    static func makeURLString(pdfID: UUID, highlightID: UUID) -> String {
+        "ticker-pdf://\(pdfID.uuidString.lowercased())#hl=\(highlightID.uuidString.lowercased())"
+    }
+
+    static func parse(urlString: String) -> (pdfID: UUID, highlightID: UUID)? {
+        let nsString = urlString as NSString
+        let fullRange = NSRange(location: 0, length: nsString.length)
+        guard let match = linkRegex.firstMatch(in: urlString, options: [], range: fullRange),
+              match.range.location == 0,
+              match.range.length == fullRange.length else {
+            return nil
+        }
+
+        let pdfIDString = nsString.substring(with: match.range(at: 1))
+        let highlightIDString = nsString.substring(with: match.range(at: 2))
+        guard let pdfID = UUID(uuidString: pdfIDString),
+              let highlightID = UUID(uuidString: highlightIDString) else {
+            return nil
+        }
+        return (pdfID, highlightID)
+    }
+
+    static func match(in text: String, containingUTF16Offset offset: Int) -> TickerPDFLinkMatch? {
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        let matches = linkRegex.matches(in: text, options: [], range: fullRange)
+
+        for match in matches {
+            let range = match.range(at: 0)
+            guard NSLocationInRange(offset, range) else { continue }
+            let urlString = nsText.substring(with: range)
+            guard let parsed = parse(urlString: urlString) else { continue }
+            return TickerPDFLinkMatch(
+                urlString: urlString,
+                range: range,
+                pdfID: parsed.pdfID,
+                highlightID: parsed.highlightID
+            )
+        }
+
+        return nil
+    }
 }
 
 struct DuplicateTickerIDGroup: Equatable {
@@ -454,13 +584,68 @@ final class LibraryService {
         fingerprint: TickerPDFFingerprint,
         in rootURL: URL
     ) throws {
+        let existingHighlights = try loadPDFMetadata(pdfID: pdfID, in: rootURL)?.highlights ?? []
         let metadata = TickerPDFMetadata(
             schemaVersion: 1,
             pdfID: pdfID,
             fingerprint: fingerprint,
+            highlights: existingHighlights,
             updatedAt: Date()
         )
-        let metadataURL = pdfMetadataURL(for: pdfID, in: rootURL)
+        try writePDFMetadata(metadata, in: rootURL)
+    }
+
+    func appendPDFHighlight(
+        pdfID: UUID,
+        highlight: TickerPDFHighlightAnchor,
+        in rootURL: URL
+    ) throws {
+        var metadata: TickerPDFMetadata
+        if let existing = try loadPDFMetadata(pdfID: pdfID, in: rootURL) {
+            metadata = existing
+        } else {
+            let pdfURL = importedPDFURL(for: pdfID, in: rootURL)
+            let fingerprint = try computePDFFingerprint(at: pdfURL)
+            metadata = TickerPDFMetadata(
+                schemaVersion: 1,
+                pdfID: pdfID,
+                fingerprint: fingerprint,
+                highlights: [],
+                updatedAt: Date()
+            )
+        }
+
+        metadata.highlights.removeAll { $0.id == highlight.id }
+        metadata.highlights.append(highlight)
+        metadata.highlights.sort { $0.createdAt < $1.createdAt }
+        metadata.updatedAt = Date()
+
+        try writePDFMetadata(metadata, in: rootURL)
+    }
+
+    func loadPDFHighlight(
+        pdfID: UUID,
+        highlightID: UUID,
+        in rootURL: URL
+    ) throws -> TickerPDFHighlightAnchor? {
+        guard let metadata = try loadPDFMetadata(pdfID: pdfID, in: rootURL) else {
+            return nil
+        }
+        return metadata.highlights.first { $0.id == highlightID }
+    }
+
+    func loadPDFHighlights(
+        pdfID: UUID,
+        in rootURL: URL
+    ) throws -> [TickerPDFHighlightAnchor] {
+        guard let metadata = try loadPDFMetadata(pdfID: pdfID, in: rootURL) else {
+            return []
+        }
+        return metadata.highlights
+    }
+
+    private func writePDFMetadata(_ metadata: TickerPDFMetadata, in rootURL: URL) throws {
+        let metadataURL = pdfMetadataURL(for: metadata.pdfID, in: rootURL)
         try fileManager.createDirectory(at: metadataURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         let encoder = JSONEncoder()

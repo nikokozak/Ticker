@@ -559,4 +559,66 @@ final class LibraryServicePDFImportTests: XCTestCase {
             XCTFail("Expected .drifted, got \(driftStatus)")
         }
     }
+
+    func test_appendPDFHighlight_persistsAndCanReloadByID() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let libraryRoot = tempDir.appendingPathComponent("Library", isDirectory: true)
+        let sourceRoot = tempDir.appendingPathComponent("Source", isDirectory: true)
+        try fileManager.createDirectory(at: libraryRoot, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
+
+        let sourcePDFURL = sourceRoot.appendingPathComponent("annotate.pdf")
+        let basePDF = Data("%PDF-1.4\n1 0 obj\n<< /Type /Page >>\nendobj\ntrailer\n<<>>\n%%EOF\n".utf8)
+        try basePDF.write(to: sourcePDFURL, options: [.atomic])
+
+        let suiteName = "LibraryServicePDFHighlightTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let service = LibraryService(defaults: defaults, fileManager: fileManager)
+        let imported = try service.importPDF(at: sourcePDFURL, in: libraryRoot)
+
+        let highlightID = UUID()
+        let highlight = TickerPDFHighlightAnchor(
+            id: highlightID,
+            pageIndex: 0,
+            selectedText: "Example quote",
+            rects: [TickerPDFHighlightRect(x: 12, y: 24, width: 120, height: 18)],
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        try service.appendPDFHighlight(pdfID: imported.pdfID, highlight: highlight, in: libraryRoot)
+
+        let loaded = try service.loadPDFHighlight(pdfID: imported.pdfID, highlightID: highlightID, in: libraryRoot)
+        XCTAssertEqual(loaded, highlight)
+
+        let allHighlights = try service.loadPDFHighlights(pdfID: imported.pdfID, in: libraryRoot)
+        XCTAssertEqual(allHighlights.count, 1)
+        XCTAssertEqual(allHighlights.first, highlight)
+    }
+
+    func test_pdfLinkCodec_roundtripAndOffsetMatching() {
+        let pdfID = UUID()
+        let highlightID = UUID()
+        let url = TickerPDFLinkCodec.makeURLString(pdfID: pdfID, highlightID: highlightID)
+
+        let parsed = TickerPDFLinkCodec.parse(urlString: url)
+        XCTAssertEqual(parsed?.pdfID, pdfID)
+        XCTAssertEqual(parsed?.highlightID, highlightID)
+
+        let text = "Before \(url) after"
+        let nsText = text as NSString
+        let linkRange = nsText.range(of: url)
+        XCTAssertNotEqual(linkRange.location, NSNotFound)
+
+        let offsetInsideLink = linkRange.location + 4
+        let match = TickerPDFLinkCodec.match(in: text, containingUTF16Offset: offsetInsideLink)
+        XCTAssertEqual(match?.urlString, url)
+        XCTAssertEqual(match?.pdfID, pdfID)
+        XCTAssertEqual(match?.highlightID, highlightID)
+    }
 }
