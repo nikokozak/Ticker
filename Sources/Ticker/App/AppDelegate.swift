@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import WebKit
 import ApplicationServices
+import PDFKit
 import Sparkle
 import UniformTypeIdentifiers
 
@@ -38,6 +39,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
     private var tickerNextPendingAIInsertion: (range: NSRange, source: String)?
     private var tickerNextSuppressTextDidChange = false
     private var tickerNextAIRequestInFlight = false
+    private var tickerNextPDFWindow: NSWindow?
+    private var tickerNextPDFView: PDFView?
+    private var tickerNextCurrentPDFID: UUID?
 
     // Menu bar (status item)
     private var statusItem: NSStatusItem?
@@ -193,6 +197,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
             importPDFItem.target = self
             appMenu.addItem(importPDFItem)
 
+            let showLinkedPDFItem = NSMenuItem(
+                title: "Show Linked PDF",
+                action: #selector(showTickerNextLinkedPDF),
+                keyEquivalent: ""
+            )
+            showLinkedPDFItem.target = self
+            appMenu.addItem(showLinkedPDFItem)
+
+            let linkPDFSelectionItem = NSMenuItem(
+                title: "Link PDF Selection to Note",
+                action: #selector(linkTickerNextPDFSelectionToNote),
+                keyEquivalent: ""
+            )
+            linkPDFSelectionItem.target = self
+            appMenu.addItem(linkPDFSelectionItem)
+
+            let openHighlightLinkItem = NSMenuItem(
+                title: "Open Highlight Link at Cursor",
+                action: #selector(openTickerNextHighlightLinkAtCursor),
+                keyEquivalent: ""
+            )
+            openHighlightLinkItem.target = self
+            appMenu.addItem(openHighlightLinkItem)
+
             let saveNoteItem = NSMenuItem(
                 title: "Save Note",
                 action: #selector(saveTickerNextNote),
@@ -275,6 +303,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
+        if window == tickerNextPDFWindow {
+            tickerNextPDFWindow = nil
+            tickerNextPDFView = nil
+            tickerNextCurrentPDFID = nil
+            return
+        }
         guard window == onboardingWindow else { return }
 
         // If the user closes onboarding without completing, proceed anyway and don't show again.
@@ -442,6 +476,115 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         } catch {
             DebugLog.log("[TickerNext] Failed to import PDF (\(DebugLog.errorSummary(error)))")
         }
+    }
+
+    @objc private func showTickerNextLinkedPDF() {
+        guard let note = tickerNextCurrentNote else { return }
+        openTickerNextPDF(for: note)
+    }
+
+    @objc private func linkTickerNextPDFSelectionToNote() {
+        guard let note = tickerNextCurrentNote,
+              note.frontMatter.tickerKind == .pdfNote,
+              let pdfID = note.frontMatter.tickerPDFID else {
+            NSSound.beep()
+            return
+        }
+        guard tickerNextCurrentPDFID == pdfID else {
+            openTickerNextPDF(for: note)
+            NSSound.beep()
+            return
+        }
+        guard let pdfView = tickerNextPDFView,
+              let selection = pdfView.currentSelection,
+              let document = pdfView.document else {
+            NSSound.beep()
+            return
+        }
+
+        let pages = selection.pages
+        guard pages.count == 1, let page = pages.first else {
+            presentTickerNextPDFDriftWarning(
+                title: "Selection Not Supported",
+                message: "Select text within a single PDF page to create a note link."
+            )
+            return
+        }
+
+        let selectedText = (selection.string ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selectedText.isEmpty else {
+            NSSound.beep()
+            return
+        }
+
+        let pageIndex = document.index(for: page)
+        let selectionRect = selection.bounds(for: page)
+        let rects = [TickerPDFHighlightRect(selectionRect)]
+        let highlightID = UUID()
+        let highlight = TickerPDFHighlightAnchor(
+            id: highlightID,
+            pageIndex: pageIndex,
+            selectedText: selectedText,
+            rects: rects,
+            createdAt: Date()
+        )
+
+        do {
+            _ = try ensureLibraryFolderSelected()
+            _ = try libraryService.withLibraryRootAccess { rootURL in
+                try libraryService.appendPDFHighlight(
+                    pdfID: pdfID,
+                    highlight: highlight,
+                    in: rootURL
+                )
+            }
+        } catch {
+            DebugLog.log("[TickerNext] Failed to persist PDF highlight (\(DebugLog.errorSummary(error)))")
+            return
+        }
+
+        guard let textView = tickerNextEditorTextView else { return }
+        let linkURL = TickerPDFLinkCodec.makeURLString(pdfID: pdfID, highlightID: highlightID)
+        let normalizedText = selectedText.replacingOccurrences(of: "\n", with: " ")
+        let label = String(normalizedText.prefix(72)).replacingOccurrences(of: "]", with: "")
+        let markdownLink = "[\(label)](\(linkURL))"
+        let insertion = "\(markdownLink)\n"
+
+        let selectedRange = textView.selectedRange()
+        guard textView.shouldChangeText(in: selectedRange, replacementString: insertion) else {
+            return
+        }
+        textView.textStorage?.replaceCharacters(in: selectedRange, with: insertion)
+        textView.setSelectedRange(NSRange(location: selectedRange.location + (insertion as NSString).length, length: 0))
+        textView.didChangeText()
+
+        persistTickerNextCurrentNoteAndMetadata()
+    }
+
+    @objc private func openTickerNextHighlightLinkAtCursor() {
+        guard let textView = tickerNextEditorTextView else {
+            NSSound.beep()
+            return
+        }
+
+        let body = textView.string
+        let selectionRange = textView.selectedRange()
+
+        var parsedLink: (pdfID: UUID, highlightID: UUID)?
+        if let match = TickerPDFLinkCodec.match(in: body, containingUTF16Offset: selectionRange.location) {
+            parsedLink = (match.pdfID, match.highlightID)
+        } else if selectionRange.length > 0 {
+            let selectedText = (body as NSString).substring(with: selectionRange)
+            parsedLink = TickerPDFLinkCodec.parse(urlString: selectedText.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        guard let parsedLink else {
+            NSSound.beep()
+            return
+        }
+
+        openTickerNextPDFHighlight(pdfID: parsedLink.pdfID, highlightID: parsedLink.highlightID)
     }
 
     @objc private func saveTickerNextNote() {
@@ -679,6 +822,134 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextView
         applyTickerNextAuthorshipStyling()
         tickerNextEditorWindow?.title = note.url.lastPathComponent
         checkTickerNextPDFDriftIfNeeded(for: note)
+        if note.frontMatter.tickerKind == .pdfNote {
+            openTickerNextPDF(for: note)
+        }
+    }
+
+    private func ensureTickerNextPDFView() -> PDFView {
+        if let existingPDFView = tickerNextPDFView, let existingWindow = tickerNextPDFWindow {
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return existingPDFView
+        }
+
+        let pdfView = PDFView(frame: .zero)
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displaysPageBreaks = true
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 860),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Ticker Next PDF"
+        window.contentView = pdfView
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.delegate = self
+
+        tickerNextPDFWindow = window
+        tickerNextPDFView = pdfView
+        NSApp.activate(ignoringOtherApps: true)
+
+        return pdfView
+    }
+
+    private func openTickerNextPDF(for note: TickerMarkdownNote) {
+        guard note.frontMatter.tickerKind == .pdfNote,
+              let pdfID = note.frontMatter.tickerPDFID else {
+            return
+        }
+
+        do {
+            _ = try ensureLibraryFolderSelected()
+            let payload = try libraryService.withLibraryRootAccess { rootURL -> (URL, PDFDocument)? in
+                let pdfURL = libraryService.importedPDFURL(for: pdfID, in: rootURL)
+                guard FileManager.default.fileExists(atPath: pdfURL.path) else {
+                    return nil
+                }
+                let pdfData = try Data(contentsOf: pdfURL, options: [.mappedIfSafe])
+                guard let document = PDFDocument(data: pdfData) else {
+                    return nil
+                }
+                return (pdfURL, document)
+            } ?? nil
+
+            guard let payload else {
+                return
+            }
+
+            let pdfView = ensureTickerNextPDFView()
+            pdfView.document = payload.1
+            tickerNextCurrentPDFID = pdfID
+            tickerNextPDFWindow?.title = payload.0.lastPathComponent
+        } catch {
+            DebugLog.log("[TickerNext] Failed to open linked PDF (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    private func openTickerNextPDFHighlight(pdfID: UUID, highlightID: UUID) {
+        do {
+            _ = try ensureLibraryFolderSelected()
+
+            let payload = try libraryService.withLibraryRootAccess { rootURL -> (URL, PDFDocument, TickerPDFHighlightAnchor)? in
+                let pdfURL = libraryService.importedPDFURL(for: pdfID, in: rootURL)
+                guard FileManager.default.fileExists(atPath: pdfURL.path) else {
+                    return nil
+                }
+                guard let highlight = try libraryService.loadPDFHighlight(
+                    pdfID: pdfID,
+                    highlightID: highlightID,
+                    in: rootURL
+                ) else {
+                    return nil
+                }
+                let pdfData = try Data(contentsOf: pdfURL, options: [.mappedIfSafe])
+                guard let document = PDFDocument(data: pdfData) else {
+                    return nil
+                }
+                return (pdfURL, document, highlight)
+            } ?? nil
+
+            guard let payload else {
+                NSSound.beep()
+                return
+            }
+
+            let pdfView = ensureTickerNextPDFView()
+            pdfView.document = payload.1
+            tickerNextCurrentPDFID = pdfID
+            tickerNextPDFWindow?.title = payload.0.lastPathComponent
+            jumpTickerNextPDFView(pdfView, to: payload.2)
+        } catch {
+            DebugLog.log("[TickerNext] Failed to open PDF highlight (\(DebugLog.errorSummary(error)))")
+            NSSound.beep()
+        }
+    }
+
+    private func jumpTickerNextPDFView(_ pdfView: PDFView, to highlight: TickerPDFHighlightAnchor) {
+        guard let document = pdfView.document,
+              let page = document.page(at: highlight.pageIndex) else {
+            return
+        }
+
+        let destinationPoint: CGPoint
+        if let firstRect = highlight.rects.first?.cgRect {
+            destinationPoint = CGPoint(x: firstRect.midX, y: firstRect.maxY)
+        } else {
+            destinationPoint = CGPoint(x: 0, y: page.bounds(for: .mediaBox).maxY)
+        }
+
+        let destination = PDFDestination(page: page, at: destinationPoint)
+        pdfView.go(to: destination)
+
+        if let firstRect = highlight.rects.first?.cgRect,
+           let selection = page.selection(for: firstRect) {
+            pdfView.setCurrentSelection(selection, animate: true)
+        }
     }
 
     func textDidChange(_ notification: Notification) {
