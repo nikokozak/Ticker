@@ -16,6 +16,11 @@ Primary guide for implementation:
 If any older docs conflict with this plan, follow `docs/STREAM_EDITOR_EVOLUTION_PLAN.md`.
 If ambiguity remains, ask the user before implementing.
 
+For aesthetic and flow parity decisions:
+- Inspect `/Users/niko/Developer/Ticker/Ticker` as a read-only reference for proven interaction patterns.
+- Do not edit files in `/Users/niko/Developer/Ticker/Ticker` during this work.
+- If parity tradeoffs are unclear, ask the user before choosing a direction.
+
 ## Product Focus (Current)
 
 Focus exclusively on the stream editor inside an individual stream.
