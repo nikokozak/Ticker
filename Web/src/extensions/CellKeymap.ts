@@ -6,7 +6,7 @@ import { IS_DEV, debugLog, debugWarn } from '../utils/debug';
 
 /**
  * Callbacks for cell lifecycle events.
- * UnifiedStreamEditor provides these to sync store + persistence.
+ * StreamEditor provides these to sync store + persistence.
  */
 export interface CellKeymapCallbacks {
   /** Called when Enter creates a new cell. Returns the new cell's UUID. */
@@ -239,8 +239,7 @@ export const CellKeymap = Extension.create<{ callbacks: CellKeymapCallbacks | nu
   },
 });
 
-// NOTE: isCellNodeEmpty is now imported from ./cellEmpty.ts
-// This shared helper is also used by UnifiedStreamEditor for auto-resetting empty AI cells.
+// NOTE: isCellNodeEmpty is imported from ./cellEmpty.ts so empty-cell behavior stays consistent.
 
 /**
  * Find the index of a cellBlock in the document by its position.

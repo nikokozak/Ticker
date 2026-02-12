@@ -43,8 +43,7 @@ Editor platform remains:
 - React/TipTap editor in `Web/`
 
 Primary target files (expected hot spots):
-- `Web/src/components/UnifiedStreamEditor.tsx`
-- `Web/src/components/StreamEditor.tsx` (fallback/compat path)
+- `Web/src/components/StreamEditor.tsx`
 - `Web/src/extensions/*` (cell behavior, keymap, clipboard)
 - `Web/src/store/blockStore.ts`
 - Bridge/persistence touchpoints only when required by editor behavior

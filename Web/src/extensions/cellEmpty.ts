@@ -10,7 +10,7 @@ import { Node as ProseMirrorNode } from '@tiptap/pm/model';
  *
  * Used by:
  * - CellKeymap: Backspace at cell start only deletes empty cells
- * - UnifiedStreamEditor: Auto-reset AI cells when they become empty
+ * - Editor update handlers: auto-reset AI cells when they become empty
  *
  * @param cellBlockNode - The cellBlock ProseMirror node to check
  * @returns true if the cell has no meaningful content

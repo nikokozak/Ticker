@@ -21,7 +21,7 @@ export interface EditorAPI {
 interface UseBridgeMessagesOptions {
   streamId: string;
   initialSources: SourceReference[];
-  /** Optional EditorAPI for updating TipTap document in unified editor mode */
+  /** Optional EditorAPI for updating TipTap content directly */
   editorAPI?: EditorAPI | null;
 }
 
@@ -50,8 +50,8 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
       debugLog('[useBridgeMessages] Received', message.type);
 
       // IMPORTANT: Don't subscribe to the zustand store from this hook.
-      // UnifiedStreamEditor updates store on every keystroke; subscribing here would cause
-      // this effect to re-run and re-subscribe to the bridge constantly.
+      // The editor updates store on keystrokes; subscribing here would cause this effect
+      // to re-run and re-subscribe to the bridge constantly.
       const store = useBlockStore.getState();
       const toastStore = useToastStore.getState();
 
@@ -84,12 +84,12 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
 
         // Only process if this is for the current stream
         if (addedStreamId === streamId) {
-          // In unified editor mode, use insertCells to update both TipTap and store
+          // If editor API is available, insert via editor so doc + store stay aligned.
           if (editorAPIRef.current?.insertCells) {
-            debugLog('[QuickPanel] Using insertCells for unified editor');
+            debugLog('[QuickPanel] Using insertCells via editor API');
             editorAPIRef.current.insertCells(cells);
           } else {
-            // Legacy mode: add each cell to the store directly
+            // Store mode: add each cell directly to the store.
             for (const cell of cells) {
               store.addBlock({
                 id: cell.id,
@@ -180,14 +180,14 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
             return;
           }
 
-          // In unified editor mode, insert via TipTap (handleUpdate will sync and persist)
+          // If editor API is available, insert via TipTap (update handlers sync + persist).
           if (editorAPIRef.current?.insertImage) {
-            debugLog('[useBridgeMessages] Using insertImage for unified editor');
+            debugLog('[useBridgeMessages] Using insertImage via editor API');
             editorAPIRef.current.insertImage(assetUrl);
           } else {
-            // Legacy mode: update store directly and persist
+            // Store mode: update store directly and persist.
             const { focusedBlockId, blockOrder } = store;
-            debugLog('[useBridgeMessages] Legacy mode inserting image', { hasFocusedBlockId: Boolean(focusedBlockId) });
+            debugLog('[useBridgeMessages] Store mode inserting image', { hasFocusedBlockId: Boolean(focusedBlockId) });
             if (blockOrder.length === 0) {
               toastStore.addToast('Create a note cell first, then drop the image again.', 'info');
               return;
@@ -246,7 +246,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
         if (cell) {
           store.updateBlock(cellId, { content: finalContent });
 
-          // Update TipTap document if editorAPI is available (unified editor mode)
+          // Update TipTap document if an editor API is available.
           if (editorAPIRef.current) {
             debugLog('[useBridgeMessages] aiComplete: updating TipTap document', { cellId });
             editorAPIRef.current.replaceCellHtml(cellId, finalContent);
@@ -372,7 +372,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
           content: htmlContent,
         });
 
-        // Update TipTap document if editorAPI is available (unified editor mode)
+        // Update TipTap document if an editor API is available.
         if (editorAPIRef.current) {
           debugLog('[useBridgeMessages] modifierComplete: updating TipTap document', { cellId });
           editorAPIRef.current.replaceCellHtml(cellId, htmlContent);
@@ -440,7 +440,7 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
         if (cell) {
           store.updateBlock(cellId, { content: htmlContent });
 
-          // Update TipTap document if editorAPI is available (unified editor mode)
+          // Update TipTap document if an editor API is available.
           if (editorAPIRef.current) {
             debugLog('[useBridgeMessages] blockRefreshComplete: updating TipTap document', { cellId });
             editorAPIRef.current.replaceCellHtml(cellId, htmlContent);

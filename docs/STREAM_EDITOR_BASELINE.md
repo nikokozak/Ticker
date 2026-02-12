@@ -6,16 +6,15 @@ This file captures the starting baseline before active UX slices.
 
 ## Current Editor Paths
 
-- Primary editor path: `Web/src/components/UnifiedStreamEditor.tsx`
-- Legacy/fallback path: `Web/src/components/StreamEditor.tsx`
-- Unified editor feature flag: `Web/src/utils/featureFlags.ts` (`unified` URL override supported)
+- Canonical editor path: `Web/src/components/StreamEditor.tsx`
+- Outline/sources are surfaced from the stream editor via an overlay drawer (not a persistent split pane).
 
 ## Core Constraints Already Present
 
 - Document schema uses `cellBlock` nodes with UUID-backed identity (`Web/src/extensions/CellBlock.ts`).
 - Paste path rewrites pasted cell UUIDs to avoid persistence collisions (`Web/src/extensions/CellClipboard.ts`).
 - Boundary key handling logic is centralized in `Web/src/extensions/CellKeymap.ts`.
-- Drag reorder behavior has dedicated logic and persistence sync in unified editor.
+- Drag reorder behavior is implemented in the stream editor block wrappers and persisted through bridge save/reorder flows.
 
 ## Known Risk Zones (Regression-Sensitive)
 

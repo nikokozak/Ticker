@@ -232,7 +232,7 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
 
   // Single "open overlay" state shared across all NodeViews.
   // This keeps the overlay positioning local (inside `cell-block-wrapper`) while avoiding
-  // parent prop-drilling from `UnifiedStreamEditor`.
+  // parent prop-drilling from the top-level stream editor.
   const overlayCellId = useBlockStore((s) => s.overlayCellId);
   const openOverlay = useBlockStore((s) => s.openOverlay);
   const closeOverlay = useBlockStore((s) => s.closeOverlay);
@@ -308,8 +308,8 @@ export function CellBlockView({ node, updateAttributes, editor }: NodeViewProps)
   /**
    * Overlay "regenerate" handler.
    *
-   * Mirrors `UnifiedStreamEditor.handleThink` semantics, but takes an explicit prompt string.
-   * This keeps unified mode overlay parity without introducing a fragile NodeView->parent callback.
+   * Mirrors stream-level "think/regenerate" semantics, but takes an explicit prompt string.
+   * This keeps overlay behavior consistent without introducing a fragile NodeView->parent callback.
    */
   const handleRegenerate = useCallback((newPrompt: string) => {
     if (!id) return;
