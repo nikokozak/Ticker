@@ -274,7 +274,7 @@ actor DeviceKeyService {
     private static func defaultFileURL(fileManager: FileManager) -> URL {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
-        let tickerDir = appSupport.appendingPathComponent("Ticker", isDirectory: true)
+        let tickerDir = appSupport.appendingPathComponent("Ticker-Next", isDirectory: true)
         return tickerDir.appendingPathComponent("device.json")
     }
 

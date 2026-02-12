@@ -10,7 +10,7 @@ final class AssetSchemeHandler: NSObject, WKURLSchemeHandler {
         let fileManager = FileManager.default
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
-        return appSupport.appendingPathComponent("Ticker/assets", isDirectory: true)
+        return appSupport.appendingPathComponent("Ticker-Next/assets", isDirectory: true)
     }
 
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {

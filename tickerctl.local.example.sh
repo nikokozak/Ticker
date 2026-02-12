@@ -7,13 +7,21 @@ SIGN_IDENTITY='Developer ID Application: Nikolai Kozak (Z5DX2YK8FA)'
 
 # Optional: bundle/id defaults for dual-lane local runs (stable + QA).
 # Stable lane (default commands: run-dev / run-prod)
-# APP_BUNDLE_ID='io.ticker.app'
-# STABLE_APP_INSTALL_PATH="$HOME/Applications/Ticker.app"
+# APP_BUNDLE_ID='io.ticker.next'
+# APP_NAME='Ticker Next'
+# APP_PRODUCT_NAME='TickerNext'
+# STABLE_APP_DISPLAY_NAME='Ticker Next'
+# STABLE_APP_PRODUCT_NAME='TickerNext'
+# STABLE_APP_INSTALL_PATH="$HOME/Applications/Ticker Next.app"
 #
 # QA lane (commands: run-dev-qa / run-prod-qa)
-# QA_APP_BUNDLE_ID='io.ticker.app.qa'
-# QA_APP_DISPLAY_NAME='Ticker QA'
-# QA_APP_INSTALL_PATH="$HOME/Applications/Ticker QA.app"
+# QA_APP_BUNDLE_ID='io.ticker.next.qa'
+# QA_APP_DISPLAY_NAME='Ticker Next QA'
+# QA_APP_INSTALL_PATH="$HOME/Applications/Ticker Next QA.app"
+
+# App data directory overrides
+# APP_SUPPORT_DIR="$HOME/Library/Application Support/Ticker-Next"
+# DEVICE_JSON_PATH="$APP_SUPPORT_DIR/device.json"
 
 # notarytool Keychain profile name created via:
 #   xcrun notarytool store-credentials AC_PASSWORD --apple-id ... --team-id ... --password <APP_SPECIFIC_PASSWORD>

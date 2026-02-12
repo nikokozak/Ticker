@@ -643,8 +643,8 @@
 				);
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				MARKETING_VERSION = 2025.12.1;
-				PRODUCT_BUNDLE_IDENTIFIER = io.ticker.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.next;
+					PRODUCT_NAME = TickerNext;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -669,8 +669,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 2025.12.1;
-				PRODUCT_BUNDLE_IDENTIFIER = io.ticker.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.next;
+					PRODUCT_NAME = TickerNext;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				};
@@ -682,10 +682,10 @@
 					BUNDLE_LOADER = "$(TEST_HOST)";
 					CODE_SIGN_STYLE = Automatic;
 					GENERATE_INFOPLIST_FILE = YES;
-					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.appTests;
-					PRODUCT_NAME = "$(TARGET_NAME)";
-					SWIFT_VERSION = 5.0;
-					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ticker.app/Contents/MacOS/Ticker";
+						PRODUCT_BUNDLE_IDENTIFIER = io.ticker.nextTests;
+						PRODUCT_NAME = "$(TARGET_NAME)";
+						SWIFT_VERSION = 5.0;
+						TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TickerNext.app/Contents/MacOS/TickerNext";
 				};
 				name = Debug;
 			};
@@ -695,10 +695,10 @@
 					BUNDLE_LOADER = "$(TEST_HOST)";
 					CODE_SIGN_STYLE = Automatic;
 					GENERATE_INFOPLIST_FILE = YES;
-					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.appTests;
-					PRODUCT_NAME = "$(TARGET_NAME)";
-					SWIFT_VERSION = 5.0;
-					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ticker.app/Contents/MacOS/Ticker";
+						PRODUCT_BUNDLE_IDENTIFIER = io.ticker.nextTests;
+						PRODUCT_NAME = "$(TARGET_NAME)";
+						SWIFT_VERSION = 5.0;
+						TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TickerNext.app/Contents/MacOS/TickerNext";
 				};
 				name = Release;
 			};

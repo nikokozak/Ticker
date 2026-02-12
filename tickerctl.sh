@@ -61,13 +61,13 @@ Config (optional):
 
 Notes:
   - Dev/prod commands build unsigned (CODE_SIGNING_ALLOWED=NO).
-  - `run-dev`/`run-prod` use stable lane (`io.ticker.app` by default).
-  - `run-dev-qa`/`run-prod-qa` use QA lane (`io.ticker.app.qa` by default).
+  - `run-dev`/`run-prod` use stable lane (`io.ticker.next` by default).
+  - `run-dev-qa`/`run-prod-qa` use QA lane (`io.ticker.next.qa` by default).
   - Sparkle update testing requires an older build installed in /Applications
     and a newer build published in the appcast.
-  - release-alpha also uploads a stable-named zip asset (Ticker-alpha-latest.zip)
+  - release-alpha also uploads a stable-named zip asset (<AppProductName>-alpha-latest.zip)
     so you can link directly to the latest build:
-      https://github.com/<owner>/<repo>/releases/latest/download/Ticker-alpha-latest.zip
+      https://github.com/<owner>/<repo>/releases/latest/download/<AppProductName>-alpha-latest.zip
 EOF
 }
 
@@ -78,17 +78,19 @@ if [[ -f "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
 
-APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.app}"
-QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.app.qa}"
-TICKER_APP_SUPPORT_DIR="${TICKER_APP_SUPPORT_DIR:-$HOME/Library/Application Support/Ticker}"
-TICKER_DEVICE_JSON_PATH="${TICKER_DEVICE_JSON_PATH:-$TICKER_APP_SUPPORT_DIR/device.json}"
+APP_NAME="${APP_NAME:-Ticker Next}"
+APP_PRODUCT_NAME="${APP_PRODUCT_NAME:-TickerNext}"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.next}"
+QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.next.qa}"
+APP_SUPPORT_DIR="${APP_SUPPORT_DIR:-$HOME/Library/Application Support/Ticker-Next}"
+DEVICE_JSON_PATH="${DEVICE_JSON_PATH:-$APP_SUPPORT_DIR/device.json}"
 
 DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode"
 RELEASE_DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode-release"
 SPARKLE_TOOLS_ROOT_DEFAULT="$ROOT_DIR/tools/sparkle/Sparkle"
 # Ignore a globally-exported DERIVED_DATA_PATH (stale after repo moves).
-# Use --derived-data or TICKER_DERIVED_DATA_PATH instead.
-DERIVED_DATA_PATH="${TICKER_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}"
+# Use --derived-data or TICKER_NEXT_DERIVED_DATA_PATH instead.
+DERIVED_DATA_PATH="${TICKER_NEXT_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}"
 
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-AC_PASSWORD}"
@@ -99,6 +101,8 @@ APPCAST_REPO_DIR="${APPCAST_REPO_DIR:-}"
 APPCAST_FILENAME="${APPCAST_FILENAME:-appcast-alpha.xml}"
 APPCAST_MAX_ITEMS="${APPCAST_MAX_ITEMS:-3}"
 MIN_MACOS="${MIN_MACOS:-14.0}"
+XCODE_PROJECT="${XCODE_PROJECT:-Ticker.xcodeproj}"
+XCODE_SCHEME="${XCODE_SCHEME:-Ticker}"
 
 require_cmd() {
   local name="$1"
@@ -346,14 +350,16 @@ build_app() {
   local -a extra=(
     "CODE_SIGNING_ALLOWED=NO"
     "CURRENT_PROJECT_VERSION=$build_num"
+    "PRODUCT_BUNDLE_IDENTIFIER=$APP_BUNDLE_ID"
+    "INFOPLIST_KEY_CFBundleDisplayName=$APP_NAME"
   )
   if [[ -n "$marketing_version" ]]; then
     extra+=("MARKETING_VERSION=$marketing_version")
   fi
 
   xcodebuild build \
-    -project Ticker.xcodeproj \
-    -scheme Ticker \
+    -project "$XCODE_PROJECT" \
+    -scheme "$XCODE_SCHEME" \
     -configuration "$configuration" \
     -destination 'platform=macOS' \
     -derivedDataPath "$DERIVED_DATA_PATH" \
@@ -418,8 +424,8 @@ swift_test() {
   build_num="$(build_number)"
 
   xcodebuild test \
-    -project Ticker.xcodeproj \
-    -scheme Ticker \
+    -project "$XCODE_PROJECT" \
+    -scheme "$XCODE_SCHEME" \
     -destination 'platform=macOS' \
     -derivedDataPath "$DERIVED_DATA_PATH" \
     CODE_SIGNING_ALLOWED=NO \
@@ -459,15 +465,15 @@ cmd_preflight_alpha() {
 cmd_build_dev() {
   echo "Building Debug (unsigned)…"
   build_app Debug
-  echo "Built: $DERIVED_DATA_PATH/Build/Products/Debug/Ticker.app"
+  echo "Built: $DERIVED_DATA_PATH/Build/Products/Debug/$APP_PRODUCT_NAME.app"
 }
 
 cmd_run_dev() {
-  TICKER_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --dev
+  TICKER_NEXT_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --dev
 }
 
 cmd_run_dev_qa() {
-  TICKER_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --dev --qa
+  TICKER_NEXT_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --dev --qa
 }
 
 cmd_build_prod() {
@@ -475,7 +481,7 @@ cmd_build_prod() {
   build_web_assets
   echo "Building Release (unsigned)…"
   build_app Release
-  echo "Built: $DERIVED_DATA_PATH/Build/Products/Release/Ticker.app"
+  echo "Built: $DERIVED_DATA_PATH/Build/Products/Release/$APP_PRODUCT_NAME.app"
 }
 
 repair_release_swiftpm_artifacts_if_needed() {
@@ -500,11 +506,11 @@ repair_release_swiftpm_artifacts_if_needed() {
 }
 
 cmd_run_prod() {
-  TICKER_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --prod
+  TICKER_NEXT_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --prod
 }
 
 cmd_run_prod_qa() {
-  TICKER_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --prod --qa
+  TICKER_NEXT_DERIVED_DATA_PATH="$DERIVED_DATA_PATH" "$ROOT_DIR/run.sh" --prod --qa
 }
 
 cmd_clean_derived_data() {
@@ -715,7 +721,7 @@ cmd_release_alpha() {
   local allow_dirty="false"
   local skip_build="false"
   local release_derived_data="$RELEASE_DERIVED_DATA_PATH_DEFAULT"
-  local stable_zip_name_default="Ticker-alpha-latest.zip"
+  local stable_zip_name_default="${APP_PRODUCT_NAME}-alpha-latest.zip"
   local -a remaining=()
 
   while [[ $# -gt 0 ]]; do
@@ -892,7 +898,7 @@ cmd_release_alpha() {
         fi
       fi
 
-      gh_cmd+=(--title "Ticker ${version}" --notes "Alpha release ${version}" "$zip_path" "$stable_zip_path")
+      gh_cmd+=(--title "${APP_NAME} ${version}" --notes "Alpha release ${version}" "$zip_path" "$stable_zip_path")
       "${gh_cmd[@]}"
     fi
 
@@ -1045,7 +1051,7 @@ PY
     fi
   fi
 
-  local app_path="$release_dd/Build/Products/Release/Ticker.app"
+  local app_path="$release_dd/Build/Products/Release/$APP_PRODUCT_NAME.app"
   if [[ ! -d "$app_path" ]]; then
     echo "Expected app bundle not found: $app_path" >&2
     exit 1
@@ -1064,20 +1070,20 @@ PY
   codesign --verify --deep --strict --verbose=2 "$app_path"
 
   echo "Notarizing…"
-  local notarize_zip="$release_out_dir/Ticker-notarize.zip"
+  local notarize_zip="$release_out_dir/${APP_PRODUCT_NAME}-notarize.zip"
   ditto -c -k --sequesterRsrc --keepParent "$app_path" "$notarize_zip"
   xcrun notarytool submit "$notarize_zip" --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$app_path"
   spctl -a -vv "$app_path"
 
   echo "Creating distribution zip…"
-  local zip_name="Ticker-${version}.zip"
+  local zip_name="${APP_PRODUCT_NAME}-${version}.zip"
   local zip_path="$release_out_dir/$zip_name"
-  (cd "$release_dd/Build/Products/Release" && ditto -c -k --sequesterRsrc --keepParent "Ticker.app" "$zip_path")
+  (cd "$release_dd/Build/Products/Release" && ditto -c -k --sequesterRsrc --keepParent "$APP_PRODUCT_NAME.app" "$zip_path")
 
   # Also publish a stable-named zip for direct downloads.
   # This enables a URL like:
-  #   https://github.com/<owner>/<repo>/releases/latest/download/Ticker-alpha-latest.zip
+  #   https://github.com/<owner>/<repo>/releases/latest/download/<AppProductName>-alpha-latest.zip
   local stable_zip_name="$stable_zip_name_default"
   local stable_zip_path="$release_out_dir/$stable_zip_name"
   cp -f "$zip_path" "$stable_zip_path"
@@ -1129,7 +1135,7 @@ PY
       fi
     fi
 
-    gh_cmd+=(--title "Ticker ${version}" --notes "Alpha release ${version}" "$zip_path" "$stable_zip_path")
+    gh_cmd+=(--title "${APP_NAME} ${version}" --notes "Alpha release ${version}" "$zip_path" "$stable_zip_path")
     "${gh_cmd[@]}"
   fi
 
@@ -1222,15 +1228,15 @@ cmd_reset_onboarding() {
   require_cmd defaults
   echo "Resetting onboarding for $APP_BUNDLE_ID..."
   defaults delete "$APP_BUNDLE_ID" has_completed_onboarding >/dev/null 2>&1 || true
-  echo "Done. Relaunch Ticker to see onboarding."
+  echo "Done. Relaunch $APP_NAME to see onboarding."
 }
 
 cmd_reset_proxy_soft() {
   require_cmd python3
   echo "Soft reset proxy registration (keep device_id):"
-  echo "  File: $TICKER_DEVICE_JSON_PATH"
+  echo "  File: $DEVICE_JSON_PATH"
 
-  python3 - "$TICKER_DEVICE_JSON_PATH" <<'PY'
+  python3 - "$DEVICE_JSON_PATH" <<'PY'
 import json
 import pathlib
 import sys
@@ -1254,13 +1260,13 @@ PY
 
 cmd_reset_proxy_hard() {
   echo "Hard reset proxy registration (regenerates device_id on next launch):"
-  echo "  File: $TICKER_DEVICE_JSON_PATH"
+  echo "  File: $DEVICE_JSON_PATH"
   if ! confirm_action "Delete this file? [y/N] "; then
     echo "Canceled."
     return 0
   fi
-  rm -f "$TICKER_DEVICE_JSON_PATH"
-  echo "Deleted. Relaunch Ticker to re-register."
+  rm -f "$DEVICE_JSON_PATH"
+  echo "Deleted. Relaunch $APP_NAME to re-register."
 }
 
 reset_tcc_permission() {
@@ -1314,7 +1320,7 @@ cmd_reset_diagnostics() {
 cmd_reset_all() {
   echo "Reset bundle: onboarding + proxy-hard + proxy-url + diagnostics"
   echo "  Bundle ID: $APP_BUNDLE_ID"
-  echo "  device.json: $TICKER_DEVICE_JSON_PATH"
+  echo "  device.json: $DEVICE_JSON_PATH"
   if ! confirm_action "Proceed? [y/N] "; then
     echo "Canceled."
     return 0
