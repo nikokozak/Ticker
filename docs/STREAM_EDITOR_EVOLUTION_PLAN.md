@@ -61,6 +61,8 @@ Primary target files (expected hot spots):
 
 - Improve in-stream readability (spacing, rhythm, hierarchy).
 - Reduce visual clutter around cell chrome and controls.
+- Remove persistent split editor panes that reduce writing width.
+- Keep outline/source tools available via non-blocking overlays or drawers.
 - Keep stream structure recognizable; do not introduce new global nav elements.
 
 ### Phase E2 — Editing Interaction Quality

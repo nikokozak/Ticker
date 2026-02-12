@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { bridge } from '../types';
-import { isUnifiedEditorEnabled, setUnifiedEditorEnabled } from '../utils/featureFlags';
 import { debugError } from '../utils/debug';
 
 type Appearance = 'light' | 'dark' | 'system';
@@ -51,7 +50,6 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const [settings, setSettings] = useState<SettingsData | null>(null);
-  const [useUnifiedEditor, setUseUnifiedEditor] = useState(isUnifiedEditorEnabled());
 
   // Proxy auth state
   const [proxyAuth, setProxyAuth] = useState<ProxyAuthStatus | null>(null);
@@ -481,28 +479,6 @@ export function Settings({ onClose }: SettingsProps) {
             </div>
           </section>
         )}
-
-        <section className="settings-section">
-          <h2>Editor</h2>
-          <div className="settings-field">
-            <label className="settings-toggle-label">
-              <input
-                type="checkbox"
-                checked={useUnifiedEditor}
-                onChange={(e) => {
-                  const next = e.target.checked;
-                  setUseUnifiedEditor(next);
-                  setUnifiedEditorEnabled(next);
-                }}
-              />
-              <span>Unified editor (experimental)</span>
-            </label>
-            <p className="settings-hint">
-              Uses a single TipTap editor for the whole stream (cross-cell selection + unified editing).
-              URL override still works: <code>?unified=true</code>.
-            </p>
-          </div>
-        </section>
 
         <section className="settings-section">
           <h2>Default Model</h2>

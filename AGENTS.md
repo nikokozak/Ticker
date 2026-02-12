@@ -26,6 +26,10 @@ Must preserve as-is unless explicitly requested:
 - settings/help surfaces
 - global hotkeys and non-editor windows
 
+Editor layout guardrail:
+- Do not ship persistent split-pane editor layouts that shrink the writing canvas.
+- If navigation/outline/source utilities are needed, prefer overlays/drawers/modals over always-on side panes.
+
 ## Technical Constraints
 
 - Keep existing architecture: Swift host + WKWebView + React/TipTap.

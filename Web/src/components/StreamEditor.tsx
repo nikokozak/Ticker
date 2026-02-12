@@ -37,6 +37,7 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
   const [title, setTitle] = useState(stream.title);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showInspector, setShowInspector] = useState(false);
   const [overlayBlockId, setOverlayBlockId] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
@@ -56,11 +57,20 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setShowSearch(true);
+      } else if (e.key === 'Escape') {
+        setShowInspector(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Ensure source-targeted navigation surfaces the inspector drawer.
+  useEffect(() => {
+    if (pendingSourceId) {
+      setShowInspector(true);
+    }
+  }, [pendingSourceId]);
 
   // Handle pending cell navigation (from cross-stream search)
   // Note: handleScrollToCell is defined with useCallback below, so this effect
@@ -468,6 +478,7 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
   // Navigate to a source in the source panel (for chunk search results)
   const handleNavigateToSource = useCallback((sourceId: string) => {
     setHighlightedSourceId(sourceId);
+    setShowInspector(true);
   }, []);
 
   // Title editing handlers
@@ -523,9 +534,18 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
           </h1>
         )}
         <button
+          onClick={() => setShowInspector(true)}
+          className="open-inspector-button"
+          title="Open outline and sources"
+          type="button"
+        >
+          Outline & Sources
+        </button>
+        <button
           onClick={() => setShowDeleteConfirm(true)}
           className="delete-stream-button"
           title="Delete stream"
+          type="button"
         >
           Delete
         </button>
@@ -627,22 +647,45 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
             );
           })}
         </div>
-
-        <SidePanel
-          cells={cells}
-          focusedCellId={focusedBlockId}
-          onCellClick={handleScrollToCell}
-          streamId={stream.id}
-          sources={sources}
-          onSourceAdded={handleSourceAdded}
-          onSourceRemoved={handleSourceRemoved}
-          highlightedSourceId={highlightedSourceId || pendingSourceId}
-          onClearHighlight={() => {
-            setHighlightedSourceId(null);
-            onClearPendingSource?.();
-          }}
-        />
       </div>
+
+      {showInspector && (
+        <div
+          className="stream-inspector-overlay"
+          onClick={() => setShowInspector(false)}
+        >
+          <div
+            className="stream-inspector-drawer"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="stream-inspector-header">
+              <h2>Outline & Sources</h2>
+              <button
+                type="button"
+                className="stream-inspector-close"
+                onClick={() => setShowInspector(false)}
+                aria-label="Close outline and sources"
+              >
+                Close
+              </button>
+            </div>
+            <SidePanel
+              cells={cells}
+              focusedCellId={focusedBlockId}
+              onCellClick={handleScrollToCell}
+              streamId={stream.id}
+              sources={sources}
+              onSourceAdded={handleSourceAdded}
+              onSourceRemoved={handleSourceRemoved}
+              highlightedSourceId={highlightedSourceId || pendingSourceId}
+              onClearHighlight={() => {
+                setHighlightedSourceId(null);
+                onClearPendingSource?.();
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Global reference preview tooltip */}
       <ReferencePreview onScrollToCell={handleScrollToCell} />

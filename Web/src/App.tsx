@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
 import { bridge, Stream, StreamSummary } from './types';
 import { StreamEditor } from './components/StreamEditor';
-import { UnifiedStreamEditor } from './components/UnifiedStreamEditor';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
 import { useBlockStore } from './store/blockStore';
-import { isUnifiedEditorEnabled } from './utils/featureFlags';
 import { debugError, debugLog } from './utils/debug';
 
 type View = 'list' | 'stream' | 'settings';
@@ -167,13 +165,10 @@ export function App() {
       />
     );
   } else if (view === 'stream' && currentStream) {
-    // Feature flag: use unified editor for cross-cell selection support
-    const EditorComponent = isUnifiedEditorEnabled() ? UnifiedStreamEditor : StreamEditor;
-
     // key={currentStream.id} forces React to remount the editor when switching streams.
-    // This ensures TipTap reinitializes with the correct content and avoids stale doc state.
+    // This ensures stream-local editor state does not leak across streams.
     viewContent = (
-      <EditorComponent
+      <StreamEditor
         key={currentStream.id}
         stream={currentStream}
         onBack={handleBackToList}
