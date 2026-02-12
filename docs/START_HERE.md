@@ -1,4 +1,11 @@
-# Start Here (Ticker Alpha)
+# Start Here (Ticker-Next)
+
+## Status
+
+Current editor direction is defined by:
+- `docs/STREAM_EDITOR_EVOLUTION_PLAN.md`
+
+Ticker-Next currently preserves Ticker's app/window flow and focuses iteration on the in-stream editor only.
 
 This folder defines the “professional mode” workflow for Ticker and the minimum bar for a 50‑user alpha.
 
