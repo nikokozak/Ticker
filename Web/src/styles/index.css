@@ -564,11 +564,11 @@ body {
 }
 
 .stream-content {
-  --stream-end-scroll-space: clamp(180px, 45vh, 520px);
+  --stream-end-scroll-space: clamp(120px, 24vh, 260px);
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: var(--spacing-lg) clamp(20px, 5.8vw, 88px) calc(var(--spacing-xxl) + var(--stream-end-scroll-space));
+  padding: var(--spacing-md) clamp(20px, 5.8vw, 88px) calc(var(--spacing-xxl) + var(--stream-end-scroll-space));
 }
 
 .stream-save-status {
@@ -584,14 +584,14 @@ body {
 
 .document-editor-shell {
   width: 100%;
-  max-width: 860px;
-  min-height: calc(100vh - 220px);
+  max-width: none;
+  min-height: calc(100vh - 200px);
   margin: 0 auto;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 14px;
-  background: var(--color-bg);
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.05);
-  overflow: hidden;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
 
 .document-editor-codemirror {
@@ -604,15 +604,19 @@ body {
   line-height: 1.78;
   color: var(--color-text);
   background: transparent;
+  overflow: visible;
 }
 
 .document-editor-codemirror .cm-scroller {
   font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", serif;
-  padding: clamp(28px, 4vw, 44px) clamp(24px, 4vw, 54px) clamp(280px, 36vh, 420px);
+  padding: clamp(22px, 3.6vw, 40px) clamp(20px, 4.6vw, 72px) clamp(220px, 30vh, 360px);
+  overflow-x: hidden;
+  overflow-y: visible;
 }
 
 .document-editor-codemirror .cm-content {
-  max-width: 72ch;
+  max-width: 78ch;
+  margin: 0 auto;
   caret-color: var(--color-text);
 }
 
@@ -622,6 +626,8 @@ body {
 
 .document-editor-codemirror .cm-line {
   padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .stream-inspector-overlay {

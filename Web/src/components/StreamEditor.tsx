@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
+import { EditorView } from '@codemirror/view';
 import { bridge, Stream, SourceReference } from '../types';
 import { SidePanel } from './SidePanel';
 import { SearchModal } from './SearchModal';
@@ -390,7 +391,6 @@ export function StreamEditor({
           >
             <CodeMirror
               value={markdownContent}
-              height="100%"
               basicSetup={{
                 lineNumbers: false,
                 foldGutter: false,
@@ -398,6 +398,7 @@ export function StreamEditor({
                 highlightActiveLineGutter: false,
               }}
               extensions={[
+                EditorView.lineWrapping,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
               ]}
               onCreateEditor={(view) => {
