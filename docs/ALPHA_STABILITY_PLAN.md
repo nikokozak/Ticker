@@ -1,13 +1,15 @@
 # Alpha Stability Plan (Ship in 2 Weeks)
 
-Note (2026-02-12): This is a historical alpha stabilization plan. If any section conflicts with `docs/TICKER_NEXT_MVP_PLAN.md`, follow the MVP plan.
+Note (2026-02-13): This document is historical context from an earlier phase.
+It is **not** the current editor implementation plan.
+For all active editor/product decisions, use `docs/TICKER_NEXT_MVP_PLAN.md`.
 
-This document is the **single execution plan** for two urgent goals:
+Historical contents below describe an older execution plan for two urgent goals:
 
 1) **Option A — One-call AI output** for stream cells: the model returns a **restatement heading + body** in the **same streamed response** (no separate “restatement” request, no special restatement field/UI).
 2) **Deep house-cleaning audit**: reduce architectural fragmentation so proxy-only alpha is stable and debuggable.
 
-This is written for an implementation LLM (Claude Code). Follow it as a checklist and keep changes slice-sized.
+This was written for a previous implementation pass and should be treated as archival reference only.
 
 ---
 

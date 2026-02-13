@@ -71,7 +71,7 @@ When Ticker detects pending schema migrations on launch, it attempts to create a
    - Rename `ticker.db` → `ticker.db.broken` (or copy it elsewhere).
 4) Pick the newest backup in `backups/` and copy it next to the DB.
 5) Rename that backup to `ticker.db`.
-6) Launch Ticker and verify your streams/cells are back.
+6) Launch Ticker and verify your streams/editor content are back.
 
 Notes:
 - This only restores local note data. It does not affect your proxy/device key state.
@@ -112,4 +112,4 @@ When triaging Quick Panel bugs, always ask which mode was used:
 Repro checklist for testers:
 - Was there captured context (selection or screenshot)?
 - Did streaming start, and did it stop when pressing `Esc`?
-- If using `⌥↵`: confirm no new stream/cell was created and nothing persisted after app restart.
+- If using `⌥↵`: confirm no new persisted stream content was created after app restart.

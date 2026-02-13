@@ -28,7 +28,7 @@ Rationale: GitHub asset URLs typically redirect; Sparkle update checks are more 
 - Privacy sanity: spot-check Console logs in Release build for accidental prompt/content logging
 - Manual QA: generate an AI response containing `![x](https://example.com/x.png)` → no image loads (and no external network request is triggered)
 - Manual QA: drag a PNG into a stream → image appears; drag a PDF → source appears
-- Manual QA: Quick Panel `⌥↵` ask mode produces a response but does not create/persist any stream cells
+- Manual QA: Quick Panel `⌥↵` ask mode produces a response but does not create/persist stream editor content
 
 ## Recommended flow (smoke test before publish)
 

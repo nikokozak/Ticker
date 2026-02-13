@@ -4,9 +4,15 @@
 
 Current editor direction is defined by:
 - `docs/TICKER_NEXT_MVP_PLAN.md`
+- `docs/EDITOR_TECH_DECISION.md`
 
 Ticker-Next preserves Ticker's app/window flow and focuses iteration on the in-stream editor only.
 If other docs conflict with the MVP plan, follow the MVP plan.
+Critical constraints from the MVP plan:
+- no native editor
+- no cell-based editor model
+- no persistent split-pane writing layout
+- images + PDF highlight linking are required capabilities
 
 This folder defines the “professional mode” workflow for Ticker and the minimum bar for a 50‑user alpha.
 
@@ -19,7 +25,8 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 
 2) **Product direction (required)**
    - Read `docs/TICKER_NEXT_MVP_PLAN.md`
-   - Treat it as canonical for editor UX/implementation direction
+   - Read `docs/EDITOR_TECH_DECISION.md`
+   - Treat these as canonical for editor UX/implementation direction
 
 3) **Release discipline**
   - Read `docs/RELEASES.md`
@@ -32,10 +39,11 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 
 5) **Proxy + diagnostics**
   - Read `docs/PROXY_ARCHITECTURE.md` and `docs/PRIVACY_DIAGNOSTICS.md`
-  - Use `docs/GITHUB_BACKLOG_ALPHA.md` as the canonical alpha issue list (Epic C/D integration notes included)
+  - Read `docs/contracts/README.md` before editing bridge payloads
+  - Use `docs/GITHUB_BACKLOG_ALPHA.md` as a working alpha issue list for non-editor operational work
 
 6) **Historical stability context (optional)**
-   - `docs/ALPHA_STABILITY_PLAN.md` is historical context for earlier alpha hardening work
+   - `docs/ALPHA_STABILITY_PLAN.md` is historical context only; it is not the editor direction doc
 
 7) **Alpha ops**
   - Read `docs/ALPHA_READINESS_CHECKLIST.md`
@@ -45,7 +53,7 @@ This folder defines the “professional mode” workflow for Ticker and the mini
 ## How to run the process (every change)
 
 1) Create a GitHub Issue with acceptance criteria.
-2) Create a branch: `fix/<issue-123>-slug` or `feature/<slug>`.
+2) Create a branch: `codex/<issue-123>-slug` (or team branch convention if not using Codex).
 3) Make a small PR.
 4) CI must pass; reviewer approves; merge to `main`.
 5) If user-facing: add 1 entry to `CHANGELOG.md`.
@@ -88,7 +96,7 @@ If you hit SwiftPM/Sparkle artifact issues, run:
 Quick Panel is the fast capture surface (hotkey-driven) and has two distinct modes:
 
 - **Save** (`↵`): saves captured context and/or your input into a stream.
-- **AI + Save** (`⌘↵`): saves, then triggers AI for the created cell.
+- **AI + Save** (`⌘↵`): saves, then triggers AI on the saved stream context.
 - **Ask (ephemeral)** (`⌥↵`): runs an in-memory chat turn that is **not** saved to the stream DB.
 
 Cancellation / escape behavior:
@@ -112,10 +120,13 @@ Ticker stores user data under:
 - `~/Library/Application Support/Ticker/`
 
 Key items:
-- `ticker.db` — the SQLite database (streams, cells, sources metadata)
+- `ticker.db` — the SQLite database (streams, stream editor data, sources metadata)
 - `assets/` — local images (inserted as `ticker-asset://...`)
 - `backups/` — automatic pre-migration DB backups (created only when pending migrations are detected)
 - `device.json` — **contains the plaintext proxy device key (`tk_...`) and device id**
+
+Note:
+- Legacy builds may still contain `cells` tables/paths during migration, but active direction is a stream-document editor model.
 
 If you need to restore data from a backup, follow the step-by-step instructions in `docs/ALPHA_SUPPORT.md`.
 

@@ -1,116 +1,177 @@
-# Ticker Next MVP Plan
+# Ticker-Next MVP Plan
 
-## Purpose
+Last updated: 2026-02-13
 
-This document is the canonical product direction for Ticker-Next.
+This is the canonical product + implementation direction for Ticker-Next.
+If any doc conflicts with this one, this file wins.
+Companion implementation rationale lives in `docs/EDITOR_TECH_DECISION.md`.
 
-Ticker-Next is **not** a full app-shell rewrite. It is an editor-focused evolution of Ticker:
-- keep Ticker’s proven app flow and UX scaffolding
-- make the in-stream editor feel like a normal, coherent document editor
-- remove cell-driven UX noise without destabilizing the rest of the app
+## 1) Scope and Intent
 
-## Non-Negotiable UX Contracts
+Ticker-Next is a focused fork of Ticker that modernizes the **stream editor** while preserving Ticker's proven app shell.
 
-1. Keep the existing app shell and flow intact:
-   - default page is the stream list
-   - settings/help/support access remains where users expect it
-   - stream view keeps title, back navigation, and delete controls
-   - existing non-editor windows/hotkeys continue to work
-2. Do not introduce persistent split panes that shrink writing width.
-   - utilities (outline, sources, metadata) must be overlay/drawer/modal based
-3. Preserve Ticker’s visual language and interaction familiarity outside the editor.
-   - this is an adjustment, not a product reinvention
+What stays:
+- stream list as the default page
+- settings/help/support access from the list context
+- stream page header patterns (title, back, delete)
+- existing non-editor windows and hotkeys unless explicitly changed
 
-## Editor Direction (MVP)
+What changes:
+- replace the current cell-centric editor model with a simpler, single-document writing model
+- target an iA Writer style writing experience: calm, centered, low chrome, predictable editing
 
-### Target Experience
+## 2) Non-Negotiable Product Constraints
 
-- The editor should feel like a normal text document:
-  - direct typing
-  - unsurprising selection/copy/paste
-  - predictable undo/redo
-  - clear typographic hierarchy and spacing rhythm
-- “Cells” may still exist as an implementation/persistence detail during migration, but **must not dominate the user experience**.
-- No mandatory block chrome during normal writing. Controls appear contextually and remain low-noise.
+1. No cell model in the new editor UX or data contract.
+2. No native editor.
+3. Keep Swift host + WKWebView architecture for the editor surface.
+4. No persistent split-pane editor layout that shrinks the writing canvas.
+5. Editor must autosave continuously.
+6. Image support is required.
+7. PDF support is required:
+   - in-app PDF reading using Apple PDF affordances
+   - highlight support
+   - ability to link highlights to locations in stream content
 
-### AI Interaction Contract
+## 3) Editor UX Target (iA-style)
 
-- AI is an edit operation, not a mode switch.
-- Selection-first actions include:
-  - Send
-  - Send & Prompt
-  - Proofread
-  - Summarize
-- Applying AI changes must support a single undo back to pre-AI state.
-- AI provenance styling is informative only and never changes editing semantics.
+The stream editor must behave like a normal document editor:
+- direct typing with no block/cell chrome
+- clean text flow with strong typography and spacing rhythm
+- selection/copy/paste behavior that feels native and unsurprising
+- predictable undo/redo
+- minimal always-on controls; contextual actions only
 
-### Save/Persistence Contract
+Design guardrails:
+- writing area remains visually dominant
+- side tools open as drawers/overlays/modals (not persistent split panes)
+- no "navigator + cramped editor" layout
 
-- Editor autosaves continuously.
-- Reloading a stream restores latest content accurately.
-- No regressions in stream load/save/reorder/data integrity.
+## 4) Editor Platform Decision
 
-## Technical Direction (Agreed Track)
+Decision: move from TipTap/cell-oriented editing to a Markdown-first web editor based on **CodeMirror 6**.
 
-### Keep
+Rationale:
+- better fit for plain-document writing than a block/cell abstraction
+- robust extension system for AI ranges, inline annotations, and link affordances
+- strong control over keyboard, selection, history, and transaction boundaries
+- straightforward path for iA-style presentation with minimal UI chrome
 
-- Existing architecture for this phase:
-  - Swift host app
-  - WKWebView
-  - React/TipTap editor stack
-- Existing stream/cell persistence model for compatibility while editor UX is being improved.
+Alternatives considered:
+- Lexical: strong framework, but more opinionated around rich-node editor patterns than needed for this MVP.
+- ProseMirror (direct): flexible, but still pulls us toward schema/node complexity we are intentionally reducing.
 
-### Do Not Do (in this track)
+Explicitly rejected for this track:
+- continuing TipTap as the primary stream editor foundation
+- any native TextKit/AppKit editor rewrite
 
-- No native-first editor rewrite (no AppKit/TextKit migration for editor).
-- No replacement of WKWebView.
-- No app-level navigation/window model rewrite.
-- No filesystem-first note migration as part of this MVP track.
+## 5) Data and Bridge Direction
 
-## Delivery Phases
+Replace cell-oriented editor persistence for stream writing with a single stream document contract.
 
-### E0 — Guardrails + Baseline
+Target persisted shape:
+- `stream_documents`
+- one primary document per stream
+- canonical content stored as Markdown (with stable revision metadata)
 
-- Lock app-shell scope.
-- Confirm stream list/settings/help/stream header parity.
-- Establish smoke checks for editor regressions.
+Migration direction:
+- legacy cell content is converted into a single stream document for each stream
+- migration is one-way for Ticker-Next
+- once migrated, editor behavior no longer depends on per-cell semantics
 
-### E1 — Readability + Layout
+Bridge direction:
+- prefer stream/document events over cell events for active editor operations
+- AI operations and annotations attach to ranges/anchors in the stream document
 
-- Widen and relax writing surface.
-- Reduce cell chrome prominence.
-- Keep utility panels non-blocking (overlay/drawer).
+## 6) AI Behavior Contract
 
-### E2 — Interaction Quality
+Required user-facing actions:
+- `Send`
+- `Send & Prompt` (opens prompt window; selected content is sent as context)
 
-- Tight keyboard boundary behavior.
-- Reliable copy/paste and selection flows.
-- Stable drag/reorder behavior with no accidental edits.
+Behavior rules:
+- AI is an edit operation in the current document, not a separate mode
+- AI apply is undoable in a single step back to pre-AI state
+- selection-first behavior is default; falls back to current paragraph/document only when no selection exists and action allows it
+- provenance styling is optional metadata and must not alter edit semantics
 
-### E3 — AI Clarity
+## 7) Autosave Contract
 
-- Ensure Send and Send & Prompt behavior is explicit and predictable.
-- Keep proofread/summarize selection workflows fast and reversible.
-- Maintain one-undo semantics.
+- autosave is always on for stream documents
+- save triggers on content changes with short debounce
+- stream reopen restores latest state accurately
+- no manual save affordance required for normal flow
 
-### E4 — Stability Hardening
+## 8) Image Support Contract
 
-- Regression pass: save/reload, undo/redo, reorder, AI actions.
-- Confirm no app-shell behavior regressions from editor work.
+Required:
+- paste/drop/insert images into stream content
+- local asset persistence and reliable reload
+- predictable rendering in editor and exported views
 
-## Definition of Done (Per Slice)
+Preferred content representation:
+- Markdown image syntax with internal asset URI resolution
+
+## 9) PDF Reader + Highlight Linking Contract
+
+PDF is a first-class companion surface, not an afterthought.
+
+Required:
+- open PDFs in-app using native Apple PDF capabilities (PDFKit in host app)
+- create/select highlights in the PDF reader
+- insert links/references from highlights into stream content
+- follow links from stream content back to the exact highlight location in the PDF
+
+Linking model:
+- each highlight has a stable ID and source reference
+- stream document stores explicit links to those highlight IDs
+- navigation is bidirectional: editor -> PDF highlight and PDF highlight -> editor anchor
+
+## 10) Delivery Phases
+
+### E0 - Baseline Parity Lock
+- preserve Ticker shell flow and window behavior
+- confirm build/run parity and no shell regressions
+
+### E1 - Editor Foundation Reset
+- introduce CodeMirror 6 stream editor
+- remove cell-based editing UI from active stream editor
+- establish single-document persistence path
+
+### E2 - Writing UX Quality
+- typography, spacing, and focus behavior tuned for iA-style writing
+- keyboard/selection/clipboard quality pass
+- no persistent split panes
+
+### E3 - AI Operations
+- implement `Send` and `Send & Prompt` in the new document model
+- enforce one-undo AI apply behavior
+- maintain autosave integrity through AI operations
+
+### E4 - Images
+- complete image insert/paste/drop pipeline
+- ensure durable persistence + reload
+
+### E5 - PDF Linking
+- in-app PDF reader + highlighting
+- bidirectional links between highlights and editor anchors
+
+### E6 - Stability Hardening
+- regression sweep across load/save, undo/redo, AI flows, images, PDF links
+- performance and crash hardening for alpha usage
+
+## 11) Definition of Done (Per Slice)
 
 A slice is complete only if:
+1. app-shell flow remains aligned with Ticker
+2. editor moves toward the no-cell iA-style target
+3. autosave/reload integrity passes
+4. AI send flows behave per contract
+5. touched-area build/tests/manual checks pass
 
-1. App shell behavior is unchanged.
-2. Editor behavior moves toward the normal-document target.
-3. Autosave/reload integrity holds.
-4. AI actions + undo contract holds.
-5. Build/test checks for touched areas pass.
+## 12) Execution Rules
 
-## Working Protocol
-
-- Make small, verifiable slices.
-- Before each slice, restate user-visible behavior change.
-- Call out bridge/persistence blast radius before editing those layers.
-- If there is ambiguity about UX direction, ask the user before implementing.
+- ship in small, verifiable slices
+- restate user-visible behavior before each implementation slice
+- call out persistence/bridge blast radius before touching those layers
+- when UX tradeoffs are unclear, ask the user before choosing

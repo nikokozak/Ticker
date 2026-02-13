@@ -19,8 +19,13 @@ Avoid:
   - Store alongside the DB under Application Support
 
 ### Before any content migration
-- Treat rewrites of `cells.content` as migrations (not “just a UI change”) and follow the same backup/rollback posture.
-- Example: `v9_heading_in_content_titles` prepends an `<h2>` heading derived from legacy `cells.restatement` when the cell content has no existing heading.
+- Treat rewrites of stream document content as migrations (not “just a UI change”) and follow the same backup/rollback posture.
+- Current direction: migration from legacy cell-oriented content to a single stream-document model is a first-class migration event.
+- Migration planning should explicitly define:
+  - source shape (legacy cell rows, metadata)
+  - target shape (stream document + anchor metadata)
+  - idempotency behavior
+  - rollback strategy using backup snapshots
 
 ### Before any location migration
 - Copy the entire data directory to a timestamped backup.
