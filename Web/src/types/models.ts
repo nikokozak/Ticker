@@ -4,6 +4,15 @@ export interface Stream {
   title: string;
   sources: SourceReference[];
   cells: Cell[];
+  document: StreamDocument;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Canonical Markdown document for a stream */
+export interface StreamDocument {
+  streamId: string;
+  markdown: string;
   createdAt: string;
   updatedAt: string;
 }

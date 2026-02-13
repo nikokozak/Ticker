@@ -348,8 +348,9 @@ final class WebViewManager: NSObject {
                 if let stream = try persistence.loadStream(id: id) {
                     // Build dependency graph for this stream
                     dependencyService.buildGraph(from: stream.cells)
+                    let document = try persistence.loadOrCreateStreamDocument(streamId: id)
 
-                    let streamPayload = encodeStream(stream)
+                    let streamPayload = encodeStream(stream, document: document)
                     bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
 
                     // Process live blocks (async, after stream is loaded and classifier is ready)
@@ -402,7 +403,8 @@ final class WebViewManager: NSObject {
             do {
                 let stream = try persistence.createStream(title: title)
                 currentStreamIdForFileDrops = stream.id
-                let streamPayload = encodeStream(stream)
+                let document = try persistence.loadOrCreateStreamDocument(streamId: stream.id)
+                let streamPayload = encodeStream(stream, document: document)
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to create stream (\(DebugLog.errorSummary(error)))")
@@ -540,6 +542,20 @@ final class WebViewManager: NSObject {
                 }
             } catch {
                 DebugLog.log("[WebViewManager] Failed to save cell (\(DebugLog.errorSummary(error)))")
+            }
+
+        case "saveStreamDocument":
+            guard let payload = message.payload,
+                  let streamIdValue = payload["streamId"]?.value as? String,
+                  let streamId = UUID(uuidString: streamIdValue),
+                  let markdown = payload["markdown"]?.value as? String else {
+                DebugLog.log("[WebViewManager] Invalid saveStreamDocument payload")
+                return
+            }
+            do {
+                try persistence.saveStreamDocument(streamId: streamId, markdown: markdown)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save stream document (\(DebugLog.errorSummary(error)))")
             }
 
         case "deleteCell":
@@ -1349,7 +1365,7 @@ final class WebViewManager: NSObject {
 
     // MARK: - Encoding/Decoding Helpers
 
-    private func encodeStream(_ stream: Stream) -> [String: Any] {
+    private func encodeStream(_ stream: Stream, document: StreamDocument) -> [String: Any] {
         let formatter = ISO8601DateFormatter()
         return [
             "id": stream.id.uuidString,
@@ -1456,7 +1472,13 @@ final class WebViewManager: NSObject {
                 return dict
             },
             "createdAt": formatter.string(from: stream.createdAt),
-            "updatedAt": formatter.string(from: stream.updatedAt)
+            "updatedAt": formatter.string(from: stream.updatedAt),
+            "document": [
+                "streamId": document.streamId.uuidString,
+                "markdown": document.markdown,
+                "createdAt": formatter.string(from: document.createdAt),
+                "updatedAt": formatter.string(from: document.updatedAt)
+            ]
         ]
     }
 

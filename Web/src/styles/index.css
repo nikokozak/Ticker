@@ -571,6 +571,59 @@ body {
   padding: var(--spacing-lg) clamp(20px, 5.8vw, 88px) calc(var(--spacing-xxl) + var(--stream-end-scroll-space));
 }
 
+.stream-save-status {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  min-width: 56px;
+  text-align: right;
+}
+
+.stream-save-status--saving {
+  color: var(--color-text-secondary);
+}
+
+.document-editor-shell {
+  width: 100%;
+  max-width: 860px;
+  min-height: calc(100vh - 220px);
+  margin: 0 auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 14px;
+  background: var(--color-bg);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+}
+
+.document-editor-codemirror {
+  min-height: inherit;
+}
+
+.document-editor-codemirror .cm-editor {
+  min-height: inherit;
+  font-size: 18px;
+  line-height: 1.78;
+  color: var(--color-text);
+  background: transparent;
+}
+
+.document-editor-codemirror .cm-scroller {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", serif;
+  padding: clamp(28px, 4vw, 44px) clamp(24px, 4vw, 54px) clamp(280px, 36vh, 420px);
+}
+
+.document-editor-codemirror .cm-content {
+  max-width: 72ch;
+  caret-color: var(--color-text);
+}
+
+.document-editor-codemirror .cm-focused {
+  outline: none;
+}
+
+.document-editor-codemirror .cm-line {
+  padding: 0;
+}
+
 .stream-inspector-overlay {
   position: fixed;
   inset: 0;

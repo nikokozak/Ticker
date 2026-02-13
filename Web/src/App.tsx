@@ -265,7 +265,7 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
             >
               <span className="stream-title">{stream.title}</span>
               <span className="stream-meta">
-                {formatRelativeTime(stream.updatedAt)} · {stream.sourceCount} {stream.sourceCount === 1 ? 'source' : 'sources'} · {stream.cellCount} {stream.cellCount === 1 ? 'cell' : 'cells'}
+                {formatRelativeTime(stream.updatedAt)} · {stream.sourceCount} {stream.sourceCount === 1 ? 'source' : 'sources'}
               </span>
             </button>
           ))
