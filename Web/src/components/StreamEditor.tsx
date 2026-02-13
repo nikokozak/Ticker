@@ -3,6 +3,8 @@ import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView } from '@codemirror/view';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
 import { bridge, Stream, SourceReference } from '../types';
 import { SidePanel } from './SidePanel';
 import { SearchModal } from './SearchModal';
@@ -19,6 +21,47 @@ interface StreamEditorProps {
   onClearPendingCell?: () => void;
   onClearPendingSource?: () => void;
 }
+
+const markdownHighlightStyle = HighlightStyle.define([
+  {
+    tag: [t.heading, t.heading1, t.heading2, t.heading3, t.heading4, t.heading5, t.heading6],
+    color: 'var(--color-text)',
+    textDecoration: 'none',
+    fontWeight: '620',
+  },
+  {
+    tag: [t.link, t.url],
+    color: 'var(--color-accent)',
+    textDecoration: 'none',
+  },
+  {
+    tag: t.processingInstruction,
+    color: 'var(--color-text-tertiary)',
+  },
+  {
+    tag: t.emphasis,
+    color: 'var(--color-text)',
+    fontStyle: 'italic',
+  },
+  {
+    tag: t.strong,
+    color: 'var(--color-text)',
+    fontWeight: '640',
+  },
+  {
+    tag: t.monospace,
+    color: 'var(--color-text-secondary)',
+    fontFamily: 'var(--font-mono)',
+  },
+  {
+    tag: [t.quote, t.contentSeparator, t.list],
+    color: 'var(--color-text-secondary)',
+  },
+  {
+    tag: [t.labelName, t.string],
+    color: 'var(--color-text-secondary)',
+  },
+]);
 
 export function StreamEditor({
   stream,
@@ -400,6 +443,7 @@ export function StreamEditor({
               extensions={[
                 EditorView.lineWrapping,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
+                syntaxHighlighting(markdownHighlightStyle),
               ]}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
