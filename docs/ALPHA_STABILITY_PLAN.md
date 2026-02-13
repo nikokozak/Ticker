@@ -1,6 +1,6 @@
 # Alpha Stability Plan (Ship in 2 Weeks)
 
-Note (2026-02-12): This is a historical alpha stabilization plan. If any section conflicts with `docs/STREAM_EDITOR_EVOLUTION_PLAN.md`, follow the stream editor evolution plan.
+Note (2026-02-12): This is a historical alpha stabilization plan. If any section conflicts with `docs/TICKER_NEXT_MVP_PLAN.md`, follow the MVP plan.
 
 This document is the **single execution plan** for two urgent goals:
 

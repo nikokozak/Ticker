@@ -11,15 +11,15 @@ Ticker-Next is an independent fork workspace.
 ## Canonical Direction
 
 Primary guide for implementation:
-- `docs/STREAM_EDITOR_EVOLUTION_PLAN.md`
+- `docs/TICKER_NEXT_MVP_PLAN.md`
 
-If any older docs conflict with this plan, follow `docs/STREAM_EDITOR_EVOLUTION_PLAN.md`.
+If any older docs conflict with this plan, follow `docs/TICKER_NEXT_MVP_PLAN.md`.
 If ambiguity remains, ask the user before implementing.
 
 For aesthetic and flow parity decisions:
 - Inspect `/Users/niko/Developer/Ticker/Ticker` as a read-only reference for proven interaction patterns.
 - Do not edit files in `/Users/niko/Developer/Ticker/Ticker` during this work.
-- If parity tradeoffs are unclear, ask the user before choosing a direction.
+- When parity tradeoffs are unclear, ask the user before choosing a direction.
 
 ## Product Focus (Current)
 
@@ -30,15 +30,18 @@ Must preserve as-is unless explicitly requested:
 - stream directory/listing flow
 - settings/help surfaces
 - global hotkeys and non-editor windows
+- stream header conventions (title, back, delete)
 
 Editor layout guardrail:
 - Do not ship persistent split-pane editor layouts that shrink the writing canvas.
 - If navigation/outline/source utilities are needed, prefer overlays/drawers/modals over always-on side panes.
+- Target a normal document-writing feel; do not let cell mechanics dominate UX.
 
 ## Technical Constraints
 
 - Keep existing architecture: Swift host + WKWebView + React/TipTap.
 - Do not initiate native-editor migration work in this repo.
+- Do not initiate filesystem-first note model migration in this repo.
 - Avoid persistence/schema rewrites unless required for a specific approved editor behavior.
 
 ## Working Rules

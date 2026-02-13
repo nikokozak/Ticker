@@ -3,39 +3,44 @@
 ## Status
 
 Current editor direction is defined by:
-- `docs/STREAM_EDITOR_EVOLUTION_PLAN.md`
+- `docs/TICKER_NEXT_MVP_PLAN.md`
 
-Ticker-Next currently preserves Ticker's app/window flow and focuses iteration on the in-stream editor only.
+Ticker-Next preserves Ticker's app/window flow and focuses iteration on the in-stream editor only.
+If other docs conflict with the MVP plan, follow the MVP plan.
 
 This folder defines the “professional mode” workflow for Ticker and the minimum bar for a 50‑user alpha.
 
 ## Where to start (recommended order)
 
 1) **Workflow + CI**
-   - Read `docs/ENGINEERING_WORKFLOW.md`
-   - Set up branch protections and CI described there
-   - Start using Issues/PRs immediately (even for small fixes)
+  - Read `docs/ENGINEERING_WORKFLOW.md`
+  - Set up branch protections and CI described there
+  - Start using Issues/PRs immediately (even for small fixes)
 
-2) **Release discipline**
-   - Read `docs/RELEASES.md`
-   - Start updating `CHANGELOG.md` for every PR
+2) **Product direction (required)**
+   - Read `docs/TICKER_NEXT_MVP_PLAN.md`
+   - Treat it as canonical for editor UX/implementation direction
 
-3) **macOS shipping**
-   - Read `docs/MAC_DISTRIBUTION.md`
-   - Do entitlements audit (`docs/MAC_ENTITLEMENTS.md`)
-   - Implement data location migration + backups (`docs/DATA_MIGRATIONS.md`) before inviting users
+3) **Release discipline**
+  - Read `docs/RELEASES.md`
+  - Start updating `CHANGELOG.md` for every PR
 
-4) **Proxy + diagnostics**
-   - Read `docs/PROXY_ARCHITECTURE.md` and `docs/PRIVACY_DIAGNOSTICS.md`
-   - Use `docs/GITHUB_BACKLOG_ALPHA.md` as the canonical alpha issue list (Epic C/D integration notes included)
+4) **macOS shipping**
+  - Read `docs/MAC_DISTRIBUTION.md`
+  - Do entitlements audit (`docs/MAC_ENTITLEMENTS.md`)
+  - Implement data location migration + backups (`docs/DATA_MIGRATIONS.md`) before inviting users
 
-5) **Stability (2-week ship)**
-   - Option A (single-call heading+body) + house-cleaning audit: `docs/ALPHA_STABILITY_PLAN.md`
+5) **Proxy + diagnostics**
+  - Read `docs/PROXY_ARCHITECTURE.md` and `docs/PRIVACY_DIAGNOSTICS.md`
+  - Use `docs/GITHUB_BACKLOG_ALPHA.md` as the canonical alpha issue list (Epic C/D integration notes included)
 
-6) **Alpha ops**
-   - Read `docs/ALPHA_READINESS_CHECKLIST.md`
-   - Read `docs/ALPHA_SUPPORT.md` (in-app feedback → manual triage)
-   - Read `docs/WEBSITE_REQUIREMENTS.md`
+6) **Historical stability context (optional)**
+   - `docs/ALPHA_STABILITY_PLAN.md` is historical context for earlier alpha hardening work
+
+7) **Alpha ops**
+  - Read `docs/ALPHA_READINESS_CHECKLIST.md`
+  - Read `docs/ALPHA_SUPPORT.md` (in-app feedback → manual triage)
+  - Read `docs/WEBSITE_REQUIREMENTS.md`
 
 ## How to run the process (every change)
 
