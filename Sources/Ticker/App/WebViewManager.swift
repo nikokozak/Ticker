@@ -866,6 +866,128 @@ final class WebViewManager: NSObject {
                 )
             }
 
+        case "thinkDocument":
+            guard let payload = message.payload,
+                  let requestId = payload["requestId"]?.value as? String,
+                  let query = payload["query"]?.value as? String else {
+                DebugLog.log("[WebViewManager] Invalid thinkDocument payload")
+                return
+            }
+
+            let imageURLs = payload["imageURLs"]?.value as? [String] ?? []
+            let imageDataURLs = assetService.assetsToDataURLs(imageURLs)
+            if !imageDataURLs.isEmpty {
+                DebugLog.log("ThinkDocument: Converting \(imageURLs.count) images to data URLs")
+            }
+
+            var streamIdForRAG: UUID? = nil
+            var sourceContext: String? = nil
+
+            if let streamIdValue = payload["streamId"]?.value as? String,
+               let streamId = UUID(uuidString: streamIdValue) {
+                streamIdForRAG = streamId
+
+                if let stream = try? persistence.loadStream(id: streamId) {
+                    let combinedText = stream.sources
+                        .compactMap { $0.extractedText }
+                        .joined(separator: "\n\n---\n\n")
+                    if !combinedText.isEmpty {
+                        sourceContext = combinedText
+                    }
+                }
+            }
+
+            var resolvedQuery = query
+            if let context = payload["context"]?.value as? String, !context.isEmpty {
+                let cleanContext = context
+                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    .replacingOccurrences(of: "&nbsp;", with: " ")
+                    .replacingOccurrences(of: "&amp;", with: "&")
+                    .replacingOccurrences(of: "&lt;", with: "<")
+                    .replacingOccurrences(of: "&gt;", with: ">")
+                    .replacingOccurrences(of: "&quot;", with: "\"")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if !cleanContext.isEmpty {
+                    resolvedQuery = "Regarding this context:\n\"\"\"\n\(cleanContext)\n\"\"\"\n\n\(resolvedQuery)"
+                }
+            }
+
+            let onChunk: (String) -> Void = { [weak self] chunk in
+                self?.bridgeService.send(BridgeMessage(
+                    type: "documentAIChunk",
+                    payload: ["requestId": AnyCodable(requestId), "chunk": AnyCodable(chunk)]
+                ))
+            }
+            let onComplete: () -> Void = { [weak self] in
+                self?.bridgeService.send(BridgeMessage(
+                    type: "documentAIComplete",
+                    payload: ["requestId": AnyCodable(requestId)]
+                ))
+            }
+            let onError: (Error) -> Void = { [weak self] error in
+                var payload: [String: AnyCodable] = [
+                    "requestId": AnyCodable(requestId),
+                    "error": AnyCodable(error.localizedDescription)
+                ]
+
+                if let proxyError = error as? ProxyLLMError {
+                    payload["errorCode"] = AnyCodable(proxyError.errorCode)
+                    if let proxyRequestId = proxyError.requestId {
+                        payload["proxyRequestId"] = AnyCodable(proxyRequestId)
+                    }
+
+                    if case .quotaExceeded(let details) = proxyError {
+                        payload["quotaScope"] = AnyCodable(details.scope)
+                        payload["quotaLimit"] = AnyCodable(details.limit)
+                        payload["quotaUsed"] = AnyCodable(details.used)
+                        payload["quotaResetAt"] = AnyCodable(details.resetAt)
+                    }
+
+                    if case .rateLimited(let retryAfter) = proxyError {
+                        if let seconds = retryAfter {
+                            payload["retryAfter"] = AnyCodable(seconds)
+                        }
+                    }
+                }
+
+                self?.bridgeService.send(BridgeMessage(
+                    type: "documentAIError",
+                    payload: payload
+                ))
+            }
+
+            Task { [weak self] in
+                guard let self else { return }
+
+                let proxyUsable = await DeviceKeyService.shared.currentState.isUsable
+
+                guard proxyUsable else {
+                    await MainActor.run {
+                        onError(OrchestratorError.noProviderAvailable)
+                    }
+                    return
+                }
+
+                await self.orchestrator.route(
+                    query: resolvedQuery,
+                    queryImages: imageDataURLs,
+                    streamId: streamIdForRAG,
+                    priorCells: [],
+                    sourceContext: sourceContext,
+                    includeHeading: false,
+                    onChunk: onChunk,
+                    onComplete: onComplete,
+                    onError: onError,
+                    onModelSelected: { [weak self] modelId in
+                        self?.bridgeService.send(BridgeMessage(
+                            type: "documentModelSelected",
+                            payload: ["requestId": AnyCodable(requestId), "modelId": AnyCodable(modelId)]
+                        ))
+                    }
+                )
+            }
+
         case "applyModifier":
             guard let payload = message.payload,
                   let cellId = payload["cellId"]?.value as? String,

@@ -3,6 +3,7 @@ import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView } from '@codemirror/view';
+import { Transaction } from '@codemirror/state';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { bridge, Stream, SourceReference } from '../types';
@@ -63,6 +64,16 @@ const markdownHighlightStyle = HighlightStyle.define([
   },
 ]);
 
+const markdownImageRegex = /!\[[^\]]*]\((ticker-asset:\/\/[^)\s]+)\)/g;
+
+function extractMarkdownImageUrls(markdownText: string): string[] {
+  const urls: string[] = [];
+  for (const match of markdownText.matchAll(markdownImageRegex)) {
+    if (match[1]) urls.push(match[1]);
+  }
+  return urls;
+}
+
 export function StreamEditor({
   stream,
   onBack,
@@ -83,12 +94,30 @@ export function StreamEditor({
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [promptValue, setPromptValue] = useState('');
+  const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
+  const [aiModel, setAiModel] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const titleInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<any>(null);
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
+  const promptContextRef = useRef<{
+    text: string;
+    from: number;
+    to: number;
+    imageUrls: string[];
+  } | null>(null);
+  const aiRequestRef = useRef<{
+    id: string;
+    buffer: string;
+    from: number;
+    to: number;
+    mode: 'replace' | 'after';
+  } | null>(null);
 
   const insertImageAtCursor = useCallback((imageUrl: string, altText = 'image') => {
     const safeAlt = altText.replace(/[\[\]\(\)]/g, '').trim() || 'image';
@@ -125,11 +154,27 @@ export function StreamEditor({
     editorAPI,
   });
 
+  const isAiThinking = aiStatus === 'thinking';
+
+  const isEditorActive = useCallback(() => {
+    const shell = editorShellRef.current;
+    const active = document.activeElement;
+    if (!shell || !active) return false;
+    return shell.contains(active);
+  }, []);
+
   useEffect(() => {
     setMarkdownContent(stream.document?.markdown ?? '');
     lastSavedContentRef.current = stream.document?.markdown ?? '';
     setTitle(stream.title);
     setSaveState('saved');
+    setAiStatus('idle');
+    setAiModel(null);
+    setAiError(null);
+    setShowPrompt(false);
+    setPromptValue('');
+    promptContextRef.current = null;
+    aiRequestRef.current = null;
   }, [stream.id, stream.document?.markdown, stream.title]);
 
   useEffect(() => {
@@ -144,22 +189,6 @@ export function StreamEditor({
       onClearPendingCell?.();
     }
   }, [pendingCellId, addToast, onClearPendingCell]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setShowSearch(true);
-        return;
-      }
-      if (e.key === 'Escape') {
-        setShowInspector(false);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   useEffect(() => {
     if (markdownContent === lastSavedContentRef.current) return;
@@ -179,6 +208,124 @@ export function StreamEditor({
 
     return () => window.clearTimeout(timer);
   }, [markdownContent, stream.id]);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      const active = aiRequestRef.current;
+      if (!active) return;
+
+      if (message.type === 'documentAIChunk') {
+        const requestId = message.payload?.requestId as string | undefined;
+        const chunk = message.payload?.chunk as string | undefined;
+        if (!requestId || requestId !== active.id || !chunk) return;
+        active.buffer += chunk;
+        return;
+      }
+
+      if (message.type === 'documentModelSelected') {
+        const requestId = message.payload?.requestId as string | undefined;
+        const modelId = message.payload?.modelId as string | undefined;
+        if (!requestId || requestId !== active.id || !modelId) return;
+        setAiModel(modelId);
+        return;
+      }
+
+      if (message.type === 'documentAIError') {
+        const requestId = message.payload?.requestId as string | undefined;
+        const error = message.payload?.error as string | undefined;
+        if (!requestId || requestId !== active.id) return;
+
+        const errorCode = message.payload?.errorCode as string | undefined;
+        const proxyRequestId = message.payload?.proxyRequestId as string | undefined;
+        let displayError = error || 'AI request failed.';
+
+        if (errorCode === 'quota_exceeded') {
+          const scope = message.payload?.quotaScope as string | undefined;
+          const resetAt = message.payload?.quotaResetAt as string | undefined;
+          if (resetAt) {
+            try {
+              const resetDate = new Date(resetAt);
+              const now = new Date();
+              const hoursUntil = Math.ceil((resetDate.getTime() - now.getTime()) / (1000 * 60 * 60));
+              displayError = `${scope === 'day' ? 'Daily' : 'Monthly'} quota exceeded. Resets in ~${hoursUntil}h.`;
+            } catch {
+              displayError = error || displayError;
+            }
+          }
+        } else if (errorCode === 'rate_limited') {
+          const retryAfter = message.payload?.retryAfter as number | undefined;
+          if (retryAfter) {
+            displayError = `Rate limit exceeded. Try again in ${retryAfter}s.`;
+          }
+        } else if (errorCode === 'invalid_key' || errorCode === 'key_bound_elsewhere') {
+          displayError = `${displayError} Check Settings to update your device key.`;
+        } else if (errorCode === 'server_error' || errorCode === 'upstream_error') {
+          if (proxyRequestId) {
+            displayError = `${displayError} (Request ID: ${proxyRequestId})`;
+          }
+        }
+
+        setAiStatus('idle');
+        setAiError(displayError);
+        setAiModel(null);
+        aiRequestRef.current = null;
+        addToast(displayError, 'error');
+        return;
+      }
+
+      if (message.type === 'documentAIComplete') {
+        const requestId = message.payload?.requestId as string | undefined;
+        if (!requestId || requestId !== active.id) return;
+
+        const view = editorViewRef.current;
+        if (!view) {
+          setAiStatus('idle');
+          aiRequestRef.current = null;
+          return;
+        }
+
+        const rawOutput = active.buffer.trim();
+        if (!rawOutput) {
+          setAiStatus('idle');
+          setAiModel(null);
+          aiRequestRef.current = null;
+          addToast('AI returned empty output.', 'warning');
+          return;
+        }
+
+        let insertText = rawOutput;
+        let from = active.from;
+        let to = active.to;
+
+        if (active.mode === 'after') {
+          const doc = view.state.doc;
+          const before = doc.sliceString(Math.max(0, active.to - 2), active.to);
+          const needsBlankLine = !before.endsWith('\n\n');
+          const needsSingleBreak = before.endsWith('\n') && !before.endsWith('\n\n');
+          const prefix = needsBlankLine ? '\n\n' : needsSingleBreak ? '\n' : '';
+          const suffix = insertText.endsWith('\n') ? '' : '\n';
+          insertText = `${prefix}${insertText}${suffix}`;
+          from = active.to;
+          to = active.to;
+        }
+
+        view.dispatch({
+          changes: { from, to, insert: insertText },
+          selection: { anchor: from + insertText.length },
+          annotations: Transaction.addToHistory.of(true),
+        });
+        view.focus();
+
+        setAiStatus('idle');
+        setAiModel(null);
+        setAiError(null);
+        aiRequestRef.current = null;
+        return;
+      }
+    });
+
+    return () => unsubscribe();
+  }, [addToast]);
 
   const startEditingTitle = useCallback(() => {
     setIsEditingTitle(true);
@@ -282,12 +429,182 @@ export function StreamEditor({
     }
   }, [saveImageToAssets, insertImageAtCursor, addToast]);
 
+  const getSelectionContext = useCallback(() => {
+    const view = editorViewRef.current;
+    if (!view) return null;
+    const selection = view.state.selection.main;
+    const doc = view.state.doc;
+
+    if (selection.from !== selection.to) {
+      const text = doc.sliceString(selection.from, selection.to);
+      return {
+        text,
+        from: selection.from,
+        to: selection.to,
+        imageUrls: extractMarkdownImageUrls(text),
+      };
+    }
+
+    const cursorLine = doc.lineAt(selection.from);
+    let startLine = cursorLine.number;
+    let endLine = cursorLine.number;
+
+    while (startLine > 1) {
+      const prevLine = doc.line(startLine - 1);
+      if (prevLine.text.trim().length === 0) break;
+      startLine -= 1;
+    }
+
+    while (endLine < doc.lines) {
+      const nextLine = doc.line(endLine + 1);
+      if (nextLine.text.trim().length === 0) break;
+      endLine += 1;
+    }
+
+    const from = doc.line(startLine).from;
+    const to = doc.line(endLine).to;
+    let text = doc.sliceString(from, to).trim();
+
+    if (!text) {
+      text = doc.toString().trim();
+      if (!text) return null;
+      return {
+        text,
+        from: 0,
+        to: doc.length,
+        imageUrls: extractMarkdownImageUrls(text),
+      };
+    }
+
+    return {
+      text,
+      from,
+      to,
+      imageUrls: extractMarkdownImageUrls(text),
+    };
+  }, []);
+
+  const startDocumentAI = useCallback((options: {
+    query: string;
+    context?: string;
+    imageUrls?: string[];
+    from: number;
+    to: number;
+    mode: 'replace' | 'after';
+  }) => {
+    if (isAiThinking) {
+      addToast('AI is already running for this stream.', 'info');
+      return;
+    }
+
+    const requestId = crypto.randomUUID();
+    aiRequestRef.current = {
+      id: requestId,
+      buffer: '',
+      from: options.from,
+      to: options.to,
+      mode: options.mode,
+    };
+    setAiStatus('thinking');
+    setAiModel(null);
+    setAiError(null);
+
+    bridge.send({
+      type: 'thinkDocument',
+      payload: {
+        requestId,
+        streamId: stream.id,
+        query: options.query,
+        context: options.context,
+        imageURLs: options.imageUrls ?? [],
+      },
+    });
+  }, [addToast, isAiThinking, stream.id]);
+
+  const handleSend = useCallback(() => {
+    const context = getSelectionContext();
+    if (!context || !context.text.trim()) {
+      addToast('Select text or place the cursor in a paragraph to send.', 'info');
+      return;
+    }
+
+    startDocumentAI({
+      query: context.text.trim(),
+      imageUrls: context.imageUrls,
+      from: context.from,
+      to: context.to,
+      mode: 'replace',
+    });
+  }, [addToast, getSelectionContext, startDocumentAI]);
+
+  const handleOpenPrompt = useCallback(() => {
+    if (isAiThinking) {
+      addToast('AI is already running for this stream.', 'info');
+      return;
+    }
+    const context = getSelectionContext();
+    if (!context || !context.text.trim()) {
+      addToast('Select text or place the cursor in a paragraph to use as context.', 'info');
+      return;
+    }
+    promptContextRef.current = context;
+    setPromptValue('');
+    setShowPrompt(true);
+  }, [addToast, getSelectionContext, isAiThinking]);
+
+  const closePrompt = useCallback(() => {
+    setShowPrompt(false);
+    setPromptValue('');
+    promptContextRef.current = null;
+  }, []);
+
+  const handlePromptSend = useCallback(() => {
+    const prompt = promptValue.trim();
+    const context = promptContextRef.current;
+    if (!prompt || !context) return;
+
+    closePrompt();
+
+    startDocumentAI({
+      query: prompt,
+      context: context.text.trim(),
+      imageUrls: context.imageUrls,
+      from: context.from,
+      to: context.to,
+      mode: 'after',
+    });
+  }, [closePrompt, promptValue, startDocumentAI]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setShowSearch(true);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        if (!isEditorActive()) return;
+        e.preventDefault();
+        if (e.shiftKey) {
+          void handleOpenPrompt();
+        } else {
+          void handleSend();
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        setShowInspector(false);
+        closePrompt();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [closePrompt, handleOpenPrompt, handleSend, isEditorActive]);
+
   useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
-      const shell = editorShellRef.current;
-      if (!shell) return;
-      const active = document.activeElement;
-      if (!active || !shell.contains(active)) return;
+      if (!isEditorActive()) return;
       if (!event.clipboardData?.items?.length) return;
 
       const imageFiles: File[] = [];
@@ -305,7 +622,7 @@ export function StreamEditor({
 
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [insertImageFiles]);
+  }, [insertImageFiles, isEditorActive]);
 
   const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     const files = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith('image/'));
@@ -359,6 +676,27 @@ export function StreamEditor({
         <span className={`stream-save-status stream-save-status--${saveState}`}>
           {saveState === 'saving' ? 'Saving…' : 'Saved'}
         </span>
+        <span className={`stream-ai-status stream-ai-status--${aiStatus}`}>
+          {aiStatus === 'thinking' ? `Thinking${aiModel ? ` (${aiModel})` : '…'}` : aiError ? 'AI error' : ''}
+        </span>
+        <button
+          onClick={handleSend}
+          className="ai-action-button"
+          type="button"
+          title="Send selection to AI"
+          disabled={isAiThinking}
+        >
+          Send
+        </button>
+        <button
+          onClick={handleOpenPrompt}
+          className="ai-action-button"
+          type="button"
+          title="Send selection with a prompt"
+          disabled={isAiThinking}
+        >
+          Send &amp; Prompt
+        </button>
         <button
           onClick={() => imageInputRef.current?.click()}
           className="open-inspector-button"
@@ -424,6 +762,49 @@ export function StreamEditor({
         </div>
       )}
 
+      {showPrompt && (
+        <div className="ai-prompt-overlay" onClick={closePrompt}>
+          <div className="ai-prompt-dialog" onClick={(e) => e.stopPropagation()}>
+            <h2>Send &amp; Prompt</h2>
+            <p>Selection will be attached as context. Write a prompt for the AI.</p>
+            <textarea
+              className="ai-prompt-input"
+              value={promptValue}
+              onChange={(event) => setPromptValue(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                  event.preventDefault();
+                  handlePromptSend();
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  closePrompt();
+                }
+              }}
+              placeholder="Ask the AI to summarize, rewrite, or expand the selected text…"
+              autoFocus
+              rows={5}
+            />
+            <div className="ai-prompt-actions">
+              <button
+                className="ai-prompt-cancel"
+                type="button"
+                onClick={closePrompt}
+              >
+                Cancel
+              </button>
+              <button
+                className="ai-prompt-send"
+                type="button"
+                onClick={handlePromptSend}
+                disabled={!promptValue.trim()}
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="stream-body">
         <div className="stream-content">
           <div
@@ -442,6 +823,13 @@ export function StreamEditor({
               }}
               extensions={[
                 EditorView.lineWrapping,
+                EditorView.contentAttributes.of({
+                  spellcheck: 'true',
+                  autocapitalize: 'sentences',
+                  autocomplete: 'on',
+                  autocorrect: 'on',
+                }),
+                EditorView.editable.of(!isAiThinking),
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
               ]}
