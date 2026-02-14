@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "swiftToWeb": {
+    "messages": {
+      "documentAIChunk": {
+        "requiredPayloadKeys": ["requestId", "chunk"]
+      },
+      "documentAIComplete": {
+        "requiredPayloadKeys": ["requestId"]
+      },
+      "documentAIError": {
+        "requiredPayloadKeys": ["requestId", "error"],
+        "optionalPayloadKeys": [
+          "errorCode",
+          "proxyRequestId",
+          "quotaScope",
+          "quotaLimit",
+          "quotaUsed",
+          "quotaResetAt",
+          "retryAfter"
+        ]
+      },
+      "documentModelSelected": {
+        "requiredPayloadKeys": ["requestId", "modelId"]
+      }
+    }
+  }
+}
