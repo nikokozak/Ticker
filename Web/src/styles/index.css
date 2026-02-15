@@ -757,6 +757,65 @@ body {
   word-break: break-word;
 }
 
+.document-editor-codemirror .cm-md-image-widget {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  margin: 0.65em 0 0.95em;
+  line-height: 0;
+}
+
+.document-editor-codemirror .cm-md-image-widget-image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  min-width: 120px;
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+}
+
+.document-editor-codemirror .cm-md-image-resize-handle {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.2);
+  cursor: nwse-resize;
+  color: rgba(15, 23, 42, 0.56);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+
+.document-editor-codemirror .cm-md-image-resize-handle::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translate(-1px, -1px);
+}
+
+.document-editor-codemirror .cm-md-image-resize-handle:hover {
+  background: rgba(255, 255, 255, 0.95);
+  color: rgba(15, 23, 42, 0.72);
+}
+
+.document-editor-codemirror .cm-md-image-widget:hover .cm-md-image-resize-handle,
+.document-editor-codemirror .cm-md-image-widget:focus-within .cm-md-image-resize-handle {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .stream-inspector-overlay {
   position: fixed;
   inset: 0;

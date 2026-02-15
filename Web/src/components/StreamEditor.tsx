@@ -11,6 +11,7 @@ import { SidePanel } from './SidePanel';
 import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
+import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 
 interface StreamEditorProps {
   stream: Stream;
@@ -92,16 +93,6 @@ const markdownHighlightStyle = HighlightStyle.define([
   },
 ]);
 
-const markdownImageRegex = /!\[[^\]]*]\((ticker-asset:\/\/[^)\s]+)\)/g;
-
-function extractMarkdownImageUrls(markdownText: string): string[] {
-  const urls: string[] = [];
-  for (const match of markdownText.matchAll(markdownImageRegex)) {
-    if (match[1]) urls.push(match[1]);
-  }
-  return urls;
-}
-
 export function StreamEditor({
   stream,
   onBack,
@@ -146,8 +137,7 @@ export function StreamEditor({
   } | null>(null);
 
   const insertImageAtCursor = useCallback((imageUrl: string, altText = 'image') => {
-    const safeAlt = altText.replace(/[\[\]\(\)]/g, '').trim() || 'image';
-    const snippet = `\n![${safeAlt}](${imageUrl})\n`;
+    const snippet = `\n${buildMarkdownImageToken({ alt: altText, url: imageUrl })}\n`;
     const view = editorViewRef.current;
 
     if (!view) {
@@ -978,6 +968,7 @@ export function StreamEditor({
                 EditorView.editable.of(!isAiThinking),
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
+                markdownImageWidgetExtension,
               ]}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
