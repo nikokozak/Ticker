@@ -173,7 +173,6 @@ function buildImageDecorations(view: EditorView): DecorationSet {
       token.to,
       Decoration.replace({
         widget: new MarkdownImageBlockWidget(token),
-        block: true,
       }),
     );
   }
