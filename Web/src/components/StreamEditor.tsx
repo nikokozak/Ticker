@@ -23,6 +23,19 @@ interface StreamEditorProps {
   onClearPendingSource?: () => void;
 }
 
+interface SelectionContext {
+  text: string;
+  from: number;
+  to: number;
+  imageUrls: string[];
+}
+
+interface FloatingMenuState {
+  visible: boolean;
+  left: number;
+  top: number;
+}
+
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: [t.heading, t.heading1, t.heading2, t.heading3, t.heading4, t.heading5, t.heading6],
@@ -97,20 +110,18 @@ export function StreamEditor({
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
-  const [aiModel, setAiModel] = useState<string | null>(null);
-  const [aiError, setAiError] = useState<string | null>(null);
+  const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState>({
+    visible: false,
+    left: 0,
+    top: 0,
+  });
 
   const titleInputRef = useRef<HTMLInputElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
-  const editorViewRef = useRef<any>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
-  const promptContextRef = useRef<{
-    text: string;
-    from: number;
-    to: number;
-    imageUrls: string[];
-  } | null>(null);
+  const promptContextRef = useRef<SelectionContext | null>(null);
+  const selectionMenuTimerRef = useRef<number | null>(null);
   const aiRequestRef = useRef<{
     id: string;
     buffer: string;
@@ -169,8 +180,7 @@ export function StreamEditor({
     setTitle(stream.title);
     setSaveState('saved');
     setAiStatus('idle');
-    setAiModel(null);
-    setAiError(null);
+    setFloatingMenu({ visible: false, left: 0, top: 0 });
     setShowPrompt(false);
     setPromptValue('');
     promptContextRef.current = null;
@@ -224,9 +234,7 @@ export function StreamEditor({
 
       if (message.type === 'documentModelSelected') {
         const requestId = message.payload?.requestId as string | undefined;
-        const modelId = message.payload?.modelId as string | undefined;
-        if (!requestId || requestId !== active.id || !modelId) return;
-        setAiModel(modelId);
+        if (!requestId || requestId !== active.id) return;
         return;
       }
 
@@ -266,8 +274,6 @@ export function StreamEditor({
         }
 
         setAiStatus('idle');
-        setAiError(displayError);
-        setAiModel(null);
         aiRequestRef.current = null;
         addToast(displayError, 'error');
         return;
@@ -287,7 +293,6 @@ export function StreamEditor({
         const rawOutput = active.buffer.trim();
         if (!rawOutput) {
           setAiStatus('idle');
-          setAiModel(null);
           aiRequestRef.current = null;
           addToast('AI returned empty output.', 'warning');
           return;
@@ -317,8 +322,6 @@ export function StreamEditor({
         view.focus();
 
         setAiStatus('idle');
-        setAiModel(null);
-        setAiError(null);
         aiRequestRef.current = null;
         return;
       }
@@ -429,7 +432,7 @@ export function StreamEditor({
     }
   }, [saveImageToAssets, insertImageAtCursor, addToast]);
 
-  const getSelectionContext = useCallback(() => {
+  const getSelectionContext = useCallback((allowFallback: boolean): SelectionContext | null => {
     const view = editorViewRef.current;
     if (!view) return null;
     const selection = view.state.selection.main;
@@ -444,6 +447,8 @@ export function StreamEditor({
         imageUrls: extractMarkdownImageUrls(text),
       };
     }
+
+    if (!allowFallback) return null;
 
     const cursorLine = doc.lineAt(selection.from);
     let startLine = cursorLine.number;
@@ -484,6 +489,64 @@ export function StreamEditor({
     };
   }, []);
 
+  const clearSelectionMenuTimer = useCallback(() => {
+    if (selectionMenuTimerRef.current !== null) {
+      window.clearTimeout(selectionMenuTimerRef.current);
+      selectionMenuTimerRef.current = null;
+    }
+  }, []);
+
+  const hideSelectionMenu = useCallback(() => {
+    clearSelectionMenuTimer();
+    setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+  }, [clearSelectionMenuTimer]);
+
+  const getFloatingMenuPlacement = useCallback((): { left: number; top: number } | null => {
+    const shell = editorShellRef.current;
+    if (!shell) return null;
+
+    const domSelection = window.getSelection();
+    if (!domSelection || domSelection.rangeCount === 0) return null;
+    if (!domSelection.anchorNode || !domSelection.focusNode) return null;
+    if (!shell.contains(domSelection.anchorNode) || !shell.contains(domSelection.focusNode)) return null;
+    if (domSelection.isCollapsed) return null;
+
+    const range = domSelection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return null;
+
+    const horizontalPadding = 16;
+    const left = Math.min(
+      window.innerWidth - horizontalPadding,
+      Math.max(horizontalPadding, rect.left + rect.width / 2),
+    );
+    const top = rect.bottom + 10;
+
+    return { left, top };
+  }, []);
+
+  const scheduleSelectionMenu = useCallback(() => {
+    clearSelectionMenuTimer();
+    if (showPrompt || isAiThinking) {
+      setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+      return;
+    }
+
+    selectionMenuTimerRef.current = window.setTimeout(() => {
+      const selection = getSelectionContext(false);
+      const placement = getFloatingMenuPlacement();
+      if (!selection || !selection.text.trim() || !placement) {
+        setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+        return;
+      }
+      setFloatingMenu({
+        visible: true,
+        left: placement.left,
+        top: placement.top,
+      });
+    }, 180);
+  }, [clearSelectionMenuTimer, getFloatingMenuPlacement, getSelectionContext, isAiThinking, showPrompt]);
+
   const startDocumentAI = useCallback((options: {
     query: string;
     context?: string;
@@ -506,8 +569,6 @@ export function StreamEditor({
       mode: options.mode,
     };
     setAiStatus('thinking');
-    setAiModel(null);
-    setAiError(null);
 
     bridge.send({
       type: 'thinkDocument',
@@ -522,7 +583,7 @@ export function StreamEditor({
   }, [addToast, isAiThinking, stream.id]);
 
   const handleSend = useCallback(() => {
-    const context = getSelectionContext();
+    const context = getSelectionContext(true);
     if (!context || !context.text.trim()) {
       addToast('Select text or place the cursor in a paragraph to send.', 'info');
       return;
@@ -535,28 +596,61 @@ export function StreamEditor({
       to: context.to,
       mode: 'replace',
     });
-  }, [addToast, getSelectionContext, startDocumentAI]);
+    hideSelectionMenu();
+  }, [addToast, getSelectionContext, hideSelectionMenu, startDocumentAI]);
+
+  const openPromptWithContext = useCallback((context: SelectionContext) => {
+    hideSelectionMenu();
+    promptContextRef.current = context;
+    setPromptValue('');
+    setShowPrompt(true);
+  }, [hideSelectionMenu]);
 
   const handleOpenPrompt = useCallback(() => {
     if (isAiThinking) {
       addToast('AI is already running for this stream.', 'info');
       return;
     }
-    const context = getSelectionContext();
+    const context = getSelectionContext(true);
     if (!context || !context.text.trim()) {
       addToast('Select text or place the cursor in a paragraph to use as context.', 'info');
       return;
     }
-    promptContextRef.current = context;
-    setPromptValue('');
-    setShowPrompt(true);
-  }, [addToast, getSelectionContext, isAiThinking]);
+    openPromptWithContext(context);
+  }, [addToast, getSelectionContext, isAiThinking, openPromptWithContext]);
+
+  const handleSelectionSend = useCallback(() => {
+    const context = getSelectionContext(false);
+    if (!context || !context.text.trim()) {
+      hideSelectionMenu();
+      return;
+    }
+
+    startDocumentAI({
+      query: context.text.trim(),
+      imageUrls: context.imageUrls,
+      from: context.from,
+      to: context.to,
+      mode: 'replace',
+    });
+    hideSelectionMenu();
+  }, [getSelectionContext, hideSelectionMenu, startDocumentAI]);
+
+  const handleSelectionPrompt = useCallback(() => {
+    const context = getSelectionContext(false);
+    if (!context || !context.text.trim()) {
+      hideSelectionMenu();
+      return;
+    }
+    openPromptWithContext(context);
+  }, [getSelectionContext, hideSelectionMenu, openPromptWithContext]);
 
   const closePrompt = useCallback(() => {
     setShowPrompt(false);
     setPromptValue('');
     promptContextRef.current = null;
-  }, []);
+    hideSelectionMenu();
+  }, [hideSelectionMenu]);
 
   const handlePromptSend = useCallback(() => {
     const prompt = promptValue.trim();
@@ -586,21 +680,66 @@ export function StreamEditor({
         if (!isEditorActive()) return;
         e.preventDefault();
         if (e.shiftKey) {
-          void handleOpenPrompt();
+          handleOpenPrompt();
         } else {
-          void handleSend();
+          handleSend();
         }
         return;
       }
       if (e.key === 'Escape') {
         setShowInspector(false);
         closePrompt();
+        hideSelectionMenu();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [closePrompt, handleOpenPrompt, handleSend, isEditorActive]);
+  }, [closePrompt, handleOpenPrompt, handleSend, hideSelectionMenu, isEditorActive]);
+
+  useEffect(() => {
+    return () => clearSelectionMenuTimer();
+  }, [clearSelectionMenuTimer]);
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) {
+        hideSelectionMenu();
+        return;
+      }
+      scheduleSelectionMenu();
+    };
+
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, [hideSelectionMenu, scheduleSelectionMenu]);
+
+  useEffect(() => {
+    if (!floatingMenu.visible) return;
+
+    const updatePlacement = () => {
+      const selection = getSelectionContext(false);
+      const placement = getFloatingMenuPlacement();
+      if (!selection || !placement) {
+        hideSelectionMenu();
+        return;
+      }
+      setFloatingMenu((previous) => ({
+        ...previous,
+        visible: true,
+        left: placement.left,
+        top: placement.top,
+      }));
+    };
+
+    window.addEventListener('resize', updatePlacement);
+    window.addEventListener('scroll', updatePlacement, true);
+    return () => {
+      window.removeEventListener('resize', updatePlacement);
+      window.removeEventListener('scroll', updatePlacement, true);
+    };
+  }, [floatingMenu.visible, getFloatingMenuPlacement, getSelectionContext, hideSelectionMenu]);
 
   useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
@@ -623,6 +762,14 @@ export function StreamEditor({
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [insertImageFiles, isEditorActive]);
+
+  useEffect(() => {
+    if (!showPrompt) {
+      scheduleSelectionMenu();
+    } else {
+      hideSelectionMenu();
+    }
+  }, [hideSelectionMenu, scheduleSelectionMenu, showPrompt]);
 
   const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     const files = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith('image/'));
@@ -676,56 +823,6 @@ export function StreamEditor({
         <span className={`stream-save-status stream-save-status--${saveState}`}>
           {saveState === 'saving' ? 'Saving…' : 'Saved'}
         </span>
-        <span className={`stream-ai-status stream-ai-status--${aiStatus}`}>
-          {aiStatus === 'thinking' ? `Thinking${aiModel ? ` (${aiModel})` : '…'}` : aiError ? 'AI error' : ''}
-        </span>
-        <button
-          onClick={handleSend}
-          className="ai-action-button"
-          type="button"
-          title="Send selection to AI"
-          disabled={isAiThinking}
-        >
-          Send
-        </button>
-        <button
-          onClick={handleOpenPrompt}
-          className="ai-action-button"
-          type="button"
-          title="Send selection with a prompt"
-          disabled={isAiThinking}
-        >
-          Send &amp; Prompt
-        </button>
-        <button
-          onClick={() => imageInputRef.current?.click()}
-          className="open-inspector-button"
-          type="button"
-          title="Insert image"
-        >
-          Image
-        </button>
-        <input
-          ref={imageInputRef}
-          type="file"
-          accept="image/*"
-          style={{ display: 'none' }}
-          onChange={(event) => {
-            const files = Array.from(event.target.files || []);
-            if (files.length > 0) {
-              void insertImageFiles(files);
-            }
-            event.currentTarget.value = '';
-          }}
-        />
-        <button
-          onClick={() => setShowInspector(true)}
-          className="open-inspector-button"
-          title="Open sources"
-          type="button"
-        >
-          Sources
-        </button>
         <button
           onClick={() => setShowDeleteConfirm(true)}
           className="delete-stream-button"
@@ -802,6 +899,40 @@ export function StreamEditor({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {floatingMenu.visible && (
+        <div
+          className="selection-action-menu"
+          style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
+        >
+          <button
+            type="button"
+            className="selection-action-button"
+            title="Send"
+            aria-label="Send"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={handleSelectionSend}
+            disabled={isAiThinking}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M3.2 4.2l17.6 7.8-17.6 7.8 2.4-7-2.4-8.6zm2.8 2.7 1.3 4.7h7.8v1h-7.8L6 17.1l11.8-5.1L6 6.9z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="selection-action-button"
+            title="Send & Prompt"
+            aria-label="Send and prompt"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={handleSelectionPrompt}
+            disabled={isAiThinking}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M4 3h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-4 4v-4H4a1 1 0 01-1-1V4a1 1 0 011-1zm1 2v9h1v1.6L7.6 14H19V5H5zm3 2h8v1H8V7zm0 3h5v1H8v-1z" />
+            </svg>
+          </button>
         </div>
       )}
 

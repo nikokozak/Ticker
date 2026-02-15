@@ -375,23 +375,6 @@ body {
   background: rgba(239, 68, 68, 0.1);
 }
 
-.open-inspector-button {
-  background: transparent;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-tertiary);
-  padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.open-inspector-button:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-  background: rgba(59, 130, 246, 0.1);
-}
-
 /* Export menu */
 .export-menu-container {
   position: relative;
@@ -675,37 +658,50 @@ body {
   color: var(--color-text-secondary);
 }
 
-.stream-ai-status {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  min-width: 120px;
-  text-align: right;
+.selection-action-menu {
+  position: fixed;
+  z-index: 920;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.14),
+    0 1px 2px rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(8px);
 }
 
-.stream-ai-status--thinking {
-  color: var(--color-accent);
-}
-
-.ai-action-button {
+.selection-action-button {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-tertiary);
-  padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 0.12s ease, background 0.12s ease, transform 0.12s ease;
 }
 
-.ai-action-button:hover:not(:disabled) {
-  border-color: var(--color-accent);
+.selection-action-button svg {
+  fill: currentColor;
+}
+
+.selection-action-button:hover:not(:disabled) {
   color: var(--color-accent);
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(59, 130, 246, 0.12);
+  transform: translateY(-1px);
 }
 
-.ai-action-button:disabled {
-  opacity: 0.45;
+.selection-action-button:disabled {
   cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .document-editor-shell {
