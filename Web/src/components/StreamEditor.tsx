@@ -37,6 +37,20 @@ interface FloatingMenuState {
   top: number;
 }
 
+interface EditorChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  status?: 'streaming' | 'complete' | 'error';
+  modelId?: string;
+}
+
+interface ChatAIRequestState {
+  id: string;
+  buffer: string;
+  assistantMessageId: string;
+}
+
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.heading,
@@ -116,6 +130,12 @@ export function StreamEditor({
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isChatMinimized, setIsChatMinimized] = useState(false);
+  const [chatMessages, setChatMessages] = useState<EditorChatMessage[]>([]);
+  const [chatInputValue, setChatInputValue] = useState('');
+  const [chatContext, setChatContext] = useState<SelectionContext | null>(null);
+  const [isChatThinking, setIsChatThinking] = useState(false);
   const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState>({
     visible: false,
     left: 0,
@@ -125,6 +145,7 @@ export function StreamEditor({
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
@@ -135,6 +156,7 @@ export function StreamEditor({
     to: number;
     mode: 'replace' | 'after';
   } | null>(null);
+  const chatAiRequestRef = useRef<ChatAIRequestState | null>(null);
 
   const insertImageAtCursor = useCallback((imageUrl: string, altText = 'image') => {
     const snippet = `\n${buildMarkdownImageToken({ alt: altText, url: imageUrl })}\n`;
@@ -171,6 +193,7 @@ export function StreamEditor({
   });
 
   const isAiThinking = aiStatus === 'thinking';
+  const isAnyAiThinking = isAiThinking || isChatThinking;
 
   const isEditorActive = useCallback(() => {
     const shell = editorShellRef.current;
@@ -185,11 +208,18 @@ export function StreamEditor({
     setTitle(stream.title);
     setSaveState('saved');
     setAiStatus('idle');
+    setIsChatOpen(false);
+    setIsChatMinimized(false);
+    setChatMessages([]);
+    setChatInputValue('');
+    setChatContext(null);
+    setIsChatThinking(false);
     setFloatingMenu({ visible: false, left: 0, top: 0 });
     setShowPrompt(false);
     setPromptValue('');
     promptContextRef.current = null;
     aiRequestRef.current = null;
+    chatAiRequestRef.current = null;
   }, [stream.id, stream.document?.markdown, stream.title]);
 
   useEffect(() => {
@@ -224,116 +254,173 @@ export function StreamEditor({
     return () => window.clearTimeout(timer);
   }, [markdownContent, stream.id]);
 
+  const formatAIError = useCallback((payload: Record<string, unknown> | undefined, fallbackError?: string) => {
+    const error = (payload?.error as string | undefined) ?? fallbackError;
+    const errorCode = payload?.errorCode as string | undefined;
+    const proxyRequestId = payload?.proxyRequestId as string | undefined;
+    let displayError = error || 'AI request failed.';
+
+    if (errorCode === 'quota_exceeded') {
+      const scope = payload?.quotaScope as string | undefined;
+      const resetAt = payload?.quotaResetAt as string | undefined;
+      if (resetAt) {
+        try {
+          const resetDate = new Date(resetAt);
+          const now = new Date();
+          const hoursUntil = Math.ceil((resetDate.getTime() - now.getTime()) / (1000 * 60 * 60));
+          displayError = `${scope === 'day' ? 'Daily' : 'Monthly'} quota exceeded. Resets in ~${hoursUntil}h.`;
+        } catch {
+          displayError = error || displayError;
+        }
+      }
+    } else if (errorCode === 'rate_limited') {
+      const retryAfter = payload?.retryAfter as number | undefined;
+      if (retryAfter) {
+        displayError = `Rate limit exceeded. Try again in ${retryAfter}s.`;
+      }
+    } else if (errorCode === 'invalid_key' || errorCode === 'key_bound_elsewhere') {
+      displayError = `${displayError} Check Settings to update your device key.`;
+    } else if (errorCode === 'server_error' || errorCode === 'upstream_error') {
+      if (proxyRequestId) {
+        displayError = `${displayError} (Request ID: ${proxyRequestId})`;
+      }
+    }
+
+    return displayError;
+  }, []);
+
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
-      const active = aiRequestRef.current;
-      if (!active) return;
+      const documentRequest = aiRequestRef.current;
+      const chatRequest = chatAiRequestRef.current;
 
       if (message.type === 'documentAIChunk') {
         const requestId = message.payload?.requestId as string | undefined;
         const chunk = message.payload?.chunk as string | undefined;
-        if (!requestId || requestId !== active.id || !chunk) return;
-        active.buffer += chunk;
+        if (!requestId || !chunk) return;
+
+        if (documentRequest && requestId === documentRequest.id) {
+          documentRequest.buffer += chunk;
+          return;
+        }
+
+        if (chatRequest && requestId === chatRequest.id) {
+          chatRequest.buffer += chunk;
+          setChatMessages((previous) => previous.map((entry) => (
+            entry.id === chatRequest.assistantMessageId
+              ? { ...entry, content: chatRequest.buffer, status: 'streaming' }
+              : entry
+          )));
+        }
         return;
       }
 
       if (message.type === 'documentModelSelected') {
         const requestId = message.payload?.requestId as string | undefined;
-        if (!requestId || requestId !== active.id) return;
+        const modelId = message.payload?.modelId as string | undefined;
+        if (!requestId || !modelId) return;
+
+        if (chatRequest && requestId === chatRequest.id) {
+          setChatMessages((previous) => previous.map((entry) => (
+            entry.id === chatRequest.assistantMessageId
+              ? { ...entry, modelId }
+              : entry
+          )));
+        }
         return;
       }
 
       if (message.type === 'documentAIError') {
         const requestId = message.payload?.requestId as string | undefined;
-        const error = message.payload?.error as string | undefined;
-        if (!requestId || requestId !== active.id) return;
+        if (!requestId) return;
 
-        const errorCode = message.payload?.errorCode as string | undefined;
-        const proxyRequestId = message.payload?.proxyRequestId as string | undefined;
-        let displayError = error || 'AI request failed.';
-
-        if (errorCode === 'quota_exceeded') {
-          const scope = message.payload?.quotaScope as string | undefined;
-          const resetAt = message.payload?.quotaResetAt as string | undefined;
-          if (resetAt) {
-            try {
-              const resetDate = new Date(resetAt);
-              const now = new Date();
-              const hoursUntil = Math.ceil((resetDate.getTime() - now.getTime()) / (1000 * 60 * 60));
-              displayError = `${scope === 'day' ? 'Daily' : 'Monthly'} quota exceeded. Resets in ~${hoursUntil}h.`;
-            } catch {
-              displayError = error || displayError;
-            }
-          }
-        } else if (errorCode === 'rate_limited') {
-          const retryAfter = message.payload?.retryAfter as number | undefined;
-          if (retryAfter) {
-            displayError = `Rate limit exceeded. Try again in ${retryAfter}s.`;
-          }
-        } else if (errorCode === 'invalid_key' || errorCode === 'key_bound_elsewhere') {
-          displayError = `${displayError} Check Settings to update your device key.`;
-        } else if (errorCode === 'server_error' || errorCode === 'upstream_error') {
-          if (proxyRequestId) {
-            displayError = `${displayError} (Request ID: ${proxyRequestId})`;
-          }
+        if (documentRequest && requestId === documentRequest.id) {
+          setAiStatus('idle');
+          aiRequestRef.current = null;
+          addToast(formatAIError(message.payload), 'error');
+          return;
         }
 
-        setAiStatus('idle');
-        aiRequestRef.current = null;
-        addToast(displayError, 'error');
+        if (chatRequest && requestId === chatRequest.id) {
+          setIsChatThinking(false);
+          chatAiRequestRef.current = null;
+          const messageText = formatAIError(message.payload);
+          setChatMessages((previous) => previous.map((entry) => (
+            entry.id === chatRequest.assistantMessageId
+              ? { ...entry, content: messageText, status: 'error' }
+              : entry
+          )));
+          addToast(messageText, 'error');
+        }
         return;
       }
 
       if (message.type === 'documentAIComplete') {
         const requestId = message.payload?.requestId as string | undefined;
-        if (!requestId || requestId !== active.id) return;
+        if (!requestId) return;
 
-        const view = editorViewRef.current;
-        if (!view) {
+        if (documentRequest && requestId === documentRequest.id) {
+          const view = editorViewRef.current;
+          if (!view) {
+            setAiStatus('idle');
+            aiRequestRef.current = null;
+            return;
+          }
+
+          const rawOutput = documentRequest.buffer.trim();
+          if (!rawOutput) {
+            setAiStatus('idle');
+            aiRequestRef.current = null;
+            addToast('AI returned empty output.', 'warning');
+            return;
+          }
+
+          let insertText = rawOutput;
+          let from = documentRequest.from;
+          let to = documentRequest.to;
+
+          if (documentRequest.mode === 'after') {
+            const doc = view.state.doc;
+            const before = doc.sliceString(Math.max(0, documentRequest.to - 2), documentRequest.to);
+            const needsBlankLine = !before.endsWith('\n\n');
+            const needsSingleBreak = before.endsWith('\n') && !before.endsWith('\n\n');
+            const prefix = needsBlankLine ? '\n\n' : needsSingleBreak ? '\n' : '';
+            const suffix = insertText.endsWith('\n') ? '' : '\n';
+            insertText = `${prefix}${insertText}${suffix}`;
+            from = documentRequest.to;
+            to = documentRequest.to;
+          }
+
+          view.dispatch({
+            changes: { from, to, insert: insertText },
+            selection: { anchor: from + insertText.length },
+            annotations: Transaction.addToHistory.of(true),
+          });
+          view.focus();
+
           setAiStatus('idle');
           aiRequestRef.current = null;
           return;
         }
 
-        const rawOutput = active.buffer.trim();
-        if (!rawOutput) {
-          setAiStatus('idle');
-          aiRequestRef.current = null;
-          addToast('AI returned empty output.', 'warning');
-          return;
+        if (chatRequest && requestId === chatRequest.id) {
+          setIsChatThinking(false);
+          chatAiRequestRef.current = null;
+          setChatMessages((previous) => previous.map((entry) => (
+            entry.id === chatRequest.assistantMessageId
+              ? {
+                  ...entry,
+                  content: chatRequest.buffer.trim() || 'AI returned empty output.',
+                  status: 'complete',
+                }
+              : entry
+          )));
         }
-
-        let insertText = rawOutput;
-        let from = active.from;
-        let to = active.to;
-
-        if (active.mode === 'after') {
-          const doc = view.state.doc;
-          const before = doc.sliceString(Math.max(0, active.to - 2), active.to);
-          const needsBlankLine = !before.endsWith('\n\n');
-          const needsSingleBreak = before.endsWith('\n') && !before.endsWith('\n\n');
-          const prefix = needsBlankLine ? '\n\n' : needsSingleBreak ? '\n' : '';
-          const suffix = insertText.endsWith('\n') ? '' : '\n';
-          insertText = `${prefix}${insertText}${suffix}`;
-          from = active.to;
-          to = active.to;
-        }
-
-        view.dispatch({
-          changes: { from, to, insert: insertText },
-          selection: { anchor: from + insertText.length },
-          annotations: Transaction.addToHistory.of(true),
-        });
-        view.focus();
-
-        setAiStatus('idle');
-        aiRequestRef.current = null;
-        return;
       }
     });
 
     return () => unsubscribe();
-  }, [addToast]);
+  }, [addToast, formatAIError]);
 
   const startEditingTitle = useCallback(() => {
     setIsEditingTitle(true);
@@ -494,6 +581,40 @@ export function StreamEditor({
     };
   }, []);
 
+  const insertTextAtCursor = useCallback((content: string) => {
+    const text = content.trim();
+    if (!text) return;
+
+    const view = editorViewRef.current;
+    if (!view) {
+      setMarkdownContent((previous) => `${previous}${previous.endsWith('\n') ? '' : '\n'}${text}\n`);
+      return;
+    }
+
+    const selection = view.state.selection.main;
+    const before = view.state.doc.sliceString(Math.max(0, selection.from - 1), selection.from);
+    const prefix = before && !before.endsWith('\n') ? '\n' : '';
+    const suffix = text.endsWith('\n') ? '' : '\n';
+    const snippet = `${prefix}${text}${suffix}`;
+
+    view.dispatch({
+      changes: {
+        from: selection.from,
+        to: selection.to,
+        insert: snippet,
+      },
+      selection: { anchor: selection.from + snippet.length },
+      annotations: Transaction.addToHistory.of(true),
+    });
+    view.focus();
+  }, []);
+
+  const getActiveSelectionForChat = useCallback(() => {
+    const selection = getSelectionContext(false);
+    if (!selection || !selection.text.trim()) return null;
+    return selection;
+  }, [getSelectionContext]);
+
   const clearSelectionMenuTimer = useCallback(() => {
     if (selectionMenuTimerRef.current !== null) {
       window.clearTimeout(selectionMenuTimerRef.current);
@@ -532,7 +653,7 @@ export function StreamEditor({
 
   const scheduleSelectionMenu = useCallback(() => {
     clearSelectionMenuTimer();
-    if (showPrompt || isAiThinking) {
+    if (showPrompt || isAnyAiThinking || (isChatOpen && !isChatMinimized)) {
       setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
       return;
     }
@@ -550,7 +671,15 @@ export function StreamEditor({
         top: placement.top,
       });
     }, 180);
-  }, [clearSelectionMenuTimer, getFloatingMenuPlacement, getSelectionContext, isAiThinking, showPrompt]);
+  }, [
+    clearSelectionMenuTimer,
+    getFloatingMenuPlacement,
+    getSelectionContext,
+    isAnyAiThinking,
+    isChatMinimized,
+    isChatOpen,
+    showPrompt,
+  ]);
 
   const startDocumentAI = useCallback((options: {
     query: string;
@@ -560,7 +689,7 @@ export function StreamEditor({
     to: number;
     mode: 'replace' | 'after';
   }) => {
-    if (isAiThinking) {
+    if (isAnyAiThinking) {
       addToast('AI is already running for this stream.', 'info');
       return;
     }
@@ -585,7 +714,7 @@ export function StreamEditor({
         imageURLs: options.imageUrls ?? [],
       },
     });
-  }, [addToast, isAiThinking, stream.id]);
+  }, [addToast, isAnyAiThinking, stream.id]);
 
   const handleSend = useCallback(() => {
     const context = getSelectionContext(true);
@@ -612,7 +741,7 @@ export function StreamEditor({
   }, [hideSelectionMenu]);
 
   const handleOpenPrompt = useCallback(() => {
-    if (isAiThinking) {
+    if (isAnyAiThinking) {
       addToast('AI is already running for this stream.', 'info');
       return;
     }
@@ -622,7 +751,7 @@ export function StreamEditor({
       return;
     }
     openPromptWithContext(context);
-  }, [addToast, getSelectionContext, isAiThinking, openPromptWithContext]);
+  }, [addToast, getSelectionContext, isAnyAiThinking, openPromptWithContext]);
 
   const handleSelectionSend = useCallback(() => {
     const context = getSelectionContext(false);
@@ -674,6 +803,113 @@ export function StreamEditor({
     });
   }, [closePrompt, promptValue, startDocumentAI]);
 
+  const openEditorChat = useCallback(() => {
+    const selection = getActiveSelectionForChat();
+    setIsChatOpen(true);
+    setIsChatMinimized(false);
+    setChatContext((previous) => selection ?? previous);
+    hideSelectionMenu();
+  }, [getActiveSelectionForChat, hideSelectionMenu]);
+
+  const minimizeEditorChat = useCallback(() => {
+    setIsChatMinimized(true);
+  }, []);
+
+  const restoreEditorChat = useCallback(() => {
+    setIsChatOpen(true);
+    setIsChatMinimized(false);
+  }, []);
+
+  const closeEditorChat = useCallback(() => {
+    setIsChatOpen(false);
+    setIsChatMinimized(false);
+    setChatMessages([]);
+    setChatInputValue('');
+    setChatContext(null);
+    setIsChatThinking(false);
+    chatAiRequestRef.current = null;
+  }, []);
+
+  const attachSelectionToChat = useCallback(() => {
+    const selection = getActiveSelectionForChat();
+    if (!selection) {
+      addToast('Highlight text in the editor to attach it as context.', 'info');
+      return;
+    }
+    setChatContext(selection);
+    addToast('Attached selected text to this chat session.', 'info');
+  }, [addToast, getActiveSelectionForChat]);
+
+  const clearChatContext = useCallback(() => {
+    setChatContext(null);
+  }, []);
+
+  const sendChatMessage = useCallback(() => {
+    const prompt = chatInputValue.trim();
+    if (!prompt) return;
+
+    if (isAnyAiThinking) {
+      addToast('AI is already running for this stream.', 'info');
+      return;
+    }
+
+    const userMessageId = crypto.randomUUID();
+    const assistantMessageId = crypto.randomUUID();
+    const nextUserMessage: EditorChatMessage = {
+      id: userMessageId,
+      role: 'user',
+      content: prompt,
+      status: 'complete',
+    };
+
+    const priorTranscript = [...chatMessages, nextUserMessage]
+      .filter((entry) => entry.content.trim().length > 0)
+      .slice(-12)
+      .map((entry) => `${entry.role === 'user' ? 'User' : 'Assistant'}: ${entry.content.trim()}`)
+      .join('\n\n');
+
+    const contextSections: string[] = [];
+    if (chatContext?.text.trim()) {
+      contextSections.push(`Selected stream text:\n\"\"\"\n${chatContext.text.trim()}\n\"\"\"`);
+    }
+    if (priorTranscript) {
+      contextSections.push(`Conversation so far:\n${priorTranscript}`);
+    }
+
+    setChatInputValue('');
+    setChatMessages((previous) => [
+      ...previous,
+      nextUserMessage,
+      {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        status: 'streaming',
+      },
+    ]);
+    setIsChatThinking(true);
+    setIsChatOpen(true);
+    setIsChatMinimized(false);
+
+    const requestId = crypto.randomUUID();
+    chatAiRequestRef.current = {
+      id: requestId,
+      buffer: '',
+      assistantMessageId,
+    };
+
+    bridge.send({
+      type: 'thinkDocument',
+      payload: {
+        requestId,
+        streamId: stream.id,
+        query: prompt,
+        context: contextSections.length > 0 ? contextSections.join('\n\n') : undefined,
+        imageURLs: chatContext?.imageUrls ?? [],
+      },
+    });
+  }, [addToast, chatContext, chatInputValue, chatMessages, isAnyAiThinking, stream.id]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -694,17 +930,36 @@ export function StreamEditor({
       if (e.key === 'Escape') {
         setShowInspector(false);
         closePrompt();
+        if (isChatOpen && !isChatMinimized) {
+          minimizeEditorChat();
+          return;
+        }
         hideSelectionMenu();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [closePrompt, handleOpenPrompt, handleSend, hideSelectionMenu, isEditorActive]);
+  }, [
+    closePrompt,
+    handleOpenPrompt,
+    handleSend,
+    hideSelectionMenu,
+    isChatMinimized,
+    isChatOpen,
+    isEditorActive,
+    minimizeEditorChat,
+  ]);
 
   useEffect(() => {
     return () => clearSelectionMenuTimer();
   }, [clearSelectionMenuTimer]);
+
+  useEffect(() => {
+    if (isChatOpen && !isChatMinimized) {
+      hideSelectionMenu();
+    }
+  }, [hideSelectionMenu, isChatMinimized, isChatOpen]);
 
   useEffect(() => {
     const handleSelectionChange = () => {
@@ -719,6 +974,13 @@ export function StreamEditor({
     document.addEventListener('selectionchange', handleSelectionChange);
     return () => document.removeEventListener('selectionchange', handleSelectionChange);
   }, [hideSelectionMenu, scheduleSelectionMenu]);
+
+  useEffect(() => {
+    if (!isChatOpen || isChatMinimized) return;
+    const messagesContainer = chatMessagesRef.current;
+    if (!messagesContainer) return;
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }, [chatMessages, isChatMinimized, isChatOpen]);
 
   useEffect(() => {
     if (!floatingMenu.visible) return;
@@ -919,7 +1181,7 @@ export function StreamEditor({
             aria-label="Send"
             onMouseDown={(event) => event.preventDefault()}
             onClick={handleSelectionSend}
-            disabled={isAiThinking}
+            disabled={isAnyAiThinking}
           >
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
               <path d="M3.2 4.2l17.6 7.8-17.6 7.8 2.4-7-2.4-8.6zm2.8 2.7 1.3 4.7h7.8v1h-7.8L6 17.1l11.8-5.1L6 6.9z" />
@@ -932,12 +1194,149 @@ export function StreamEditor({
             aria-label="Send and prompt"
             onMouseDown={(event) => event.preventDefault()}
             onClick={handleSelectionPrompt}
-            disabled={isAiThinking}
+            disabled={isAnyAiThinking}
           >
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
               <path d="M4 3h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-4 4v-4H4a1 1 0 01-1-1V4a1 1 0 011-1zm1 2v9h1v1.6L7.6 14H19V5H5zm3 2h8v1H8V7zm0 3h5v1H8v-1z" />
             </svg>
           </button>
+        </div>
+      )}
+
+      {!isChatOpen && (
+        <button
+          type="button"
+          className="editor-chat-launcher"
+          onClick={openEditorChat}
+          title="Open editor chat"
+          aria-label="Open editor chat"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M12 2a4 4 0 0 0-4 4v1.2A5.8 5.8 0 0 0 4.2 13v.2c0 2.8 2.2 5 5 5h.8l1.2 1.8c.3.5 1 .5 1.4 0l1.2-1.8h.8c2.8 0 5-2.2 5-5V13A5.8 5.8 0 0 0 16 7.2V6a4 4 0 0 0-4-4zm-2 4a2 2 0 1 1 4 0v1h-4V6zm-2.8 7A2.8 2.8 0 0 1 10 10.2h4A2.8 2.8 0 0 1 16.8 13v.2A2.8 2.8 0 0 1 14 16h-1.4l-.6.9-.6-.9H10a2.8 2.8 0 0 1-2.8-2.8V13z" />
+          </svg>
+        </button>
+      )}
+
+      {isChatOpen && isChatMinimized && (
+        <div className="editor-chat-tab">
+          <button
+            type="button"
+            className="editor-chat-tab-open"
+            onClick={restoreEditorChat}
+          >
+            Chat
+          </button>
+          <button
+            type="button"
+            className="editor-chat-tab-close"
+            onClick={closeEditorChat}
+            aria-label="Close chat"
+            title="Close chat"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {isChatOpen && !isChatMinimized && (
+        <div className="editor-chat-overlay">
+          <section className="editor-chat-panel" aria-label="Editor chat">
+            <header className="editor-chat-header">
+              <div className="editor-chat-title-wrap">
+                <h2>Chat</h2>
+                <span className="editor-chat-status">
+                  {isChatThinking ? 'Thinking…' : 'Ready'}
+                </span>
+              </div>
+              <div className="editor-chat-controls">
+                <button type="button" onClick={attachSelectionToChat}>
+                  Attach Selection
+                </button>
+                <button type="button" onClick={minimizeEditorChat}>
+                  Minimize
+                </button>
+                <button type="button" onClick={closeEditorChat}>
+                  Close
+                </button>
+              </div>
+            </header>
+
+            {chatContext && (
+              <div className="editor-chat-context">
+                <span>
+                  Context: {chatContext.text.trim().replace(/\s+/g, ' ').slice(0, 220)}
+                  {chatContext.text.trim().length > 220 ? '…' : ''}
+                </span>
+                <button type="button" onClick={clearChatContext} aria-label="Clear context">
+                  Clear
+                </button>
+              </div>
+            )}
+
+            <div className="editor-chat-messages" ref={chatMessagesRef}>
+              {chatMessages.length === 0 && (
+                <div className="editor-chat-empty">
+                  Ask about highlighted text, or start a general conversation.
+                </div>
+              )}
+
+              {chatMessages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`editor-chat-message editor-chat-message--${message.role}`}
+                >
+                  <div className="editor-chat-bubble">
+                    <div className="editor-chat-message-meta">
+                      <span>{message.role === 'assistant' ? 'Assistant' : 'You'}</span>
+                      {message.modelId && <span>{message.modelId}</span>}
+                    </div>
+                    <p>
+                      {message.content || (message.status === 'streaming' ? 'Thinking…' : '')}
+                    </p>
+                  </div>
+                  {message.role === 'assistant' && (
+                    <button
+                      type="button"
+                      className="editor-chat-insert"
+                      title="Insert at cursor"
+                      aria-label="Insert at cursor"
+                      onClick={() => insertTextAtCursor(message.content)}
+                      disabled={!message.content.trim() || message.status === 'streaming'}
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <form
+              className="editor-chat-composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                sendChatMessage();
+              }}
+            >
+              <textarea
+                value={chatInputValue}
+                onChange={(event) => setChatInputValue(event.target.value)}
+                placeholder="Ask about this stream..."
+                rows={3}
+                onKeyDown={(event) => {
+                  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                    event.preventDefault();
+                    sendChatMessage();
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                disabled={!chatInputValue.trim() || isAnyAiThinking}
+              >
+                Send
+              </button>
+            </form>
+          </section>
         </div>
       )}
 
