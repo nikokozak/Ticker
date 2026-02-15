@@ -26,6 +26,18 @@ For aesthetic and flow parity decisions:
 
 Focus exclusively on the stream editor experience inside an individual stream, while preserving Ticker shell UX.
 
+## Terminology (Required)
+
+- In Ticker-Next discussion, `window` and `page` are interchangeable when referring to sections inside the main app window.
+- The main app window includes:
+  - default stream-list page/window
+  - settings page/window
+  - editor page/window
+- Inside the editor page/window:
+  - the top header/menu is the chrome area (back button, stream title, actions)
+  - everything below that header is the editor surface
+- Do not reinterpret this vocabulary unless the user explicitly changes it.
+
 Must preserve as-is unless explicitly requested:
 - app/window structure
 - stream list as default page
