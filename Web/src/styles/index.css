@@ -2476,6 +2476,42 @@ body {
 .settings-editor-slider {
   width: 100%;
   accent-color: var(--color-accent);
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+}
+
+.settings-editor-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #e6e8ec;
+}
+
+.settings-editor-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.settings-editor-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #e6e8ec;
+}
+
+.settings-editor-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
 .settings-editor-preview {

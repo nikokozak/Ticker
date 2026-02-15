@@ -18,6 +18,57 @@ type ProxyAuthState =
   | 'blockedBoundElsewhere'
   | 'degradedOffline';
 
+type EditorFont = 'systemSans' | 'humanistSans' | 'monoSans';
+
+interface EditorTypographySettings {
+  editorFont: EditorFont;
+  editorFontSize: number;
+  editorLineSpacing: number;
+}
+
+const DEFAULT_EDITOR_TYPOGRAPHY: EditorTypographySettings = {
+  editorFont: 'systemSans',
+  editorFontSize: 16,
+  editorLineSpacing: 1.55,
+};
+
+function editorFontStack(font: EditorFont): string {
+  switch (font) {
+    case 'humanistSans':
+      return '"Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
+    case 'monoSans':
+      return '"SF Mono", "JetBrains Mono", "IBM Plex Sans", Menlo, "SF Pro Text", sans-serif';
+    case 'systemSans':
+    default:
+      return '"SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", sans-serif';
+  }
+}
+
+function normalizeEditorTypography(raw: Partial<EditorTypographySettings> | null | undefined): EditorTypographySettings {
+  const merged = { ...DEFAULT_EDITOR_TYPOGRAPHY, ...(raw ?? {}) };
+  const validFonts: EditorFont[] = ['systemSans', 'humanistSans', 'monoSans'];
+  const editorFont = validFonts.includes(merged.editorFont) ? merged.editorFont : DEFAULT_EDITOR_TYPOGRAPHY.editorFont;
+  const editorFontSize = Number.isFinite(Number(merged.editorFontSize))
+    ? Math.min(24, Math.max(13, Number(merged.editorFontSize)))
+    : DEFAULT_EDITOR_TYPOGRAPHY.editorFontSize;
+  const editorLineSpacing = Number.isFinite(Number(merged.editorLineSpacing))
+    ? Math.min(2.0, Math.max(1.3, Number(merged.editorLineSpacing)))
+    : DEFAULT_EDITOR_TYPOGRAPHY.editorLineSpacing;
+
+  return {
+    editorFont,
+    editorFontSize: Number(editorFontSize.toFixed(1)),
+    editorLineSpacing: Number(editorLineSpacing.toFixed(2)),
+  };
+}
+
+function applyEditorTypography(settings: EditorTypographySettings) {
+  const root = document.documentElement;
+  root.style.setProperty('--editor-font-family', editorFontStack(settings.editorFont));
+  root.style.setProperty('--editor-font-size', `${settings.editorFontSize}px`);
+  root.style.setProperty('--editor-line-height', String(settings.editorLineSpacing));
+}
+
 export function App() {
   const [view, setView] = useState<View>('list');
   const [streams, setStreams] = useState<StreamSummary[]>([]);
@@ -41,6 +92,11 @@ export function App() {
       });
   }, []);
 
+  // Load global editor typography settings on app startup.
+  useEffect(() => {
+    bridge.send({ type: 'loadSettings' });
+  }, []);
+
   useEffect(() => {
     // Subscribe to bridge messages
     const unsubscribe = bridge.onMessage((message) => {
@@ -58,6 +114,11 @@ export function App() {
           setIsLoadingStream(false);
           setView('stream');
           break;
+        case 'settingsLoaded': {
+          const raw = message.payload?.settings as Partial<EditorTypographySettings> | undefined;
+          applyEditorTypography(normalizeEditorTypography(raw));
+          break;
+        }
         case 'quickPanelCellsAdded':
           // Quick Panel added cells - if it's a new stream, load it and update list
           if (message.payload?.isNewStream && message.payload?.streamId) {

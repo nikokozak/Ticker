@@ -36,50 +36,6 @@ interface FloatingMenuState {
   top: number;
 }
 
-type EditorFont = 'systemSans' | 'humanistSans' | 'monoSans';
-
-interface EditorPreferences {
-  editorFont: EditorFont;
-  editorFontSize: number;
-  editorLineSpacing: number;
-}
-
-const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
-  editorFont: 'systemSans',
-  editorFontSize: 16,
-  editorLineSpacing: 1.55,
-};
-
-function editorFontStack(font: EditorFont): string {
-  switch (font) {
-    case 'humanistSans':
-      return '"Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
-    case 'monoSans':
-      return '"SF Mono", "JetBrains Mono", "IBM Plex Sans", Menlo, "SF Pro Text", sans-serif';
-    case 'systemSans':
-    default:
-      return '"SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", sans-serif';
-  }
-}
-
-function normalizeEditorPreferences(raw: Partial<EditorPreferences> | null | undefined): EditorPreferences {
-  const merged = { ...DEFAULT_EDITOR_PREFERENCES, ...(raw ?? {}) };
-  const fontOptions: EditorFont[] = ['systemSans', 'humanistSans', 'monoSans'];
-  const editorFont = fontOptions.includes(merged.editorFont) ? merged.editorFont : DEFAULT_EDITOR_PREFERENCES.editorFont;
-  const editorFontSize = Number.isFinite(Number(merged.editorFontSize))
-    ? Math.min(24, Math.max(13, Number(merged.editorFontSize)))
-    : DEFAULT_EDITOR_PREFERENCES.editorFontSize;
-  const editorLineSpacing = Number.isFinite(Number(merged.editorLineSpacing))
-    ? Math.min(2.0, Math.max(1.3, Number(merged.editorLineSpacing)))
-    : DEFAULT_EDITOR_PREFERENCES.editorLineSpacing;
-
-  return {
-    editorFont,
-    editorFontSize: Number(editorFontSize.toFixed(1)),
-    editorLineSpacing: Number(editorLineSpacing.toFixed(2)),
-  };
-}
-
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.heading,
@@ -169,7 +125,6 @@ export function StreamEditor({
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
-  const [editorPreferences, setEditorPreferences] = useState<EditorPreferences>(DEFAULT_EDITOR_PREFERENCES);
   const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState>({
     visible: false,
     left: 0,
@@ -232,27 +187,6 @@ export function StreamEditor({
     const active = document.activeElement;
     if (!shell || !active) return false;
     return shell.contains(active);
-  }, []);
-
-  const editorStyleVars = useMemo(
-    () =>
-      ({
-        '--editor-font-family': editorFontStack(editorPreferences.editorFont),
-        '--editor-font-size': `${editorPreferences.editorFontSize}px`,
-        '--editor-line-height': String(editorPreferences.editorLineSpacing),
-      }) as React.CSSProperties,
-    [editorPreferences],
-  );
-
-  useEffect(() => {
-    const unsubscribe = bridge.onMessage((message) => {
-      if (message.type !== 'settingsLoaded' || !message.payload?.settings) return;
-      const settings = message.payload.settings as Partial<EditorPreferences>;
-      setEditorPreferences(normalizeEditorPreferences(settings));
-    });
-
-    bridge.send({ type: 'loadSettings' });
-    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -880,7 +814,7 @@ export function StreamEditor({
   }, []);
 
   return (
-    <div className="stream-editor" style={editorStyleVars}>
+    <div className="stream-editor">
       <header className="stream-header">
         <button onClick={onBack} className="back-button">
           ← Back
