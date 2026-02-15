@@ -21,6 +21,9 @@ final class SettingsService {
         static let smartRoutingEnabled = "smart_routing_enabled"
         static let defaultModel = "default_model"
         static let appearance = "appearance"
+        static let editorFont = "editor_font"
+        static let editorFontSize = "editor_font_size"
+        static let editorLineSpacing = "editor_line_spacing"
         static let hasCompletedKeychainMigration = "has_completed_keychain_migration"
         static let hasCompletedOnboarding = "has_completed_onboarding"
         static let diagnosticsEnabled = "diagnostics_enabled"
@@ -46,6 +49,12 @@ final class SettingsService {
     enum DefaultModel: String {
         case openai = "openai"
         case anthropic = "anthropic"
+    }
+
+    enum EditorFont: String {
+        case systemSans = "systemSans"
+        case humanistSans = "humanistSans"
+        case monoSans = "monoSans"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -235,6 +244,41 @@ final class SettingsService {
         set { defaults.set(newValue, forKey: Keys.diagnosticsEnabled) }
     }
 
+    // MARK: - Editor Typography
+
+    var editorFont: EditorFont {
+        get {
+            guard let raw = defaults.string(forKey: Keys.editorFont),
+                  let value = EditorFont(rawValue: raw) else {
+                return .systemSans
+            }
+            return value
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.editorFont) }
+    }
+
+    var editorFontSize: Double {
+        get {
+            if defaults.object(forKey: Keys.editorFontSize) == nil {
+                return 16.0
+            }
+            let value = defaults.double(forKey: Keys.editorFontSize)
+            return min(max(value, 13.0), 24.0)
+        }
+        set { defaults.set(min(max(newValue, 13.0), 24.0), forKey: Keys.editorFontSize) }
+    }
+
+    var editorLineSpacing: Double {
+        get {
+            if defaults.object(forKey: Keys.editorLineSpacing) == nil {
+                return 1.55
+            }
+            let value = defaults.double(forKey: Keys.editorLineSpacing)
+            return min(max(value, 1.3), 2.0)
+        }
+        set { defaults.set(min(max(newValue, 1.3), 2.0), forKey: Keys.editorLineSpacing) }
+    }
+
     // MARK: - Settings Dictionary (for bridge)
 
     /// Get all settings as a dictionary for sending to React
@@ -244,7 +288,10 @@ final class SettingsService {
             "smartRoutingEnabled": smartRoutingEnabled,
             "defaultModel": defaultModel.rawValue,
             "appearance": appearance.rawValue,
-            "diagnosticsEnabled": diagnosticsEnabled
+            "diagnosticsEnabled": diagnosticsEnabled,
+            "editorFont": editorFont.rawValue,
+            "editorFontSize": editorFontSize,
+            "editorLineSpacing": editorLineSpacing
         ]
     }
 

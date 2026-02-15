@@ -1186,6 +1186,26 @@ final class WebViewManager: NSObject {
                 SettingsService.shared.diagnosticsEnabled = diagnosticsEnabled
             }
 
+            // Save editor font setting if provided
+            if let editorFontValue = payload["editorFont"]?.value as? String,
+               let editorFont = SettingsService.EditorFont(rawValue: editorFontValue) {
+                SettingsService.shared.editorFont = editorFont
+            }
+
+            // Save editor font size setting if provided
+            if let editorFontSize = payload["editorFontSize"]?.value as? Double {
+                SettingsService.shared.editorFontSize = editorFontSize
+            } else if let editorFontSize = payload["editorFontSize"]?.value as? NSNumber {
+                SettingsService.shared.editorFontSize = editorFontSize.doubleValue
+            }
+
+            // Save editor line spacing setting if provided
+            if let editorLineSpacing = payload["editorLineSpacing"]?.value as? Double {
+                SettingsService.shared.editorLineSpacing = editorLineSpacing
+            } else if let editorLineSpacing = payload["editorLineSpacing"]?.value as? NSNumber {
+                SettingsService.shared.editorLineSpacing = editorLineSpacing.doubleValue
+            }
+
             // Send back updated settings
             let settings = settingsWithClassifierState()
             bridgeService.send(BridgeMessage(

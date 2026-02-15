@@ -4,12 +4,60 @@ import { debugError } from '../utils/debug';
 
 type Appearance = 'light' | 'dark' | 'system';
 type DefaultModel = 'openai' | 'anthropic';
+type EditorFont = 'systemSans' | 'humanistSans' | 'monoSans';
 
 interface SettingsData {
   proxyOnlyMode?: boolean;
   defaultModel: DefaultModel;
   appearance: Appearance;
   diagnosticsEnabled: boolean;
+  editorFont: EditorFont;
+  editorFontSize: number;
+  editorLineSpacing: number;
+}
+
+const DEFAULT_SETTINGS: SettingsData = {
+  proxyOnlyMode: true,
+  defaultModel: 'openai',
+  appearance: 'light',
+  diagnosticsEnabled: true,
+  editorFont: 'systemSans',
+  editorFontSize: 16,
+  editorLineSpacing: 1.55,
+};
+
+const EDITOR_FONT_OPTIONS: Array<{ value: EditorFont; label: string; detail: string }> = [
+  { value: 'systemSans', label: 'System Sans', detail: 'SF Pro style' },
+  { value: 'humanistSans', label: 'Humanist Sans', detail: 'Avenir-style tone' },
+  { value: 'monoSans', label: 'Mono Sans', detail: 'Duospace feel' },
+];
+
+function editorFontStack(font: EditorFont): string {
+  switch (font) {
+    case 'humanistSans':
+      return '"Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
+    case 'monoSans':
+      return '"SF Mono", "JetBrains Mono", "IBM Plex Sans", Menlo, "SF Pro Text", sans-serif';
+    case 'systemSans':
+    default:
+      return '"SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", sans-serif';
+  }
+}
+
+function normalizeSettings(raw: Partial<SettingsData> | null | undefined): SettingsData {
+  const merged = { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
+  const font: EditorFont = EDITOR_FONT_OPTIONS.some((option) => option.value === merged.editorFont)
+    ? merged.editorFont
+    : DEFAULT_SETTINGS.editorFont;
+  const fontSize = Math.min(24, Math.max(13, Number(merged.editorFontSize) || DEFAULT_SETTINGS.editorFontSize));
+  const lineSpacing = Math.min(2.0, Math.max(1.3, Number(merged.editorLineSpacing) || DEFAULT_SETTINGS.editorLineSpacing));
+
+  return {
+    ...merged,
+    editorFont: font,
+    editorFontSize: Number(fontSize.toFixed(1)),
+    editorLineSpacing: Number(lineSpacing.toFixed(2)),
+  };
 }
 
 // Proxy auth state (matches Swift ProxyAuthState enum)
@@ -49,7 +97,7 @@ interface SettingsProps {
 }
 
 export function Settings({ onClose }: SettingsProps) {
-  const [settings, setSettings] = useState<SettingsData | null>(null);
+  const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS);
 
   // Proxy auth state
   const [proxyAuth, setProxyAuth] = useState<ProxyAuthStatus | null>(null);
@@ -74,7 +122,7 @@ export function Settings({ onClose }: SettingsProps) {
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
       if (message.type === 'settingsLoaded' && message.payload?.settings) {
-        setSettings(message.payload.settings as SettingsData);
+        setSettings(normalizeSettings(message.payload.settings as Partial<SettingsData>));
       }
     });
 
@@ -82,6 +130,14 @@ export function Settings({ onClose }: SettingsProps) {
 
     return unsubscribe;
   }, []);
+
+  const applySettingsPatch = (patch: Partial<SettingsData>) => {
+    setSettings((previous) => normalizeSettings({ ...previous, ...patch }));
+    bridge.send({
+      type: 'saveSettings',
+      payload: patch,
+    });
+  };
 
   // Load proxy auth status on mount, then refresh from server
   useEffect(() => {
@@ -352,12 +408,9 @@ export function Settings({ onClose }: SettingsProps) {
             <label className="settings-toggle-label">
               <input
                 type="checkbox"
-                checked={settings?.diagnosticsEnabled ?? true}
+                checked={settings.diagnosticsEnabled}
                 onChange={(e) => {
-                  bridge.send({
-                    type: 'saveSettings',
-                    payload: { diagnosticsEnabled: e.target.checked },
-                  });
+                  applySettingsPatch({ diagnosticsEnabled: e.target.checked });
                 }}
               />
               <span>Send diagnostics</span>
@@ -485,24 +538,18 @@ export function Settings({ onClose }: SettingsProps) {
           <div className="settings-field">
             <div className="settings-model-options">
               <button
-                className={`settings-model-btn ${settings?.defaultModel === 'openai' ? 'settings-model-btn--active' : ''}`}
+                className={`settings-model-btn ${settings.defaultModel === 'openai' ? 'settings-model-btn--active' : ''}`}
                 onClick={() => {
-                  bridge.send({
-                    type: 'saveSettings',
-                    payload: { defaultModel: 'openai' },
-                  });
+                  applySettingsPatch({ defaultModel: 'openai' });
                 }}
               >
                 <span className="settings-model-name">OpenAI</span>
                 <span className="settings-model-detail">GPT-4o</span>
               </button>
               <button
-                className={`settings-model-btn ${settings?.defaultModel === 'anthropic' ? 'settings-model-btn--active' : ''}`}
+                className={`settings-model-btn ${settings.defaultModel === 'anthropic' ? 'settings-model-btn--active' : ''}`}
                 onClick={() => {
-                  bridge.send({
-                    type: 'saveSettings',
-                    payload: { defaultModel: 'anthropic' },
-                  });
+                  applySettingsPatch({ defaultModel: 'anthropic' });
                 }}
               >
                 <span className="settings-model-name">Anthropic</span>
@@ -521,12 +568,9 @@ export function Settings({ onClose }: SettingsProps) {
             <label>Theme</label>
             <div className="settings-appearance-options">
               <button
-                className={`settings-appearance-btn ${settings?.appearance === 'light' ? 'settings-appearance-btn--active' : ''}`}
+                className={`settings-appearance-btn ${settings.appearance === 'light' ? 'settings-appearance-btn--active' : ''}`}
                 onClick={() => {
-                  bridge.send({
-                    type: 'saveSettings',
-                    payload: { appearance: 'light' },
-                  });
+                  applySettingsPatch({ appearance: 'light' });
                 }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -543,12 +587,9 @@ export function Settings({ onClose }: SettingsProps) {
                 Light
               </button>
               <button
-                className={`settings-appearance-btn ${settings?.appearance === 'dark' ? 'settings-appearance-btn--active' : ''}`}
+                className={`settings-appearance-btn ${settings.appearance === 'dark' ? 'settings-appearance-btn--active' : ''}`}
                 onClick={() => {
-                  bridge.send({
-                    type: 'saveSettings',
-                    payload: { appearance: 'dark' },
-                  });
+                  applySettingsPatch({ appearance: 'dark' });
                 }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -557,12 +598,9 @@ export function Settings({ onClose }: SettingsProps) {
                 Dark
               </button>
               <button
-                className={`settings-appearance-btn ${settings?.appearance === 'system' ? 'settings-appearance-btn--active' : ''}`}
+                className={`settings-appearance-btn ${settings.appearance === 'system' ? 'settings-appearance-btn--active' : ''}`}
                 onClick={() => {
-                  bridge.send({
-                    type: 'saveSettings',
-                    payload: { appearance: 'system' },
-                  });
+                  applySettingsPatch({ appearance: 'system' });
                 }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -577,23 +615,92 @@ export function Settings({ onClose }: SettingsProps) {
         </section>
 
         <section className="settings-section">
+          <h2>Editor</h2>
+          <div className="settings-field">
+            <label>Font</label>
+            <div className="settings-editor-font-options">
+              {EDITOR_FONT_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  className={`settings-editor-font-btn ${settings.editorFont === option.value ? 'settings-editor-font-btn--active' : ''}`}
+                  onClick={() => applySettingsPatch({ editorFont: option.value })}
+                  type="button"
+                >
+                  <span className="settings-editor-font-name">{option.label}</span>
+                  <span className="settings-editor-font-detail">{option.detail}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="settings-field">
+            <label className="settings-editor-control-label">
+              <span>Font Size</span>
+              <code>{settings.editorFontSize.toFixed(1)} px</code>
+            </label>
+            <input
+              className="settings-editor-slider"
+              type="range"
+              min={13}
+              max={24}
+              step={0.5}
+              value={settings.editorFontSize}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                applySettingsPatch({ editorFontSize: value });
+              }}
+            />
+          </div>
+
+          <div className="settings-field">
+            <label className="settings-editor-control-label">
+              <span>Line Spacing</span>
+              <code>{settings.editorLineSpacing.toFixed(2)}</code>
+            </label>
+            <input
+              className="settings-editor-slider"
+              type="range"
+              min={1.3}
+              max={2.0}
+              step={0.05}
+              value={settings.editorLineSpacing}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                applySettingsPatch({ editorLineSpacing: value });
+              }}
+            />
+            <div
+              className="settings-editor-preview"
+              style={{
+                fontFamily: editorFontStack(settings.editorFont),
+                fontSize: `${settings.editorFontSize}px`,
+                lineHeight: String(settings.editorLineSpacing),
+              }}
+            >
+              <p>Write clearly, then trim the noise.</p>
+              <p>## Markdown headings should read naturally.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="settings-section">
           <h2>Keyboard Shortcuts</h2>
           <div className="settings-shortcuts">
             <div className="shortcut-row">
               <span className="shortcut-keys">Cmd+Enter</span>
-              <span className="shortcut-desc">Think with AI</span>
+              <span className="shortcut-desc">Send selection or current paragraph</span>
             </div>
             <div className="shortcut-row">
-              <span className="shortcut-keys">Enter</span>
-              <span className="shortcut-desc">New cell (at end of content)</span>
+              <span className="shortcut-keys">Cmd+Shift+Enter</span>
+              <span className="shortcut-desc">Send &amp; Prompt with selected context</span>
             </div>
             <div className="shortcut-row">
-              <span className="shortcut-keys">Backspace</span>
-              <span className="shortcut-desc">Delete empty cell</span>
+              <span className="shortcut-keys">Cmd+K</span>
+              <span className="shortcut-desc">Open search</span>
             </div>
             <div className="shortcut-row">
-              <span className="shortcut-keys">Arrow Up/Down</span>
-              <span className="shortcut-desc">Navigate between cells</span>
+              <span className="shortcut-keys">Esc</span>
+              <span className="shortcut-desc">Close overlays and dialogs</span>
             </div>
           </div>
         </section>
