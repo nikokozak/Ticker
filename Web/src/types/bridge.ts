@@ -31,6 +31,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'modifierError',
   'modelSelected',
   'proxyAuthState',
+  'pdfHighlightLinked',
   'quickPanelCellsAdded',
   'settingsLoaded',
   'sourceAdded',

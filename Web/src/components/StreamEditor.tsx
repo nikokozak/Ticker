@@ -157,6 +157,27 @@ export function StreamEditor({
     view.focus();
   }, []);
 
+  const insertTextAtCursor = useCallback((snippet: string) => {
+    const view = editorViewRef.current;
+
+    if (!view) {
+      setMarkdownContent((prev) => `${prev}${snippet}`);
+      return;
+    }
+
+    const selection = view.state.selection.main;
+    view.dispatch({
+      changes: {
+        from: selection.from,
+        to: selection.to,
+        insert: snippet,
+      },
+      selection: { anchor: selection.from + snippet.length },
+      annotations: Transaction.addToHistory.of(true),
+    });
+    view.focus();
+  }, []);
+
   const editorAPI = useMemo<EditorAPI>(() => ({
     replaceCellHtml: () => {
       // Document editor mode: cell updates are ignored.
@@ -334,6 +355,35 @@ export function StreamEditor({
 
     return () => unsubscribe();
   }, [addToast]);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type !== 'pdfHighlightLinked') return;
+
+      const payloadStreamId = message.payload?.streamId as string | undefined;
+      if (!payloadStreamId || payloadStreamId !== stream.id) return;
+
+      const sourceId = message.payload?.sourceId as string | undefined;
+      const sourceName = message.payload?.sourceName as string | undefined;
+      const highlightId = message.payload?.highlightId as string | undefined;
+      const page = message.payload?.page as number | undefined;
+      const quote = message.payload?.quote as string | undefined;
+
+      if (!sourceId || !highlightId) return;
+
+      const pageNumber = Number.isFinite(page) ? Math.max(1, Math.round(page as number)) : 1;
+      const linkUrl = `ticker-pdf://${sourceId}?highlight=${encodeURIComponent(highlightId)}&page=${pageNumber}`;
+      const compactQuote = (quote || '').trim().replace(/\s+/g, ' ');
+      const quoteLine = compactQuote ? `> ${compactQuote}\n` : '';
+      const linkLabel = `${sourceName || 'PDF'} p.${pageNumber}`;
+      const snippet = `\n${quoteLine}[${linkLabel}](${linkUrl})\n`;
+
+      insertTextAtCursor(snippet);
+      addToast('Linked PDF selection inserted into stream.', 'success');
+    });
+
+    return () => unsubscribe();
+  }, [addToast, insertTextAtCursor, stream.id]);
 
   const startEditingTitle = useCallback(() => {
     setIsEditingTitle(true);
@@ -794,6 +844,13 @@ export function StreamEditor({
     setSources((prev: SourceReference[]) => prev.filter((source) => source.id !== sourceId));
   }, [setSources]);
 
+  const handleOpenSource = useCallback((source: SourceReference) => {
+    bridge.send({
+      type: 'openSource',
+      payload: { sourceId: source.id },
+    });
+  }, []);
+
   const handleNavigateToCell = useCallback(() => {
     addToast('Cell anchors are not available in document editor mode yet.', 'info');
   }, [addToast]);
@@ -1009,6 +1066,7 @@ export function StreamEditor({
               streamId={stream.id}
               sources={sources}
               onSourceRemoved={handleSourceRemoved}
+              onSourceOpen={handleOpenSource}
               highlightedSourceId={highlightedSourceId || pendingSourceId}
               onClearHighlight={() => {
                 setHighlightedSourceId(null);

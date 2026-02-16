@@ -1593,6 +1593,11 @@ body {
   background: var(--color-surface-hover);
 }
 
+.side-panel-item:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.45);
+  outline-offset: 1px;
+}
+
 .side-panel-item--active {
   background: var(--color-surface-hover);
 }

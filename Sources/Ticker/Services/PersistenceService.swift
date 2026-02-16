@@ -801,6 +801,30 @@ final class PersistenceService {
 
     // MARK: - Source Operations
 
+    func loadSource(id: UUID) throws -> SourceReference? {
+        try dbQueue.read { db in
+            guard let row = try Row.fetchOne(db, sql: "SELECT * FROM sources WHERE id = ?", arguments: [id.uuidString]) else {
+                return nil
+            }
+
+            let embeddingStatusRaw: String? = row["embedding_status"]
+            let embeddingStatus = embeddingStatusRaw.flatMap(SourceEmbeddingStatus.init(rawValue:)) ?? .none
+
+            return SourceReference(
+                id: UUID(uuidString: row["id"])!,
+                streamId: UUID(uuidString: row["stream_id"])!,
+                displayName: row["display_name"],
+                fileType: SourceFileType(rawValue: row["file_type"]) ?? .text,
+                bookmarkData: row["bookmark_data"],
+                status: SourceStatus(rawValue: row["status"]) ?? .pending,
+                extractedText: row["extracted_text"],
+                pageCount: row["page_count"],
+                embeddingStatus: embeddingStatus,
+                addedAt: Date(timeIntervalSince1970: row["added_at"])
+            )
+        }
+    }
+
     func saveSource(_ source: SourceReference) throws {
         try dbQueue.write { db in
             try db.execute(

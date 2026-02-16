@@ -26,6 +26,7 @@ final class WebViewManager: NSObject {
     // Asset management
     private let assetService = AssetService()
     private var currentStreamIdForFileDrops: UUID?
+    private var pdfReaderWindows: [UUID: PDFReaderWindowController] = [:]
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -201,6 +202,55 @@ final class WebViewManager: NSObject {
             DebugLog.log("[WebViewManager] Failed to import dropped document (\(DebugLog.errorSummary(error)))")
             bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
         }
+    }
+
+    private func sendSourceError(_ message: String) {
+        bridgeService.send(BridgeMessage(type: "sourceError", payload: [
+            "error": AnyCodable(message)
+        ]))
+    }
+
+    private func sendPDFHighlightLinked(_ payload: PDFHighlightLinkPayload) {
+        bridgeService.send(BridgeMessage(
+            type: "pdfHighlightLinked",
+            payload: [
+                "streamId": AnyCodable(payload.streamId.uuidString),
+                "sourceId": AnyCodable(payload.sourceId.uuidString),
+                "sourceName": AnyCodable(payload.sourceName),
+                "highlightId": AnyCodable(payload.highlightId),
+                "page": AnyCodable(payload.page),
+                "quote": AnyCodable(payload.quote)
+            ]
+        ))
+    }
+
+    @MainActor
+    private func presentPDFReaderWindow(source: SourceReference, fileURL: URL) -> Bool {
+        if let existing = pdfReaderWindows[source.id] {
+            existing.showWindow(nil)
+            existing.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return false
+        }
+
+        let controller = PDFReaderWindowController(
+            streamId: source.streamId,
+            sourceId: source.id,
+            sourceName: source.displayName,
+            sourceURL: fileURL,
+            onCreateLink: { [weak self] payload in
+                self?.sendPDFHighlightLinked(payload)
+            },
+            onClose: { [weak self] in
+                fileURL.stopAccessingSecurityScopedResource()
+                self?.pdfReaderWindows.removeValue(forKey: source.id)
+            }
+        )
+        pdfReaderWindows[source.id] = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        return true
     }
 
     func load() {
@@ -690,6 +740,41 @@ final class WebViewManager: NSObject {
                     "id": AnyCodable(id.uuidString),
                     "error": AnyCodable(error.localizedDescription)
                 ]))
+            }
+
+        case "openSource":
+            guard let payload = message.payload,
+                  let sourceIdValue = payload["sourceId"]?.value as? String,
+                  let sourceId = UUID(uuidString: sourceIdValue),
+                  let sourceService else {
+                DebugLog.log("[WebViewManager] Invalid openSource payload")
+                return
+            }
+
+            do {
+                guard let source = try persistence.loadSource(id: sourceId) else {
+                    sendSourceError("Source not found.")
+                    return
+                }
+
+                let url = try sourceService.accessFile(source)
+
+                if source.fileType == .pdf {
+                    let didAdoptURL = await MainActor.run { [weak self] in
+                        self?.presentPDFReaderWindow(source: source, fileURL: url) ?? false
+                    }
+                    if !didAdoptURL {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                } else {
+                    await MainActor.run {
+                        NSWorkspace.shared.open(url)
+                    }
+                    url.stopAccessingSecurityScopedResource()
+                }
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to open source (\(DebugLog.errorSummary(error)))")
+                sendSourceError(error.localizedDescription)
             }
 
         case "think":
