@@ -31,8 +31,8 @@ export function SidePanel({
   highlightedSourceId,
   onClearHighlight,
 }: SidePanelProps) {
-  const [isCollapsed, setIsCollapsed] = useState(true);
-  const [activeTab, setActiveTab] = useState<Tab>('outline');
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>('sources');
   const [error, setError] = useState<string | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);

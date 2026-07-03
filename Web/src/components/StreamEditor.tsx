@@ -108,7 +108,6 @@ export function StreamEditor({
   const [title, setTitle] = useState(stream.title);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [showInspector, setShowInspector] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
@@ -190,6 +189,11 @@ export function StreamEditor({
     initialSources: stream.sources,
     editorAPI,
   });
+  const pdfSources = useMemo(
+    () => sources.filter((source) => source.fileType === 'pdf'),
+    [sources],
+  );
+  const hasPdfSources = pdfSources.length > 0;
 
   const isAiThinking = aiStatus === 'thinking';
 
@@ -214,10 +218,17 @@ export function StreamEditor({
   }, [stream.id, stream.document?.markdown, stream.title]);
 
   useEffect(() => {
-    if (pendingSourceId) {
-      setShowInspector(true);
+    if (!pendingSourceId) return;
+    if (pdfSources.some((source) => source.id === pendingSourceId)) {
+      setHighlightedSourceId(pendingSourceId);
     }
-  }, [pendingSourceId]);
+  }, [pdfSources, pendingSourceId]);
+
+  useEffect(() => {
+    if (hasPdfSources) return;
+    setHighlightedSourceId(null);
+    onClearPendingSource?.();
+  }, [hasPdfSources, onClearPendingSource]);
 
   useEffect(() => {
     if (pendingCellId) {
@@ -742,7 +753,6 @@ export function StreamEditor({
         return;
       }
       if (e.key === 'Escape') {
-        setShowInspector(false);
         closePrompt();
         hideSelectionMenu();
       }
@@ -856,9 +866,12 @@ export function StreamEditor({
   }, [addToast]);
 
   const handleNavigateToSource = useCallback((sourceId: string) => {
+    if (!pdfSources.some((source) => source.id === sourceId)) {
+      addToast('Source panel is available for PDF sources only.', 'info');
+      return;
+    }
     setHighlightedSourceId(sourceId);
-    setShowInspector(true);
-  }, []);
+  }, [addToast, pdfSources]);
 
   return (
     <div className="stream-editor">
@@ -1037,34 +1050,14 @@ export function StreamEditor({
             />
           </div>
         </div>
-      </div>
-
-      {showInspector && (
-        <div
-          className="stream-inspector-overlay"
-          onClick={() => setShowInspector(false)}
-        >
-          <div
-            className="stream-inspector-drawer"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="stream-inspector-header">
-              <h2>Sources</h2>
-              <button
-                type="button"
-                className="stream-inspector-close"
-                onClick={() => setShowInspector(false)}
-                aria-label="Close sources"
-              >
-                Close
-              </button>
-            </div>
+        {hasPdfSources && (
+          <div className="stream-sources-dock">
             <SidePanel
               cells={[]}
               focusedCellId={null}
               onCellClick={() => {}}
               streamId={stream.id}
-              sources={sources}
+              sources={pdfSources}
               onSourceRemoved={handleSourceRemoved}
               onSourceOpen={handleOpenSource}
               highlightedSourceId={highlightedSourceId || pendingSourceId}
@@ -1074,8 +1067,8 @@ export function StreamEditor({
               }}
             />
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       <SearchModal
         isOpen={showSearch}

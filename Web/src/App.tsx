@@ -97,6 +97,30 @@ export function App() {
     bridge.send({ type: 'loadSettings' });
   }, []);
 
+  // Keep native file-drop routing in sync with the active page.
+  useEffect(() => {
+    if (view === 'stream' && currentStream) {
+      bridge.send({
+        type: 'setFileDropContext',
+        payload: { mode: 'stream', streamId: currentStream.id },
+      });
+      return;
+    }
+
+    if (view === 'list') {
+      bridge.send({
+        type: 'setFileDropContext',
+        payload: { mode: 'list' },
+      });
+      return;
+    }
+
+    bridge.send({
+      type: 'setFileDropContext',
+      payload: { mode: 'disabled' },
+    });
+  }, [view, currentStream]);
+
   useEffect(() => {
     // Subscribe to bridge messages
     const unsubscribe = bridge.onMessage((message) => {
