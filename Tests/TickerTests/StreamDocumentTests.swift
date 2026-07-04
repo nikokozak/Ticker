@@ -866,6 +866,21 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(destination.chunkId, chunkId)
     }
 
+    func test_openPDFDestinationFailureMessagesArePlainLanguage() throws {
+        XCTAssertEqual(
+            OpenPDFDestinationFailure.missingSource.userMessage,
+            "This link points to a source that's no longer in this stream."
+        )
+        XCTAssertEqual(
+            OpenPDFDestinationFailure.damagedLink.userMessage,
+            "This link is damaged and can't be opened."
+        )
+        XCTAssertEqual(
+            OpenPDFDestinationFailure.wrongStream.userMessage,
+            "This link points to a source in another stream."
+        )
+    }
+
     func test_pdfCitationNavigatorDerivesLeadingSentenceAndRetryNeedles() throws {
         let candidates = PDFCitationNavigator.needleCandidates(
             from: "  This sentence is definitely long enough to cite in the reader.  More context follows for retry matching. "

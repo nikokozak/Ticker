@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Document AI answers now add quiet provenance notes, and stale PDF links explain why they cannot open.
 - PDF citation links now open to the cited chunk and flash the matched passage when PDF text matching succeeds.
 - Document AI answers over retrieved sources now turn model citation markers into PDF links.
 - Document AI prompt popover now includes a session-only Sources scope chip for Auto, All, or None source context.

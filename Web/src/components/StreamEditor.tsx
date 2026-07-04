@@ -7,7 +7,7 @@ import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, type Stream, type SourceReference, type DocumentAICitation } from '../types';
+import { bridge, type Stream, type SourceReference, type DocumentAICitation, type DocumentAISourceContextMode } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
@@ -17,7 +17,7 @@ import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { computeAppendInsertion } from '../utils/appendInsertion';
-import { swapCitationMarkers } from '../utils/citationMarkers';
+import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
 import {
   buildPDFAnchorLinkEdit,
@@ -114,6 +114,13 @@ function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
     if (!chunkId || !sourceId || !label) return [];
     return [{ n, page, chunkId, sourceId, label }];
   });
+}
+
+function parseDocumentAISourceContextMode(value: unknown): DocumentAISourceContextMode | undefined {
+  if (value === 'passthrough' || value === 'retrieved' || value === 'none') {
+    return value;
+  }
+  return undefined;
 }
 
 function focusEditorAtDocumentEnd(view: EditorView) {
@@ -705,7 +712,22 @@ export function StreamEditor({
         }
 
         const citations = parseDocumentAICitations(message.payload?.citations);
-        const finalOutput = citations ? swapCitationMarkers(rawOutput, citations) : rawOutput;
+        const sourceContextMode = parseDocumentAISourceContextMode(message.payload?.sourceContextMode);
+        let finalOutput = rawOutput;
+        let provenanceLine: string | null = null;
+
+        if (citations) {
+          const result = swapCitationMarkersWithMetadata(rawOutput, citations);
+          finalOutput = result.text;
+          provenanceLine = buildProvenanceLine(result.swappedCitations);
+        } else if (sourceContextMode === 'none') {
+          provenanceLine = '*From model knowledge.*';
+        }
+
+        if (provenanceLine) {
+          finalOutput = `${finalOutput}\n\n${provenanceLine}`;
+        }
+
         const suffix = active.mode === 'after' && !finalOutput.endsWith('\n') ? '\n' : '';
         const insertText = `${active.prefix}${finalOutput}${suffix}`;
         const finalFrom = range.from;

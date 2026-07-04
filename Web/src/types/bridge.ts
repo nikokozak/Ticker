@@ -83,6 +83,8 @@ export interface DocumentAICitation {
   label: string;
 }
 
+export type DocumentAISourceContextMode = 'passthrough' | 'retrieved' | 'none';
+
 /** Callback registry for async responses */
 type CallbackFn = (payload: Record<string, unknown>) => void;
 
