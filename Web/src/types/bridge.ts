@@ -44,6 +44,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'loadSettings',
   'loadStream',
   'loadStreams',
+  'openPdfDestination',
   'openSource',
   'refreshProxyAuth',
   'removeSource',
@@ -157,5 +158,7 @@ declare global {
   }
 }
 
-window.bridge = bridge;
-debugLog('[Bridge] window.bridge initialized');
+if (typeof window !== 'undefined') {
+  window.bridge = bridge;
+  debugLog('[Bridge] window.bridge initialized');
+}

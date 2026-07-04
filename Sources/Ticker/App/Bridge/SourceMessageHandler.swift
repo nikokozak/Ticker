@@ -6,6 +6,7 @@ protocol SourceMessageHandlerDelegate: AnyObject {
     func setFileDropContext(streamId: UUID?, allowsListFileDrops: Bool)
     func hidePDFPane() async
     func openSourceReference(_ source: SourceReference, sourceService: SourceService)
+    func openPDFDestination(_ source: SourceReference, sourceService: SourceService, highlightId: String?, page: Int?) async
 }
 
 final class SourceMessageHandler: BridgeMessageHandler {
@@ -15,6 +16,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
         "addSourceFromPath",
         "removeSource",
         "openSource",
+        "openPdfDestination",
         "saveImage",
         "getAssetPath"
     ]
@@ -146,6 +148,45 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 delegate?.openSourceReference(source, sourceService: sourceService)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to open source (\(DebugLog.errorSummary(error)))")
+                sendSourceError(error.localizedDescription)
+            }
+
+        case "openPdfDestination":
+            guard let payload = message.payload,
+                  let streamIdValue = payload["streamId"]?.value as? String,
+                  let streamId = UUID(uuidString: streamIdValue),
+                  let sourceIdValue = payload["sourceId"]?.value as? String,
+                  let sourceId = UUID(uuidString: sourceIdValue),
+                  let sourceService else {
+                DebugLog.log("[WebViewManager] Invalid openPdfDestination payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid openPdfDestination payload")
+                return
+            }
+
+            do {
+                guard let source = try persistence.loadSource(id: sourceId) else {
+                    sendSourceError("Source not found.")
+                    return
+                }
+                guard source.streamId == streamId else {
+                    sendSourceError("Source does not belong to this stream.")
+                    return
+                }
+                guard source.fileType == .pdf else {
+                    sendSourceError("Source is not a PDF.")
+                    return
+                }
+
+                let highlightId = (payload["highlightId"]?.value as? String)
+                    .flatMap { $0.isEmpty ? nil : $0 }
+                await delegate?.openPDFDestination(
+                    source,
+                    sourceService: sourceService,
+                    highlightId: highlightId,
+                    page: payload["page"]?.intValue
+                )
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to open PDF destination (\(DebugLog.errorSummary(error)))")
                 sendSourceError(error.localizedDescription)
             }
 

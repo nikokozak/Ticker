@@ -36,6 +36,77 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
 }
 
 final class StreamDocumentTests: XCTestCase {
+    func test_v14MigrationCreatesPDFHighlightsTable() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+        defer {
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        var service: PersistenceService? = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        XCTAssertNotNil(service)
+        service = nil
+
+        let dbQueue = try DatabaseQueue(path: dbURL.path)
+        let tableExists = try dbQueue.read { db in
+            try Row.fetchOne(
+                db,
+                sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pdf_highlights'"
+            ) != nil
+        }
+        let indexExists = try dbQueue.read { db in
+            try Row.fetchOne(
+                db,
+                sql: "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_pdf_highlights_source'"
+            ) != nil
+        }
+
+        XCTAssertTrue(tableExists)
+        XCTAssertTrue(indexExists)
+    }
+
+    func test_savePDFHighlightRoundTripsRects() throws {
+        try withTempPersistenceService { service in
+            let source = try savePDFSource(in: service)
+            let highlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 2,
+                rects: [
+                    PDFHighlightRect(page: 2, x: 10.5, y: 20.25, w: 120, h: 14),
+                    PDFHighlightRect(page: 3, x: 11, y: 30, w: 98.75, h: 16.5),
+                ],
+                quote: "Important quoted text",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+
+            try service.savePDFHighlight(highlight)
+
+            XCTAssertEqual(try service.loadPDFHighlights(sourceId: source.id), [highlight])
+        }
+    }
+
+    func test_deleteSourceDeletesPDFHighlights() throws {
+        try withTempPersistenceService { service in
+            let source = try savePDFSource(in: service)
+            let highlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 1,
+                rects: [PDFHighlightRect(page: 1, x: 1, y: 2, w: 3, h: 4)],
+                quote: "Remove me",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+
+            try service.savePDFHighlight(highlight)
+            try service.deleteSource(id: source.id)
+
+            XCTAssertEqual(try service.loadPDFHighlights(sourceId: source.id), [])
+        }
+    }
+
     func test_appendToStreamDocument_createsDocumentWithExactlyFragmentWhenMissing() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "New Document")
@@ -544,6 +615,21 @@ final class StreamDocumentTests: XCTestCase {
         try await body(service)
     }
 
+    private func savePDFSource(in service: PersistenceService) throws -> SourceReference {
+        let stream = Stream(title: "PDF Highlights")
+        try service.saveStream(stream)
+
+        let source = SourceReference(
+            streamId: stream.id,
+            displayName: "Document.pdf",
+            fileType: .pdf,
+            bookmarkData: Data("bookmark".utf8),
+            status: .ready
+        )
+        try service.saveSource(source)
+        return source
+    }
+
     private func withSeededV10Database(
         seed: (Database) throws -> Void,
         body: (URL, FileManager) throws -> Void
@@ -577,6 +663,21 @@ final class StreamDocumentTests: XCTestCase {
                 updated_at DOUBLE NOT NULL
             )
             """)
+        try db.execute(sql: """
+            CREATE TABLE sources (
+                id TEXT PRIMARY KEY,
+                stream_id TEXT NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+                display_name TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                bookmark_data BLOB NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                extracted_text TEXT,
+                page_count INTEGER,
+                added_at DOUBLE NOT NULL,
+                embedding_status TEXT DEFAULT 'none'
+            )
+            """)
+        try db.execute(sql: "CREATE INDEX idx_sources_stream ON sources(stream_id)")
         try db.execute(sql: """
             CREATE TABLE cells (
                 id TEXT PRIMARY KEY,

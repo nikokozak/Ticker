@@ -15,6 +15,7 @@ import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
 import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
+import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { debugWarn } from '../utils/debug';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
@@ -1328,6 +1329,7 @@ export function StreamEditor({
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
                 markdownImageWidgetExtension,
+                tickerPDFLinkExtension(stream.id),
               ]}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;

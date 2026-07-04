@@ -135,6 +135,10 @@
       "openSource": {
         "requiredPayloadKeys": ["sourceId"]
       },
+      "openPdfDestination": {
+        "requiredPayloadKeys": ["streamId", "sourceId"],
+        "optionalPayloadKeys": ["highlightId", "page"]
+      },
       "refreshProxyAuth": {
         "requiredPayloadKeys": [],
         "requiredCallbackId": true

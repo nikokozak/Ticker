@@ -13,6 +13,17 @@ struct StreamDocumentRevisionConflict: Error {
     let revision: Int
 }
 
+enum PersistenceError: LocalizedError {
+    case encodingFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .encodingFailed(let message):
+            return message
+        }
+    }
+}
+
 /// Manages SQLite persistence for streams, stream documents, and sources
 final class PersistenceService {
     private let dbQueue: DatabaseQueue
@@ -349,6 +360,19 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v14_pdf_highlights") { db in
+            try db.create(table: "pdf_highlights") { t in
+                t.column("id", .text).primaryKey()
+                t.column("source_id", .text).notNull()
+                    .references("sources", onDelete: .cascade)
+                t.column("page", .integer).notNull()
+                t.column("rects_json", .text).notNull()
+                t.column("quote", .text).notNull()
+                t.column("created_at", .text).notNull()
+            }
+            try db.create(index: "idx_pdf_highlights_source", on: "pdf_highlights", columns: ["source_id"])
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -416,6 +440,12 @@ final class PersistenceService {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter
+    }()
+
+    private static let pdfHighlightDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
@@ -790,8 +820,79 @@ final class PersistenceService {
 
     func deleteSource(id: UUID) throws {
         try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM pdf_highlights WHERE source_id = ?", arguments: [id.uuidString])
             try db.execute(sql: "DELETE FROM sources WHERE id = ?", arguments: [id.uuidString])
         }
+    }
+
+    // MARK: - PDF Highlight Operations
+
+    func savePDFHighlight(_ highlight: PDFHighlightRecord) throws {
+        let rectsData = try JSONEncoder().encode(highlight.rects)
+        guard let rectsJSON = String(data: rectsData, encoding: .utf8) else {
+            throw PersistenceError.encodingFailed("Could not encode PDF highlight rects.")
+        }
+
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO pdf_highlights (id, source_id, page, rects_json, quote, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        source_id = excluded.source_id,
+                        page = excluded.page,
+                        rects_json = excluded.rects_json,
+                        quote = excluded.quote,
+                        created_at = excluded.created_at
+                """,
+                arguments: [
+                    highlight.id.uuidString,
+                    highlight.sourceId.uuidString,
+                    highlight.page,
+                    rectsJSON,
+                    highlight.quote,
+                    Self.pdfHighlightDateFormatter.string(from: highlight.createdAt)
+                ]
+            )
+        }
+    }
+
+    func loadPDFHighlights(sourceId: UUID) throws -> [PDFHighlightRecord] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, source_id, page, rects_json, quote, created_at
+                    FROM pdf_highlights
+                    WHERE source_id = ?
+                    ORDER BY created_at ASC
+                """,
+                arguments: [sourceId.uuidString]
+            )
+
+            return try rows.map { row in
+                try decodePDFHighlight(row)
+            }
+        }
+    }
+
+    private func decodePDFHighlight(_ row: Row) throws -> PDFHighlightRecord {
+        let rectsJSON: String = row["rects_json"]
+        guard let rectsData = rectsJSON.data(using: .utf8) else {
+            throw PersistenceError.encodingFailed("Could not read PDF highlight rects.")
+        }
+        let rects = try JSONDecoder().decode([PDFHighlightRect].self, from: rectsData)
+        let createdAtValue: String = row["created_at"]
+        let createdAt = Self.pdfHighlightDateFormatter.date(from: createdAtValue) ?? Date(timeIntervalSince1970: 0)
+
+        return PDFHighlightRecord(
+            id: UUID(uuidString: row["id"])!,
+            sourceId: UUID(uuidString: row["source_id"])!,
+            page: row["page"],
+            rects: rects,
+            quote: row["quote"],
+            createdAt: createdAt
+        )
     }
 
     private static func htmlToPlainText(_ html: String) -> String {

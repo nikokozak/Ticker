@@ -108,8 +108,24 @@ final class WebViewManager: NSObject {
     }
 
     private func configurePDFPaneCallbacks() {
+        pdfPaneController.highlightsProvider = { [weak self] sourceId in
+            guard let self, let persistence = self.persistence else { return [] }
+            do {
+                return try persistence.loadPDFHighlights(sourceId: sourceId)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to load PDF highlights (\(DebugLog.errorSummary(error)))")
+                return []
+            }
+        }
         pdfPaneController.onLinkSelection = { [weak self] payload in
-            self?.sendPDFHighlightLinked(payload)
+            guard let self, let persistence = self.persistence else { return }
+            do {
+                try persistence.savePDFHighlight(payload.highlight)
+                self.sendPDFHighlightLinked(payload)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save PDF highlight (\(DebugLog.errorSummary(error)))")
+                self.sendSourceError("Could not save PDF highlight.")
+            }
         }
         pdfPaneController.onClose = { [weak self] in
             self?.activePDFPaneStreamId = nil
@@ -260,48 +276,91 @@ final class WebViewManager: NSObject {
             type: "pdfHighlightLinked",
             payload: [
                 "streamId": AnyCodable(payload.streamId.uuidString),
-                "sourceId": AnyCodable(payload.sourceId.uuidString),
+                "sourceId": AnyCodable(payload.highlight.sourceId.uuidString),
                 "sourceName": AnyCodable(payload.sourceName),
-                "highlightId": AnyCodable(payload.highlightId),
-                "page": AnyCodable(payload.page),
-                "quote": AnyCodable(payload.quote)
+                "highlightId": AnyCodable(payload.highlight.id.uuidString),
+                "page": AnyCodable(payload.highlight.page),
+                "quote": AnyCodable(payload.highlight.quote)
             ]
         ))
     }
 
-    func openSourceReference(_ source: SourceReference, sourceService: SourceService) {
+    private func openPDFSource(
+        _ source: SourceReference,
+        sourceService: SourceService,
+        afterPresent: (@MainActor (PDFReaderPaneController) -> Void)? = nil
+    ) {
         do {
             let url = try sourceService.accessFile(source)
 
-            if source.fileType == .pdf {
-                Task { @MainActor [weak self] in
-                    guard let self else {
-                        url.stopAccessingSecurityScopedResource()
-                        return
-                    }
-                    do {
-                        try self.pdfPaneController.present(
-                            url: url,
-                            streamId: source.streamId,
-                            sourceId: source.id,
-                            displayName: source.displayName
-                        )
-                        self.activePDFPaneStreamId = source.streamId
-                    } catch {
-                        url.stopAccessingSecurityScopedResource()
-                        self.activePDFPaneStreamId = nil
-                        self.sendSourceError(error.localizedDescription)
-                    }
-                }
-            } else {
-                Task { @MainActor in
-                    NSWorkspace.shared.open(url)
+            Task { @MainActor [weak self] in
+                guard let self else {
                     url.stopAccessingSecurityScopedResource()
+                    return
+                }
+                do {
+                    try self.pdfPaneController.present(
+                        url: url,
+                        streamId: source.streamId,
+                        sourceId: source.id,
+                        displayName: source.displayName
+                    )
+                    self.activePDFPaneStreamId = source.streamId
+                    afterPresent?(self.pdfPaneController)
+                } catch {
+                    url.stopAccessingSecurityScopedResource()
+                    self.activePDFPaneStreamId = nil
+                    self.sendSourceError(error.localizedDescription)
                 }
             }
         } catch {
             DebugLog.log("[WebViewManager] Failed to open source (\(DebugLog.errorSummary(error)))")
             sendSourceError(error.localizedDescription)
+        }
+    }
+
+    func openSourceReference(_ source: SourceReference, sourceService: SourceService) {
+        if source.fileType == .pdf {
+            openPDFSource(source, sourceService: sourceService)
+        } else {
+            do {
+                let url = try sourceService.accessFile(source)
+                Task { @MainActor in
+                    NSWorkspace.shared.open(url)
+                    url.stopAccessingSecurityScopedResource()
+                }
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to open source (\(DebugLog.errorSummary(error)))")
+                sendSourceError(error.localizedDescription)
+            }
+        }
+    }
+
+    func openPDFDestination(
+        _ source: SourceReference,
+        sourceService: SourceService,
+        highlightId: String?,
+        page: Int?
+    ) async {
+        guard source.fileType == .pdf else {
+            sendSourceError("Source is not a PDF.")
+            return
+        }
+
+        let isAlreadyPresenting = await MainActor.run {
+            pdfPaneController.isPresenting(sourceId: source.id)
+        }
+
+        if isAlreadyPresenting {
+            await MainActor.run {
+                activePDFPaneStreamId = source.streamId
+                pdfPaneController.navigateToHighlight(id: highlightId, page: page)
+            }
+            return
+        }
+
+        openPDFSource(source, sourceService: sourceService) { controller in
+            controller.navigateToHighlight(id: highlightId, page: page)
         }
     }
 

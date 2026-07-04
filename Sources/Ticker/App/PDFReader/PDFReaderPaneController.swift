@@ -3,11 +3,8 @@ import PDFKit
 
 struct PDFHighlightLinkPayload {
     let streamId: UUID
-    let sourceId: UUID
     let sourceName: String
-    let highlightId: String
-    let page: Int
-    let quote: String
+    let highlight: PDFHighlightRecord
 }
 
 private enum PDFReaderPanePresentationError: LocalizedError {
@@ -62,6 +59,12 @@ private enum PDFPaneStyle {
     }
 }
 
+private enum PDFHighlightAnnotationStyle {
+    static let contentsPrefix = "ticker-pdf-highlight:"
+    static let color = NSColor.systemYellow.withAlphaComponent(0.32)
+    static let pulseColor = NSColor.systemYellow.withAlphaComponent(0.62)
+}
+
 private final class PDFPaneResizeHandleView: NSView {
     override func resetCursorRects() {
         super.resetCursorRects()
@@ -71,6 +74,7 @@ private final class PDFPaneResizeHandleView: NSView {
 
 final class PDFReaderPaneController: NSViewController {
     var onLinkSelection: ((PDFHighlightLinkPayload) -> Void)?
+    var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
     var onClose: (() -> Void)?
 
     private let pdfPaneView = NSView(frame: .zero)
@@ -129,7 +133,30 @@ final class PDFReaderPaneController: NSViewController {
             sourceName: displayName,
             fileURL: url
         )
+        applySavedHighlights(sourceId: sourceId)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func isPresenting(sourceId: UUID) -> Bool {
+        activePDFContext?.sourceId == sourceId && isPDFPaneVisible
+    }
+
+    func navigateToHighlight(id highlightId: String?, page pageNumber: Int?) {
+        if let highlightId, !highlightId.isEmpty {
+            var annotations = taggedAnnotations(highlightId: highlightId)
+            if annotations.isEmpty, let record = savedHighlight(id: highlightId) {
+                applyHighlight(record)
+                annotations = taggedAnnotations(highlightId: highlightId)
+            }
+
+            if let first = firstAnnotationForNavigation(annotations) {
+                navigate(to: first.annotation.bounds, on: first.page)
+                pulseAnnotations(annotations)
+                return
+            }
+        }
+
+        navigate(toPageNumber: pageNumber)
     }
 
     @discardableResult
@@ -397,29 +424,141 @@ final class PDFReaderPaneController: NSViewController {
             return
         }
 
-        let highlightId = UUID().uuidString
-        let firstPage = selection.pages.first
-        let pageNumber = firstPage.flatMap { page in
-            pdfPanePDFView.document.map { $0.index(for: page) + 1 }
-        } ?? 1
-
-        for page in selection.pages {
-            let bounds = selection.bounds(for: page)
-            guard bounds.width > 0, bounds.height > 0 else { continue }
-            let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
-            annotation.color = NSColor.systemYellow.withAlphaComponent(0.32)
-            annotation.userName = "Ticker-Next"
-            annotation.contents = quote
-            page.addAnnotation(annotation)
+        let rects = highlightRects(for: selection)
+        guard let firstRect = rects.first else {
+            NSSound.beep()
+            return
         }
+
+        let highlight = PDFHighlightRecord(
+            id: UUID(),
+            sourceId: context.sourceId,
+            page: firstRect.page,
+            rects: rects,
+            quote: quote,
+            createdAt: Date()
+        )
+        applyHighlight(highlight)
 
         onLinkSelection?(PDFHighlightLinkPayload(
             streamId: context.streamId,
-            sourceId: context.sourceId,
             sourceName: context.sourceName,
-            highlightId: highlightId,
-            page: pageNumber,
-            quote: quote
+            highlight: highlight
         ))
+    }
+
+    private func highlightRects(for selection: PDFSelection) -> [PDFHighlightRect] {
+        guard let document = pdfPanePDFView.document else { return [] }
+        let lineSelections = selection.selectionsByLine()
+        let selections = lineSelections.isEmpty ? [selection] : lineSelections
+
+        return selections.flatMap { lineSelection in
+            lineSelection.pages.compactMap { page -> PDFHighlightRect? in
+                let bounds = lineSelection.bounds(for: page).standardized
+                guard bounds.width > 0, bounds.height > 0 else { return nil }
+
+                return PDFHighlightRect(
+                    page: document.index(for: page) + 1,
+                    x: Double(bounds.minX),
+                    y: Double(bounds.minY),
+                    w: Double(bounds.width),
+                    h: Double(bounds.height)
+                )
+            }
+        }
+    }
+
+    private func applySavedHighlights(sourceId: UUID) {
+        guard let highlightsProvider else { return }
+        for highlight in highlightsProvider(sourceId) {
+            applyHighlight(highlight)
+        }
+    }
+
+    private func savedHighlight(id highlightId: String) -> PDFHighlightRecord? {
+        guard let sourceId = activePDFContext?.sourceId,
+              let highlightsProvider else {
+            return nil
+        }
+
+        return highlightsProvider(sourceId).first { $0.id.uuidString == highlightId }
+    }
+
+    private func applyHighlight(_ highlight: PDFHighlightRecord) {
+        guard let document = pdfPanePDFView.document else { return }
+
+        for rect in highlight.rects {
+            guard rect.page > 0,
+                  let page = document.page(at: rect.page - 1) else {
+                continue
+            }
+
+            let bounds = CGRect(x: rect.x, y: rect.y, width: rect.w, height: rect.h)
+            let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
+            annotation.color = PDFHighlightAnnotationStyle.color
+            annotation.userName = "Ticker-Next"
+            annotation.contents = "\(PDFHighlightAnnotationStyle.contentsPrefix)\(highlight.id.uuidString)"
+            page.addAnnotation(annotation)
+        }
+    }
+
+    private func taggedAnnotations(highlightId: String) -> [PDFAnnotation] {
+        guard let document = pdfPanePDFView.document else { return [] }
+        let tag = "\(PDFHighlightAnnotationStyle.contentsPrefix)\(highlightId)"
+        var annotations: [PDFAnnotation] = []
+
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index) else { continue }
+            annotations.append(contentsOf: page.annotations.filter { $0.contents == tag })
+        }
+
+        return annotations
+    }
+
+    private func firstAnnotationForNavigation(_ annotations: [PDFAnnotation]) -> (annotation: PDFAnnotation, page: PDFPage)? {
+        guard let document = pdfPanePDFView.document else { return nil }
+
+        return annotations
+            .compactMap { annotation -> (annotation: PDFAnnotation, page: PDFPage, pageIndex: Int)? in
+                guard let page = annotation.page else { return nil }
+                return (annotation, page, document.index(for: page))
+            }
+            .sorted { lhs, rhs in
+                if lhs.pageIndex != rhs.pageIndex { return lhs.pageIndex < rhs.pageIndex }
+                return lhs.annotation.bounds.maxY > rhs.annotation.bounds.maxY
+            }
+            .first
+            .map { ($0.annotation, $0.page) }
+    }
+
+    private func navigate(to rect: CGRect, on page: PDFPage) {
+        let destination = PDFDestination(page: page, at: CGPoint(x: rect.minX, y: rect.maxY))
+        pdfPanePDFView.go(to: destination)
+    }
+
+    private func navigate(toPageNumber pageNumber: Int?) {
+        guard let document = pdfPanePDFView.document,
+              document.pageCount > 0 else {
+            return
+        }
+
+        let clampedPage = max(1, min(pageNumber ?? 1, document.pageCount))
+        guard let page = document.page(at: clampedPage - 1) else { return }
+        let bounds = page.bounds(for: .mediaBox)
+        navigate(to: bounds, on: page)
+    }
+
+    private func pulseAnnotations(_ annotations: [PDFAnnotation]) {
+        guard !annotations.isEmpty else { return }
+        let originalColors = annotations.map(\.color)
+        annotations.forEach { $0.color = PDFHighlightAnnotationStyle.pulseColor }
+        pdfPanePDFView.needsDisplay = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            for (annotation, color) in zip(annotations, originalColors) {
+                annotation.color = color
+            }
+            self?.pdfPanePDFView.needsDisplay = true
+        }
     }
 }
