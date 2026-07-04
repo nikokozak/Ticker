@@ -1,7 +1,15 @@
 {
   "version": 2,
+  "status": "live",
   "swiftToWeb": {
     "messages": {
+      "assetPath": {
+        "requiredPayloadKeys": ["relativePath", "fullPath"]
+      },
+      "callback": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
       "documentAIChunk": {
         "requiredPayloadKeys": ["requestId", "chunk"]
       },
@@ -23,8 +31,62 @@
       "documentModelSelected": {
         "requiredPayloadKeys": ["requestId", "modelId"]
       },
+      "exportCanceled": {
+        "requiredPayloadKeys": ["streamId"]
+      },
+      "exportComplete": {
+        "requiredPayloadKeys": ["streamId", "path"]
+      },
+      "exportError": {
+        "requiredPayloadKeys": ["streamId", "error"]
+      },
+      "fileDropError": {
+        "requiredPayloadKeys": ["error"]
+      },
+      "imageDropped": {
+        "requiredPayloadKeys": ["relativePath", "assetUrl", "streamId"]
+      },
+      "imageSaveError": {
+        "requiredPayloadKeys": ["error", "requestId"]
+      },
+      "imageSaved": {
+        "requiredPayloadKeys": ["relativePath", "assetUrl", "requestId"]
+      },
+      "pdfHighlightLinked": {
+        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "highlightId", "page", "quote"]
+      },
+      "proxyAuthState": {
+        "requiredPayloadKeys": ["state"]
+      },
+      "settingsLoaded": {
+        "requiredPayloadKeys": ["settings"]
+      },
+      "sourceAdded": {
+        "requiredPayloadKeys": ["source"]
+      },
+      "sourceError": {
+        "requiredPayloadKeys": ["error"]
+      },
+      "sourceRemoveError": {
+        "requiredPayloadKeys": ["id", "error"]
+      },
+      "sourceRemoved": {
+        "requiredPayloadKeys": ["id"]
+      },
       "streamDocumentAppended": {
         "requiredPayloadKeys": ["streamId", "fragment", "isNewStream", "source"]
+      },
+      "streamLoaded": {
+        "requiredPayloadKeys": ["stream"]
+      },
+      "streamTitleUpdated": {
+        "requiredPayloadKeys": ["id", "title"]
+      },
+      "streamsChanged": {
+        "requiredPayloadKeys": []
+      },
+      "streamsLoaded": {
+        "requiredPayloadKeys": ["streams"]
       }
     }
   }

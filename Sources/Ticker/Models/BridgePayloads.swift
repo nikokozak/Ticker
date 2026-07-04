@@ -2,76 +2,6 @@ import Foundation
 
 // MARK: - Outgoing Payloads (Swift -> JS)
 
-/// AI streaming chunk payload
-struct AIChunkPayload: Codable {
-    let cellId: String
-    let chunk: String
-}
-
-/// AI streaming complete payload
-struct AICompletePayload: Codable {
-    let cellId: String
-}
-
-/// AI streaming error payload
-struct AIErrorPayload: Codable {
-    let cellId: String
-    let error: String
-}
-
-/// Model selection payload
-struct ModelSelectedPayload: Codable {
-    let cellId: String
-    let modelId: String
-}
-
-/// Modifier created payload
-struct ModifierCreatedPayload: Codable {
-    let cellId: String
-    let modifier: ModifierPayload
-}
-
-/// Modifier chunk payload
-struct ModifierChunkPayload: Codable {
-    let cellId: String
-    let chunk: String
-}
-
-/// Modifier complete payload
-struct ModifierCompletePayload: Codable {
-    let cellId: String
-    let modifierId: String
-}
-
-/// Modifier error payload
-struct ModifierErrorPayload: Codable {
-    let cellId: String
-    let error: String
-}
-
-/// Block refresh start payload
-struct BlockRefreshStartPayload: Codable {
-    let cellId: String
-}
-
-/// Block refresh chunk payload
-struct BlockRefreshChunkPayload: Codable {
-    let cellId: String
-    let chunk: String
-}
-
-/// Block refresh complete payload
-struct BlockRefreshCompletePayload: Codable {
-    let cellId: String
-    let content: String
-}
-
-/// Block refresh error payload
-struct BlockRefreshErrorPayload: Codable {
-    let cellId: String
-    let error: String
-}
-
 /// Source added payload
 struct SourceAddedPayload: Codable {
     let source: SourcePayload
@@ -114,28 +44,6 @@ struct SourcePayload: Codable {
     }
 }
 
-/// Modifier payload for bridge
-struct ModifierPayload: Codable {
-    let id: String
-    let prompt: String
-    let label: String?
-    let createdAt: String
-
-    init(from modifier: Modifier) {
-        self.id = modifier.id.uuidString
-        self.prompt = modifier.prompt
-        self.label = modifier.label
-        self.createdAt = ISO8601DateFormatter().string(from: modifier.createdAt)
-    }
-
-    init(id: String, prompt: String, label: String?, createdAt: String) {
-        self.id = id
-        self.prompt = prompt
-        self.label = label
-        self.createdAt = createdAt
-    }
-}
-
 // MARK: - BridgeService Extensions
 
 extension BridgeService {
@@ -153,63 +61,6 @@ extension BridgeService {
         } catch {
             DebugLog.log("[Bridge] Failed to encode payload for \(type) (\(DebugLog.errorSummary(error)))")
         }
-    }
-
-    // MARK: - AI Streaming Convenience Methods
-
-    func sendAIChunk(cellId: String, chunk: String) {
-        send("aiChunk", payload: AIChunkPayload(cellId: cellId, chunk: chunk))
-    }
-
-    func sendAIComplete(cellId: String) {
-        send("aiComplete", payload: AICompletePayload(cellId: cellId))
-    }
-
-    func sendAIError(cellId: String, error: String) {
-        send("aiError", payload: AIErrorPayload(cellId: cellId, error: error))
-    }
-
-    func sendModelSelected(cellId: String, modelId: String) {
-        send("modelSelected", payload: ModelSelectedPayload(cellId: cellId, modelId: modelId))
-    }
-
-    // MARK: - Modifier Streaming Convenience Methods
-
-    func sendModifierCreated(cellId: String, modifier: Modifier) {
-        send("modifierCreated", payload: ModifierCreatedPayload(
-            cellId: cellId,
-            modifier: ModifierPayload(from: modifier)
-        ))
-    }
-
-    func sendModifierChunk(cellId: String, chunk: String) {
-        send("modifierChunk", payload: ModifierChunkPayload(cellId: cellId, chunk: chunk))
-    }
-
-    func sendModifierComplete(cellId: String, modifierId: String) {
-        send("modifierComplete", payload: ModifierCompletePayload(cellId: cellId, modifierId: modifierId))
-    }
-
-    func sendModifierError(cellId: String, error: String) {
-        send("modifierError", payload: ModifierErrorPayload(cellId: cellId, error: error))
-    }
-
-    // MARK: - Block Refresh Convenience Methods
-
-    func sendBlockRefreshStart(cellId: String) {
-        send("blockRefreshStart", payload: BlockRefreshStartPayload(cellId: cellId))
-    }
-
-    func sendBlockRefreshChunk(cellId: String, chunk: String) {
-        send("blockRefreshChunk", payload: BlockRefreshChunkPayload(cellId: cellId, chunk: chunk))
-    }
-
-    func sendBlockRefreshComplete(cellId: String, content: String) {
-        send("blockRefreshComplete", payload: BlockRefreshCompletePayload(cellId: cellId, content: content))
-    }
-
-    func sendBlockRefreshError(cellId: String, error: String) {
-        send("blockRefreshError", payload: BlockRefreshErrorPayload(cellId: cellId, error: error))
     }
 
     // MARK: - Source Convenience Methods

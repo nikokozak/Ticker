@@ -1,5 +1,7 @@
 {
   "version": 1,
+  "status": "historical",
+  "note": "Legacy cell-era bridge snapshot retained for reference only. bridge.v2.json is the sole live contract.",
   "swiftToWeb": {
     "messages": {
       "proxyAuthState": {

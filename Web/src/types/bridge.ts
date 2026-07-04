@@ -2,22 +2,12 @@ import { debugLog } from '../utils/debug';
 
 /** Message structure for Swift ↔ JS communication */
 export const SWIFT_TO_WEB_MESSAGE_TYPES = [
-  'aiChunk',
-  'aiComplete',
-  'aiError',
   'documentAIChunk',
   'documentAIComplete',
   'documentAIError',
   'documentModelSelected',
   'assetPath',
-  'blockRefreshChunk',
-  'blockRefreshComplete',
-  'blockRefreshError',
-  'blockRefreshStart',
-  'blocksReordered',
   'callback',
-  'cellDeleted',
-  'cellSaved',
   'exportCanceled',
   'exportComplete',
   'exportError',
@@ -25,11 +15,6 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'imageDropped',
   'imageSaveError',
   'imageSaved',
-  'modifierChunk',
-  'modifierComplete',
-  'modifierCreated',
-  'modifierError',
-  'modelSelected',
   'proxyAuthState',
   'pdfHighlightLinked',
   'settingsLoaded',
@@ -44,11 +29,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'streamsLoaded',
 ] as const;
 
-type LegacySwiftToWebMessageType = 'quickPanelCellsAdded';
-
-export type SwiftToWebMessageType =
-  | (typeof SWIFT_TO_WEB_MESSAGE_TYPES)[number]
-  | LegacySwiftToWebMessageType;
+export type SwiftToWebMessageType = (typeof SWIFT_TO_WEB_MESSAGE_TYPES)[number];
 
 export interface BridgeMessage {
   type: string;

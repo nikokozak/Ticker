@@ -37,12 +37,10 @@
 		A1000001000000000015 /* AnthropicService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000015 /* AnthropicService.swift */; };
 		A1000001000000000016 /* AssetService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000016 /* AssetService.swift */; };
 		A1000001000000000017 /* ChunkingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000017 /* ChunkingService.swift */; };
-		A1000001000000000018 /* DependencyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000018 /* DependencyService.swift */; };
 		A1000001000000000019 /* EmbeddingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000019 /* EmbeddingService.swift */; };
 		A100000100000000001A /* MLXClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000001A /* MLXClassifier.swift */; };
 		A100000100000000001B /* PerplexityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000001B /* PerplexityService.swift */; };
 		A100000100000000001C /* PersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000001C /* PersistenceService.swift */; };
-		A100000100000000001D /* ProcessingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000001D /* ProcessingService.swift */; };
 		A100000100000000001E /* Prompts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000001E /* Prompts.swift */; };
 		A100000100000000001F /* LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000001F /* LLMProvider.swift */; };
 		A1000001000000000020 /* QueryClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000020 /* QueryClassifier.swift */; };
@@ -103,12 +101,10 @@
 		B1000001000000000015 /* AnthropicService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicService.swift; sourceTree = "<group>"; };
 		B1000001000000000016 /* AssetService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetService.swift; sourceTree = "<group>"; };
 		B1000001000000000017 /* ChunkingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChunkingService.swift; sourceTree = "<group>"; };
-		B1000001000000000018 /* DependencyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyService.swift; sourceTree = "<group>"; };
 		B1000001000000000019 /* EmbeddingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddingService.swift; sourceTree = "<group>"; };
 		B100000100000000001A /* MLXClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXClassifier.swift; sourceTree = "<group>"; };
 		B100000100000000001B /* PerplexityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerplexityService.swift; sourceTree = "<group>"; };
 		B100000100000000001C /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
-		B100000100000000001D /* ProcessingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingService.swift; sourceTree = "<group>"; };
 		B100000100000000001E /* Prompts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Prompts.swift; sourceTree = "<group>"; };
 		B100000100000000001F /* LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMProvider.swift; sourceTree = "<group>"; };
 		B1000001000000000020 /* QueryClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryClassifier.swift; sourceTree = "<group>"; };
@@ -248,13 +244,11 @@
 				B1000001000000000015 /* AnthropicService.swift */,
 				B1000001000000000016 /* AssetService.swift */,
 				B1000001000000000017 /* ChunkingService.swift */,
-				B1000001000000000018 /* DependencyService.swift */,
 				B100000100000000002C /* DeviceKeyService.swift */,
 				B1000001000000000019 /* EmbeddingService.swift */,
 				B100000100000000001A /* MLXClassifier.swift */,
 				B100000100000000001B /* PerplexityService.swift */,
 				B100000100000000001C /* PersistenceService.swift */,
-				B100000100000000001D /* ProcessingService.swift */,
 				B100000100000000001E /* Prompts.swift */,
 				B100000100000000002D /* ProxyLLMService.swift */,
 				B100000100000000002E /* DebugLog.swift */,
@@ -477,12 +471,10 @@
 				A1000001000000000015 /* AnthropicService.swift in Sources */,
 				A1000001000000000016 /* AssetService.swift in Sources */,
 				A1000001000000000017 /* ChunkingService.swift in Sources */,
-				A1000001000000000018 /* DependencyService.swift in Sources */,
 				A1000001000000000019 /* EmbeddingService.swift in Sources */,
 				A100000100000000001A /* MLXClassifier.swift in Sources */,
 				A100000100000000001B /* PerplexityService.swift in Sources */,
 				A100000100000000001C /* PersistenceService.swift in Sources */,
-				A100000100000000001D /* ProcessingService.swift in Sources */,
 				A100000100000000001E /* Prompts.swift in Sources */,
 				A100000100000000001F /* LLMProvider.swift in Sources */,
 				A1000001000000000020 /* QueryClassifier.swift in Sources */,

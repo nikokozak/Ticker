@@ -460,7 +460,6 @@ function sorted(values) {
 function main() {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const contractPaths = [
-    path.join(repoRoot, 'docs', 'contracts', 'bridge.v1.json'),
     path.join(repoRoot, 'docs', 'contracts', 'bridge.v2.json'),
   ].filter((p) => fs.existsSync(p));
   const webBridgePath = path.join(repoRoot, 'Web', 'src', 'types', 'bridge.ts');

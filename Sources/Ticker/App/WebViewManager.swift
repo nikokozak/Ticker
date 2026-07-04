@@ -11,12 +11,8 @@ final class WebViewManager: NSObject {
     private let sourceService: SourceService?
     private let proxyService: ProxyLLMService  // For proxy-mode AI operations
     let orchestrator: AIOrchestrator  // Exposed for Quick Panel ephemeral AI
-    private let dependencyService: DependencyService
-    private var processingService: ProcessingService?
     private var mlxClassifier: MLXClassifier?
     private var classifierSkipped = false  // True if classifier loading was intentionally skipped
-    private var classifierReady: CheckedContinuation<Void, Never>?
-    private var isClassifierReady = false
 
     // RAG services
     private let embeddingService: EmbeddingService
@@ -60,9 +56,6 @@ final class WebViewManager: NSObject {
         // Initialize orchestrator (proxy-only mode, no vendor provider registration)
         self.orchestrator = AIOrchestrator()
 
-        // Initialize dependency service
-        self.dependencyService = DependencyService()
-
         do {
             let p = try PersistenceService()
             self.persistence = p
@@ -88,18 +81,12 @@ final class WebViewManager: NSObject {
                 embedding: embeddingService
             )
 
-            self.processingService = ProcessingService(
-                orchestrator: orchestrator,
-                dependencyService: dependencyService,
-                persistence: p
-            )
         } catch {
             DebugLog.log("[WebViewManager] Failed to initialize persistence (\(DebugLog.errorSummary(error)))")
             self.persistence = nil
             self.sourceService = nil
             self.retrievalService = nil
             self.searchService = nil
-            self.processingService = nil
         }
 
         super.init()
@@ -410,9 +397,6 @@ final class WebViewManager: NSObject {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             DebugLog.log("MLX classifier skipped: running unit tests")
             classifierSkipped = true
-            isClassifierReady = true
-            classifierReady?.resume()
-            classifierReady = nil
             return
         }
 
@@ -438,29 +422,12 @@ final class WebViewManager: NSObject {
                 // App continues to work, just uses direct GPT calls
             }
 
-            // Signal that classifier is ready (or failed)
-            isClassifierReady = true
-            classifierReady?.resume()
-            classifierReady = nil
-
             // Notify frontend of classifier state change
             let settings = settingsWithClassifierState()
             bridgeService.send(BridgeMessage(
                 type: "settingsLoaded",
                 payload: ["settings": AnyCodable(settings)]
             ))
-        }
-    }
-
-    /// Wait for the classifier to be ready (or skipped)
-    private func waitForClassifier() async {
-        if classifierSkipped || isClassifierReady { return }
-        await withCheckedContinuation { continuation in
-            if isClassifierReady {
-                continuation.resume()
-            } else {
-                classifierReady = continuation
-            }
         }
     }
 
@@ -531,53 +498,10 @@ final class WebViewManager: NSObject {
             }
             do {
                 if let stream = try persistence.loadStream(id: id) {
-                    // Build dependency graph for this stream
-                    dependencyService.buildGraph(from: stream.cells)
                     let document = try persistence.loadOrCreateStreamDocument(streamId: id)
 
                     let streamPayload = encodeStream(stream, document: document)
                     bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
-
-                    // Process live blocks (async, after stream is loaded and classifier is ready)
-                    if let processingService {
-                        Task {
-                            // Wait for classifier so live blocks route correctly
-                            await self.waitForClassifier()
-                            await processingService.processStreamOpen(
-                                stream,
-                                onBlockRefreshStart: { [weak self] blockId in
-                                    self?.bridgeService.send(BridgeMessage(
-                                        type: "blockRefreshStart",
-                                        payload: ["cellId": AnyCodable(blockId.uuidString)]
-                                    ))
-                                },
-                                onBlockChunk: { [weak self] blockId, chunk in
-                                    self?.bridgeService.send(BridgeMessage(
-                                        type: "blockRefreshChunk",
-                                        payload: ["cellId": AnyCodable(blockId.uuidString), "chunk": AnyCodable(chunk)]
-                                    ))
-                                },
-                                onBlockRefreshComplete: { [weak self] blockId, content in
-                                    self?.bridgeService.send(BridgeMessage(
-                                        type: "blockRefreshComplete",
-                                        payload: ["cellId": AnyCodable(blockId.uuidString), "content": AnyCodable(content)]
-                                    ))
-                                },
-                                onBlockRefreshError: { [weak self] blockId, error in
-                                    self?.bridgeService.send(BridgeMessage(
-                                        type: "blockRefreshError",
-                                        payload: ["cellId": AnyCodable(blockId.uuidString), "error": AnyCodable(error.localizedDescription)]
-                                    ))
-                                },
-                                onModelSelected: { [weak self] blockId, modelId in
-                                    self?.bridgeService.send(BridgeMessage(
-                                        type: "modelSelected",
-                                        payload: ["cellId": AnyCodable(blockId.uuidString), "modelId": AnyCodable(modelId)]
-                                    ))
-                                }
-                            )
-                        }
-                    }
                 }
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load stream (\(DebugLog.errorSummary(error)))")
@@ -678,85 +602,6 @@ final class WebViewManager: NSObject {
                 }
             }
 
-        case "saveCell":
-            guard let payload = message.payload else {
-                DebugLog.log("[WebViewManager] Invalid saveCell payload")
-                return
-            }
-            do {
-                var cell = try decodeCell(from: payload)
-
-                // Parse references from content and resolve to UUIDs
-                let identifiers = DependencyService.extractReferenceIdentifiers(from: cell.content)
-                if !identifiers.isEmpty, let stream = try persistence.loadStream(id: cell.streamId) {
-                    let resolvedRefs = DependencyService.resolveIdentifiers(identifiers, in: stream.cells)
-                    cell = Cell(
-                        id: cell.id,
-                        streamId: cell.streamId,
-                        content: cell.content,
-                        originalPrompt: cell.originalPrompt,
-                        type: cell.type,
-                        order: cell.order,
-                        modifiers: cell.modifiers,
-                        versions: cell.versions,
-                        activeVersionId: cell.activeVersionId,
-                        processingConfig: cell.processingConfig,
-                        references: resolvedRefs.isEmpty ? nil : resolvedRefs,
-                        blockName: cell.blockName
-                    )
-                }
-
-                // Update dependency graph
-                dependencyService.updateCell(cell)
-
-                try persistence.saveCell(cell)
-
-                // Find dependents that need cascade updates
-                let dependents = dependencyService.getCascadeDependents(of: cell.id)
-                let dependentIds = dependents.map { $0.uuidString }
-
-                bridgeService.send(BridgeMessage(type: "cellSaved", payload: [
-                    "id": AnyCodable(cell.id.uuidString),
-                    "dependents": AnyCodable(dependentIds)
-                ]))
-
-                // Trigger cascade updates for dependent blocks
-                if !dependents.isEmpty, let processingService, let stream = try persistence.loadStream(id: cell.streamId) {
-                    Task {
-                        await processingService.processCascadeUpdate(
-                            changedBlockId: cell.id,
-                            in: stream,
-                            onBlockRefreshStart: { [weak self] blockId in
-                                self?.bridgeService.send(BridgeMessage(
-                                    type: "blockRefreshStart",
-                                    payload: ["cellId": AnyCodable(blockId.uuidString)]
-                                ))
-                            },
-                            onBlockChunk: { [weak self] blockId, chunk in
-                                self?.bridgeService.send(BridgeMessage(
-                                    type: "blockRefreshChunk",
-                                    payload: ["cellId": AnyCodable(blockId.uuidString), "chunk": AnyCodable(chunk)]
-                                ))
-                            },
-                            onBlockRefreshComplete: { [weak self] blockId, content in
-                                self?.bridgeService.send(BridgeMessage(
-                                    type: "blockRefreshComplete",
-                                    payload: ["cellId": AnyCodable(blockId.uuidString), "content": AnyCodable(content)]
-                                ))
-                            },
-                            onBlockRefreshError: { [weak self] blockId, error in
-                                self?.bridgeService.send(BridgeMessage(
-                                    type: "blockRefreshError",
-                                    payload: ["cellId": AnyCodable(blockId.uuidString), "error": AnyCodable(error.localizedDescription)]
-                                ))
-                            }
-                        )
-                    }
-                }
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to save cell (\(DebugLog.errorSummary(error)))")
-            }
-
         case "saveStreamDocument":
             guard let payload = message.payload,
                   let streamIdValue = payload["streamId"]?.value as? String,
@@ -769,69 +614,6 @@ final class WebViewManager: NSObject {
                 try persistence.saveStreamDocument(streamId: streamId, markdown: markdown)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to save stream document (\(DebugLog.errorSummary(error)))")
-            }
-
-        case "deleteCell":
-            guard let payload = message.payload,
-                  let idValue = payload["id"]?.value as? String,
-                  let id = UUID(uuidString: idValue) else {
-                DebugLog.log("[WebViewManager] Invalid deleteCell payload")
-                return
-            }
-            do {
-                // Get cell content before deleting to extract asset URLs
-                if let content = try persistence.getCellContent(id: id) {
-                    cleanupAssetsInContent(content)
-                }
-
-                // Remove from dependency graph
-                dependencyService.removeCell(id: id)
-
-                try persistence.deleteCell(id: id)
-                bridgeService.send(BridgeMessage(type: "cellDeleted", payload: ["id": AnyCodable(id.uuidString)]))
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to delete cell (\(DebugLog.errorSummary(error)))")
-            }
-
-        case "reorderBlocks":
-            guard let payload = message.payload,
-                  let streamIdValue = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdValue),
-                  let ordersRaw = payload["orders"]?.value as? [[String: Any]] else {
-                DebugLog.log("[WebViewManager] Invalid reorderBlocks payload")
-                return
-            }
-            do {
-                // WebKit/JS numbers often arrive as Double (even if they look like integers in JS).
-                // Be permissive here so reorder actually persists.
-                let orders = ordersRaw.compactMap { dict -> (UUID, Int)? in
-                    guard let idStr = dict["id"] as? String,
-                          let id = UUID(uuidString: idStr),
-                          let orderAny = dict["order"] else { return nil }
-
-                    let order: Int?
-                    if let o = orderAny as? Int {
-                        order = o
-                    } else if let o = orderAny as? Double {
-                        order = Int(o)
-                    } else if let o = orderAny as? NSNumber {
-                        order = o.intValue
-                    } else {
-                        order = nil
-                    }
-
-                    guard let order else { return nil }
-                    return (id, order)
-                }
-                if orders.isEmpty {
-                    DebugLog.log("[WebViewManager] reorderBlocks payload had orders=[], skipping persistence")
-                    bridgeService.send(BridgeMessage(type: "blocksReordered", payload: [:]))
-                    return
-                }
-                try persistence.updateCellOrders(orders, streamId: streamId)
-                bridgeService.send(BridgeMessage(type: "blocksReordered", payload: [:]))
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to reorder blocks (\(DebugLog.errorSummary(error)))")
             }
 
         case "addSource":
@@ -923,180 +705,6 @@ final class WebViewManager: NSObject {
             } catch {
                 DebugLog.log("[WebViewManager] Failed to open source (\(DebugLog.errorSummary(error)))")
                 sendSourceError(error.localizedDescription)
-            }
-
-        case "think":
-            guard let payload = message.payload,
-                  let cellId = payload["cellId"]?.value as? String,
-                  let currentCell = payload["currentCell"]?.value as? String else {
-                DebugLog.log("[WebViewManager] Invalid think payload")
-                return
-            }
-
-            // Parse image URLs for current cell (convert ticker-asset:// to data URLs)
-            let currentCellImageURLs = payload["imageURLs"]?.value as? [String] ?? []
-            var allImageDataURLs = assetService.assetsToDataURLs(currentCellImageURLs)
-            if !allImageDataURLs.isEmpty {
-                DebugLog.log("Think: Converting \(currentCellImageURLs.count) current cell images to data URLs")
-            }
-
-            // Get referenced content (from Quick Panel - the highlighted text/screenshot)
-            let referencedContent = payload["referencedContent"]?.value as? String
-
-            // Get referenced image URLs (screenshots from Quick Panel)
-            let referencedImageURLs = payload["referencedImageURLs"]?.value as? [String] ?? []
-            let referencedDataURLs = assetService.assetsToDataURLs(referencedImageURLs)
-            if !referencedDataURLs.isEmpty {
-                DebugLog.log("Think: Converting \(referencedImageURLs.count) referenced images to data URLs")
-                allImageDataURLs.append(contentsOf: referencedDataURLs)
-            }
-
-            // Parse streamId for RAG retrieval and reference resolution
-            var streamIdForRAG: UUID? = nil
-            var sourceContext: String? = nil
-            var streamCells: [Cell] = []
-
-            if let streamIdValue = payload["streamId"]?.value as? String,
-               let streamId = UUID(uuidString: streamIdValue) {
-                streamIdForRAG = streamId
-
-                if let stream = try? persistence.loadStream(id: streamId) {
-                    streamCells = stream.cells
-
-                    // Build fallback source context (used if RAG unavailable)
-                    let combinedText = stream.sources
-                        .compactMap { $0.extractedText }
-                        .joined(separator: "\n\n---\n\n")
-                    if !combinedText.isEmpty {
-                        sourceContext = combinedText
-                    }
-                }
-            }
-
-            // Resolve @block-xxx references in the current cell content
-            var resolvedCurrentCell = DependencyService.resolveReferencesInContent(currentCell, cells: streamCells)
-
-            // If there's referenced content from Quick Panel, prepend it as context
-            if let refContent = referencedContent, !refContent.isEmpty {
-                // Strip HTML for cleaner context
-                let cleanRef = refContent
-                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-                    .replacingOccurrences(of: "&nbsp;", with: " ")
-                    .replacingOccurrences(of: "&amp;", with: "&")
-                    .replacingOccurrences(of: "&lt;", with: "<")
-                    .replacingOccurrences(of: "&gt;", with: ">")
-                    .replacingOccurrences(of: "&quot;", with: "\"")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-
-                if !cleanRef.isEmpty {
-                    resolvedCurrentCell = "Regarding this context:\n\"\"\"\n\(cleanRef)\n\"\"\"\n\n\(resolvedCurrentCell)"
-                }
-            }
-
-            // Parse prior cells and resolve their references too (including images)
-            var priorCells: [[String: Any]] = []
-            if let priorCellsRaw = payload["priorCells"]?.value as? [[String: Any]] {
-                for cell in priorCellsRaw {
-                    var cellDict: [String: Any] = [:]
-                    if let content = cell["content"] as? String {
-                        // Resolve references in prior cell content
-                        cellDict["content"] = DependencyService.resolveReferencesInContent(content, cells: streamCells)
-                    }
-                    let type = cell["type"] as? String
-                    if let type {
-                        cellDict["type"] = type
-                    }
-                    // Only user-role history should carry images to the model.
-                    // aiResponse maps to assistant role and OpenAI rejects assistant image parts.
-                    if type != "aiResponse",
-                       let imageURLs = cell["imageURLs"] as? [String],
-                       !imageURLs.isEmpty {
-                        cellDict["imageURLs"] = assetService.assetsToDataURLs(imageURLs)
-                    }
-                    priorCells.append(cellDict)
-                }
-            }
-
-            // Define callbacks for streaming
-            let onChunk: (String) -> Void = { [weak self] chunk in
-                self?.bridgeService.send(BridgeMessage(
-                    type: "aiChunk",
-                    payload: ["cellId": AnyCodable(cellId), "chunk": AnyCodable(chunk)]
-                ))
-            }
-            let onComplete: () -> Void = { [weak self] in
-                self?.bridgeService.send(BridgeMessage(
-                    type: "aiComplete",
-                    payload: ["cellId": AnyCodable(cellId)]
-                ))
-            }
-            let onError: (Error) -> Void = { [weak self] error in
-                var payload: [String: AnyCodable] = [
-                    "cellId": AnyCodable(cellId),
-                    "error": AnyCodable(error.localizedDescription)
-                ]
-
-                // Add proxy-specific error details
-                if let proxyError = error as? ProxyLLMError {
-                    payload["errorCode"] = AnyCodable(proxyError.errorCode)
-                    if let requestId = proxyError.requestId {
-                        payload["requestId"] = AnyCodable(requestId)
-                    }
-
-                    // Add quota details for quota exceeded errors
-                    if case .quotaExceeded(let details) = proxyError {
-                        payload["quotaScope"] = AnyCodable(details.scope)
-                        payload["quotaLimit"] = AnyCodable(details.limit)
-                        payload["quotaUsed"] = AnyCodable(details.used)
-                        payload["quotaResetAt"] = AnyCodable(details.resetAt)
-                    }
-
-                    // Add retry timing for rate limit errors
-                    if case .rateLimited(let retryAfter) = proxyError {
-                        if let seconds = retryAfter {
-                            payload["retryAfter"] = AnyCodable(seconds)
-                        }
-                    }
-                }
-
-                self?.bridgeService.send(BridgeMessage(
-                    type: "aiError",
-                    payload: payload
-                ))
-            }
-
-            // Route through orchestrator (handles smart routing and RAG retrieval internally)
-            Task { [weak self] in
-                guard let self else { return }
-
-                // Proxy-only mode: all AI goes through proxy
-                let proxyUsable = await DeviceKeyService.shared.currentState.isUsable
-
-                guard proxyUsable else {
-                    await MainActor.run {
-                        onError(OrchestratorError.noProviderAvailable)
-                    }
-                    return
-                }
-
-                await self.orchestrator.route(
-                    query: resolvedCurrentCell,
-                    queryImages: allImageDataURLs,
-                    streamId: streamIdForRAG,
-                    priorCells: priorCells,
-                    sourceContext: sourceContext,
-                    includeHeading: true,  // Think flow: model generates "## Heading" as first line
-                    onChunk: onChunk,
-                    onComplete: onComplete,
-                    onError: onError,
-                    onModelSelected: { [weak self] modelId in
-                        // Notify frontend which model is being used
-                        self?.bridgeService.send(BridgeMessage(
-                            type: "modelSelected",
-                            payload: ["cellId": AnyCodable(cellId), "modelId": AnyCodable(modelId)]
-                        ))
-                    }
-                )
             }
 
         case "thinkDocument":
@@ -1220,86 +828,6 @@ final class WebViewManager: NSObject {
                     }
                 )
             }
-
-        case "applyModifier":
-            guard let payload = message.payload,
-                  let cellId = payload["cellId"]?.value as? String,
-                  let modifierPrompt = payload["modifierPrompt"]?.value as? String,
-                  let currentContent = payload["currentContent"]?.value as? String else {
-                DebugLog.log("[Modifier] Invalid applyModifier payload")
-                return
-            }
-
-            DebugLog.log("[Modifier] Received request - cellId: \(cellId), promptLength=\(modifierPrompt.count)")
-
-            // Proxy-only mode: always use proxy. If no device key, proxy will return auth error.
-
-            // First, generate a short label for the modifier
-            var modifierLabel = ""
-            do {
-                modifierLabel = try await proxyService.generateLabel(for: modifierPrompt)
-                DebugLog.log("[Modifier] Generated label")
-            } catch {
-                DebugLog.log("[Modifier] Label generation failed (\(DebugLog.errorSummary(error))), using truncated prompt")
-                modifierLabel = String(modifierPrompt.prefix(20))
-            }
-
-            // Create the modifier
-            let modifierId = UUID()
-            let modifier: [String: Any] = [
-                "id": modifierId.uuidString,
-                "prompt": modifierPrompt,
-                "label": modifierLabel,
-                "createdAt": ISO8601DateFormatter().string(from: Date())
-            ]
-
-            // Send modifier created event
-            DebugLog.log("[Modifier] Sending modifierCreated event")
-            bridgeService.send(BridgeMessage(
-                type: "modifierCreated",
-                payload: ["cellId": AnyCodable(cellId), "modifier": AnyCodable(modifier)]
-            ))
-
-            // Track chunks for debugging
-            var chunkCount = 0
-            var totalContent = ""
-
-            // Define callbacks for streaming
-            let onChunk: (String) -> Void = { [weak self] chunk in
-                chunkCount += 1
-                totalContent += chunk
-                if chunkCount <= 3 || chunkCount % 10 == 0 {
-                    DebugLog.log("[Modifier] Chunk #\(chunkCount), total length: \(totalContent.count)")
-                }
-                self?.bridgeService.send(BridgeMessage(
-                    type: "modifierChunk",
-                    payload: ["cellId": AnyCodable(cellId), "modifierId": AnyCodable(modifierId.uuidString), "chunk": AnyCodable(chunk)]
-                ))
-            }
-            let onComplete: () -> Void = { [weak self] in
-                DebugLog.log("[Modifier] Complete - received \(chunkCount) chunks, total content length: \(totalContent.count)")
-                self?.bridgeService.send(BridgeMessage(
-                    type: "modifierComplete",
-                    payload: ["cellId": AnyCodable(cellId), "modifierId": AnyCodable(modifierId.uuidString)]
-                ))
-            }
-            let onError: (Error) -> Void = { [weak self] error in
-                DebugLog.log("[Modifier] Error (\(DebugLog.errorSummary(error)))")
-                self?.bridgeService.send(BridgeMessage(
-                    type: "modifierError",
-                    payload: ["cellId": AnyCodable(cellId), "error": AnyCodable(error.localizedDescription)]
-                ))
-            }
-
-            // Apply the modifier using proxy (proxy-only mode)
-            DebugLog.log("[Modifier] Starting AI request via proxy")
-            await proxyService.applyModifier(
-                currentContent: currentContent,
-                modifierPrompt: modifierPrompt,
-                onChunk: onChunk,
-                onComplete: onComplete,
-                onError: onError
-            )
 
         case "exportStream":
             guard let payload = message.payload,
@@ -1760,92 +1288,6 @@ final class WebViewManager: NSObject {
                 }
                 return dict
             },
-            "cells": stream.cells.map { cell -> [String: Any] in
-                var dict: [String: Any] = [
-                    "id": cell.id.uuidString,
-                    "streamId": cell.streamId.uuidString,
-                    "content": cell.content,
-                    "type": cell.type.rawValue,
-                    "order": cell.order,
-                    "createdAt": formatter.string(from: cell.createdAt),
-                    "updatedAt": formatter.string(from: cell.updatedAt)
-                ]
-                if let originalPrompt = cell.originalPrompt {
-                    dict["originalPrompt"] = originalPrompt
-                }
-                // Modifier stack fields
-                if let modifiers = cell.modifiers, !modifiers.isEmpty {
-                    dict["modifiers"] = modifiers.map { modifier -> [String: Any] in
-                        [
-                            "id": modifier.id.uuidString,
-                            "prompt": modifier.prompt,
-                            "label": modifier.label,
-                            "createdAt": formatter.string(from: modifier.createdAt)
-                        ]
-                    }
-                }
-                if let versions = cell.versions, !versions.isEmpty {
-                    dict["versions"] = versions.map { version -> [String: Any] in
-                        [
-                            "id": version.id.uuidString,
-                            "content": version.content,
-                            "modifierIds": version.modifierIds.map { $0.uuidString },
-                            "createdAt": formatter.string(from: version.createdAt)
-                        ]
-                    }
-                }
-                if let activeVersionId = cell.activeVersionId {
-                    dict["activeVersionId"] = activeVersionId.uuidString
-                }
-                // Processing fields
-                if let processingConfig = cell.processingConfig {
-                    var configDict: [String: Any] = [:]
-                    if let refreshTrigger = processingConfig.refreshTrigger {
-                        configDict["refreshTrigger"] = refreshTrigger.rawValue
-                    }
-                    if let schema = processingConfig.schema {
-                        var schemaDict: [String: Any] = ["jsonSchema": schema.jsonSchema, "driftDetected": schema.driftDetected]
-                        if let lastValidatedAt = schema.lastValidatedAt {
-                            schemaDict["lastValidatedAt"] = formatter.string(from: lastValidatedAt)
-                        }
-                        configDict["schema"] = schemaDict
-                    }
-                    if let autoTransform = processingConfig.autoTransform {
-                        configDict["autoTransform"] = [
-                            "condition": autoTransform.condition,
-                            "transformation": autoTransform.transformation
-                        ]
-                    }
-                    if !configDict.isEmpty {
-                        dict["processingConfig"] = configDict
-                    }
-                }
-                if let references = cell.references, !references.isEmpty {
-                    dict["references"] = references.map { $0.uuidString }
-                }
-                if let blockName = cell.blockName {
-                    dict["blockName"] = blockName
-                }
-                if let sourceApp = cell.sourceApp {
-                    dict["sourceApp"] = sourceApp
-                }
-                // Source binding
-                if let sourceBinding = cell.sourceBinding {
-                    var bindingDict: [String: Any] = ["sourceId": sourceBinding.sourceId.uuidString]
-                    switch sourceBinding.location {
-                    case .whole:
-                        bindingDict["location"] = ["type": "whole"]
-                    case .page(let page):
-                        bindingDict["location"] = ["type": "page", "page": page]
-                    case .pageRange(let start, let end):
-                        bindingDict["location"] = ["type": "pageRange", "startPage": start, "endPage": end]
-                    }
-                    dict["sourceBinding"] = bindingDict
-                } else {
-                    dict["sourceBinding"] = NSNull()
-                }
-                return dict
-            },
             "createdAt": formatter.string(from: stream.createdAt),
             "updatedAt": formatter.string(from: stream.updatedAt),
             "document": [
@@ -2003,124 +1445,6 @@ final class WebViewManager: NSObject {
         return name.components(separatedBy: invalidChars).joined(separator: "-")
     }
 
-    private func decodeCell(from payload: [String: AnyCodable]) throws -> Cell {
-        guard let idValue = payload["id"]?.value as? String,
-              let id = UUID(uuidString: idValue),
-              let streamIdValue = payload["streamId"]?.value as? String,
-              let streamId = UUID(uuidString: streamIdValue),
-              let content = payload["content"]?.value as? String else {
-            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Invalid cell payload"))
-        }
-
-        let typeRaw = payload["type"]?.value as? String ?? "text"
-        let type = CellType(rawValue: typeRaw) ?? .text
-        let order = payload["order"]?.value as? Int ?? 0
-        let originalPrompt = payload["originalPrompt"]?.value as? String
-
-        // Decode modifier stack fields
-        var modifiers: [Modifier]? = nil
-        if let modifiersRaw = payload["modifiers"]?.value as? [[String: Any]] {
-            modifiers = modifiersRaw.compactMap { dict -> Modifier? in
-                guard let idStr = dict["id"] as? String,
-                      let modId = UUID(uuidString: idStr),
-                      let prompt = dict["prompt"] as? String,
-                      let label = dict["label"] as? String else { return nil }
-                return Modifier(id: modId, prompt: prompt, label: label)
-            }
-        }
-
-        var versions: [CellVersion]? = nil
-        if let versionsRaw = payload["versions"]?.value as? [[String: Any]] {
-            versions = versionsRaw.compactMap { dict -> CellVersion? in
-                guard let idStr = dict["id"] as? String,
-                      let verId = UUID(uuidString: idStr),
-                      let verContent = dict["content"] as? String,
-                      let modifierIdsRaw = dict["modifierIds"] as? [String] else { return nil }
-                let modifierIds = modifierIdsRaw.compactMap { UUID(uuidString: $0) }
-                return CellVersion(id: verId, content: verContent, modifierIds: modifierIds)
-            }
-        }
-
-        var activeVersionId: UUID? = nil
-        if let activeVersionIdStr = payload["activeVersionId"]?.value as? String {
-            activeVersionId = UUID(uuidString: activeVersionIdStr)
-        }
-
-        // Decode processing fields
-        var processingConfig: ProcessingConfig? = nil
-        if let configRaw = payload["processingConfig"]?.value as? [String: Any] {
-            var config = ProcessingConfig()
-            if let refreshTriggerRaw = configRaw["refreshTrigger"] as? String {
-                config.refreshTrigger = RefreshTrigger(rawValue: refreshTriggerRaw)
-            }
-            if let schemaRaw = configRaw["schema"] as? [String: Any],
-               let jsonSchema = schemaRaw["jsonSchema"] as? String {
-                config.schema = BlockSchema(
-                    jsonSchema: jsonSchema,
-                    driftDetected: schemaRaw["driftDetected"] as? Bool ?? false
-                )
-            }
-            if let autoTransformRaw = configRaw["autoTransform"] as? [String: Any],
-               let condition = autoTransformRaw["condition"] as? String,
-               let transformation = autoTransformRaw["transformation"] as? String {
-                config.autoTransform = AutoTransformRule(condition: condition, transformation: transformation)
-            }
-            processingConfig = config
-        }
-
-        var references: [UUID]? = nil
-        if let referencesRaw = payload["references"]?.value as? [String] {
-            references = referencesRaw.compactMap { UUID(uuidString: $0) }
-        }
-
-        let blockName = payload["blockName"]?.value as? String
-        let sourceApp = payload["sourceApp"]?.value as? String
-
-        // Decode source binding
-        var sourceBinding: SourceBinding? = nil
-        if let bindingRaw = payload["sourceBinding"]?.value as? [String: Any],
-           let sourceIdStr = bindingRaw["sourceId"] as? String,
-           let sourceId = UUID(uuidString: sourceIdStr),
-           let locationRaw = bindingRaw["location"] as? [String: Any],
-           let locationType = locationRaw["type"] as? String {
-            let location: SourceLocation
-            switch locationType {
-            case "page":
-                if let page = locationRaw["page"] as? Int {
-                    location = .page(page)
-                } else {
-                    location = .whole
-                }
-            case "pageRange":
-                if let start = locationRaw["startPage"] as? Int,
-                   let end = locationRaw["endPage"] as? Int {
-                    location = .pageRange(start, end)
-                } else {
-                    location = .whole
-                }
-            default:
-                location = .whole
-            }
-            sourceBinding = SourceBinding(sourceId: sourceId, location: location)
-        }
-
-        return Cell(
-            id: id,
-            streamId: streamId,
-            content: content,
-            originalPrompt: originalPrompt,
-            type: type,
-            sourceBinding: sourceBinding,
-            order: order,
-            modifiers: modifiers,
-            versions: versions,
-            activeVersionId: activeVersionId,
-            processingConfig: processingConfig,
-            references: references,
-            blockName: blockName,
-            sourceApp: sourceApp
-        )
-    }
 }
 
 extension WebViewManager: WKNavigationDelegate {
@@ -2138,29 +1462,5 @@ extension WebViewManager: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         DebugLog.log("[WebViewManager] WebView provisional navigation failed (\(DebugLog.errorSummary(error)))")
-    }
-
-    // MARK: - Asset Cleanup
-
-    /// Extract ticker-asset:// URLs from HTML content and delete the associated files
-    private func cleanupAssetsInContent(_ content: String) {
-        // Match ticker-asset:// URLs in src attributes
-        let pattern = #"ticker-asset:///?([^"'\s>]+)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-
-        let range = NSRange(content.startIndex..<content.endIndex, in: content)
-        let matches = regex.matches(in: content, range: range)
-
-        for match in matches {
-            guard let pathRange = Range(match.range(at: 1), in: content) else { continue }
-            let relativePath = String(content[pathRange])
-
-            // Delete the asset file
-            do {
-                try assetService.deleteAsset(relativePath: relativePath)
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to delete asset (\(DebugLog.errorSummary(error)))")
-            }
-        }
     }
 }
