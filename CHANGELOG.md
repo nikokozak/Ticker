@@ -12,6 +12,7 @@ All notable user-facing changes to Ticker are documented here.
 
 ### Fixed
 - Recovered quick-capture notes that previously didn't appear in streams.
+- Stopped embedded stream images from flickering or refetching while editing nearby text, and made cursor movement skip image tokens atomically.
 
 ### Removed
 - TBD
