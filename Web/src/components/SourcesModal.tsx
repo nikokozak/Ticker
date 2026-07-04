@@ -1,5 +1,49 @@
 import { useCallback, useEffect, useRef, useState, forwardRef } from 'react';
-import { SourceReference, bridge } from '../types';
+import type { SourceIndexStatus, SourceReference } from '../types';
+import { bridge } from '../types';
+
+interface SourceIndexStatusLineInput {
+  status: SourceIndexStatus;
+  progress?: number | null;
+  pageCount?: number | null;
+}
+
+export function formatSourceIndexStatusLine({
+  status,
+  progress,
+  pageCount,
+}: SourceIndexStatusLineInput): string | null {
+  switch (status) {
+    case 'indexing':
+      if (typeof progress === 'number' && Number.isFinite(progress)) {
+        const percent = Math.round(Math.min(1, Math.max(0, progress)) * 100);
+        return `indexing · ${percent}%`;
+      }
+      return 'indexing…';
+    case 'ready': {
+      const pages = formatPageCount(pageCount ?? null);
+      if (!pages) return null;
+      return pageCount && pageCount > 0 ? `${pages} · indexed` : pages;
+    }
+    case 'failed_no_text':
+      return 'No readable text — this looks like a scanned document';
+    case 'failed':
+      return 'Indexing failed';
+    case 'pending':
+      return 'waiting to index…';
+    default:
+      return null;
+  }
+}
+
+function canRetryIndexing(status: SourceIndexStatus): boolean {
+  return status === 'failed_no_text' || status === 'failed';
+}
+
+interface SourceIndexStatusSnapshot {
+  status: SourceIndexStatus;
+  progress?: number | null;
+}
 
 interface SourcesModalProps {
   isOpen: boolean;
@@ -25,6 +69,7 @@ export function SourcesModal({
   const [error, setError] = useState<string | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [indexUpdates, setIndexUpdates] = useState<Record<string, SourceIndexStatusSnapshot>>({});
   const sourceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const handleClose = useCallback(() => {
@@ -42,6 +87,15 @@ export function SourcesModal({
     setError(null);
     setPendingRemoval(id);
     bridge.send({ type: 'removeSource', payload: { id } });
+  };
+
+  const handleRetryIndexing = (sourceId: string) => {
+    setError(null);
+    setIndexUpdates((previous) => ({
+      ...previous,
+      [sourceId]: { status: 'pending' },
+    }));
+    bridge.send({ type: 'retrySourceIndexing', payload: { sourceId } });
   };
 
   const handleOpenSource = (source: SourceReference) => {
@@ -109,9 +163,36 @@ export function SourcesModal({
         setPendingRemoval(null);
         showError(message.payload.error as string);
       }
+      if (message.type === 'sourceIndexStatusChanged' && message.payload?.sourceId) {
+        const sourceId = message.payload.sourceId as string;
+        const status = message.payload.status as SourceIndexStatus | undefined;
+        if (!status) return;
+        const progress = typeof message.payload.progress === 'number'
+          ? message.payload.progress
+          : undefined;
+        setIndexUpdates((previous) => ({
+          ...previous,
+          [sourceId]: { status, progress },
+        }));
+      }
     });
     return unsubscribe;
   }, [isOpen, onSourceRemoved]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIndexUpdates({});
+      return;
+    }
+
+    const sourceIds = new Set(sources.map((source) => source.id));
+    setIndexUpdates((previous) => {
+      const next = Object.fromEntries(
+        Object.entries(previous).filter(([sourceId]) => sourceIds.has(sourceId))
+      );
+      return Object.keys(next).length === Object.keys(previous).length ? previous : next;
+    });
+  }, [isOpen, sources]);
 
   useEffect(() => {
     if (!isOpen || !highlightedSourceId) return undefined;
@@ -182,8 +263,10 @@ export function SourcesModal({
               <SourceItem
                 key={source.id}
                 source={source}
+                indexStatus={indexUpdates[source.id]}
                 isRemoving={pendingRemoval === source.id}
                 onRemove={() => handleRemoveSource(source.id)}
+                onRetryIndexing={() => handleRetryIndexing(source.id)}
                 onOpen={() => handleOpenSource(source)}
                 ref={(el) => {
                   if (el) sourceRefs.current.set(source.id, el);
@@ -200,16 +283,23 @@ export function SourcesModal({
 
 interface SourceItemProps {
   source: SourceReference;
+  indexStatus?: SourceIndexStatusSnapshot;
   isRemoving: boolean;
   onRemove: () => void;
+  onRetryIndexing: () => void;
   onOpen: () => void;
 }
 
 const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
-  function SourceItem({ source, isRemoving, onRemove, onOpen }, ref) {
+  function SourceItem({ source, indexStatus, isRemoving, onRemove, onRetryIndexing, onOpen }, ref) {
     const icon = getFileIcon(source.fileType);
-    const embeddingInfo = getEmbeddingInfo(source.embeddingStatus);
-    const pageCount = formatPageCount(source.pageCount);
+    const currentStatus = indexStatus?.status ?? source.indexStatus;
+    const statusLine = formatSourceIndexStatusLine({
+      status: currentStatus,
+      progress: indexStatus?.progress,
+      pageCount: source.pageCount,
+    });
+    const showsRetry = canRetryIndexing(currentStatus);
 
     return (
       <div
@@ -229,15 +319,19 @@ const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
         <span className="sources-modal-item-icon">{icon}</span>
         <div className="sources-modal-item-info">
           <span className="sources-modal-item-name">{source.displayName}</span>
-          <div className="sources-modal-item-meta">
-            {pageCount && <span>{pageCount}</span>}
-            {embeddingInfo && (
-              <span
-                className={`sources-modal-embedding sources-modal-embedding--${source.embeddingStatus}`}
-                title={embeddingInfo.tooltip}
+          <div className="sources-modal-item-meta" aria-live="polite">
+            {statusLine && <span>{statusLine}</span>}
+            {showsRetry && (
+              <button
+                type="button"
+                className="sources-modal-retry"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRetryIndexing();
+                }}
               >
-                {embeddingInfo.label}
-              </span>
+                Retry
+              </button>
             )}
           </div>
         </div>
@@ -272,17 +366,4 @@ function getFileIcon(fileType: string): string {
 function formatPageCount(pageCount: number | null): string | null {
   if (pageCount === null) return null;
   return `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`;
-}
-
-function getEmbeddingInfo(status: string): { label: string; tooltip: string } | null {
-  switch (status) {
-    case 'processing':
-      return { label: 'Indexing…', tooltip: 'Creating semantic index for AI search' };
-    case 'complete':
-      return { label: 'Indexed', tooltip: 'Ready for semantic search' };
-    case 'failed':
-      return { label: 'Index failed', tooltip: 'Semantic indexing failed - full text will be used' };
-    default:
-      return null;
-  }
 }

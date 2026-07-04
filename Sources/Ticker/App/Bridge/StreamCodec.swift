@@ -14,6 +14,7 @@ enum StreamCodec {
                     "fileType": source.fileType.rawValue,
                     "status": source.status.rawValue,
                     "embeddingStatus": source.embeddingStatus.rawValue,
+                    "indexStatus": source.indexStatus.rawValue,
                     "addedAt": formatter.string(from: source.addedAt)
                 ]
                 if let pageCount = source.pageCount {
@@ -41,6 +42,8 @@ enum StreamCodec {
             "displayName": source.displayName,
             "fileType": source.fileType.rawValue,
             "status": source.status.rawValue,
+            "embeddingStatus": source.embeddingStatus.rawValue,
+            "indexStatus": source.indexStatus.rawValue,
             "addedAt": formatter.string(from: source.addedAt)
         ]
         if let pageCount = source.pageCount {

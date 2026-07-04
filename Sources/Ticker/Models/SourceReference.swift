@@ -12,6 +12,7 @@ struct SourceReference: Identifiable, Codable {
     var extractedText: String?
     var pageCount: Int?
     var embeddingStatus: SourceEmbeddingStatus
+    var indexStatus: SourceIndexStatus
     let addedAt: Date
 
     init(
@@ -25,6 +26,7 @@ struct SourceReference: Identifiable, Codable {
         extractedText: String? = nil,
         pageCount: Int? = nil,
         embeddingStatus: SourceEmbeddingStatus = .none,
+        indexStatus: SourceIndexStatus = .pending,
         addedAt: Date = Date()
     ) {
         self.id = id
@@ -37,6 +39,7 @@ struct SourceReference: Identifiable, Codable {
         self.extractedText = extractedText
         self.pageCount = pageCount
         self.embeddingStatus = embeddingStatus
+        self.indexStatus = indexStatus
         self.addedAt = addedAt
     }
 }
@@ -47,6 +50,15 @@ enum SourceEmbeddingStatus: String, Codable {
     case processing  // Currently chunking/embedding
     case complete    // All chunks embedded
     case failed      // Embedding failed
+}
+
+/// Status of local source chunk indexing.
+enum SourceIndexStatus: String, Codable {
+    case pending
+    case indexing
+    case ready
+    case failedNoText = "failed_no_text"
+    case failed
 }
 
 /// Supported source file types

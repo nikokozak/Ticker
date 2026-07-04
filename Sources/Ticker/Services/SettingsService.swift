@@ -11,9 +11,8 @@ final class SettingsService {
     /// This prevents Keychain access prompts in signed Release builds.
     private static let vendorKeysEnabled = false
 
-    /// Proxy-only mode: all LLM and embedding calls must go through Ticker Proxy.
+    /// Proxy-only mode: all LLM calls must go through Ticker Proxy.
     /// When true, local vendor API calls (OpenAI, Anthropic, Perplexity) are disabled at runtime.
-    /// This includes EmbeddingService (RAG is disabled for alpha).
     static let proxyOnlyMode = true
 
     // UserDefaults keys (non-sensitive settings)

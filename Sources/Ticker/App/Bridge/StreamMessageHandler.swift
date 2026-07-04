@@ -55,6 +55,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
     private let persistence: PersistenceService
     private let bridgeService: BridgeService
     private let assetService: AssetService
+    private let ingestService: IngestService?
     private weak var delegate: StreamMessageHandlerDelegate?
 
     init?(container: ServiceContainer, delegate: StreamMessageHandlerDelegate) {
@@ -62,6 +63,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         self.persistence = persistence
         self.bridgeService = container.bridgeService
         self.assetService = container.assetService
+        self.ingestService = container.ingestService
         self.delegate = delegate
     }
 
@@ -94,6 +96,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
 
                     let streamPayload = StreamCodec.encodeStream(stream, document: document)
                     bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
+                    ingestService?.enqueuePendingSources(for: id)
                 }
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load stream (\(DebugLog.errorSummary(error)))")

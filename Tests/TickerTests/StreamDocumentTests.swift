@@ -1,6 +1,8 @@
 import CoreGraphics
+import AppKit
 import Foundation
 import GRDB
+import PDFKit
 import XCTest
 
 @testable import Ticker
@@ -36,6 +38,18 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
 }
 
 final class StreamDocumentTests: XCTestCase {
+    private enum TestPDFError: Error {
+        case creationFailed
+    }
+
+    private typealias RetrievalChunkFixture = (
+        seq: Int,
+        text: String,
+        pageStart: Int,
+        pageEnd: Int,
+        sectionPath: String?
+    )
+
     func test_v14MigrationCreatesPDFHighlightsTable() throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -90,6 +104,515 @@ final class StreamDocumentTests: XCTestCase {
         }
 
         XCTAssertTrue(columnExists)
+    }
+
+    func test_v16MigrationDropsLegacyChunksAndAddsIndexStatus() throws {
+        let streamId = UUID()
+        let sourceId = UUID()
+
+        try withSeededV15Database { db in
+            try insertStream(db, id: streamId, title: "Legacy Chunks", createdAt: 900)
+            try insertV15Source(
+                db,
+                id: sourceId,
+                streamId: streamId,
+                displayName: "Legacy.pdf",
+                fileType: "pdf",
+                pageCount: 2
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO source_chunks (
+                        id, source_id, chunk_index, content, token_count, page_start, page_end, embedding_status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    UUID().uuidString,
+                    sourceId.uuidString,
+                    4,
+                    "Distinct legacy chunk text",
+                    6,
+                    2,
+                    2,
+                    "pending",
+                    1_000
+                ]
+            )
+        } body: { dbURL, fileManager in
+            let service = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+
+            let statuses = try service.loadSourceIndexStatuses(streamId: streamId)
+            XCTAssertEqual(statuses[sourceId], .pending)
+
+            let chunks = try service.loadSourceChunks(sourceId: sourceId)
+            XCTAssertTrue(chunks.isEmpty)
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let chunkColumns = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(source_chunks)").map { row -> String in
+                    row["name"]
+                }
+            }
+            XCTAssertEqual(
+                chunkColumns,
+                ["id", "source_id", "seq", "text", "page_start", "page_end", "section_path"]
+            )
+
+            let ftsExists = try dbQueue.read { db in
+                try Row.fetchOne(
+                    db,
+                    sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'source_chunks_fts'"
+                ) != nil
+            }
+            XCTAssertTrue(ftsExists)
+
+            let legacyEmbeddingTableIsGone = try dbQueue.read { db in
+                try Row.fetchOne(
+                    db,
+                    sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunk_embeddings'"
+                ) == nil
+            }
+            XCTAssertTrue(legacyEmbeddingTableIsGone)
+
+            let ftsCount: Int = try dbQueue.read { db in
+                try Row.fetchOne(db, sql: "SELECT COUNT(*) AS count FROM source_chunks_fts")?["count"] ?? -1
+            }
+            XCTAssertEqual(ftsCount, 0)
+        }
+    }
+
+    func test_chunkerUsesOutlineSectionPathsAndPageRanges() throws {
+        let document = try makePDFDocument(pages: [
+            "Opening receipts establish the first page.",
+            "Storage receipts include the caliper phrase.",
+            "Closing receipts finish the third page."
+        ])
+        try addOutline(to: document, labels: ["1 Opening", "2 Storage", "3 Closing"])
+
+        let chunks = try ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0))
+            .chunkPDF(document: document, sourceId: UUID())
+
+        XCTAssertEqual(chunks.count, 3)
+        XCTAssertEqual(chunks.map(\.pageStart), [1, 2, 3])
+        XCTAssertEqual(chunks.map(\.pageEnd), [1, 2, 3])
+        XCTAssertEqual(chunks.map(\.sectionPath), ["1 Opening", "2 Storage", "3 Closing"])
+        XCTAssertTrue(chunks[1].text.contains("caliper phrase"))
+    }
+
+    func test_sourceChunksAndFTSRowsAreRemovedWhenSourceIsDeleted() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, _ in
+            let source = try savePDFSource(in: service)
+            let chunk = SourceChunk(
+                sourceId: source.id,
+                seq: 0,
+                text: "The ultraviolet caliper phrase should be found by FTS.",
+                pageStart: 1,
+                pageEnd: 1,
+                sectionPath: "Fixtures"
+            )
+
+            try service.saveSourceChunks([chunk], for: source.id)
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let matches = try dbQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT c.text
+                        FROM source_chunks_fts
+                        JOIN source_chunks c ON c.id = source_chunks_fts.chunk_id
+                        WHERE source_chunks_fts MATCH ?
+                    """,
+                    arguments: ["ultraviolet"]
+                ).map { row -> String in row["text"] }
+            }
+
+            XCTAssertEqual(matches, [chunk.text])
+
+            try service.deleteSource(id: source.id)
+
+            let counts = try dbQueue.read { db in
+                let chunkCount: Int = try Row.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) AS count FROM source_chunks WHERE source_id = ?",
+                    arguments: [source.id.uuidString]
+                )?["count"] ?? -1
+                let ftsCount: Int = try Row.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) AS count FROM source_chunks_fts WHERE source_id = ?",
+                    arguments: [source.id.uuidString]
+                )?["count"] ?? -1
+                return (chunkCount, ftsCount)
+            }
+
+            XCTAssertEqual(counts.0, 0)
+            XCTAssertEqual(counts.1, 0)
+        }
+    }
+
+    func test_retrievalReturnsNoContextForIrrelevantQuery() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Large Source")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "Storage manifolds and caliper fixtures are indexed here.", 4, 4, "Storage")
+                ]
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+
+            let unrelatedQuery = "what is the best way to do this"
+            XCTAssertTrue(try retrieval.retrieve(query: unrelatedQuery, streamId: stream.id).isEmpty)
+            XCTAssertNil(try retrieval.assembleSourceContext(query: unrelatedQuery, streamId: stream.id))
+        }
+    }
+
+    func test_retrievalReturnsNoContextWhenAllQueryTokensMatchOnlyWeakly() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Weak Matches")
+            try service.saveStream(stream)
+            let weakChunks = weakUnrelatedChunks()
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Technical.pdf",
+                extractedText: largeExtractedText(),
+                chunks: weakChunks
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+            let query = "good dish party friends"
+            let sanitized = try XCTUnwrap(RetrievalService.sanitizedFTSQuery(query))
+            let cutoff = -1.0 * Double(sanitized.tokenCount)
+            let rawResults = try retrieval.retrieve(query: query, streamId: stream.id, applyThreshold: false)
+            let bestScore = try XCTUnwrap(rawResults.first?.score)
+            let corpusText = weakChunks.map(\.text).joined(separator: " ")
+
+            XCTAssertEqual(sanitized.tokenCount, 4)
+            XCTAssertTrue(["good", "dish", "party", "friends"].allSatisfy { corpusText.contains($0) })
+            XCTAssertLessThan(bestScore, 0)
+            XCTAssertGreaterThan(bestScore, cutoff)
+            XCTAssertTrue(try retrieval.retrieve(query: query, streamId: stream.id).isEmpty)
+            XCTAssertNil(try retrieval.assembleSourceContext(query: query, streamId: stream.id))
+        }
+    }
+
+    func test_retrievalKeepsStrongMatchesAbovePerTokenCutoff() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Strong Match")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Interpreter.pdf",
+                extractedText: largeExtractedText(),
+                chunks: stronglyRelevantChunks(
+                    strongText: "interpreter interpreter interpreter numeric numeric numeric conversion conversion conversion input input input",
+                    pageStart: 9,
+                    pageEnd: 9
+                )
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+            let query = "interpreter numeric conversion input"
+            let sanitized = try XCTUnwrap(RetrievalService.sanitizedFTSQuery(query))
+            let cutoff = -1.0 * Double(sanitized.tokenCount)
+            let rawResults = try retrieval.retrieve(query: query, streamId: stream.id, applyThreshold: false)
+            let bestScore = try XCTUnwrap(rawResults.first?.score)
+            let results = try retrieval.retrieve(query: query, streamId: stream.id)
+
+            XCTAssertEqual(sanitized.tokenCount, 4)
+            XCTAssertLessThanOrEqual(bestScore, cutoff)
+            XCTAssertEqual(results.count, 1)
+            XCTAssertEqual(results.first?.sourceName, "Interpreter.pdf")
+        }
+    }
+
+    func test_retrievalCapsPerTokenCutoffForLongParagraphQueries() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Long Query")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Interpreter.pdf",
+                extractedText: largeExtractedText(),
+                chunks: stronglyRelevantChunks(
+                    strongText: "interpreter interpreter interpreter numeric numeric numeric",
+                    pageStart: 10,
+                    pageEnd: 10
+                )
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+            let query = "interpreter numeric conversion input handle source cursor paragraph manual chapter section reader"
+            let sanitized = try XCTUnwrap(RetrievalService.sanitizedFTSQuery(query))
+            let uncappedCutoff = -1.0 * Double(sanitized.tokenCount)
+            let cappedCutoff = -1.0 * Double(8)
+            let rawResults = try retrieval.retrieve(query: query, streamId: stream.id, applyThreshold: false)
+            let bestScore = try XCTUnwrap(rawResults.first?.score)
+            let results = try retrieval.retrieve(query: query, streamId: stream.id)
+
+            XCTAssertEqual(sanitized.tokenCount, 12)
+            XCTAssertGreaterThan(bestScore, uncappedCutoff)
+            XCTAssertLessThanOrEqual(bestScore, cappedCutoff)
+            XCTAssertEqual(results.count, 1)
+            XCTAssertEqual(results.first?.sourceName, "Interpreter.pdf")
+        }
+    }
+
+    func test_retrievalSourceScopeNoneReturnsNoContextEvenWithMatchingChunks() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Scope None")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "Storage manifolds and caliper fixtures are indexed here.", 4, 4, "Storage")
+                ]
+            )
+
+            let context = try RetrievalService(persistence: service)
+                .assembleSourceContext(query: "storage manifold", streamId: stream.id, scope: .none)
+
+            XCTAssertNil(context)
+        }
+    }
+
+    func test_retrievalSourceScopeAllReturnsWeakMatchesBelowAutoThreshold() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Scope All")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Weak.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "weakterm " + String(repeating: "filler ", count: 30), 5, 5, nil),
+                    (1, String(repeating: "other filler ", count: 10), 6, 6, nil)
+                ]
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+
+            XCTAssertTrue(try retrieval.retrieve(query: "weakterm", streamId: stream.id).isEmpty)
+
+            let context = try XCTUnwrap(
+                retrieval.assembleSourceContext(query: "weakterm", streamId: stream.id, scope: .all)
+            )
+            XCTAssertEqual(context.mode, .retrieved)
+            XCTAssertEqual(context.chunks.map(\.sourceName), ["Weak.pdf"])
+            XCTAssertTrue(context.text.contains("[1] Weak.pdf, p.5:"))
+        }
+    }
+
+    func test_retrievalPassthroughUsesLegacyWholeTextFormatForSmallSources() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Small Sources")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "One.txt",
+                extractedText: "First source text",
+                indexStatus: .pending,
+                addedAt: Date(timeIntervalSince1970: 1)
+            )
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Two.txt",
+                extractedText: "Second source text",
+                indexStatus: .ready,
+                addedAt: Date(timeIntervalSince1970: 2)
+            )
+
+            let context = try XCTUnwrap(
+                RetrievalService(persistence: service)
+                    .assembleSourceContext(query: "anything", streamId: stream.id)
+            )
+
+            XCTAssertEqual(context.mode, .passthrough)
+            XCTAssertEqual(context.text, "First source text\n\n---\n\nSecond source text")
+        }
+    }
+
+    func test_retrievalInterleavesMultipleSourcesByScore() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Multiple Sources")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Alpha.pdf",
+                extractedText: largeExtractedText("alpha"),
+                chunks: stronglyRelevantChunks(
+                    strongText: "caliper caliper caliper storage storage storage manifold manifold manifold",
+                    pageStart: 2,
+                    pageEnd: 2
+                )
+            )
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Beta.pdf",
+                extractedText: largeExtractedText("beta"),
+                chunks: stronglyRelevantChunks(
+                    strongText: "caliper caliper storage storage manifold manifold",
+                    pageStart: 8,
+                    pageEnd: 8
+                )
+            )
+
+            let results = try RetrievalService(persistence: service)
+                .retrieve(query: "caliper storage manifold", streamId: stream.id)
+
+            XCTAssertEqual(results.map(\.sourceName), ["Alpha.pdf", "Beta.pdf"])
+            XCTAssertLessThanOrEqual(results[0].score, results[1].score)
+        }
+    }
+
+    func test_retrievalSanitizesQuerySyntaxWithoutThrowing() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Sanitize")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Syntax.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "Quotes and parens appear in this chunk.", 1, 1, nil)
+                ]
+            )
+
+            XCTAssertNoThrow(
+                try RetrievalService(persistence: service)
+                    .retrieve(query: #""quotes" AND (parens) don't-crash"#, streamId: stream.id)
+            )
+        }
+    }
+
+    func test_retrievalManifestIncludesNumbersSourcePagesAndSection() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Manifest")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: stronglyRelevantChunks(
+                    strongText: "storage storage storage manifold manifold manifold receipts receipts receipts",
+                    pageStart: 12,
+                    pageEnd: 14,
+                    sectionPath: "3.2 Storage"
+                )
+            )
+
+            let context = try XCTUnwrap(
+                RetrievalService(persistence: service)
+                    .assembleSourceContext(query: "storage manifold receipts", streamId: stream.id)
+            )
+
+            XCTAssertEqual(context.mode, .retrieved)
+            XCTAssertEqual(context.text, """
+            [1] Manual.pdf, p.12–14 (§3.2 Storage):
+            storage storage storage manifold manifold manifold receipts receipts receipts
+            """)
+        }
+    }
+
+    func test_ingestServiceIndexesPDFAndEmitsStatusTransitions() throws {
+        try withTempPersistenceServiceAndURL { service, _, fileManager in
+            let stream = Stream(title: "Ingest Ready")
+            try service.saveStream(stream)
+
+            let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { _ = try? fileManager.removeItem(at: tempDir) }
+
+            let pdfURL = tempDir.appendingPathComponent("Ready.pdf")
+            try makePDFData(pages: ["Ready receipt text with the anvil phrase."]).write(to: pdfURL)
+
+            let sourceService = SourceService(persistence: service)
+            let source = try sourceService.addSource(from: pdfURL, to: stream.id)
+            let ingestService = IngestService(
+                persistence: service,
+                sourceService: sourceService,
+                chunkingService: ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0))
+            )
+
+            let ready = expectation(description: "source indexed")
+            let lock = NSLock()
+            var statuses: [SourceIndexStatus] = []
+            ingestService.onStatusChange = { update in
+                lock.lock()
+                statuses.append(update.status)
+                lock.unlock()
+                if update.status == .ready {
+                    ready.fulfill()
+                }
+            }
+
+            ingestService.enqueue(source: source)
+            wait(for: [ready], timeout: 5)
+
+            let reloaded = try XCTUnwrap(service.loadSource(id: source.id))
+            XCTAssertEqual(reloaded.indexStatus, .ready)
+            XCTAssertFalse(try service.loadSourceChunks(sourceId: source.id).isEmpty)
+            lock.lock()
+            let capturedStatuses = statuses
+            lock.unlock()
+            XCTAssertTrue(capturedStatuses.contains(.indexing))
+            XCTAssertTrue(capturedStatuses.contains(.ready))
+        }
+    }
+
+    func test_ingestServiceMarksNoTextPDFAsFailedNoText() throws {
+        try withTempPersistenceServiceAndURL { service, _, fileManager in
+            let stream = Stream(title: "Ingest No Text")
+            try service.saveStream(stream)
+
+            let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { _ = try? fileManager.removeItem(at: tempDir) }
+
+            let pdfURL = tempDir.appendingPathComponent("Blank.pdf")
+            try makePDFData(pages: [""]).write(to: pdfURL)
+
+            let sourceService = SourceService(persistence: service)
+            let source = try sourceService.addSource(from: pdfURL, to: stream.id)
+            let ingestService = IngestService(
+                persistence: service,
+                sourceService: sourceService,
+                chunkingService: ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0))
+            )
+
+            let failed = expectation(description: "source failed without text")
+            ingestService.onStatusChange = { update in
+                if update.status == .failedNoText {
+                    failed.fulfill()
+                }
+            }
+
+            ingestService.enqueue(source: source)
+            wait(for: [failed], timeout: 5)
+
+            let reloaded = try XCTUnwrap(service.loadSource(id: source.id))
+            XCTAssertEqual(reloaded.indexStatus, .failedNoText)
+            XCTAssertTrue(try service.loadSourceChunks(sourceId: source.id).isEmpty)
+        }
     }
 
     func test_savePDFHighlightRoundTripsRects() throws {
@@ -520,15 +1043,10 @@ final class StreamDocumentTests: XCTestCase {
                 """
             )
 
-            let embeddingService = EmbeddingService()
-            let retrievalService = RetrievalService(
-                persistence: service,
-                embeddingService: embeddingService
-            )
+            let retrievalService = RetrievalService(persistence: service)
             let searchService = SearchService(
                 persistence: service,
-                retrieval: retrievalService,
-                embedding: embeddingService
+                retrieval: retrievalService
             )
 
             let results = try await searchService.hybridSearch(
@@ -778,6 +1296,28 @@ final class StreamDocumentTests: XCTestCase {
         try await body(service)
     }
 
+    private func withTempPersistenceServiceAndURL(
+        _ body: (PersistenceService, URL, FileManager) throws -> Void
+    ) throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+
+        var service: PersistenceService? = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        defer {
+            service = nil
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        guard let service else {
+            XCTFail("Expected persistence service")
+            return
+        }
+
+        try body(service, dbURL, fileManager)
+    }
+
     private func savePDFSource(in service: PersistenceService) throws -> SourceReference {
         let stream = Stream(title: "PDF Highlights")
         try service.saveStream(stream)
@@ -791,6 +1331,87 @@ final class StreamDocumentTests: XCTestCase {
         )
         try service.saveSource(source)
         return source
+    }
+
+    private func saveRetrievalSource(
+        in service: PersistenceService,
+        streamId: UUID,
+        displayName: String,
+        extractedText: String,
+        indexStatus: SourceIndexStatus = .ready,
+        addedAt: Date = Date(),
+        chunks chunkFixtures: [RetrievalChunkFixture] = []
+    ) throws -> SourceReference {
+        let source = SourceReference(
+            streamId: streamId,
+            displayName: displayName,
+            fileType: .pdf,
+            bookmarkData: Data("bookmark-\(displayName)".utf8),
+            status: .ready,
+            extractedText: extractedText,
+            pageCount: 20,
+            indexStatus: indexStatus,
+            addedAt: addedAt
+        )
+        try service.saveSource(source)
+
+        let chunks = chunkFixtures.map { fixture in
+            SourceChunk(
+                sourceId: source.id,
+                seq: fixture.seq,
+                text: fixture.text,
+                pageStart: fixture.pageStart,
+                pageEnd: fixture.pageEnd,
+                sectionPath: fixture.sectionPath
+            )
+        }
+        try service.saveSourceChunks(chunks, for: source.id)
+        return source
+    }
+
+    private func largeExtractedText(_ marker: String = "large") -> String {
+        String(repeating: "\(marker) source context. ", count: 2_500)
+    }
+
+    private func stronglyRelevantChunks(
+        strongText: String,
+        pageStart: Int,
+        pageEnd: Int,
+        sectionPath: String? = nil
+    ) -> [RetrievalChunkFixture] {
+        genericRetrievalFillerChunks(count: 40, startingSeq: 1)
+            + [(0, strongText, pageStart, pageEnd, sectionPath)]
+    }
+
+    private func weakUnrelatedChunks() -> [RetrievalChunkFixture] {
+        var chunks = genericRetrievalFillerChunks(count: 40, startingSeq: 0)
+        var seq = chunks.count
+        for token in ["good", "dish", "party", "friends"] {
+            for index in 0..<10 {
+                chunks.append((
+                    seq,
+                    "\(token) compiler pipeline register cache \(index)",
+                    seq + 1,
+                    seq + 1,
+                    nil
+                ))
+                seq += 1
+            }
+        }
+        return chunks
+    }
+
+    private func genericRetrievalFillerChunks(count: Int, startingSeq: Int) -> [RetrievalChunkFixture] {
+        (0..<count).map { offset in
+            let seq = startingSeq + offset
+            return (
+                seq,
+                "technical parser runtime buffer queue memory index compiler register module \(seq)",
+                seq + 1,
+                seq + 1,
+                nil
+            )
+        }
     }
 
     private func withSeededV10Database(
@@ -807,6 +1428,30 @@ final class StreamDocumentTests: XCTestCase {
             try createV10Schema(db)
             try seed(db)
             try markV10MigrationsApplied(db)
+        }
+        dbQueue = nil
+
+        defer {
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        try body(dbURL, fileManager)
+    }
+
+    private func withSeededV15Database(
+        seed: (Database) throws -> Void,
+        body: (URL, FileManager) throws -> Void
+    ) throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+
+        var dbQueue: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
+        try dbQueue?.write { db in
+            try createV15Schema(db)
+            try seed(db)
+            try markV15MigrationsApplied(db)
         }
         dbQueue = nil
 
@@ -877,6 +1522,47 @@ final class StreamDocumentTests: XCTestCase {
         try db.execute(sql: "CREATE TABLE grdb_migrations (identifier TEXT NOT NULL PRIMARY KEY)")
     }
 
+    private func createV15Schema(_ db: Database) throws {
+        try createV10Schema(db)
+
+        try db.execute(sql: """
+            CREATE TABLE source_chunks (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                token_count INTEGER NOT NULL,
+                page_start INTEGER,
+                page_end INTEGER,
+                embedding_status TEXT NOT NULL DEFAULT 'pending',
+                created_at DOUBLE NOT NULL
+            )
+            """)
+        try db.execute(sql: "CREATE INDEX idx_chunks_source ON source_chunks(source_id)")
+        try db.execute(sql: "CREATE INDEX idx_chunks_status ON source_chunks(embedding_status)")
+        try db.execute(sql: """
+            CREATE TABLE chunk_embeddings (
+                chunk_id TEXT PRIMARY KEY REFERENCES source_chunks(id) ON DELETE CASCADE,
+                embedding BLOB NOT NULL,
+                model TEXT NOT NULL,
+                created_at DOUBLE NOT NULL
+            )
+            """)
+        try db.execute(sql: "ALTER TABLE stream_documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+        try db.execute(sql: """
+            CREATE TABLE pdf_highlights (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                page INTEGER NOT NULL,
+                rects_json TEXT NOT NULL,
+                quote TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """)
+        try db.execute(sql: "CREATE INDEX idx_pdf_highlights_source ON pdf_highlights(source_id)")
+        try db.execute(sql: "ALTER TABLE sources ADD COLUMN original_path TEXT")
+    }
+
     private func markV10MigrationsApplied(_ db: Database) throws {
         for identifier in [
             "v1_initial",
@@ -897,6 +1583,31 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    private func markV15MigrationsApplied(_ db: Database) throws {
+        for identifier in [
+            "v1_initial",
+            "v2_cell_restatement",
+            "v3_cell_original_prompt",
+            "v4_modifier_stack",
+            "v5_processing",
+            "v6_fix_source_status",
+            "v7_rag_pipeline",
+            "v8_quick_panel",
+            "v9_heading_in_content_titles",
+            "v10_stream_documents",
+            "v11_recover_orphaned_quickpanel_cells",
+            "v12_seed_documents_from_legacy_cells",
+            "v13_stream_document_revision",
+            "v14_pdf_highlights",
+            "v15_source_original_path"
+        ] {
+            try db.execute(
+                sql: "INSERT INTO grdb_migrations (identifier) VALUES (?)",
+                arguments: [identifier]
+            )
+        }
+    }
+
     private func insertStream(_ db: Database, id: UUID, title: String, createdAt: Double) throws {
         try db.execute(
             sql: """
@@ -904,6 +1615,47 @@ final class StreamDocumentTests: XCTestCase {
                 VALUES (?, ?, ?, ?)
             """,
             arguments: [id.uuidString, title, createdAt, createdAt]
+        )
+    }
+
+    private func insertV15Source(
+        _ db: Database,
+        id: UUID,
+        streamId: UUID,
+        displayName: String,
+        fileType: String,
+        pageCount: Int?
+    ) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO sources (
+                    id,
+                    stream_id,
+                    display_name,
+                    file_type,
+                    bookmark_data,
+                    status,
+                    extracted_text,
+                    page_count,
+                    added_at,
+                    embedding_status,
+                    original_path
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            arguments: [
+                id.uuidString,
+                streamId.uuidString,
+                displayName,
+                fileType,
+                Data("bookmark".utf8),
+                "ready",
+                "legacy extracted text",
+                pageCount,
+                1_000,
+                "none",
+                nil
+            ]
         )
     }
 
@@ -975,5 +1727,61 @@ final class StreamDocumentTests: XCTestCase {
             at: backupsDirectory,
             includingPropertiesForKeys: nil
         ).filter { $0.pathExtension.lowercased() == "db" }
+    }
+
+    private func makePDFDocument(pages: [String]) throws -> PDFDocument {
+        let data = try makePDFData(pages: pages)
+        guard let document = PDFDocument(data: data) else {
+            throw TestPDFError.creationFailed
+        }
+        return document
+    }
+
+    private func makePDFData(pages: [String]) throws -> Data {
+        let data = NSMutableData()
+        guard let consumer = CGDataConsumer(data: data as CFMutableData) else {
+            throw TestPDFError.creationFailed
+        }
+
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            throw TestPDFError.creationFailed
+        }
+
+        for text in pages {
+            context.beginPDFPage(nil)
+            let graphicsContext = NSGraphicsContext(cgContext: context, flipped: false)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = graphicsContext
+
+            let attributed = NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 14),
+                    .foregroundColor: NSColor.black
+                ]
+            )
+            attributed.draw(in: CGRect(x: 72, y: 650, width: 468, height: 80))
+
+            NSGraphicsContext.restoreGraphicsState()
+            context.endPDFPage()
+        }
+
+        context.closePDF()
+        return data as Data
+    }
+
+    private func addOutline(to document: PDFDocument, labels: [String]) throws {
+        let root = PDFOutline()
+        for (index, label) in labels.enumerated() {
+            guard let page = document.page(at: index) else {
+                throw TestPDFError.creationFailed
+            }
+            let outline = PDFOutline()
+            outline.label = label
+            outline.destination = PDFDestination(page: page, at: CGPoint(x: 0, y: 0))
+            root.insertChild(outline, at: root.numberOfChildren)
+        }
+        document.outlineRoot = root
     }
 }

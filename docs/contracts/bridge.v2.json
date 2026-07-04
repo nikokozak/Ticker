@@ -80,6 +80,10 @@
       "sourceError": {
         "requiredPayloadKeys": ["error"]
       },
+      "sourceIndexStatusChanged": {
+        "requiredPayloadKeys": ["sourceId", "status"],
+        "optionalPayloadKeys": ["progress"]
+      },
       "sourceRemoveError": {
         "requiredPayloadKeys": ["id", "error"]
       },
@@ -159,6 +163,9 @@
       "removeSource": {
         "requiredPayloadKeys": ["id"]
       },
+      "retrySourceIndexing": {
+        "requiredPayloadKeys": ["sourceId"]
+      },
       "saveImage": {
         "requiredPayloadKeys": ["streamId", "data", "requestId"]
       },
@@ -196,7 +203,7 @@
       },
       "thinkDocument": {
         "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
-        "optionalPayloadKeys": ["context"]
+        "optionalPayloadKeys": ["context", "sourceScope"]
       },
       "updateStreamTitle": {
         "requiredPayloadKeys": ["id", "title"]

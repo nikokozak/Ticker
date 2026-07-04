@@ -1,19 +1,16 @@
 import Foundation
 
-/// Hybrid search combining text matching and semantic similarity
+/// Search combining stream-document text and local source chunk FTS matches.
 final class SearchService {
     private let persistence: PersistenceService
     private let retrieval: RetrievalService
-    private let embedding: EmbeddingService
 
     init(
         persistence: PersistenceService,
-        retrieval: RetrievalService,
-        embedding: EmbeddingService
+        retrieval: RetrievalService
     ) {
         self.persistence = persistence
         self.retrieval = retrieval
-        self.embedding = embedding
     }
 
     // MARK: - Public Interface
@@ -31,17 +28,11 @@ final class SearchService {
             limitPerCategory: limit
         )
 
-        // 2. Get current stream title for semantic results
+        // 2. Get current stream title for chunk results
         let currentStreamTitle = try persistence.getStreamTitle(id: currentStreamId) ?? "Untitled"
 
-        // 3. Semantic search in current stream (if embedding API is configured)
-        // Note: Semantic search requires an API key to embed the query, even if sources
-        // already have embeddings. If the key is removed, semantic search stops working.
-        // This is intentional - we can't perform similarity search without embedding the query.
-        var semanticResults: [RetrievedChunk] = []
-        if !SettingsService.proxyOnlyMode && embedding.isConfigured {
-            semanticResults = try await retrieval.retrieve(query: query, streamId: currentStreamId)
-        }
+        // 3. Source chunk search in current stream.
+        let chunkResults = try retrieval.retrieve(query: query, streamId: currentStreamId)
 
         // 4. Convert to unified SearchResult format, keeping results separated by stream
         var currentStreamResults: [SearchResult] = []
@@ -91,22 +82,22 @@ final class SearchService {
             ))
         }
 
-        // Add semantic results (only for current stream - from source chunks)
-        for semanticResult in semanticResults {
-            let snippet = truncate(semanticResult.chunk.content, maxLength: 150)
+        // Add source chunk results (only for current stream)
+        for chunkResult in chunkResults {
+            let snippet = truncate(chunkResult.text, maxLength: 150)
 
             currentStreamResults.append(SearchResult(
-                id: semanticResult.chunk.id.uuidString,
+                id: chunkResult.id.uuidString,
                 streamId: currentStreamId.uuidString,
                 streamTitle: currentStreamTitle,
                 sourceType: .chunk,
-                title: semanticResult.sourceName,
+                title: chunkResult.sourceName,
                 snippet: snippet,
                 cellType: nil,
-                sourceId: semanticResult.chunk.sourceId.uuidString,
-                sourceName: semanticResult.sourceName,
-                similarity: semanticResult.similarity,
-                matchType: .semantic
+                sourceId: chunkResult.sourceId.uuidString,
+                sourceName: chunkResult.sourceName,
+                similarity: nil,
+                matchType: .text
             ))
         }
 
@@ -132,7 +123,7 @@ final class SearchService {
         return indexed.sorted { a, b in
             let (indexA, resultA) = a
             let (indexB, resultB) = b
-            // Semantic matches first
+            // Future semantic matches first
             if resultA.matchType == .semantic && resultB.matchType != .semantic { return true }
             if resultA.matchType != .semantic && resultB.matchType == .semantic { return false }
             // Then by similarity if both semantic

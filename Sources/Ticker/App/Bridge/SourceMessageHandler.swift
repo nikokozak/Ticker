@@ -16,6 +16,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
         "addSource",
         "addSourceFromPath",
         "removeSource",
+        "retrySourceIndexing",
         "openSource",
         "openPdfDestination",
         "beginPdfAnchorPick",
@@ -26,6 +27,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
     private let persistence: PersistenceService
     private let bridgeService: BridgeService
     private let sourceService: SourceService?
+    private let ingestService: IngestService?
     private let assetService: AssetService
     private weak var delegate: SourceMessageHandlerDelegate?
 
@@ -34,6 +36,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
         self.persistence = persistence
         self.bridgeService = container.bridgeService
         self.sourceService = container.sourceService
+        self.ingestService = container.ingestService
         self.assetService = container.assetService
         self.delegate = delegate
     }
@@ -84,6 +87,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                         let source = try sourceService.addSource(from: url, to: streamId)
                         let sourcePayload = StreamCodec.encodeSource(source)
                         bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+                        ingestService?.enqueue(source: source)
                     } catch {
                         DebugLog.log("[WebViewManager] Failed to add source (\(DebugLog.errorSummary(error)))")
                         bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
@@ -107,6 +111,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 let source = try sourceService.addSource(from: url, to: streamId)
                 let sourcePayload = StreamCodec.encodeSource(source)
                 bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+                ingestService?.enqueue(source: source)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to add source from path (\(DebugLog.errorSummary(error)))")
                 bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
@@ -130,6 +135,34 @@ final class SourceMessageHandler: BridgeMessageHandler {
                     "id": AnyCodable(id.uuidString),
                     "error": AnyCodable(error.localizedDescription)
                 ]))
+            }
+
+        case "retrySourceIndexing":
+            guard let payload = message.payload,
+                  let sourceIdValue = payload["sourceId"]?.value as? String,
+                  let sourceId = UUID(uuidString: sourceIdValue),
+                  let ingestService else {
+                DebugLog.log("[WebViewManager] Invalid retrySourceIndexing payload or service unavailable")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid retrySourceIndexing payload or service unavailable")
+                return
+            }
+
+            do {
+                guard var source = try persistence.loadSource(id: sourceId) else {
+                    sendSourceError("Source not found.")
+                    return
+                }
+
+                try persistence.updateSourceIndexStatus(sourceId, status: .pending)
+                source.indexStatus = .pending
+                await bridgeService.send(BridgeMessage(type: "sourceIndexStatusChanged", payload: [
+                    "sourceId": AnyCodable(sourceId.uuidString),
+                    "status": AnyCodable(SourceIndexStatus.pending.rawValue)
+                ]))
+                ingestService.enqueue(source: source)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to retry source indexing (\(DebugLog.errorSummary(error)))")
+                sendSourceError(error.localizedDescription)
             }
 
         case "openSource":

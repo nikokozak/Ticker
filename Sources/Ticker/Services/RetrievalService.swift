@@ -1,133 +1,152 @@
 import Foundation
-import Accelerate
 
-/// Retrieves relevant chunks for a query using cosine similarity
+/// Local source retrieval over the v16 FTS chunk index.
 final class RetrievalService {
     private let persistence: PersistenceService
-    private let embeddingService: EmbeddingService
 
-    // MARK: - Configuration
+    private static let topK = 8
+    private static let passthroughTokenBudget = 8_000
+    // ponytail: Short-query BM25 scales from a 274-page book where relevant queries scored
+    // about -1.9/token and unrelated queries about -0.52/token; cap long paragraph queries
+    // so strong matches around -13 remain retrievable while unrelated 8-token best -4.15 stays gated.
+    private static let perTokenCutoff = -1.0
+    private static let maxCutoffTokens = 8
+    // ponytail: Inline English stopwords are a small guardrail for R1 BM25;
+    // tune/replace with the R3 eval set before adding query-language features.
+    private static let stopwords: Set<String> = [
+        "the", "a", "an", "is", "are", "was", "were", "be", "been",
+        "of", "in", "on", "at", "to", "for", "with", "from", "by", "as",
+        "and", "or", "not", "no", "it", "its", "this", "that", "these", "those",
+        "i", "you", "he", "she", "we", "they", "what", "which", "who", "how",
+        "when", "where", "why", "do", "does", "did", "can", "could", "would",
+        "should", "my", "your"
+    ]
 
-    struct Config {
-        var topK: Int = 5                    // Max chunks to retrieve
-        var similarityThreshold: Float = 0.3 // Minimum similarity score
-        var tokenBudget: Int = 8000          // Max tokens in retrieved context
-    }
-
-    private let config: Config
-
-    init(
-        persistence: PersistenceService,
-        embeddingService: EmbeddingService,
-        config: Config = Config()
-    ) {
+    init(persistence: PersistenceService) {
         self.persistence = persistence
-        self.embeddingService = embeddingService
-        self.config = config
     }
 
-    // MARK: - Public Interface
+    /// Retrieve relevant chunks for a query within a stream.
+    func retrieve(query: String, streamId: UUID, applyThreshold: Bool = true) throws -> [RetrievedChunk] {
+        guard let ftsQuery = Self.sanitizedFTSQuery(query) else {
+            return []
+        }
+        let relevanceCutoff = Self.relevanceCutoff(tokenCount: ftsQuery.tokenCount)
 
-    /// Retrieve relevant chunks for a query within a stream
-    func retrieve(query: String, streamId: UUID) async throws -> [RetrievedChunk] {
-        // 1. Check if embedding service is configured
-        guard embeddingService.isConfigured else {
-            DebugLog.log("RetrievalService: Embedding service not configured, skipping RAG")
+        let chunks = try persistence.searchSourceChunks(
+            matching: ftsQuery.matchExpression,
+            streamId: streamId,
+            limit: Self.topK
+        )
+
+        guard applyThreshold else {
+            return chunks
+        }
+
+        guard let bestScore = chunks.first?.score,
+              bestScore <= relevanceCutoff else {
             return []
         }
 
-        // 2. Embed the query
-        let queryEmbedding = try await embeddingService.embed(text: query)
-
-        // 3. Get all chunks with embeddings for this stream's sources
-        let candidateChunks = try persistence.loadChunksWithEmbeddings(streamId: streamId)
-
-        guard !candidateChunks.isEmpty else {
-            DebugLog.log("RetrievalService: No embedded chunks found for stream")
-            return []
-        }
-
-        // 4. Calculate cosine similarity for each
-        var scoredChunks: [(chunk: SourceChunk, sourceName: String, similarity: Float)] = []
-
-        for (chunk, embedding, sourceName) in candidateChunks {
-            let similarity = cosineSimilarity(queryEmbedding, embedding)
-            if similarity >= config.similarityThreshold {
-                scoredChunks.append((chunk, sourceName, similarity))
-            }
-        }
-
-        // 5. Sort by similarity (descending)
-        scoredChunks.sort { $0.similarity > $1.similarity }
-
-        // 6. Select top-K within token budget
-        var selected: [RetrievedChunk] = []
-        var usedTokens = 0
-
-        // Consider more than topK to fill budget if early chunks are small
-        for (chunk, sourceName, similarity) in scoredChunks.prefix(config.topK * 2) {
-            if usedTokens + chunk.tokenCount <= config.tokenBudget {
-                selected.append(RetrievedChunk(
-                    chunk: chunk,
-                    sourceName: sourceName,
-                    similarity: similarity
-                ))
-                usedTokens += chunk.tokenCount
-
-                if selected.count >= config.topK {
-                    break
-                }
-            }
-        }
-
-        DebugLog.log("RetrievalService: Retrieved \(selected.count) chunks (\(usedTokens) tokens) from \(candidateChunks.count) candidates")
-        return selected
+        return chunks.filter { $0.score <= relevanceCutoff }
     }
 
-    /// Build context string from retrieved chunks
-    func buildContext(from chunks: [RetrievedChunk]) -> String {
-        if chunks.isEmpty { return "" }
-
-        var context = "## Relevant Excerpts from Source Documents\n\n"
-
-        for (index, retrieved) in chunks.enumerated() {
-            let chunk = retrieved.chunk
-            var header = "### \(retrieved.sourceName)"
-
-            if let pageStart = chunk.pageStart {
-                if let pageEnd = chunk.pageEnd, pageEnd != pageStart {
-                    header += " (pages \(pageStart)-\(pageEnd))"
-                } else {
-                    header += " (page \(pageStart))"
-                }
-            }
-
-            context += "\(header)\n\n\(chunk.content)\n\n"
-
-            if index < chunks.count - 1 {
-                context += "---\n\n"
-            }
+    /// One source-context decision point: small-source passthrough, retrieved manifest, or no source context.
+    func assembleSourceContext(query: String, streamId: UUID, scope: SourceScope = .auto) throws -> SourceContext? {
+        guard scope != .none else {
+            return nil
         }
 
-        return context
+        guard let stream = try persistence.loadStream(id: streamId) else {
+            return nil
+        }
+
+        let extractedTexts = stream.sources.compactMap(\.extractedText)
+        let combinedText = extractedTexts.joined(separator: "\n\n---\n\n")
+        let totalTokens = extractedTexts.reduce(0) { $0 + estimatedTokenCount($1) }
+
+        // Small streams keep the exact legacy whole-text behavior. This also covers
+        // pending/indexing sources while their chunks are unavailable: their extracted
+        // text is still explicit local context if the whole stream fits the budget.
+        if totalTokens < Self.passthroughTokenBudget && !combinedText.isEmpty {
+            return SourceContext(text: combinedText, chunks: [], mode: .passthrough)
+        }
+
+        let chunks = try retrieve(query: query, streamId: streamId, applyThreshold: scope == .auto)
+        guard !chunks.isEmpty else {
+            return nil
+        }
+
+        return SourceContext(
+            text: Self.buildManifest(from: chunks),
+            chunks: chunks,
+            mode: .retrieved
+        )
     }
 
-    // MARK: - Private
+    /// FTS5 MATCH treats quotes/operators/parens as syntax, so raw user text is unsafe.
+    /// Tokenizing to alphanumerics, quoting each token, and joining with OR gives a broad
+    /// recall-first candidate set while making user punctuation inert.
+    /// Short tokens and common stopwords are dropped so unrelated questions sharing only
+    /// glue words do not accidentally retrieve source chunks.
+    static func sanitizedFTSQuery(_ query: String) -> SanitizedFTSQuery? {
+        let tokens = query
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count > 2 && !Self.stopwords.contains($0) }
 
-    /// Calculate cosine similarity between two vectors using Accelerate
-    private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
-        guard a.count == b.count, !a.isEmpty else { return 0 }
+        guard !tokens.isEmpty else {
+            return nil
+        }
 
-        var dotProduct: Float = 0
-        var normA: Float = 0
-        var normB: Float = 0
+        let uniqueTokens = Array(Set(tokens)).sorted()
+        let matchExpression = uniqueTokens
+            .map { "\"\($0)\"" }
+            .joined(separator: " OR ")
 
-        // Use Accelerate for SIMD optimization
-        vDSP_dotpr(a, 1, b, 1, &dotProduct, vDSP_Length(a.count))
-        vDSP_dotpr(a, 1, a, 1, &normA, vDSP_Length(a.count))
-        vDSP_dotpr(b, 1, b, 1, &normB, vDSP_Length(b.count))
-
-        let denominator = sqrt(normA) * sqrt(normB)
-        return denominator > 0 ? dotProduct / denominator : 0
+        return SanitizedFTSQuery(
+            matchExpression: matchExpression,
+            tokenCount: uniqueTokens.count
+        )
     }
+
+    static func buildManifest(from chunks: [RetrievedChunk]) -> String {
+        chunks.enumerated().map { index, chunk in
+            let pageText = chunk.pageStart == chunk.pageEnd
+                ? "p.\(chunk.pageStart)"
+                : "p.\(chunk.pageStart)–\(chunk.pageEnd)"
+            let sectionText = chunk.sectionPath.map { " (§\($0))" } ?? ""
+            return "[\(index + 1)] \(chunk.sourceName), \(pageText)\(sectionText):\n\(chunk.text)"
+        }.joined(separator: "\n\n")
+    }
+
+    private func estimatedTokenCount(_ text: String) -> Int {
+        Int(ceil(Double(text.count) / 4.0))
+    }
+
+    private static func relevanceCutoff(tokenCount: Int) -> Double {
+        perTokenCutoff * Double(min(tokenCount, maxCutoffTokens))
+    }
+}
+
+struct SanitizedFTSQuery {
+    let matchExpression: String
+    let tokenCount: Int
+}
+
+struct SourceContext {
+    let text: String
+    let chunks: [RetrievedChunk]
+    let mode: SourceContextMode
+}
+
+enum SourceContextMode: Equatable {
+    case passthrough
+    case retrieved
+}
+
+enum SourceScope: String {
+    case auto
+    case all
+    case none
 }

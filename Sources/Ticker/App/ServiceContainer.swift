@@ -1,3 +1,5 @@
+import Foundation
+
 /// App composition root for long-lived services.
 struct ServiceContainer {
     let settingsService: SettingsService
@@ -5,11 +7,11 @@ struct ServiceContainer {
     let bridgeService: BridgeService
     let assetService: AssetService
     let proxyService: ProxyLLMService
-    let embeddingService: EmbeddingService
     let chunkingService: ChunkingService
     let orchestrator: AIOrchestrator
     let persistence: PersistenceService?
     let sourceService: SourceService?
+    let ingestService: IngestService?
     let retrievalService: RetrievalService?
     let searchService: SearchService?
 
@@ -25,7 +27,6 @@ struct ServiceContainer {
         let proxyService = ProxyLLMService(deviceKeyService: deviceKeyService)
         self.proxyService = proxyService
 
-        self.embeddingService = EmbeddingService(settings: settingsService)
         self.chunkingService = ChunkingService()
 
         let orchestrator = AIOrchestrator(
@@ -38,29 +39,44 @@ struct ServiceContainer {
             let persistence = try PersistenceService()
             self.persistence = persistence
 
-            let sourceService = SourceService(
-                persistence: persistence,
-                chunkingService: chunkingService,
-                embeddingService: embeddingService
-            )
+            let sourceService = SourceService(persistence: persistence)
             self.sourceService = sourceService
 
-            let retrievalService = RetrievalService(
+            let ingestService = IngestService(
                 persistence: persistence,
-                embeddingService: embeddingService
+                sourceService: sourceService,
+                chunkingService: chunkingService
             )
+            ingestService.onStatusChange = { [bridgeService] update in
+                var payload: [String: AnyCodable] = [
+                    "sourceId": AnyCodable(update.sourceId.uuidString),
+                    "status": AnyCodable(update.status.rawValue)
+                ]
+                if let progress = update.progress {
+                    payload["progress"] = AnyCodable(progress)
+                }
+                DispatchQueue.main.async {
+                    bridgeService.send(BridgeMessage(
+                        type: "sourceIndexStatusChanged",
+                        payload: payload
+                    ))
+                }
+            }
+            self.ingestService = ingestService
+
+            let retrievalService = RetrievalService(persistence: persistence)
             self.retrievalService = retrievalService
             orchestrator.setRetrievalService(retrievalService)
 
             self.searchService = SearchService(
                 persistence: persistence,
-                retrieval: retrievalService,
-                embedding: embeddingService
+                retrieval: retrievalService
             )
         } catch {
             DebugLog.log("[WebViewManager] Failed to initialize persistence (\(DebugLog.errorSummary(error)))")
             self.persistence = nil
             self.sourceService = nil
+            self.ingestService = nil
             self.retrievalService = nil
             self.searchService = nil
         }

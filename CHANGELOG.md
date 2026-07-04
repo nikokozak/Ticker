@@ -5,6 +5,9 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Document AI prompt popover now includes a session-only Sources scope chip for Auto, All, or None source context.
+- Source rows now show quiet indexing status with retry for failed source indexing.
+- Added local source chunk indexing foundations for Reading with Receipts.
 - Selection popover now includes bold, italic, and inline-code markdown formatting controls.
 - Selected stream text can now be linked to a picked PDF spot.
 - PDF stream links now reopen their source and navigate back to the saved highlight.
@@ -15,6 +18,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- Document AI now uses local source retrieval for large source sets instead of concatenating every source.
 - Main window chrome is now transparent, with content inset around the floating traffic-light controls.
 - Stream sources now open in a modal instead of a persistent sidebar, preserving editor width beside the PDF pane.
 - PDF pane header controls now use compact icon toolbar styling and keep their hit targets with long source names.

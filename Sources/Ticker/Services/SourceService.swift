@@ -3,25 +3,12 @@ import PDFKit
 import Vision
 import AppKit
 
-/// Manages file sources: bookmarks, access, text extraction, and RAG processing
+/// Manages file sources: bookmarks, access, and legacy whole-document text extraction.
 final class SourceService {
     private let persistence: PersistenceService
-    private let chunkingService: ChunkingService
-    private let embeddingService: EmbeddingService
 
-    init(
-        persistence: PersistenceService,
-        chunkingService: ChunkingService = ChunkingService(),
-        embeddingService: EmbeddingService = EmbeddingService()
-    ) {
+    init(persistence: PersistenceService) {
         self.persistence = persistence
-        self.chunkingService = chunkingService
-        self.embeddingService = embeddingService
-    }
-
-    /// Check if embedding service is configured and enabled
-    var isEmbeddingConfigured: Bool {
-        embeddingService.isConfigured
     }
 
     // MARK: - Bookmark Creation
@@ -211,7 +198,7 @@ final class SourceService {
 
     // MARK: - Full Processing
 
-    /// Create and process a source: create bookmark, extract text, save, and trigger RAG processing
+    /// Create and process a source: create bookmark, extract text, and save for the legacy whole-text AI path.
     func addSource(from url: URL, to streamId: UUID) throws -> SourceReference {
         // Create the source with bookmark
         var source = try createSource(from: url, for: streamId)
@@ -230,106 +217,7 @@ final class SourceService {
         // Update in database
         try persistence.saveSource(source)
 
-        // Trigger RAG processing asynchronously if text was extracted
-        if source.status == .ready, source.extractedText != nil {
-            guard !SettingsService.proxyOnlyMode else {
-                // ponytail: RAG indexing is parked until Ticker Proxy supports embeddings.
-                return source
-            }
-            Task {
-                await processSourceForRAG(source: source)
-            }
-        }
-
         return source
-    }
-
-    // MARK: - RAG Processing
-
-    /// Process a source for RAG: chunk, embed, and store
-    func processSourceForRAG(source: SourceReference) async {
-        guard !SettingsService.proxyOnlyMode else {
-            DebugLog.log("RAG: Proxy-only mode, skipping sourceId=\(source.id)")
-            return
-        }
-
-        guard let text = source.extractedText, !text.isEmpty else {
-            DebugLog.log("RAG: No text to process for sourceId=\(source.id)")
-            return
-        }
-
-        guard embeddingService.isConfigured else {
-            DebugLog.log("RAG: Embedding service not configured, skipping sourceId=\(source.id)")
-            // Mark as unconfigured so UI can explain why indexing didn't run
-            try? persistence.updateSourceEmbeddingStatus(source.id, status: "unconfigured")
-            return
-        }
-
-        do {
-            // Mark as processing
-            try persistence.updateSourceEmbeddingStatus(source.id, status: "processing")
-            DebugLog.log("RAG: Processing sourceId=\(source.id)...")
-
-            // Chunk the document
-            let chunks: [SourceChunk]
-            if source.fileType == .pdf {
-                // Re-access file for page-aware chunking
-                do {
-                    let url = try accessFile(source)
-                    defer { url.stopAccessingSecurityScopedResource() }
-
-                    if let document = PDFDocument(url: url) {
-                        chunks = chunkingService.chunkPDF(document: document, sourceId: source.id)
-                    } else {
-                        chunks = chunkingService.chunkText(text: text, sourceId: source.id)
-                    }
-                } catch {
-                    // Fall back to text-based chunking if file access fails
-                    DebugLog.log("RAG: File access failed, using text-based chunking (\(DebugLog.errorSummary(error)))")
-                    chunks = chunkingService.chunkText(text: text, sourceId: source.id)
-                }
-            } else {
-                chunks = chunkingService.chunkText(text: text, sourceId: source.id)
-            }
-
-            guard !chunks.isEmpty else {
-                DebugLog.log("RAG: No chunks generated for sourceId=\(source.id)")
-                try persistence.updateSourceEmbeddingStatus(source.id, status: "failed")
-                return
-            }
-
-            DebugLog.log("RAG: Generated \(chunks.count) chunks for sourceId=\(source.id)")
-
-            // Save chunks
-            try persistence.saveChunks(chunks)
-
-            // Generate embeddings in batch
-            let texts = chunks.map { $0.content }
-            let embeddings = try await embeddingService.embedBatch(texts: texts)
-
-            guard embeddings.count == chunks.count else {
-                DebugLog.log("RAG: Embedding count mismatch for sourceId=\(source.id)")
-                try persistence.updateSourceEmbeddingStatus(source.id, status: "failed")
-                return
-            }
-
-            // Save embeddings
-            for (chunk, embedding) in zip(chunks, embeddings) {
-                try persistence.saveEmbedding(
-                    chunkId: chunk.id,
-                    embedding: embedding,
-                    model: "text-embedding-3-small"
-                )
-            }
-
-            // Mark complete
-            try persistence.updateSourceEmbeddingStatus(source.id, status: "complete")
-            DebugLog.log("RAG: Completed processing sourceId=\(source.id): \(chunks.count) chunks embedded")
-
-        } catch {
-            DebugLog.log("RAG: Processing failed for sourceId=\(source.id) (\(DebugLog.errorSummary(error)))")
-            try? persistence.updateSourceEmbeddingStatus(source.id, status: "failed")
-        }
     }
 
     /// Remove a source

@@ -37,6 +37,7 @@ export interface SourceReference {
   fileType: SourceFileType;
   status: SourceStatus;
   embeddingStatus: SourceEmbeddingStatus;
+  indexStatus: SourceIndexStatus;
   extractedText: string | null;
   pageCount: number | null;
   addedAt: string;
@@ -50,6 +51,9 @@ export type SourceStatus = 'pending' | 'ready' | 'stale' | 'error';
 
 /** Status of RAG embedding for a source */
 export type SourceEmbeddingStatus = 'none' | 'processing' | 'complete' | 'failed';
+
+/** Status of local source chunk indexing */
+export type SourceIndexStatus = 'pending' | 'indexing' | 'ready' | 'failed_no_text' | 'failed';
 
 // MARK: - Search Types
 

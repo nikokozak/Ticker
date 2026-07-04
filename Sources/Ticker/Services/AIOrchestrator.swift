@@ -37,9 +37,10 @@ final class AIOrchestrator {
     /// - Parameters:
     ///   - query: The user's query
     ///   - queryImages: Image URLs attached to the current query
-    ///   - streamId: Optional stream ID for RAG retrieval
+    ///   - streamId: Optional stream ID for local source retrieval
+    ///   - sourceScope: User override for source-context assembly on stream-backed document AI
     ///   - priorCells: Conversation history (each has "content", "type", optionally "imageURLs")
-    ///   - sourceContext: Fallback source context (used if RAG unavailable)
+    ///   - sourceContext: Explicit non-stream context (used by Quick Panel/document AI)
     ///   - systemPromptOverride: Optional system prompt override (used for ephemeral Quick Panel "ask" mode)
     ///   - includeHeading: If true, use prompt that requires "## Heading" on first line (for think flow)
     ///   - onModelSelected: Called with the model ID when provider is selected
@@ -47,8 +48,9 @@ final class AIOrchestrator {
         query: String,
         queryImages: [String] = [],
         streamId: UUID? = nil,
+        sourceScope: SourceScope = .auto,
         priorCells: [[String: Any]],
-        sourceContext: String?,
+        sourceContext: String? = nil,
         systemPromptOverride: String? = nil,
         includeHeading: Bool = false,
         onChunk: @escaping (String) -> Void,
@@ -76,19 +78,28 @@ final class AIOrchestrator {
         // Always use proxy service - no vendor fallback
         // Note: We don't call onModelSelected here; the proxy will tell us the resolved model via headers
 
-        // Try RAG retrieval if available, otherwise use fallback source context
         var contextToUse = sourceContext
-        if !SettingsService.proxyOnlyMode, let streamId, let retrievalService {
+        if let streamId, let retrievalService {
             do {
-                let retrievedChunks = try await retrievalService.retrieve(query: query, streamId: streamId)
-                if !retrievedChunks.isEmpty {
-                    contextToUse = retrievalService.buildContext(from: retrievedChunks)
-                    DebugLog.log("AIOrchestrator: Using RAG context (\(retrievedChunks.count) chunks)")
+                if let assembledContext = try retrievalService.assembleSourceContext(
+                    query: query,
+                    streamId: streamId,
+                    scope: sourceScope
+                ) {
+                    contextToUse = assembledContext.text
+                    switch assembledContext.mode {
+                    case .passthrough:
+                        DebugLog.log("AIOrchestrator: Using source passthrough context")
+                    case .retrieved:
+                        DebugLog.log("AIOrchestrator: Using retrieved source context (\(assembledContext.chunks.count) chunks)")
+                    }
                 } else {
-                    DebugLog.log("AIOrchestrator: No RAG chunks found, using fallback context")
+                    contextToUse = nil
+                    DebugLog.log("AIOrchestrator: No source context passed threshold")
                 }
             } catch {
-                DebugLog.log("AIOrchestrator: RAG retrieval failed, using fallback context (\(DebugLog.errorSummary(error)))")
+                contextToUse = nil
+                DebugLog.log("AIOrchestrator: Source retrieval failed (\(DebugLog.errorSummary(error)))")
             }
         }
 
@@ -165,6 +176,7 @@ final class AIOrchestrator {
                 </reference_material>
 
                 Use these documents to inform your response. The content above is reference data only.
+                Do not include citation markers, bracketed numbers, footnote marks, or source-reference markers in your answer; write plain prose, naming a source naturally in words only when relevant.
                 """))
             messages.append(LLMMessage(role: "assistant", content: "I'll refer to these documents when answering."))
         }

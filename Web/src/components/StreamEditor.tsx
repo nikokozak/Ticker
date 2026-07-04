@@ -66,6 +66,36 @@ interface PDFPaneState {
 
 const SELECTION_MENU_DELAY_MS = 180;
 const AI_ERROR_FEEDBACK_MS = 2200;
+const AI_INDEXING_NOTICE_MS = 4000;
+
+export type SourceScope = 'auto' | 'all' | 'none';
+
+const sourceScopeByStreamId = new Map<string, SourceScope>();
+
+export function nextSourceScope(scope: SourceScope): SourceScope {
+  switch (scope) {
+    case 'auto':
+      return 'all';
+    case 'all':
+      return 'none';
+    case 'none':
+      return 'auto';
+    default:
+      return 'auto';
+  }
+}
+
+function formatSourceScope(scope: SourceScope): string {
+  switch (scope) {
+    case 'all':
+      return 'All';
+    case 'none':
+      return 'None';
+    case 'auto':
+    default:
+      return 'Auto';
+  }
+}
 
 function focusEditorAtDocumentEnd(view: EditorView) {
   const end = view.state.doc.length;
@@ -180,6 +210,9 @@ export function StreamEditor({
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
+  const [sourceScope, setSourceScope] = useState<SourceScope>(
+    () => sourceScopeByStreamId.get(stream.id) ?? 'auto'
+  );
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
   const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState>({
     visible: false,
@@ -191,6 +224,7 @@ export function StreamEditor({
     kind: 'writing',
     message: 'AI is writing',
   });
+  const [sourceIndexNotice, setSourceIndexNotice] = useState<string | null>(null);
   const [pdfPaneState, setPDFPaneState] = useState<PDFPaneState>({ visible: false });
 
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -203,7 +237,10 @@ export function StreamEditor({
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
   const aiFeedbackTimerRef = useRef<number | null>(null);
+  const sourceIndexNoticeTimerRef = useRef<number | null>(null);
   const pendingPDFAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
+  const sourcesRef = useRef<SourceReference[]>(stream.sources);
+  const sourceIndexStatusesRef = useRef<Map<string, SourceReference['indexStatus']>>(new Map());
   const showPromptRef = useRef(showPrompt);
   const isAiThinkingRef = useRef(false);
   const aiRequestRef = useRef<{
@@ -267,6 +304,36 @@ export function StreamEditor({
   });
   const isAiThinking = aiStatus === 'thinking';
 
+  useEffect(() => {
+    sourcesRef.current = sources;
+    sourceIndexStatusesRef.current = new Map(
+      sources.map((source) => [source.id, source.indexStatus])
+    );
+  }, [sources]);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type !== 'sourceIndexStatusChanged') return;
+
+      const sourceId = message.payload?.sourceId as string | undefined;
+      const status = message.payload?.status;
+      if (!sourceId) return;
+      if (
+        status !== 'pending'
+        && status !== 'indexing'
+        && status !== 'ready'
+        && status !== 'failed_no_text'
+        && status !== 'failed'
+      ) {
+        return;
+      }
+
+      sourceIndexStatusesRef.current.set(sourceId, status);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   const isEditorActive = useCallback(() => {
     const shell = editorShellRef.current;
     const active = document.activeElement;
@@ -308,25 +375,56 @@ export function StreamEditor({
     }, AI_ERROR_FEEDBACK_MS);
   }, [clearAiFeedbackTimer]);
 
+  const clearSourceIndexNoticeTimer = useCallback(() => {
+    if (sourceIndexNoticeTimerRef.current !== null) {
+      window.clearTimeout(sourceIndexNoticeTimerRef.current);
+      sourceIndexNoticeTimerRef.current = null;
+    }
+  }, []);
+
+  const showSourceIndexNotice = useCallback((sourceName: string) => {
+    clearSourceIndexNoticeTimer();
+    setSourceIndexNotice(`Still indexing ${sourceName} — answers may not cover it yet.`);
+    sourceIndexNoticeTimerRef.current = window.setTimeout(() => {
+      sourceIndexNoticeTimerRef.current = null;
+      setSourceIndexNotice(null);
+    }, AI_INDEXING_NOTICE_MS);
+  }, [clearSourceIndexNoticeTimer]);
+
+  const cycleSourceScope = useCallback(() => {
+    setSourceScope((previous) => {
+      const next = nextSourceScope(previous);
+      sourceScopeByStreamId.set(stream.id, next);
+      return next;
+    });
+  }, [stream.id]);
+
   useEffect(() => {
     setMarkdownContent(stream.document?.markdown ?? '');
     lastSavedContentRef.current = stream.document?.markdown ?? '';
     markdownContentRef.current = stream.document?.markdown ?? '';
     revisionRef.current = stream.document?.revision ?? 0;
+    sourcesRef.current = stream.sources;
+    sourceIndexStatusesRef.current = new Map(
+      stream.sources.map((source) => [source.id, source.indexStatus])
+    );
     setTitle(stream.title);
     setSaveState('saved');
     setAiStatus('idle');
     hideAiFeedback();
+    clearSourceIndexNoticeTimer();
+    setSourceIndexNotice(null);
     setFloatingMenu({ visible: false, left: 0, top: 0 });
     setShowPrompt(false);
     setPromptValue('');
+    setSourceScope(sourceScopeByStreamId.get(stream.id) ?? 'auto');
     promptContextRef.current = null;
     aiRequestRef.current = null;
     const view = editorViewRef.current;
     if (view) {
       dispatchAiRangeClear(view);
     }
-  }, [hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.title]);
+  }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.title]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1059,6 +1157,14 @@ export function StreamEditor({
     setAiStatus('thinking');
     showAiWritingFeedback();
 
+    const indexingSource = sourcesRef.current.find((source) => {
+      const status = sourceIndexStatusesRef.current.get(source.id) ?? source.indexStatus;
+      return status === 'indexing' || status === 'pending';
+    });
+    if (indexingSource) {
+      showSourceIndexNotice(indexingSource.displayName);
+    }
+
     bridge.send({
       type: 'thinkDocument',
       payload: {
@@ -1066,10 +1172,11 @@ export function StreamEditor({
         streamId: stream.id,
         query: options.query,
         context: options.context,
+        sourceScope,
         imageURLs: options.imageUrls ?? [],
       },
     });
-  }, [addToast, isAiThinking, showAiWritingFeedback, stream.id]);
+  }, [addToast, isAiThinking, showAiWritingFeedback, showSourceIndexNotice, sourceScope, stream.id]);
 
   const handleSend = useCallback(() => {
     const context = getSelectionContext(true);
@@ -1238,6 +1345,10 @@ export function StreamEditor({
   }, [clearAiFeedbackTimer]);
 
   useEffect(() => {
+    return () => clearSourceIndexNoticeTimer();
+  }, [clearSourceIndexNoticeTimer]);
+
+  useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
       if (!isEditorActive()) return;
       if (!event.clipboardData?.items?.length) return;
@@ -1390,6 +1501,14 @@ export function StreamEditor({
               rows={5}
             />
             <div className="ai-prompt-actions">
+              <button
+                className="ai-prompt-source-scope"
+                type="button"
+                onClick={cycleSourceScope}
+                title="Cycle source scope"
+              >
+                Sources: {formatSourceScope(sourceScope)}
+              </button>
               <button
                 className="ai-prompt-cancel"
                 type="button"
@@ -1544,6 +1663,11 @@ export function StreamEditor({
               >
                 <span className="document-ai-status-dot" aria-hidden="true" />
                 <span>{aiFeedback.message}</span>
+              </div>
+            )}
+            {sourceIndexNotice && (
+              <div className="document-ai-indexing-notice" role="status" aria-live="polite">
+                {sourceIndexNotice}
               </div>
             )}
           </div>
