@@ -142,9 +142,54 @@ struct QuickPanelView: View {
         }
     }
 
-    // MARK: - Context Badge
+    // MARK: - Context Preview
 
+    @ViewBuilder
     private func contextBadge(context: QuickPanelContext) -> some View {
+        if let selectedText = context.trimmedSelectedText {
+            selectedTextContextPreview(context: context, selectedText: selectedText)
+        } else {
+            attachmentContextBadge(context: context)
+        }
+    }
+
+    private func selectedTextContextPreview(context: QuickPanelContext, selectedText: String) -> some View {
+        HStack(alignment: .top, spacing: Spacing.sm) {
+            Image(systemName: "text.quote")
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, weight: .medium))
+                .foregroundColor(QuickPanelStyle.accent)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text(selectedText)
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
+                    .foregroundColor(QuickPanelStyle.text)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let source = contextSourceLabel(context) {
+                    Text(source)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
+                        .foregroundColor(QuickPanelStyle.textMuted)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: Spacing.sm)
+
+            clearContextButton
+        }
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.sm)
+        .background(QuickPanelStyle.accent.opacity(0.1))
+        .overlay(
+            RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
+                .stroke(QuickPanelStyle.accent.opacity(0.16), lineWidth: 1)
+        )
+        .cornerRadius(QuickPanelStyle.radius)
+    }
+
+    private func attachmentContextBadge(context: QuickPanelContext) -> some View {
         let isScreenshot = context.isScreenshot
         let accentColor = isScreenshot ? QuickPanelStyle.success : QuickPanelStyle.textMuted
         let backgroundColor = isScreenshot ? QuickPanelStyle.success.opacity(0.15) : QuickPanelStyle.accent.opacity(0.1)
@@ -171,14 +216,7 @@ struct QuickPanelView: View {
                     .cornerRadius(QuickPanelStyle.radius)
             }
 
-            // Dismiss button
-            Button(action: { manager.clearContext() }) {
-                Image(systemName: "xmark")
-                    .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .semibold))
-                    .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
-            }
-            .buttonStyle(.plain)
-            .help("Clear context")
+            clearContextButton
         }
         .padding(.horizontal, Spacing.sm)
         .padding(.vertical, Spacing.xs)
@@ -190,21 +228,53 @@ struct QuickPanelView: View {
         .cornerRadius(QuickPanelStyle.radius)
     }
 
+    private var clearContextButton: some View {
+        Button(action: { manager.clearContext() }) {
+            Image(systemName: "xmark")
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .semibold))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
+        }
+        .buttonStyle(.plain)
+        .help("Clear context")
+    }
+
     private func contextPreview(_ context: QuickPanelContext) -> String {
         if context.isScreenshot {
             return "Screenshot attached"
         }
-        if let text = context.selectedText {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.count > 40 {
-                return String(trimmed.prefix(37)) + "..."
+        if let text = context.trimmedSelectedText {
+            if text.count > 40 {
+                return String(text.prefix(37)) + "..."
             }
-            return trimmed
+            return text
         }
         if context.hasImage {
             return "Image attached"
         }
         return "Context attached"
+    }
+
+    private func contextSourceLabel(_ context: QuickPanelContext) -> String? {
+        let app = context.activeApp?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = context.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceApp = app?.isEmpty == false ? app : nil
+        let sourceTitle = title?.isEmpty == false ? title : nil
+
+        switch (sourceApp, sourceTitle) {
+        case let (sourceApp?, sourceTitle?):
+            return "\(sourceApp) — \(truncate(sourceTitle, maxLength: 60))"
+        case let (sourceApp?, nil):
+            return sourceApp
+        case let (nil, sourceTitle?):
+            return truncate(sourceTitle, maxLength: 60)
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private func truncate(_ text: String, maxLength: Int) -> String {
+        guard text.count > maxLength else { return text }
+        return "\(text.prefix(maxLength - 3))..."
     }
 
     // MARK: - Stream Destination Picker

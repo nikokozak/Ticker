@@ -130,6 +130,7 @@ final class QuickPanelManager: ObservableObject {
     func toggle() {
         // Capture context BEFORE we steal focus
         let capturedContext = contextRespectingDismissedClipboardImage(selectionService.buildContext())
+        logCapturedContext(capturedContext)
 
         if isVisible {
             // Check if there's a new selection
@@ -208,7 +209,7 @@ final class QuickPanelManager: ObservableObject {
 
         // If Accessibility isn't granted, just show a soft warning (don't prompt).
         // Onboarding is responsible for prompting; repeated system prompts here are jarring.
-        if showAccessibilityWarning && !cursorService.hasAccessibilityPermission && !capturedContext.hasContent {
+        if showAccessibilityWarning && !cursorService.hasAccessibilityPermission && !capturedContext.hasSelection {
             statusMessage = "Grant Accessibility permission to capture text selections"
         }
 
@@ -299,6 +300,20 @@ final class QuickPanelManager: ObservableObject {
                 self.hide()
             }
         }
+    }
+
+    private func logCapturedContext(_ capturedContext: QuickPanelContext) {
+        let selectedLength = capturedContext.selectedText?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .count ?? 0
+        DebugLog.log(
+            "[QuickPanel] toggle captured context " +
+            "axTrusted=\(cursorService.hasAccessibilityPermission) " +
+            "hasSelection=\(capturedContext.hasSelection) " +
+            "selectedLength=\(selectedLength) " +
+            "hasImage=\(capturedContext.hasImage) " +
+            "activeApp=\(capturedContext.activeApp ?? "unknown")"
+        )
     }
 
     /// Update panel appearance (light/dark mode)
@@ -597,48 +612,21 @@ final class QuickPanelManager: ObservableObject {
     }
 
     private func buildMarkdownFragment(streamId: UUID) throws -> String {
-        var blocks: [String] = []
-
-        if let ctx = context {
-            if let selectedText = nonEmptyTrimmed(ctx.selectedText) {
-                blocks.append(markdownBlockquote(selectedText))
-
-                if let sourceApp = nonEmptyTrimmed(ctx.activeApp) {
-                    blocks.append("*— \(escapeMarkdownEmphasis(sourceApp))*")
-                }
+        try QuickPanelMarkdownFormatter.buildFragment(
+            context: context,
+            inputText: inputText
+        ) { imageData in
+            guard let assetService = assetService else {
+                throw QuickPanelError.assetServiceNotConfigured
             }
 
-            if let imageData = ctx.clipboardImage {
-                guard let assetService = assetService else {
-                    throw QuickPanelError.assetServiceNotConfigured
-                }
-
-                let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
-                blocks.append("![capture](ticker-asset:///\(relativePath))")
-            }
+            let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
+            return "![capture](ticker-asset:///\(relativePath))"
         }
-
-        if let input = nonEmptyTrimmed(inputText) {
-            blocks.append(input)
-        }
-
-        return blocks.joined(separator: "\n\n")
-    }
-
-    private func markdownBlockquote(_ text: String) -> String {
-        text.components(separatedBy: CharacterSet.newlines)
-            .map { line in
-                line.isEmpty ? ">" : "> \(line)"
-            }
-            .joined(separator: "\n")
     }
 
     private func nonEmptyTrimmed(_ text: String?) -> String? {
-        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else {
-            return nil
-        }
-        return trimmed
+        QuickPanelMarkdownFormatter.nonEmptyTrimmed(text)
     }
 
     private func displayTitle(for streamId: UUID, persistence: PersistenceService) -> String {
@@ -653,13 +641,6 @@ final class QuickPanelManager: ObservableObject {
         }
 
         return "Untitled"
-    }
-
-    private func escapeMarkdownEmphasis(_ text: String) -> String {
-        text
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "*", with: "\\*")
-            .replacingOccurrences(of: "_", with: "\\_")
     }
 
     private func startDocumentAI(
@@ -743,7 +724,7 @@ final class QuickPanelManager: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = compact.isEmpty ? "Unknown error" : compact
         let shortened = fallback.count > 180 ? "\(fallback.prefix(177))..." : fallback
-        return "*AI request failed: \(escapeMarkdownEmphasis(shortened))*"
+        return "*AI request failed: \(QuickPanelMarkdownFormatter.escapeMarkdownEmphasis(shortened))*"
     }
 
     /// Notify the React frontend about document appends.
@@ -841,6 +822,80 @@ final class QuickPanelManager: ObservableObject {
                 self.applyHeightUpdate()
             }
         }
+    }
+}
+
+enum QuickPanelMarkdownFormatter {
+    static func buildFragment(
+        context: QuickPanelContext?,
+        inputText: String,
+        imageMarkdown: (Data) throws -> String
+    ) throws -> String {
+        var blocks: [String] = []
+
+        if let context {
+            if let selectedText = nonEmptyTrimmed(context.selectedText) {
+                blocks.append(markdownBlockquote(selectedText))
+
+                if let source = sourceAttribution(for: context) {
+                    blocks.append("*— \(escapeMarkdownEmphasis(source))*")
+                }
+            }
+
+            if let imageData = context.clipboardImage {
+                blocks.append(try imageMarkdown(imageData))
+            }
+        }
+
+        if let input = nonEmptyTrimmed(inputText) {
+            blocks.append(input)
+        }
+
+        return blocks.joined(separator: "\n\n")
+    }
+
+    static func nonEmptyTrimmed(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    static func escapeMarkdownEmphasis(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "*", with: "\\*")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    private static func markdownBlockquote(_ text: String) -> String {
+        text.components(separatedBy: CharacterSet.newlines)
+            .map { line in
+                line.isEmpty ? ">" : "> \(line)"
+            }
+            .joined(separator: "\n")
+    }
+
+    private static func sourceAttribution(for context: QuickPanelContext) -> String? {
+        let app = nonEmptyTrimmed(context.activeApp)
+        let title = nonEmptyTrimmed(context.windowTitle).map { truncate($0, maxLength: 60) }
+
+        switch (app, title) {
+        case let (app?, title?):
+            return "\(app) — \(title)"
+        case let (app?, nil):
+            return app
+        case let (nil, title?):
+            return title
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private static func truncate(_ text: String, maxLength: Int) -> String {
+        guard text.count > maxLength else { return text }
+        return "\(text.prefix(maxLength - 3))..."
     }
 }
 

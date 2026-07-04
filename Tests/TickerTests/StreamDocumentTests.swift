@@ -1,8 +1,39 @@
+import CoreGraphics
 import Foundation
 import GRDB
 import XCTest
 
 @testable import Ticker
+
+final class QuickPanelMarkdownFormatterTests: XCTestCase {
+    func test_buildFragment_includesSelectedTextAsBlockquoteWithAttribution() throws {
+        let context = QuickPanelContext(
+            selectedText: " First line\nSecond line ",
+            activeApp: "Safari",
+            windowTitle: "Article *Title*",
+            panelPosition: CGPoint(x: 0, y: 0),
+            clipboardImage: nil,
+            isScreenshot: false
+        )
+
+        let fragment = try QuickPanelMarkdownFormatter.buildFragment(
+            context: context,
+            inputText: "Saved note"
+        ) { _ in
+            XCTFail("Image formatter should not run for text-only context")
+            return ""
+        }
+
+        XCTAssertEqual(fragment, """
+        > First line
+        > Second line
+
+        *— Safari — Article \\*Title\\**
+
+        Saved note
+        """)
+    }
+}
 
 final class StreamDocumentTests: XCTestCase {
     func test_appendToStreamDocument_createsDocumentWithExactlyFragmentWhenMissing() throws {
