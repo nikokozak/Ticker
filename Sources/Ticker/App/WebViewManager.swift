@@ -186,29 +186,14 @@ final class WebViewManager: NSObject {
             }
 
             let document = try persistence.loadOrCreateStreamDocument(streamId: createdStream.id)
-            let streamPayload = encodeStream(reloadedStream, document: document)
+            let streamPayload = StreamCodec.encodeStream(reloadedStream, document: document)
             bridgeService.send(BridgeMessage(type: "streamLoaded", payload: [
                 "stream": AnyCodable(streamPayload)
             ]))
 
             // Refresh the list in the background so counts/titles stay current when user navigates back.
             let summaries = try persistence.loadStreamSummaries()
-            let formatter = ISO8601DateFormatter()
-            let payload: [String: AnyCodable] = [
-                "streams": AnyCodable(summaries.map { summary -> [String: Any] in
-                    var dict: [String: Any] = [
-                        "id": summary.id.uuidString,
-                        "title": summary.title,
-                        "sourceCount": summary.sourceCount,
-                        "cellCount": summary.cellCount,
-                        "updatedAt": formatter.string(from: summary.updatedAt)
-                    ]
-                    if let previewText = summary.previewText {
-                        dict["previewText"] = previewText
-                    }
-                    return dict
-                })
-            ]
+            let payload = StreamCodec.encodeSummaries(summaries)
             bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: payload))
         } catch {
             DebugLog.log("[WebViewManager] Failed to create stream from dropped PDF (\(DebugLog.errorSummary(error)))")
@@ -273,7 +258,7 @@ final class WebViewManager: NSObject {
 
         do {
             let source = try withSecurityScopedAccess(url) { try sourceService.addSource(from: url, to: streamId) }
-            let sourcePayload = encodeSource(source)
+            let sourcePayload = StreamCodec.encodeSource(source)
             bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
             if source.fileType == .pdf {
                 openSourceReference(source, sourceService: sourceService)
@@ -433,22 +418,7 @@ final class WebViewManager: NSObject {
         case "loadStreams":
             do {
                 let summaries = try persistence.loadStreamSummaries()
-                let formatter = ISO8601DateFormatter()
-                let payload: [String: AnyCodable] = [
-                    "streams": AnyCodable(summaries.map { summary -> [String: Any] in
-                        var dict: [String: Any] = [
-                            "id": summary.id.uuidString,
-                            "title": summary.title,
-                            "sourceCount": summary.sourceCount,
-                            "cellCount": summary.cellCount,
-                            "updatedAt": formatter.string(from: summary.updatedAt)
-                        ]
-                        if let previewText = summary.previewText {
-                            dict["previewText"] = previewText
-                        }
-                        return dict
-                    })
-                ]
+                let payload = StreamCodec.encodeSummaries(summaries)
                 bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: payload))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load streams (\(DebugLog.errorSummary(error)))")
@@ -472,7 +442,7 @@ final class WebViewManager: NSObject {
                 if let stream = try persistence.loadStream(id: id) {
                     let document = try persistence.loadOrCreateStreamDocument(streamId: id)
 
-                    let streamPayload = encodeStream(stream, document: document)
+                    let streamPayload = StreamCodec.encodeStream(stream, document: document)
                     bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
                 }
             } catch {
@@ -485,7 +455,7 @@ final class WebViewManager: NSObject {
                 let stream = try persistence.createStream(title: title)
                 currentStreamIdForFileDrops = stream.id
                 let document = try persistence.loadOrCreateStreamDocument(streamId: stream.id)
-                let streamPayload = encodeStream(stream, document: document)
+                let streamPayload = StreamCodec.encodeStream(stream, document: document)
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to create stream (\(DebugLog.errorSummary(error)))")
@@ -525,22 +495,7 @@ final class WebViewManager: NSObject {
                 try? assetService.deleteAssets(for: id)
                 // Reload streams list
                 let summaries = try persistence.loadStreamSummaries()
-                let formatter = ISO8601DateFormatter()
-                let summariesPayload: [String: AnyCodable] = [
-                    "streams": AnyCodable(summaries.map { summary -> [String: Any] in
-                        var dict: [String: Any] = [
-                            "id": summary.id.uuidString,
-                            "title": summary.title,
-                            "sourceCount": summary.sourceCount,
-                            "cellCount": summary.cellCount,
-                            "updatedAt": formatter.string(from: summary.updatedAt)
-                        ]
-                        if let previewText = summary.previewText {
-                            dict["previewText"] = previewText
-                        }
-                        return dict
-                    })
-                ]
+                let summariesPayload = StreamCodec.encodeSummaries(summaries)
                 bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: summariesPayload))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to delete stream (\(DebugLog.errorSummary(error)))")
@@ -611,7 +566,7 @@ final class WebViewManager: NSObject {
                 if panel.runModal() == .OK, let url = panel.url {
                     do {
                         let source = try sourceService.addSource(from: url, to: streamId)
-                        let sourcePayload = encodeSource(source)
+                        let sourcePayload = StreamCodec.encodeSource(source)
                         bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
                     } catch {
                         DebugLog.log("[WebViewManager] Failed to add source (\(DebugLog.errorSummary(error)))")
@@ -633,7 +588,7 @@ final class WebViewManager: NSObject {
             let url = URL(fileURLWithPath: filePath)
             do {
                 let source = try sourceService.addSource(from: url, to: streamId)
-                let sourcePayload = encodeSource(source)
+                let sourcePayload = StreamCodec.encodeSource(source)
                 bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to add source from path (\(DebugLog.errorSummary(error)))")
@@ -822,9 +777,9 @@ final class WebViewManager: NSObject {
                 let document = try persistence.loadOrCreateStreamDocument(streamId: streamId)
 
                 // Convert to export format
-                let content = formatStreamForExport(stream: stream, document: document, format: format)
+                let content = StreamCodec.formatStreamForExport(stream: stream, document: document, format: format)
                 let fileExtension = format == "markdown" ? ".md" : ".txt"
-                let suggestedName = sanitizeFilename(stream.title) + fileExtension
+                let suggestedName = StreamCodec.sanitizeFilename(stream.title) + fileExtension
 
                 // Show save panel on main thread
                 await MainActor.run {
@@ -1239,58 +1194,6 @@ final class WebViewManager: NSObject {
         }
     }
 
-    // MARK: - Encoding/Decoding Helpers
-
-    private func encodeStream(_ stream: Stream, document: StreamDocument) -> [String: Any] {
-        let formatter = ISO8601DateFormatter()
-        return [
-            "id": stream.id.uuidString,
-            "title": stream.title,
-            "sources": stream.sources.map { source -> [String: Any] in
-                var dict: [String: Any] = [
-                    "id": source.id.uuidString,
-                    "streamId": source.streamId.uuidString,
-                    "displayName": source.displayName,
-                    "fileType": source.fileType.rawValue,
-                    "status": source.status.rawValue,
-                    "embeddingStatus": source.embeddingStatus.rawValue,
-                    "addedAt": formatter.string(from: source.addedAt)
-                ]
-                if let pageCount = source.pageCount {
-                    dict["pageCount"] = pageCount
-                }
-                return dict
-            },
-            "createdAt": formatter.string(from: stream.createdAt),
-            "updatedAt": formatter.string(from: stream.updatedAt),
-            "document": [
-                "streamId": document.streamId.uuidString,
-                "markdown": document.markdown,
-                "createdAt": formatter.string(from: document.createdAt),
-                "updatedAt": formatter.string(from: document.updatedAt)
-            ]
-        ]
-    }
-
-    private func encodeSource(_ source: SourceReference) -> [String: Any] {
-        let formatter = ISO8601DateFormatter()
-        var dict: [String: Any] = [
-            "id": source.id.uuidString,
-            "streamId": source.streamId.uuidString,
-            "displayName": source.displayName,
-            "fileType": source.fileType.rawValue,
-            "status": source.status.rawValue,
-            "addedAt": formatter.string(from: source.addedAt)
-        ]
-        if let pageCount = source.pageCount {
-            dict["pageCount"] = pageCount
-        }
-        if source.extractedText != nil {
-            dict["hasExtractedText"] = true
-        }
-        return dict
-    }
-
     /// Get settings enriched with classifier state
     private func settingsWithClassifierState() -> [String: Any] {
         var settings = settingsService.allSettings()
@@ -1310,49 +1213,6 @@ final class WebViewManager: NSObject {
             settings["classifierLoading"] = true
         }
         return settings
-    }
-
-    // MARK: - Export Helpers
-
-    /// Format a stream for export as markdown or plain text
-    private func formatStreamForExport(stream: Stream, document: StreamDocument, format: String) -> String {
-        var output = ""
-        let isMarkdown = format == "markdown"
-
-        if isMarkdown {
-            output += "# \(stream.title)\n\n"
-        } else {
-            output += "\(stream.title)\n\n"
-        }
-
-        let body = isMarkdown ? document.markdown : plainTextFromMarkdown(document.markdown)
-        if !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            output += body + "\n\n"
-        }
-
-        if !stream.sources.isEmpty {
-            output += isMarkdown ? "## Sources\n\n" : "Sources:\n"
-            for source in stream.sources {
-                output += "- \(source.displayName)\n"
-            }
-        }
-
-        return output
-    }
-
-    private func plainTextFromMarkdown(_ markdown: String) -> String {
-        markdown
-            .replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\!\[([^\]]*)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"`([^`]*)`"#, with: "$1", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Sanitize a string for use as a filename
-    private func sanitizeFilename(_ name: String) -> String {
-        let invalidChars = CharacterSet(charactersIn: ":/\\?%*|\"<>")
-        return name.components(separatedBy: invalidChars).joined(separator: "-")
     }
 
 }
