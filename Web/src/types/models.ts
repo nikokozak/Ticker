@@ -23,6 +23,8 @@ export interface StreamSummary {
   title: string;
   sourceCount: number;
   cellCount: number;
+  charCount: number;
+  imageCount: number;
   updatedAt: string;
   previewText: string | null;
 }

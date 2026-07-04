@@ -61,6 +61,8 @@ enum StreamCodec {
                     "title": summary.title,
                     "sourceCount": summary.sourceCount,
                     "cellCount": summary.cellCount,
+                    "charCount": summary.charCount,
+                    "imageCount": summary.imageCount,
                     "updatedAt": formatter.string(from: summary.updatedAt)
                 ]
                 if let previewText = summary.previewText {

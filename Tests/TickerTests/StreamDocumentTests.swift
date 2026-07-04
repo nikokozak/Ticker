@@ -232,14 +232,23 @@ final class StreamDocumentTests: XCTestCase {
             try service.saveStream(olderStream)
             try service.saveStream(newerStream)
 
+            let olderMarkdown = "# Older Notes\n\nThe older document preview comes from markdown."
+            let newerMarkdown = """
+            Newer document preview
+
+            ![diagram](ticker-asset://stream/diagram.png)
+            ![photo](https://example.com/photo.jpg)
+
+            Second paragraph.
+            """
             _ = try service.saveStreamDocument(
                 streamId: olderStream.id,
-                markdown: "# Older Notes\n\nThe older document preview comes from markdown."
+                markdown: olderMarkdown
             )
             Thread.sleep(forTimeInterval: 0.01)
             _ = try service.saveStreamDocument(
                 streamId: newerStream.id,
-                markdown: "Newer document preview\n\nSecond paragraph."
+                markdown: newerMarkdown
             )
 
             let summaries = try service.loadStreamSummaries()
@@ -251,10 +260,14 @@ final class StreamDocumentTests: XCTestCase {
             )
 
             let newerSummary = try XCTUnwrap(summaries.first { $0.id == newerStream.id })
-            XCTAssertEqual(newerSummary.previewText, "Newer document preview\n\nSecond paragraph.")
+            XCTAssertEqual(newerSummary.previewText, newerMarkdown)
+            XCTAssertEqual(newerSummary.charCount, newerMarkdown.count)
+            XCTAssertEqual(newerSummary.imageCount, 2)
 
             let olderSummary = try XCTUnwrap(summaries.first { $0.id == olderStream.id })
-            XCTAssertEqual(olderSummary.previewText, "# Older Notes\n\nThe older document preview comes from markdown.")
+            XCTAssertEqual(olderSummary.previewText, olderMarkdown)
+            XCTAssertEqual(olderSummary.charCount, olderMarkdown.count)
+            XCTAssertEqual(olderSummary.imageCount, 0)
         }
     }
 

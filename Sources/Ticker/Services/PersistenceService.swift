@@ -26,6 +26,16 @@ final class PersistenceService {
 #endif
     }
 
+    private static func countMarkdownImageTokens(in markdown: String) -> Int {
+        var count = 0
+        var searchStart = markdown.startIndex
+        while let range = markdown.range(of: "![", range: searchStart..<markdown.endIndex) {
+            count += 1
+            searchStart = range.upperBound
+        }
+        return count
+    }
+
     init(databaseURL: URL? = nil, fileManager: FileManager = .default) throws {
         let databaseURL = databaseURL ?? Self.databaseURL(fileManager: fileManager)
         self.databaseURL = databaseURL
@@ -418,6 +428,7 @@ final class PersistenceService {
                     s.id, s.title, s.updated_at,
                     (SELECT COUNT(*) FROM sources WHERE stream_id = s.id) as source_count,
                     (SELECT COUNT(*) FROM cells WHERE stream_id = s.id) as cell_count,
+                    (SELECT markdown FROM stream_documents WHERE stream_id = s.id) as document_markdown,
                     COALESCE(
                         (SELECT markdown FROM stream_documents WHERE stream_id = s.id),
                         (SELECT content FROM cells WHERE stream_id = s.id ORDER BY position LIMIT 1)
@@ -426,11 +437,17 @@ final class PersistenceService {
                 ORDER BY s.updated_at DESC
             """
             return try Row.fetchAll(db, sql: sql).map { row in
-                StreamSummary(
+                let documentMarkdown: String = row["document_markdown"] ?? ""
+                // ponytail: raw markdown counts are the ceiling here; upgrade to parser-backed rendered-text/image metrics if list metadata needs semantic precision.
+                let charCount = documentMarkdown.count
+                let imageCount = Self.countMarkdownImageTokens(in: documentMarkdown)
+                return StreamSummary(
                     id: UUID(uuidString: row["id"])!,
                     title: row["title"],
                     sourceCount: row["source_count"],
                     cellCount: row["cell_count"],
+                    charCount: charCount,
+                    imageCount: imageCount,
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
                     previewText: row["preview_text"]
                 )

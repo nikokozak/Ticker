@@ -315,6 +315,29 @@ function formatRelativeTime(dateString: string): string {
   return date.toLocaleDateString();
 }
 
+function formatCompactCount(count: number): string {
+  if (count < 1000) {
+    return new Intl.NumberFormat().format(count);
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(count / 1000)}k`;
+}
+
+function formatStreamMetadata(stream: StreamSummary): string {
+  const segments = [formatRelativeTime(stream.updatedAt)];
+
+  if (stream.sourceCount > 0) {
+    segments.push(`${stream.sourceCount} ${stream.sourceCount === 1 ? 'source' : 'sources'}`);
+  }
+  if (stream.charCount > 0) {
+    segments.push(`${formatCompactCount(stream.charCount)} chars`);
+  }
+  if (stream.imageCount > 0) {
+    segments.push(`${stream.imageCount} ${stream.imageCount === 1 ? 'image' : 'images'}`);
+  }
+
+  return segments.join(' · ');
+}
+
 function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreate, onSettings }: StreamListViewProps) {
   // Sort streams by updatedAt (most recent first)
   const sortedStreams = [...streams].sort((a, b) =>
@@ -355,7 +378,7 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
             >
               <span className="stream-title">{stream.title}</span>
               <span className="stream-meta">
-                {formatRelativeTime(stream.updatedAt)} · {stream.sourceCount} {stream.sourceCount === 1 ? 'source' : 'sources'}
+                {formatStreamMetadata(stream)}
               </span>
             </button>
           ))
