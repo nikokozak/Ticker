@@ -37,7 +37,9 @@ final class StreamMessageHandler: BridgeMessageHandler {
             do {
                 let summaries = try persistence.loadStreamSummaries()
                 let payload = StreamCodec.encodeSummaries(summaries)
-                bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: payload))
+                bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: [
+                    "streams": payload["streams"]!
+                ]))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load streams (\(DebugLog.errorSummary(error)))")
             }
@@ -107,7 +109,9 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 // Reload streams list
                 let summaries = try persistence.loadStreamSummaries()
                 let summariesPayload = StreamCodec.encodeSummaries(summaries)
-                bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: summariesPayload))
+                bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: [
+                    "streams": summariesPayload["streams"]!
+                ]))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to delete stream (\(DebugLog.errorSummary(error)))")
             }

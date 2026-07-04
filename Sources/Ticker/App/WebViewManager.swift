@@ -176,7 +176,9 @@ final class WebViewManager: NSObject {
 
             let summaries = try persistence.loadStreamSummaries()
             let payload = StreamCodec.encodeSummaries(summaries)
-            bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: payload))
+            bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: [
+                "streams": payload["streams"]!
+            ]))
         } catch {
             DebugLog.log("[WebViewManager] Failed to create stream from dropped PDF (\(DebugLog.errorSummary(error)))")
             bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
