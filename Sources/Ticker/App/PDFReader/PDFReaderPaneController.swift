@@ -71,6 +71,127 @@ private enum PDFHighlightAnnotationStyle {
     static let escapeKeyCode: UInt16 = 53
 }
 
+struct PDFCitationMatch {
+    let selection: PDFSelection
+    let page: PDFPage
+    let bounds: CGRect
+}
+
+enum PDFCitationNavigator {
+    private static let primaryFallbackLength = 80
+    private static let retryFallbackLength = 40
+    private static let minimumSentenceLength = 20
+    private static let sentenceTerminators: Set<Character> = [".", "!", "?"]
+
+    static func needleCandidates(from text: String) -> [String] {
+        let normalized = normalizeWhitespace(text)
+        guard !normalized.isEmpty else { return [] }
+
+        let primary = firstSentence(in: normalized)
+            ?? prefix(normalized, maxLength: primaryFallbackLength)
+        let retry = prefix(normalized, maxLength: retryFallbackLength)
+        let rawCandidates = retry.count < primary.count ? [primary, retry] : [primary]
+
+        var seen = Set<String>()
+        return rawCandidates.filter { candidate in
+            guard !candidate.isEmpty, !seen.contains(candidate) else { return false }
+            seen.insert(candidate)
+            return true
+        }
+    }
+
+    static func match(in document: PDFDocument, chunk: SourceChunk) -> PDFCitationMatch? {
+        guard let pageRange = pageRange(for: chunk, pageCount: document.pageCount) else {
+            return nil
+        }
+
+        for needle in needleCandidates(from: chunk.text) {
+            let selections = document.findString(needle, withOptions: .caseInsensitive)
+            for selection in selections {
+                guard let page = firstPage(in: selection, document: document, pageRange: pageRange) else {
+                    continue
+                }
+
+                let bounds = selection.bounds(for: page)
+                guard bounds.isFiniteAndNonEmpty else {
+                    continue
+                }
+
+                return PDFCitationMatch(selection: selection, page: page, bounds: bounds)
+            }
+        }
+
+        return nil
+    }
+
+    static func fallbackPage(for chunk: SourceChunk, requestedPage: Int?) -> Int {
+        requestedPage ?? chunk.pageStart
+    }
+
+    static func pageRange(for chunk: SourceChunk, pageCount: Int) -> ClosedRange<Int>? {
+        guard pageCount > 0 else { return nil }
+        let start = max(1, min(chunk.pageStart, chunk.pageEnd))
+        let end = min(pageCount, max(chunk.pageStart, chunk.pageEnd))
+        guard start <= end else { return nil }
+        return start...end
+    }
+
+    private static func normalizeWhitespace(_ text: String) -> String {
+        text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static func firstSentence(in text: String) -> String? {
+        var sentence = ""
+        for character in text {
+            sentence.append(character)
+            guard sentenceTerminators.contains(character) else {
+                continue
+            }
+
+            let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.count >= minimumSentenceLength ? trimmed : nil
+        }
+        return nil
+    }
+
+    private static func prefix(_ text: String, maxLength: Int) -> String {
+        guard text.count > maxLength else {
+            return text
+        }
+        return String(text.prefix(maxLength)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func firstPage(
+        in selection: PDFSelection,
+        document: PDFDocument,
+        pageRange: ClosedRange<Int>
+    ) -> PDFPage? {
+        selection.pages
+            .filter { page in
+                let pageNumber = document.index(for: page) + 1
+                return pageRange.contains(pageNumber)
+            }
+            .sorted { lhs, rhs in
+                document.index(for: lhs) < document.index(for: rhs)
+            }
+            .first
+    }
+}
+
+private extension CGRect {
+    var isFiniteAndNonEmpty: Bool {
+        origin.x.isFinite
+            && origin.y.isFinite
+            && size.width.isFinite
+            && size.height.isFinite
+            && width > 0
+            && height > 0
+    }
+}
+
 private final class PDFPaneResizeHandleView: NSView {
     override func resetCursorRects() {
         super.resetCursorRects()
@@ -215,6 +336,15 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         navigate(toPageNumber: pageNumber)
+    }
+
+    func navigateToDestination(highlightId: String?, page pageNumber: Int?, chunk: SourceChunk?) {
+        if let chunk {
+            navigateToCitationChunk(chunk, fallbackPage: pageNumber)
+            return
+        }
+
+        navigateToHighlight(id: highlightId, page: pageNumber)
     }
 
     func removeHighlightAnnotations(ids: [String]) {
@@ -715,6 +845,19 @@ final class PDFReaderPaneController: NSViewController {
             .map { ($0.annotation, $0.page) }
     }
 
+    private func navigateToCitationChunk(_ chunk: SourceChunk, fallbackPage pageNumber: Int?) {
+        guard let document = pdfPanePDFView.document,
+              let match = PDFCitationNavigator.match(in: document, chunk: chunk) else {
+            navigate(toPageNumber: PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: pageNumber))
+            return
+        }
+
+        navigate(to: match.bounds, on: match.page)
+        if let pageRange = PDFCitationNavigator.pageRange(for: chunk, pageCount: document.pageCount) {
+            flashCitationSelection(match.selection, pageRange: pageRange)
+        }
+    }
+
     private func navigate(to rect: CGRect, on page: PDFPage) {
         let visibleHeight = pdfPanePDFView.convert(pdfPanePDFView.bounds, to: page).height
         let pageBounds = page.bounds(for: .mediaBox)
@@ -748,7 +891,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.go(to: destination)
     }
 
-    private func pulseAnnotations(_ annotations: [PDFAnnotation]) {
+    private func pulseAnnotations(_ annotations: [PDFAnnotation], removeAfterPulse: Bool = false) {
         guard !annotations.isEmpty else { return }
         let originalColors = annotations.map(\.color)
         let originalInteriorColors = annotations.map(\.interiorColor)
@@ -763,12 +906,48 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.needsDisplay = true
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            for ((annotation, color), interiorColor) in zip(zip(annotations, originalColors), originalInteriorColors) {
-                annotation.color = color
-                annotation.interiorColor = interiorColor
+            if removeAfterPulse {
+                annotations.forEach { annotation in
+                    annotation.page?.removeAnnotation(annotation)
+                }
+            } else {
+                for ((annotation, color), interiorColor) in zip(zip(annotations, originalColors), originalInteriorColors) {
+                    annotation.color = color
+                    annotation.interiorColor = interiorColor
+                }
             }
             self?.pdfPanePDFView.needsDisplay = true
         }
+    }
+
+    private func flashCitationSelection(_ selection: PDFSelection, pageRange: ClosedRange<Int>) {
+        guard let document = pdfPanePDFView.document else { return }
+
+        let lineSelections = selection.selectionsByLine()
+        let selections = lineSelections.isEmpty ? [selection] : lineSelections
+        var annotations: [PDFAnnotation] = []
+
+        for lineSelection in selections {
+            for page in lineSelection.pages {
+                let pageNumber = document.index(for: page) + 1
+                guard pageRange.contains(pageNumber) else {
+                    continue
+                }
+
+                let bounds = lineSelection.bounds(for: page)
+                guard bounds.isFiniteAndNonEmpty else {
+                    continue
+                }
+
+                let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
+                annotation.color = PDFHighlightAnnotationStyle.color
+                annotation.userName = "Ticker-Next"
+                page.addAnnotation(annotation)
+                annotations.append(annotation)
+            }
+        }
+
+        pulseAnnotations(annotations, removeAfterPulse: true)
     }
 
     private func handleAnchorPickMouseDown(_ event: NSEvent) -> NSEvent? {

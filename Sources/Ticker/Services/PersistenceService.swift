@@ -1096,6 +1096,20 @@ final class PersistenceService {
         }
     }
 
+    func loadSourceChunk(id: UUID) throws -> SourceChunk? {
+        try dbQueue.read { db in
+            try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id, source_id, seq, text, page_start, page_end, section_path
+                    FROM source_chunks
+                    WHERE id = ?
+                """,
+                arguments: [id.uuidString]
+            ).map(Self.decodeSourceChunk)
+        }
+    }
+
     func searchSourceChunks(matching ftsQuery: String, streamId: UUID, limit: Int) throws -> [RetrievedChunk] {
         try dbQueue.read { db in
             try Row.fetchAll(

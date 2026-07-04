@@ -251,6 +251,38 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_loadSourceChunkReturnsSingleChunkById() throws {
+        try withTempPersistenceService { service in
+            let source = try savePDFSource(in: service)
+            let first = SourceChunk(
+                sourceId: source.id,
+                seq: 0,
+                text: "First chunk text.",
+                pageStart: 1,
+                pageEnd: 1
+            )
+            let second = SourceChunk(
+                sourceId: source.id,
+                seq: 1,
+                text: "Second chunk text.",
+                pageStart: 2,
+                pageEnd: 2
+            )
+
+            try service.saveSourceChunks([first, second], for: source.id)
+
+            let loaded = try XCTUnwrap(service.loadSourceChunk(id: second.id))
+            XCTAssertEqual(loaded.id, second.id)
+            XCTAssertEqual(loaded.sourceId, second.sourceId)
+            XCTAssertEqual(loaded.seq, second.seq)
+            XCTAssertEqual(loaded.text, second.text)
+            XCTAssertEqual(loaded.pageStart, second.pageStart)
+            XCTAssertEqual(loaded.pageEnd, second.pageEnd)
+            XCTAssertEqual(loaded.sectionPath, second.sectionPath)
+            XCTAssertNil(try service.loadSourceChunk(id: UUID()))
+        }
+    }
+
     func test_retrievalReturnsNoContextForIrrelevantQuery() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Large Source")
@@ -832,6 +864,60 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertNil(destination.highlightId)
         XCTAssertEqual(destination.page, 12)
         XCTAssertEqual(destination.chunkId, chunkId)
+    }
+
+    func test_pdfCitationNavigatorDerivesLeadingSentenceAndRetryNeedles() throws {
+        let candidates = PDFCitationNavigator.needleCandidates(
+            from: "  This sentence is definitely long enough to cite in the reader.  More context follows for retry matching. "
+        )
+
+        XCTAssertEqual(candidates.first, "This sentence is definitely long enough to cite in the reader.")
+        XCTAssertEqual(candidates.last, "This sentence is definitely long enough")
+    }
+
+    func test_pdfCitationNavigatorUsesShortTextFallbackWhenLeadingSentenceIsTooShort() throws {
+        let candidates = PDFCitationNavigator.needleCandidates(from: "Tiny. Short fallback text")
+
+        XCTAssertEqual(candidates, ["Tiny. Short fallback text"])
+    }
+
+    func test_pdfCitationNavigatorFindsMatchWithinChunkPageRange() throws {
+        let sentence = "Citations should flash this exact passage in the reader."
+        let document = try makePDFDocument(pages: [
+            "First page also says \(sentence)",
+            "Second page says \(sentence)",
+            "Third page has unrelated text."
+        ])
+        let chunk = SourceChunk(
+            sourceId: UUID(),
+            seq: 0,
+            text: "\(sentence) Additional context belongs to this chunk.",
+            pageStart: 2,
+            pageEnd: 2
+        )
+
+        let match = try XCTUnwrap(PDFCitationNavigator.match(in: document, chunk: chunk))
+
+        XCTAssertEqual(document.index(for: match.page), 1)
+        XCTAssertFalse(match.bounds.isEmpty)
+    }
+
+    func test_pdfCitationNavigatorFallsBackToChunkPageWhenNeedleIsAbsent() throws {
+        let document = try makePDFDocument(pages: [
+            "First page text.",
+            "Second page text."
+        ])
+        let chunk = SourceChunk(
+            sourceId: UUID(),
+            seq: 0,
+            text: "This absent sentence is long enough to become the citation search needle.",
+            pageStart: 2,
+            pageEnd: 2
+        )
+
+        XCTAssertNil(PDFCitationNavigator.match(in: document, chunk: chunk))
+        XCTAssertEqual(PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: nil), 2)
+        XCTAssertEqual(PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: 1), 1)
     }
 
     func test_documentAICitationPayloadBuildsFromRetrievedSourceContext() throws {

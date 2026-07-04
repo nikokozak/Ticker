@@ -6,7 +6,13 @@ protocol SourceMessageHandlerDelegate: AnyObject {
     func setFileDropContext(streamId: UUID?, allowsListFileDrops: Bool)
     func hidePDFPane() async
     func openSourceReference(_ source: SourceReference, sourceService: SourceService)
-    func openPDFDestination(_ source: SourceReference, sourceService: SourceService, highlightId: String?, page: Int?) async
+    func openPDFDestination(
+        _ source: SourceReference,
+        sourceService: SourceService,
+        highlightId: String?,
+        page: Int?,
+        chunkId: UUID?
+    ) async
     func beginPDFAnchorPick(streamId: UUID) async
 }
 
@@ -203,6 +209,8 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 .flatMap { $0.isEmpty ? nil : $0 }
                 ?? parsedDestination?.highlightId
             let page = payload["page"]?.intValue ?? parsedDestination?.page
+            let chunkId = (payload["chunkId"]?.value as? String).flatMap(UUID.init(uuidString:))
+                ?? parsedDestination?.chunkId
 
             do {
                 let source: SourceReference
@@ -241,7 +249,8 @@ final class SourceMessageHandler: BridgeMessageHandler {
                     source,
                     sourceService: sourceService,
                     highlightId: highlightId,
-                    page: pageToOpen
+                    page: pageToOpen,
+                    chunkId: chunkId
                 )
             } catch {
                 DebugLog.log("[WebViewManager] Failed to open PDF destination (\(DebugLog.errorSummary(error)))")
