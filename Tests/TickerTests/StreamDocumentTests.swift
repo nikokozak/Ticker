@@ -334,6 +334,39 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_retrievalCapsPerTokenCutoffForLongParagraphQueries() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Long Query")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Interpreter.pdf",
+                extractedText: largeExtractedText(),
+                chunks: stronglyRelevantChunks(
+                    strongText: "interpreter interpreter interpreter numeric numeric numeric",
+                    pageStart: 10,
+                    pageEnd: 10
+                )
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+            let query = "interpreter numeric conversion input handle source cursor paragraph manual chapter section reader"
+            let sanitized = try XCTUnwrap(RetrievalService.sanitizedFTSQuery(query))
+            let uncappedCutoff = -1.0 * Double(sanitized.tokenCount)
+            let cappedCutoff = -1.0 * Double(8)
+            let rawResults = try retrieval.retrieve(query: query, streamId: stream.id, applyThreshold: false)
+            let bestScore = try XCTUnwrap(rawResults.first?.score)
+            let results = try retrieval.retrieve(query: query, streamId: stream.id)
+
+            XCTAssertEqual(sanitized.tokenCount, 12)
+            XCTAssertGreaterThan(bestScore, uncappedCutoff)
+            XCTAssertLessThanOrEqual(bestScore, cappedCutoff)
+            XCTAssertEqual(results.count, 1)
+            XCTAssertEqual(results.first?.sourceName, "Interpreter.pdf")
+        }
+    }
+
     func test_retrievalSourceScopeNoneReturnsNoContextEvenWithMatchingChunks() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Scope None")

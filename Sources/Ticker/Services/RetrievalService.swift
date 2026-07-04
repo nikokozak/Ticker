@@ -6,10 +6,11 @@ final class RetrievalService {
 
     private static let topK = 8
     private static let passthroughTokenBudget = 8_000
-    // ponytail: Per-token BM25 cutoff is calibrated from a 274-page book where relevant
-    // queries scored about -1.9/token and unrelated queries about -0.52/token; tune with
-    // the R3 golden-set eval before adding embeddings.
+    // ponytail: Short-query BM25 scales from a 274-page book where relevant queries scored
+    // about -1.9/token and unrelated queries about -0.52/token; cap long paragraph queries
+    // so strong matches around -13 remain retrievable while unrelated 8-token best -4.15 stays gated.
     private static let perTokenCutoff = -1.0
+    private static let maxCutoffTokens = 8
     // ponytail: Inline English stopwords are a small guardrail for R1 BM25;
     // tune/replace with the R3 eval set before adding query-language features.
     private static let stopwords: Set<String> = [
@@ -124,7 +125,7 @@ final class RetrievalService {
     }
 
     private static func relevanceCutoff(tokenCount: Int) -> Double {
-        perTokenCutoff * Double(tokenCount)
+        perTokenCutoff * Double(min(tokenCount, maxCutoffTokens))
     }
 }
 
