@@ -222,6 +222,60 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v11_recover_orphaned_quickpanel_cells") { db in
+            let documentRows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT stream_id, markdown, created_at
+                    FROM stream_documents
+                """
+            )
+
+            for documentRow in documentRows {
+                let streamId: String = documentRow["stream_id"]
+                let documentMarkdown: String = documentRow["markdown"]
+                let documentCreatedAt: Double = documentRow["created_at"]
+
+                let cellRows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT content
+                        FROM cells
+                        WHERE stream_id = ?
+                          AND created_at > ?
+                        ORDER BY created_at ASC, position ASC
+                    """,
+                    arguments: [streamId, documentCreatedAt]
+                )
+
+                let recoveredFragments: [String] = cellRows.compactMap { row in
+                    let content: String = row["content"]
+                    let markdown = Self.markdownishTextFromLegacyCellHTML(content)
+                    return markdown.isEmpty ? nil : markdown
+                }
+
+                guard !recoveredFragments.isEmpty else { continue }
+
+                let recoveryBlock = (["## Recovered captures"] + recoveredFragments)
+                    .joined(separator: "\n\n")
+                let recoveredMarkdown = documentMarkdown.isEmpty
+                    ? recoveryBlock
+                    : "\(documentMarkdown)\n\n\(recoveryBlock)"
+                let now = Date().timeIntervalSince1970
+
+                try db.execute(
+                    sql: """
+                        UPDATE stream_documents
+                        SET markdown = ?, updated_at = ?
+                        WHERE stream_id = ?
+                    """,
+                    arguments: [recoveredMarkdown, now, streamId]
+                )
+            }
+
+            // ponytail: Retain legacy cells until Phase 2+ drops the cells table in a future migration.
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -953,6 +1007,32 @@ final class PersistenceService {
         }
 
         return attributed.string.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func markdownishTextFromLegacyCellHTML(_ html: String) -> String {
+        let rewrittenHTML = rewriteImageTagsToMarkdown(html)
+        return htmlToPlainText(rewrittenHTML).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func rewriteImageTagsToMarkdown(_ html: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"<img\b[^>]*\bsrc\s*=\s*(['"])(.*?)\1[^>]*>"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return html
+        }
+
+        let original = html as NSString
+        let result = NSMutableString(string: html)
+        let fullRange = NSRange(location: 0, length: original.length)
+
+        for match in regex.matches(in: html, range: fullRange).reversed() {
+            guard match.numberOfRanges >= 3 else { continue }
+            let src = original.substring(with: match.range(at: 2))
+            result.replaceCharacters(in: match.range, with: "![capture](\(src))")
+        }
+
+        return result as String
     }
 
     // MARK: - Chunk Operations (RAG Pipeline)
