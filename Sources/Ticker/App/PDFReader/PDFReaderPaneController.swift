@@ -87,10 +87,14 @@ final class PDFReaderPaneController: NSViewController {
     private let pdfPaneHeaderView = NSView(frame: .zero)
     private let pdfPaneResizeHandle = PDFPaneResizeHandleView(frame: .zero)
     private let pdfPaneTitleField = NSTextField(labelWithString: "")
-    private let pdfPaneLinkButton = NSButton(title: "Link Selection", target: nil, action: nil)
-    private let pdfPaneCloseButton = NSButton(title: "Close", target: nil, action: nil)
+    private let pdfPaneStatusField = NSTextField(labelWithString: "")
+    private let pdfPaneHintIconView = NSImageView(frame: .zero)
+    private let pdfPaneLinkButton = NSButton(title: "", target: nil, action: nil)
+    private let pdfPaneCloseButton = NSButton(title: "", target: nil, action: nil)
     private let pdfPanePDFView = PDFView(frame: .zero)
     private var pdfPaneWidthConstraint: NSLayoutConstraint?
+    private var pdfPaneStatusLeadingConstraint: NSLayoutConstraint?
+    private var pdfPaneStatusHintLeadingConstraint: NSLayoutConstraint?
     private var isPDFPaneVisible = false
     private let preferredPDFPaneWidth: CGFloat = 520
     private let minimumPDFPaneWidth: CGFloat = 320
@@ -137,7 +141,8 @@ final class PDFReaderPaneController: NSViewController {
 
         pdfPanePDFView.document = document
         pdfPaneTitleField.stringValue = makePDFPaneHeader(displayName)
-        pdfPaneLinkButton.isEnabled = false
+        setPDFPaneLinkButtonEnabled(false)
+        updatePDFPaneStatus()
         activePDFContext = (
             streamId: streamId,
             sourceId: sourceId,
@@ -161,9 +166,8 @@ final class PDFReaderPaneController: NSViewController {
         exitAnchorPickMode(notifyCancelled: false)
 
         isAnchorPickMode = true
-        pdfPaneTitleField.stringValue = "Click a spot to link · Esc to cancel"
-        pdfPaneTitleField.textColor = PDFPaneStyle.accent
-        pdfPaneLinkButton.isEnabled = false
+        setPDFPaneLinkButtonEnabled(false)
+        updatePDFPaneStatus()
         pdfPanePDFView.enclosingScrollView?.documentCursor = .crosshair
 
         anchorPickMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
@@ -269,6 +273,8 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneHeaderView.layer?.backgroundColor = PDFPaneStyle.background.cgColor
         pdfPaneResizeHandle.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneTitleField.translatesAutoresizingMaskIntoConstraints = false
+        pdfPaneStatusField.translatesAutoresizingMaskIntoConstraints = false
+        pdfPaneHintIconView.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneLinkButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneCloseButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPanePDFView.translatesAutoresizingMaskIntoConstraints = false
@@ -280,25 +286,59 @@ final class PDFReaderPaneController: NSViewController {
             action: #selector(handlePDFPaneResizePan(_:))
         ))
 
-        pdfPaneTitleField.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        pdfPaneTitleField.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         pdfPaneTitleField.textColor = PDFPaneStyle.text
-        pdfPaneTitleField.lineBreakMode = .byTruncatingTail
+        pdfPaneTitleField.lineBreakMode = .byTruncatingMiddle
         pdfPaneTitleField.maximumNumberOfLines = 1
         pdfPaneTitleField.usesSingleLineMode = true
         pdfPaneTitleField.stringValue = "PDF Source"
+        pdfPaneTitleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        pdfPaneTitleField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        pdfPaneStatusField.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        pdfPaneStatusField.textColor = PDFPaneStyle.textMuted
+        pdfPaneStatusField.lineBreakMode = .byTruncatingTail
+        pdfPaneStatusField.maximumNumberOfLines = 1
+        pdfPaneStatusField.usesSingleLineMode = true
+        pdfPaneStatusField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        pdfPaneStatusField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        pdfPaneHintIconView.image = NSImage(systemSymbolName: "cursorarrow.click", accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "link", accessibilityDescription: nil)
+        pdfPaneHintIconView.imageScaling = .scaleProportionallyDown
+        pdfPaneHintIconView.contentTintColor = PDFPaneStyle.accent
+        pdfPaneHintIconView.isHidden = true
 
         pdfPaneLinkButton.target = self
         pdfPaneLinkButton.action = #selector(handlePDFPaneLinkSelection)
-        pdfPaneLinkButton.bezelStyle = .rounded
+        pdfPaneLinkButton.bezelStyle = .texturedRounded
         pdfPaneLinkButton.controlSize = .small
-        pdfPaneLinkButton.isEnabled = false
-        pdfPaneLinkButton.contentTintColor = PDFPaneStyle.accent
+        pdfPaneLinkButton.image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "link", accessibilityDescription: nil)
+        pdfPaneLinkButton.imagePosition = .imageOnly
+        pdfPaneLinkButton.imageScaling = .scaleProportionallyDown
+        pdfPaneLinkButton.isBordered = true
+        pdfPaneLinkButton.showsBorderOnlyWhileMouseInside = true
+        pdfPaneLinkButton.toolTip = "Link selection to stream"
+        pdfPaneLinkButton.setAccessibilityLabel("Link selection to stream")
+        pdfPaneLinkButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        pdfPaneLinkButton.setContentHuggingPriority(.required, for: .horizontal)
+        setPDFPaneLinkButtonEnabled(false)
 
         pdfPaneCloseButton.target = self
         pdfPaneCloseButton.action = #selector(handlePDFPaneClose)
-        pdfPaneCloseButton.bezelStyle = .rounded
+        pdfPaneCloseButton.bezelStyle = .texturedRounded
         pdfPaneCloseButton.controlSize = .small
+        pdfPaneCloseButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
+        pdfPaneCloseButton.imagePosition = .imageOnly
+        pdfPaneCloseButton.imageScaling = .scaleProportionallyDown
+        pdfPaneCloseButton.isBordered = true
+        pdfPaneCloseButton.showsBorderOnlyWhileMouseInside = true
         pdfPaneCloseButton.contentTintColor = PDFPaneStyle.textMuted
+        pdfPaneCloseButton.toolTip = "Close PDF"
+        pdfPaneCloseButton.setAccessibilityLabel("Close PDF")
+        pdfPaneCloseButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        pdfPaneCloseButton.setContentHuggingPriority(.required, for: .horizontal)
 
         pdfPanePDFView.autoScales = true
         pdfPanePDFView.displayMode = .singlePageContinuous
@@ -310,13 +350,30 @@ final class PDFReaderPaneController: NSViewController {
             pdfPanePDFView.perform(pageControllerSelector, with: NSNumber(value: true), with: nil)
         }
 
+        let headerSeparator = NSView(frame: .zero)
+        headerSeparator.translatesAutoresizingMaskIntoConstraints = false
+        headerSeparator.wantsLayer = true
+        headerSeparator.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
+
         pdfPaneView.addSubview(divider)
         pdfPaneView.addSubview(pdfPaneResizeHandle)
         pdfPaneView.addSubview(pdfPaneHeaderView)
         pdfPaneView.addSubview(pdfPanePDFView)
         pdfPaneHeaderView.addSubview(pdfPaneTitleField)
+        pdfPaneHeaderView.addSubview(pdfPaneHintIconView)
+        pdfPaneHeaderView.addSubview(pdfPaneStatusField)
         pdfPaneHeaderView.addSubview(pdfPaneLinkButton)
         pdfPaneHeaderView.addSubview(pdfPaneCloseButton)
+        pdfPaneHeaderView.addSubview(headerSeparator)
+
+        pdfPaneStatusLeadingConstraint = pdfPaneStatusField.leadingAnchor.constraint(
+            equalTo: pdfPaneTitleField.leadingAnchor
+        )
+        pdfPaneStatusHintLeadingConstraint = pdfPaneStatusField.leadingAnchor.constraint(
+            equalTo: pdfPaneHintIconView.trailingAnchor,
+            constant: 4
+        )
+        pdfPaneStatusLeadingConstraint?.isActive = true
 
         NSLayoutConstraint.activate([
             divider.trailingAnchor.constraint(equalTo: pdfPaneView.trailingAnchor),
@@ -335,14 +392,32 @@ final class PDFReaderPaneController: NSViewController {
             pdfPaneHeaderView.heightAnchor.constraint(equalToConstant: 44),
 
             pdfPaneTitleField.leadingAnchor.constraint(equalTo: pdfPaneHeaderView.leadingAnchor, constant: 12),
-            pdfPaneTitleField.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
-            pdfPaneTitleField.trailingAnchor.constraint(lessThanOrEqualTo: pdfPaneLinkButton.leadingAnchor, constant: -8),
+            pdfPaneTitleField.topAnchor.constraint(equalTo: pdfPaneHeaderView.topAnchor, constant: 6),
+            pdfPaneTitleField.trailingAnchor.constraint(lessThanOrEqualTo: pdfPaneLinkButton.leadingAnchor, constant: -10),
+
+            pdfPaneHintIconView.leadingAnchor.constraint(equalTo: pdfPaneTitleField.leadingAnchor),
+            pdfPaneHintIconView.centerYAnchor.constraint(equalTo: pdfPaneStatusField.centerYAnchor),
+            pdfPaneHintIconView.widthAnchor.constraint(equalToConstant: 12),
+            pdfPaneHintIconView.heightAnchor.constraint(equalToConstant: 12),
+
+            pdfPaneStatusField.topAnchor.constraint(equalTo: pdfPaneTitleField.bottomAnchor, constant: 1),
+            pdfPaneStatusField.trailingAnchor.constraint(lessThanOrEqualTo: pdfPaneLinkButton.leadingAnchor, constant: -10),
+            pdfPaneStatusField.bottomAnchor.constraint(lessThanOrEqualTo: pdfPaneHeaderView.bottomAnchor, constant: -5),
 
             pdfPaneCloseButton.trailingAnchor.constraint(equalTo: pdfPaneHeaderView.trailingAnchor, constant: -10),
             pdfPaneCloseButton.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
+            pdfPaneCloseButton.widthAnchor.constraint(equalToConstant: 28),
+            pdfPaneCloseButton.heightAnchor.constraint(equalToConstant: 28),
 
             pdfPaneLinkButton.trailingAnchor.constraint(equalTo: pdfPaneCloseButton.leadingAnchor, constant: -8),
             pdfPaneLinkButton.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
+            pdfPaneLinkButton.widthAnchor.constraint(equalToConstant: 28),
+            pdfPaneLinkButton.heightAnchor.constraint(equalToConstant: 28),
+
+            headerSeparator.leadingAnchor.constraint(equalTo: pdfPaneHeaderView.leadingAnchor),
+            headerSeparator.trailingAnchor.constraint(equalTo: pdfPaneHeaderView.trailingAnchor),
+            headerSeparator.bottomAnchor.constraint(equalTo: pdfPaneHeaderView.bottomAnchor),
+            headerSeparator.heightAnchor.constraint(equalToConstant: 1),
 
             pdfPanePDFView.leadingAnchor.constraint(equalTo: pdfPaneView.leadingAnchor),
             pdfPanePDFView.trailingAnchor.constraint(equalTo: pdfPaneView.trailingAnchor, constant: -8),
@@ -354,6 +429,12 @@ final class PDFReaderPaneController: NSViewController {
             self,
             selector: #selector(handlePDFPaneSelectionChanged),
             name: Notification.Name.PDFViewSelectionChanged,
+            object: pdfPanePDFView
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePDFPanePageChanged),
+            name: Notification.Name.PDFViewPageChanged,
             object: pdfPanePDFView
         )
     }
@@ -408,11 +489,7 @@ final class PDFReaderPaneController: NSViewController {
 
     private func makePDFPaneHeader(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "PDF Source" }
-        if trimmed.count <= 90 { return trimmed }
-        let prefix = trimmed.prefix(68)
-        let suffix = trimmed.suffix(14)
-        return "\(prefix)…\(suffix)"
+        return trimmed.isEmpty ? "PDF Source" : trimmed
     }
 
     private func releaseActivePDFContext() {
@@ -423,7 +500,8 @@ final class PDFReaderPaneController: NSViewController {
         activePDFContext = nil
         pdfPanePDFView.document = nil
         pdfPaneTitleField.stringValue = "PDF Source"
-        pdfPaneLinkButton.isEnabled = false
+        setPDFPaneLinkButtonEnabled(false)
+        updatePDFPaneStatus()
     }
 
     @objc private func handlePDFPaneClose() {
@@ -433,11 +511,15 @@ final class PDFReaderPaneController: NSViewController {
 
     @objc private func handlePDFPaneSelectionChanged() {
         guard !isAnchorPickMode else {
-            pdfPaneLinkButton.isEnabled = false
+            setPDFPaneLinkButtonEnabled(false)
             return
         }
         let selectedText = pdfPanePDFView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        pdfPaneLinkButton.isEnabled = !selectedText.isEmpty
+        setPDFPaneLinkButtonEnabled(!selectedText.isEmpty)
+    }
+
+    @objc private func handlePDFPanePageChanged() {
+        updatePDFPaneStatus()
     }
 
     @objc private func handlePDFPaneResizePan(_ recognizer: NSPanGestureRecognizer) {
@@ -715,10 +797,40 @@ final class PDFReaderPaneController: NSViewController {
             pdfPaneTitleField.stringValue = "PDF Source"
         }
         pdfPaneTitleField.textColor = PDFPaneStyle.text
+        updatePDFPaneStatus()
         handlePDFPaneSelectionChanged()
 
         if notifyCancelled, let streamId {
             onAnchorPickCancelled?(streamId)
         }
+    }
+
+    private func setPDFPaneLinkButtonEnabled(_ enabled: Bool) {
+        pdfPaneLinkButton.isEnabled = enabled
+        pdfPaneLinkButton.contentTintColor = enabled ? PDFPaneStyle.accent : PDFPaneStyle.textMuted
+    }
+
+    private func updatePDFPaneStatus() {
+        let pageText = pdfPanePageText()
+        let showHint = isAnchorPickMode
+        let hintText = "Click a spot to link · Esc to cancel"
+
+        pdfPaneHintIconView.isHidden = !showHint
+        pdfPaneStatusLeadingConstraint?.isActive = !showHint
+        pdfPaneStatusHintLeadingConstraint?.isActive = showHint
+        pdfPaneStatusField.stringValue = showHint
+            ? [pageText, hintText].filter { !$0.isEmpty }.joined(separator: " · ")
+            : pageText
+    }
+
+    private func pdfPanePageText() -> String {
+        guard let document = pdfPanePDFView.document,
+              document.pageCount > 0 else {
+            return ""
+        }
+
+        let page = pdfPanePDFView.currentPage ?? document.page(at: 0)
+        let current = page.map { max(1, document.index(for: $0) + 1) } ?? 1
+        return "p. \(current) / \(document.pageCount)"
     }
 }
