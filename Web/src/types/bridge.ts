@@ -32,19 +32,23 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'modelSelected',
   'proxyAuthState',
   'pdfHighlightLinked',
-  'quickPanelCellsAdded',
   'settingsLoaded',
   'sourceAdded',
   'sourceError',
   'sourceRemoveError',
   'sourceRemoved',
+  'streamDocumentAppended',
   'streamLoaded',
   'streamTitleUpdated',
   'streamsChanged',
   'streamsLoaded',
 ] as const;
 
-export type SwiftToWebMessageType = (typeof SWIFT_TO_WEB_MESSAGE_TYPES)[number];
+type LegacySwiftToWebMessageType = 'quickPanelCellsAdded';
+
+export type SwiftToWebMessageType =
+  | (typeof SWIFT_TO_WEB_MESSAGE_TYPES)[number]
+  | LegacySwiftToWebMessageType;
 
 export interface BridgeMessage {
   type: string;

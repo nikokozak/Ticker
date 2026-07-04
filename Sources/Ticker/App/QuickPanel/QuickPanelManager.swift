@@ -259,12 +259,13 @@ final class QuickPanelManager: ObservableObject {
 
     /// Handle Enter key - add content to stream
     func handleEnter() async {
-        await addToStream(triggerAI: false)
+        await addToStream()
     }
 
     /// Handle Cmd+Enter - add content and trigger AI
     func handleCmdEnter() async {
-        await addToStream(triggerAI: true)
+        // TODO(task-1.4): Restore Quick Panel AI handling on the document model.
+        await addToStream()
     }
 
     /// Handle Option+Enter - ephemeral AI conversation (not saved)
@@ -402,16 +403,16 @@ final class QuickPanelManager: ObservableObject {
         )
     }
 
-    // MARK: - Cell Creation
+    // MARK: - Markdown Capture
 
     /// Add captured content and/or input to the active stream
-    private func addToStream(triggerAI: Bool) async {
+    private func addToStream() async {
         guard let persistence = persistence else {
             error = "Persistence not configured"
             return
         }
 
-        let hasContext = context?.hasContent == true
+        let hasContext = nonEmptyTrimmed(context?.selectedText) != nil || context?.clipboardImage != nil
         let hasInput = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         // Must have something to add
@@ -427,47 +428,9 @@ final class QuickPanelManager: ObservableObject {
             // Get target stream (may create new one)
             let (streamId, isNewStream) = try getTargetStreamId()
 
-            var pendingCells: [Cell] = []
-            var contextCellId: UUID?
-            var triggerAICellId: UUID?
-
-            // 1. If we have context (selection or image), create a quote cell
-            if let ctx = context, ctx.hasContent {
-                let contextCell = createContextCell(from: ctx, streamId: streamId)
-                pendingCells.append(contextCell)
-                contextCellId = contextCell.id
-            }
-
-            // 2. If we have input text
-            if hasInput {
-                let trimmedInput = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                if triggerAI {
-                    // Create AI response cell that references context
-                    let aiCell = Cell(
-                        streamId: streamId,
-                        content: "",  // Will be filled by AI
-                        originalPrompt: trimmedInput,
-                        type: .aiResponse,
-                        order: 0,  // Final order assigned atomically at persistence time.
-                        references: contextCellId.map { [$0] }
-                    )
-                    pendingCells.append(aiCell)
-                    triggerAICellId = aiCell.id
-                } else {
-                    // Create plain text cell
-                    let textCell = Cell(
-                        streamId: streamId,
-                        content: "<p>\(escapeHtml(trimmedInput))</p>",
-                        type: .text,
-                        order: 0  // Final order assigned atomically at persistence time.
-                    )
-                    pendingCells.append(textCell)
-                }
-            }
-
-            let persistedCells = try persistence.insertQuickPanelCells(streamId: streamId, cells: pendingCells)
-            notifyFrontend(streamId: streamId, cells: persistedCells, triggerAI: triggerAICellId, isNewStream: isNewStream)
+            let fragment = try buildMarkdownFragment(streamId: streamId)
+            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
+            notifyFrontend(streamId: streamId, fragment: result.fragment, isNewStream: isNewStream)
 
             // Success - hide panel
             hide()
@@ -538,115 +501,70 @@ final class QuickPanelManager: ObservableObject {
         return (newStream.id, true)
     }
 
-    /// Create a quote cell from captured context
-    private func createContextCell(from ctx: QuickPanelContext, streamId: UUID) -> Cell {
-        var content = ""
+    private func buildMarkdownFragment(streamId: UUID) throws -> String {
+        var blocks: [String] = []
 
-        // Build source attribution: "App — Window Title" or just "App"
-        let sourceAttribution = buildSourceAttribution(app: ctx.activeApp, windowTitle: ctx.windowTitle)
+        if let ctx = context {
+            if let selectedText = nonEmptyTrimmed(ctx.selectedText) {
+                blocks.append(markdownBlockquote(selectedText))
 
-        if let text = ctx.selectedText {
-            // Format as italicized quote with source info
-            let escapedText = escapeHtml(text)
-            content = "<p><em>\(escapedText)</em></p>"
-
-            if let source = sourceAttribution {
-                content += "<p class=\"source-info\">— \(source)</p>"
-            }
-        } else if let imageData = ctx.clipboardImage, let assetService = assetService {
-            // Save image via AssetService and embed as img tag
-            do {
-                let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
-                // Use relative path for portability - AssetSchemeHandler resolves at render time
-                // Note: ticker-asset:/// (three slashes) ensures the path isn't parsed as host
-                let assetUrl = "ticker-asset:///\(relativePath)"
-                content = "<p><img src=\"\(assetUrl)\" alt=\"Screenshot\" style=\"max-width: 100%;\"></p>"
-
-                if let source = sourceAttribution {
-                    content += "<p class=\"source-info\">— Screenshot from \(source)</p>"
+                if let sourceApp = nonEmptyTrimmed(ctx.activeApp) {
+                    blocks.append("*— \(escapeMarkdownEmphasis(sourceApp))*")
                 }
-            } catch {
-                DebugLog.log("[QuickPanel] Failed to save screenshot (\(DebugLog.errorSummary(error)))")
-                content = "<p>[Screenshot failed to save]</p>"
+            }
+
+            if let imageData = ctx.clipboardImage {
+                guard let assetService = assetService else {
+                    throw QuickPanelError.assetServiceNotConfigured
+                }
+
+                let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
+                blocks.append("![capture](ticker-asset:///\(relativePath))")
             }
         }
 
-        return Cell(
-            streamId: streamId,
-            content: content,
-            type: .quote,
-            order: 0,  // Final order assigned atomically at persistence time.
-            sourceApp: ctx.activeApp
-        )
+        if let input = nonEmptyTrimmed(inputText) {
+            blocks.append(input)
+        }
+
+        return blocks.joined(separator: "\n\n")
     }
 
-    /// Build source attribution string from app name and window title
-    private func buildSourceAttribution(app: String?, windowTitle: String?) -> String? {
-        let escapedApp = app.map { escapeHtml($0) }
-        let escapedTitle = windowTitle.map { escapeHtml($0) }
+    private func markdownBlockquote(_ text: String) -> String {
+        text.components(separatedBy: CharacterSet.newlines)
+            .map { line in
+                line.isEmpty ? ">" : "> \(line)"
+            }
+            .joined(separator: "\n")
+    }
 
-        switch (escapedApp, escapedTitle) {
-        case let (app?, title?) where !title.isEmpty:
-            // Truncate long titles
-            let truncatedTitle = title.count > 60 ? String(title.prefix(57)) + "..." : title
-            return "\(app) — \(truncatedTitle)"
-        case let (app?, _):
-            return app
-        case let (nil, title?) where !title.isEmpty:
-            return title
-        default:
+    private func nonEmptyTrimmed(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
             return nil
         }
+        return trimmed
     }
 
-    /// Notify the React frontend about new cells
-    /// When isNewStream is true, includes stream metadata so frontend can add it without creating a blank cell
-    private func notifyFrontend(streamId: UUID, cells: [Cell], triggerAI: UUID?, isNewStream: Bool = false) {
+    private func escapeMarkdownEmphasis(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "*", with: "\\*")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    /// Notify the React frontend about document appends.
+    private func notifyFrontend(streamId: UUID, fragment: String, isNewStream: Bool = false) {
         guard let bridgeService = bridgeService else { return }
 
-        var payload: [String: AnyCodable] = [
+        let payload: [String: AnyCodable] = [
             "streamId": AnyCodable(streamId.uuidString),
-            "cells": AnyCodable(cells.map { cellToDict($0) }),
-            "isNewStream": AnyCodable(isNewStream)
+            "fragment": AnyCodable(fragment),
+            "isNewStream": AnyCodable(isNewStream),
+            "source": AnyCodable("quickPanel")
         ]
 
-        if let aiCellId = triggerAI {
-            payload["triggerAI"] = AnyCodable(aiCellId.uuidString)
-        }
-
-        bridgeService.send(BridgeMessage(type: "quickPanelCellsAdded", payload: payload))
-    }
-
-    /// Convert Cell to dictionary for bridge
-    private func cellToDict(_ cell: Cell) -> [String: Any] {
-        var dict: [String: Any] = [
-            "id": cell.id.uuidString,
-            "streamId": cell.streamId.uuidString,
-            "content": cell.content,
-            "type": cell.type.rawValue,
-            "order": cell.order,
-            "createdAt": ISO8601DateFormatter().string(from: cell.createdAt),
-            "updatedAt": ISO8601DateFormatter().string(from: cell.updatedAt)
-        ]
-        if let sourceApp = cell.sourceApp {
-            dict["sourceApp"] = sourceApp
-        }
-        if let originalPrompt = cell.originalPrompt {
-            dict["originalPrompt"] = originalPrompt
-        }
-        if let references = cell.references {
-            dict["references"] = references.map { $0.uuidString }
-        }
-        return dict
-    }
-
-    /// Simple HTML escaping
-    private func escapeHtml(_ text: String) -> String {
-        text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
+        bridgeService.send(BridgeMessage(type: "streamDocumentAppended", payload: payload))
     }
 
     // MARK: - Panel Creation
@@ -727,12 +645,15 @@ final class QuickPanelManager: ObservableObject {
 
 enum QuickPanelError: Error, LocalizedError {
     case persistenceNotConfigured
+    case assetServiceNotConfigured
     case noActiveStream
 
     var errorDescription: String? {
         switch self {
         case .persistenceNotConfigured:
             return "Database not configured"
+        case .assetServiceNotConfigured:
+            return "Asset storage not configured"
         case .noActiveStream:
             return "No active stream"
         }

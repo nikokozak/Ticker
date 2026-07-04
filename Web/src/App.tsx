@@ -143,28 +143,12 @@ export function App() {
           applyEditorTypography(normalizeEditorTypography(raw));
           break;
         }
-        case 'quickPanelCellsAdded':
-          // Quick Panel added cells - if it's a new stream, load it and update list
+        case 'streamDocumentAppended':
+          // Quick Panel appended to a document - if it's a new stream, load it.
           if (message.payload?.isNewStream && message.payload?.streamId) {
             const streamId = message.payload.streamId as string;
-            const cellCount = (message.payload.cells as unknown[])?.length || 0;
-            debugLog('[App] Quick Panel created new stream with cells', { streamId, cellCount });
+            debugLog('[App] Quick Panel created new stream document', { streamId });
 
-            // Add to streams list so it appears when navigating back
-            setStreams(prev => {
-              // Avoid duplicates
-              if (prev.some(s => s.id === streamId)) return prev;
-              return [{
-                id: streamId,
-                title: 'Untitled',
-                sourceCount: 0,
-                cellCount,
-                updatedAt: new Date().toISOString(),
-                previewText: null
-              }, ...prev];
-            });
-
-            // Load the stream from DB - cells are already saved
             bridge.send({ type: 'loadStream', payload: { id: streamId } });
           }
           break;

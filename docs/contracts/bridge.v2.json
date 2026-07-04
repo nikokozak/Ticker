@@ -22,6 +22,9 @@
       },
       "documentModelSelected": {
         "requiredPayloadKeys": ["requestId", "modelId"]
+      },
+      "streamDocumentAppended": {
+        "requiredPayloadKeys": ["streamId", "fragment", "isNewStream", "source"]
       }
     }
   }
