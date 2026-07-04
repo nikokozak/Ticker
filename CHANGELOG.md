@@ -5,7 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
-- TBD
+- Live markdown concealment in the stream editor so formatting marks fade away off the active line while styled text remains readable.
 
 ### Changed
 - TBD

@@ -11,6 +11,7 @@ import { SidePanel } from './SidePanel';
 import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
+import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 
 interface StreamEditorProps {
@@ -1059,6 +1060,7 @@ export function StreamEditor({
                 EditorView.editable.of(!isAiThinking),
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
+                markdownConcealExtension,
                 markdownImageWidgetExtension,
               ]}
               onCreateEditor={(view) => {

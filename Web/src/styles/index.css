@@ -757,6 +757,12 @@ body {
   word-break: break-word;
 }
 
+.document-editor-codemirror .cm-blockquote-line {
+  padding-left: 0.9em;
+  border-left: 2px solid rgba(59, 130, 246, 0.24);
+  color: var(--color-text-secondary);
+}
+
 .document-editor-codemirror .cm-md-image-widget {
   position: relative;
   display: inline-block;
