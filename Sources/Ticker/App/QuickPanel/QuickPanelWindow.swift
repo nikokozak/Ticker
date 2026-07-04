@@ -15,6 +15,8 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
     var onDismiss: (() -> Void)?
     /// Callback for Escape so all focus states use the same graduated handling.
     var onEscape: (() -> Void)?
+    private var fadeGeneration: Int = 0
+    private var isProgrammaticHide = false
 
     // MARK: - NSPanel Overrides
 
@@ -39,6 +41,7 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
     // MARK: - NSWindowDelegate (Blur Dismissal)
 
     func windowDidResignKey(_ notification: Notification) {
+        guard !isProgrammaticHide else { return }
         // Auto-dismiss when user clicks outside the panel
         onDismiss?()
     }
@@ -96,6 +99,42 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
     /// Position the panel at a specific point (bottom-left origin)
     func position(at point: CGPoint) {
         setFrameOrigin(point)
+    }
+
+    /// Show with a short opacity fade. Movement/scale stay fixed to avoid visual churn.
+    func fadeIn(duration: TimeInterval = 0.12) {
+        fadeGeneration += 1
+        let generation = fadeGeneration
+        alphaValue = 0
+        orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().alphaValue = 1
+        } completionHandler: { [weak self] in
+            guard let self, generation == self.fadeGeneration else { return }
+            self.alphaValue = 1
+        }
+    }
+
+    /// Hide with a short opacity fade. Completion is ignored if a newer show/hide starts.
+    func fadeOut(duration: TimeInterval = 0.12, completion: (() -> Void)? = nil) {
+        fadeGeneration += 1
+        let generation = fadeGeneration
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            guard let self, generation == self.fadeGeneration else { return }
+            self.isProgrammaticHide = true
+            self.orderOut(nil)
+            self.isProgrammaticHide = false
+            self.alphaValue = 1
+            completion?()
+        }
     }
 
     /// Reset panel to initial minimum height

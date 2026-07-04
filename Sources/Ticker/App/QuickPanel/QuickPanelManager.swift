@@ -45,6 +45,7 @@ final class QuickPanelManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var statusMessage: String?  // Temporary feedback (success/info messages)
+    @Published private(set) var isShowingSaveFeedback: Bool = false
     @Published var ephemeralConversation = EphemeralConversation()
 
     // Stream selection
@@ -80,6 +81,7 @@ final class QuickPanelManager: ObservableObject {
     private var hostingView: NSHostingView<QuickPanelView>?
     private var currentAppearance: NSAppearance?  // Stored to apply when panel is created
     private var suppressedClipboardImageChangeCount: Int?
+    private var presentationGeneration: Int = 0
 
     // MARK: - Initialization
 
@@ -201,6 +203,8 @@ final class QuickPanelManager: ObservableObject {
 
     /// Show the quick panel with specific context
     private func show(with capturedContext: QuickPanelContext, showAccessibilityWarning: Bool) {
+        presentationGeneration += 1
+        cancelFeedbackTasks()
         self.context = capturedContext
         resetState()
 
@@ -220,11 +224,15 @@ final class QuickPanelManager: ObservableObject {
 
         guard let panel = panel else { return }
 
+        heightDebounceTimer?.invalidate()
+        targetHeight = QuickPanelWindow.minHeight
+        panel.resetToMinHeight()
+
         // Position at captured location
         panel.position(at: capturedContext.panelPosition)
 
         // Show panel without bringing main window forward
-        panel.orderFrontRegardless()
+        panel.fadeIn()
         panel.makeKey()
 
         isVisible = true
@@ -237,14 +245,27 @@ final class QuickPanelManager: ObservableObject {
 
     /// Hide the quick panel
     func hide() {
+        presentationGeneration += 1
+        let generation = presentationGeneration
         cancelFeedbackTasks()
         // Cancel any in-flight streaming to avoid orphan AI calls
         cancelStreaming()
 
-        panel?.orderOut(nil)
         isVisible = false
-        resetState()
-        statusMessage = nil
+
+        let finishHide = { [weak self] in
+            guard let self, generation == self.presentationGeneration else { return }
+            self.resetState()
+            self.context = nil
+            self.statusMessage = nil
+        }
+
+        guard let panel, panel.isVisible else {
+            finishHide()
+            return
+        }
+
+        panel.fadeOut(completion: finishHide)
         // Note: ephemeralConversation is intentionally preserved so user can re-reference
     }
 
@@ -262,6 +283,7 @@ final class QuickPanelManager: ObservableObject {
         isLoading = false
         error = nil
         statusMessage = nil
+        isShowingSaveFeedback = false
     }
 
     private func cancelFeedbackTasks() {
@@ -273,6 +295,7 @@ final class QuickPanelManager: ObservableObject {
 
     private func showTimedStatusMessage(_ message: String, durationNanoseconds: UInt64) {
         statusClearTask?.cancel()
+        isShowingSaveFeedback = false
         statusMessage = message
 
         statusClearTask = Task { [weak self] in
@@ -290,6 +313,7 @@ final class QuickPanelManager: ObservableObject {
         statusClearTask?.cancel()
         statusClearTask = nil
         saveFeedbackTask?.cancel()
+        isShowingSaveFeedback = true
         statusMessage = message
 
         saveFeedbackTask = Task { [weak self] in
@@ -421,6 +445,11 @@ final class QuickPanelManager: ObservableObject {
             return
         }
 
+        if isShowingSaveFeedback {
+            hide()
+            return
+        }
+
         // Second: clear input/context
         if !inputText.isEmpty || context?.hasContent == true {
             suppressDismissedClipboardImageIfNeeded()
@@ -518,8 +547,6 @@ final class QuickPanelManager: ObservableObject {
                 }
             }
 
-            inputText = ""
-            context = nil
             isLoading = false
             let feedbackMessage = triggerDocumentAI
                 ? "Saved to \(streamTitle) — asking AI…"
