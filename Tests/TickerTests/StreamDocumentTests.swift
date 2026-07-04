@@ -107,29 +107,46 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_appendToStreamDocumentSeedsLegacyCellsBeforeAppendingWhenDocumentMissing() throws {
-        try withTempPersistenceService { service in
-            let stream = Stream(title: "Legacy Seed")
+    func test_textSearchFindsStreamDocumentWithSnippet() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Searchable Stream")
             try service.saveStream(stream)
-
-            let legacyCell = Cell(
+            try service.saveStreamDocument(
                 streamId: stream.id,
-                content: "<p>Legacy note</p>",
-                type: .text,
-                order: 0
+                markdown: """
+                # Research Notes
+
+                This stream document contains a retargeted search phrase for SQL coverage.
+
+                The surrounding markdown should appear in the result snippet.
+                """
             )
-            try service.saveCell(legacyCell)
 
-            let result = try service.appendToStreamDocument(streamId: stream.id, fragment: "New capture")
+            let embeddingService = EmbeddingService()
+            let retrievalService = RetrievalService(
+                persistence: service,
+                embeddingService: embeddingService
+            )
+            let searchService = SearchService(
+                persistence: service,
+                retrieval: retrievalService,
+                embedding: embeddingService
+            )
 
-            XCTAssertEqual(result.fragment, "New capture")
-            XCTAssertTrue(result.isNewDocument)
+            let results = try await searchService.hybridSearch(
+                query: "retargeted search phrase",
+                currentStreamId: stream.id,
+                limit: 5
+            )
 
-            let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
-            XCTAssertEqual(document.markdown, "Legacy note\n\nNew capture")
-
-            let loaded = try service.loadOrCreateStreamDocument(streamId: stream.id)
-            XCTAssertEqual(loaded.markdown, "Legacy note\n\nNew capture")
+            let result = try XCTUnwrap(results.currentStreamResults.first)
+            XCTAssertEqual(result.streamId, stream.id.uuidString)
+            XCTAssertEqual(result.streamTitle, "Searchable Stream")
+            XCTAssertEqual(result.sourceType.rawValue, "cell")
+            XCTAssertEqual(result.cellType, "text")
+            XCTAssertEqual(result.title, "Research Notes")
+            XCTAssertTrue(result.snippet.contains("retargeted search phrase"))
+            XCTAssertTrue(results.otherStreamResults.isEmpty)
         }
     }
 
@@ -274,6 +291,26 @@ final class StreamDocumentTests: XCTestCase {
         }
 
         try body(service)
+    }
+
+    private func withTempPersistenceService(_ body: (PersistenceService) async throws -> Void) async throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+
+        var service: PersistenceService? = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        defer {
+            service = nil
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        guard let service else {
+            XCTFail("Expected persistence service")
+            return
+        }
+
+        try await body(service)
     }
 
     private func withSeededV10Database(

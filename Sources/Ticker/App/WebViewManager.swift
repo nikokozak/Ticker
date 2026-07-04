@@ -847,9 +847,10 @@ final class WebViewManager: NSObject {
                     ]))
                     return
                 }
+                let document = try persistence.loadOrCreateStreamDocument(streamId: streamId)
 
                 // Convert to export format
-                let content = formatStreamForExport(stream: stream, format: format)
+                let content = formatStreamForExport(stream: stream, document: document, format: format)
                 let fileExtension = format == "markdown" ? ".md" : ".txt"
                 let suggestedName = sanitizeFilename(stream.title) + fileExtension
 
@@ -1342,69 +1343,21 @@ final class WebViewManager: NSObject {
     // MARK: - Export Helpers
 
     /// Format a stream for export as markdown or plain text
-    private func formatStreamForExport(stream: Stream, format: String) -> String {
+    private func formatStreamForExport(stream: Stream, document: StreamDocument, format: String) -> String {
         var output = ""
         let isMarkdown = format == "markdown"
 
-        // Title
         if isMarkdown {
             output += "# \(stream.title)\n\n"
         } else {
             output += "\(stream.title)\n\n"
         }
 
-        // Cells
-        let sortedCells = stream.cells.sorted(by: { $0.order < $1.order })
-        for cell in sortedCells {
-            let plainContent = stripHTML(cell.content)
-
-            switch cell.type {
-            case .text:
-                output += plainContent + "\n\n"
-
-            case .aiResponse:
-                if isMarkdown {
-                    output += "**AI Response**"
-                    if let modelId = cell.modelId {
-                        output += " *(\(modelId))*"
-                    }
-                    output += "\n"
-                    if let prompt = cell.originalPrompt {
-                        // Format multi-line prompts as proper blockquotes
-                        let quotedPrompt = prompt.components(separatedBy: "\n")
-                            .map { "> \($0)" }
-                            .joined(separator: "\n")
-                        output += "\(quotedPrompt)\n\n"
-                    }
-                } else {
-                    output += "[AI Response"
-                    if let modelId = cell.modelId { output += " - \(modelId)" }
-                    output += "]\n"
-                    if let prompt = cell.originalPrompt {
-                        output += "Prompt: \(prompt)\n\n"
-                    }
-                }
-                output += plainContent + "\n\n"
-
-            case .quote:
-                if isMarkdown {
-                    output += "**Quote**"
-                    if let sourceApp = cell.sourceApp {
-                        output += " *(from \(sourceApp))*"
-                    }
-                    output += "\n\n"
-                } else {
-                    output += "[Quote"
-                    if let sourceApp = cell.sourceApp { output += " - \(sourceApp)" }
-                    output += "]\n"
-                }
-                output += plainContent + "\n\n"
-            }
-
-            output += isMarkdown ? "---\n\n" : "---\n\n"
+        let body = isMarkdown ? document.markdown : plainTextFromMarkdown(document.markdown)
+        if !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            output += body + "\n\n"
         }
 
-        // Sources
         if !stream.sources.isEmpty {
             output += isMarkdown ? "## Sources\n\n" : "Sources:\n"
             for source in stream.sources {
@@ -1415,28 +1368,13 @@ final class WebViewManager: NSObject {
         return output
     }
 
-    /// Strip HTML tags from content and convert to plain text
-    private func stripHTML(_ html: String) -> String {
-        guard let data = html.data(using: .utf8),
-              let attributedString = try? NSAttributedString(
-                  data: data,
-                  options: [
-                      .documentType: NSAttributedString.DocumentType.html,
-                      .characterEncoding: String.Encoding.utf8.rawValue
-                  ],
-                  documentAttributes: nil
-              ) else {
-            // Fallback: basic regex-based stripping
-            return html
-                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-                .replacingOccurrences(of: "&nbsp;", with: " ")
-                .replacingOccurrences(of: "&amp;", with: "&")
-                .replacingOccurrences(of: "&lt;", with: "<")
-                .replacingOccurrences(of: "&gt;", with: ">")
-                .replacingOccurrences(of: "&quot;", with: "\"")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return attributedString.string.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func plainTextFromMarkdown(_ markdown: String) -> String {
+        markdown
+            .replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\!\[([^\]]*)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"`([^`]*)`"#, with: "$1", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Sanitize a string for use as a filename

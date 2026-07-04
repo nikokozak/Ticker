@@ -121,18 +121,7 @@ enum Prompts {
     Answer: search, knowledge, expand, summarize, rewrite, or extract
     """
 
-    // MARK: - Modifier Stack
-
-    static let modifierLabel = """
-    Summarize this instruction in 1-3 words. Return ONLY the summary.
-
-    Examples:
-    - "make it shorter" → "shorter"
-    - "add technical detail" → "detail"
-    - "make it more casual" → "casual"
-    - "focus on the key points" → "key points"
-    - "expand on this" → "expanded"
-    """
+    // MARK: - Transform
 
     static let applyModifier = """
     Transform the content according to the user's instruction.
