@@ -94,12 +94,10 @@ final class RetrievalService {
             let chunk = retrieved.chunk
             var header = "### \(retrieved.sourceName)"
 
-            if let pageStart = chunk.pageStart {
-                if let pageEnd = chunk.pageEnd, pageEnd != pageStart {
-                    header += " (pages \(pageStart)-\(pageEnd))"
-                } else {
-                    header += " (page \(pageStart))"
-                }
+            if chunk.pageEnd != chunk.pageStart {
+                header += " (pages \(chunk.pageStart)-\(chunk.pageEnd))"
+            } else {
+                header += " (page \(chunk.pageStart))"
             }
 
             context += "\(header)\n\n\(chunk.content)\n\n"

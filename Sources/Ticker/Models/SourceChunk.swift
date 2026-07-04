@@ -1,46 +1,47 @@
 import Foundation
 
-/// A chunk of text from a source document for RAG retrieval
+/// A local text chunk from a source document.
 struct SourceChunk: Identifiable, Codable {
     let id: UUID
     let sourceId: UUID
-    var chunkIndex: Int
-    var content: String
-    var tokenCount: Int
-    var pageStart: Int?
-    var pageEnd: Int?
-    var embeddingStatus: EmbeddingStatus
-    let createdAt: Date
+    var seq: Int
+    var text: String
+    var pageStart: Int
+    var pageEnd: Int
+    var sectionPath: String?
+
+    var tokenCount: Int {
+        Int(ceil(Double(text.count) / 4.0))
+    }
+
+    // ponytail: Compatibility ceiling for dormant pre-R1 retrieval code; remove when Task 1.3 rewrites retrieval over FTS.
+    var chunkIndex: Int {
+        get { seq }
+        set { seq = newValue }
+    }
+
+    var content: String {
+        get { text }
+        set { text = newValue }
+    }
 
     init(
         id: UUID = UUID(),
         sourceId: UUID,
-        chunkIndex: Int,
-        content: String,
-        tokenCount: Int,
-        pageStart: Int? = nil,
-        pageEnd: Int? = nil,
-        embeddingStatus: EmbeddingStatus = .pending,
-        createdAt: Date = Date()
+        seq: Int,
+        text: String,
+        pageStart: Int,
+        pageEnd: Int,
+        sectionPath: String? = nil
     ) {
         self.id = id
         self.sourceId = sourceId
-        self.chunkIndex = chunkIndex
-        self.content = content
-        self.tokenCount = tokenCount
+        self.seq = seq
+        self.text = text
         self.pageStart = pageStart
         self.pageEnd = pageEnd
-        self.embeddingStatus = embeddingStatus
-        self.createdAt = createdAt
+        self.sectionPath = sectionPath
     }
-}
-
-/// Status of embedding generation for a chunk
-enum EmbeddingStatus: String, Codable {
-    case pending
-    case processing
-    case complete
-    case failed
 }
 
 /// A retrieved chunk with relevance score for RAG queries

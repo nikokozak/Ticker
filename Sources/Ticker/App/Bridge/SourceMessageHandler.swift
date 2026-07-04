@@ -26,6 +26,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
     private let persistence: PersistenceService
     private let bridgeService: BridgeService
     private let sourceService: SourceService?
+    private let ingestService: IngestService?
     private let assetService: AssetService
     private weak var delegate: SourceMessageHandlerDelegate?
 
@@ -34,6 +35,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
         self.persistence = persistence
         self.bridgeService = container.bridgeService
         self.sourceService = container.sourceService
+        self.ingestService = container.ingestService
         self.assetService = container.assetService
         self.delegate = delegate
     }
@@ -84,6 +86,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                         let source = try sourceService.addSource(from: url, to: streamId)
                         let sourcePayload = StreamCodec.encodeSource(source)
                         bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+                        ingestService?.enqueue(source: source)
                     } catch {
                         DebugLog.log("[WebViewManager] Failed to add source (\(DebugLog.errorSummary(error)))")
                         bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
@@ -107,6 +110,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 let source = try sourceService.addSource(from: url, to: streamId)
                 let sourcePayload = StreamCodec.encodeSource(source)
                 bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+                ingestService?.enqueue(source: source)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to add source from path (\(DebugLog.errorSummary(error)))")
                 bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))

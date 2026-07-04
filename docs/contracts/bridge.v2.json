@@ -80,6 +80,10 @@
       "sourceError": {
         "requiredPayloadKeys": ["error"]
       },
+      "sourceIndexStatusChanged": {
+        "requiredPayloadKeys": ["sourceId", "status"],
+        "optionalPayloadKeys": ["progress"]
+      },
       "sourceRemoveError": {
         "requiredPayloadKeys": ["id", "error"]
       },

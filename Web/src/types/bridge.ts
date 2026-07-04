@@ -24,6 +24,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'settingsLoaded',
   'sourceAdded',
   'sourceError',
+  'sourceIndexStatusChanged',
   'sourceRemoveError',
   'sourceRemoved',
   'streamDocumentAppended',

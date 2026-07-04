@@ -1,6 +1,8 @@
 import CoreGraphics
+import AppKit
 import Foundation
 import GRDB
+import PDFKit
 import XCTest
 
 @testable import Ticker
@@ -36,6 +38,10 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
 }
 
 final class StreamDocumentTests: XCTestCase {
+    private enum TestPDFError: Error {
+        case creationFailed
+    }
+
     func test_v14MigrationCreatesPDFHighlightsTable() throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -90,6 +96,226 @@ final class StreamDocumentTests: XCTestCase {
         }
 
         XCTAssertTrue(columnExists)
+    }
+
+    func test_v16MigrationRebuildsSourceChunksAndAddsIndexStatus() throws {
+        let streamId = UUID()
+        let sourceId = UUID()
+        let chunkId = UUID()
+
+        try withSeededV15Database { db in
+            try insertStream(db, id: streamId, title: "Legacy Chunks", createdAt: 900)
+            try insertV15Source(
+                db,
+                id: sourceId,
+                streamId: streamId,
+                displayName: "Legacy.pdf",
+                fileType: "pdf",
+                pageCount: 2
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO source_chunks (
+                        id, source_id, chunk_index, content, token_count, page_start, page_end, embedding_status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    chunkId.uuidString,
+                    sourceId.uuidString,
+                    4,
+                    "Distinct legacy chunk text",
+                    6,
+                    2,
+                    2,
+                    "pending",
+                    1_000
+                ]
+            )
+        } body: { dbURL, fileManager in
+            let service = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+
+            let statuses = try service.loadSourceIndexStatuses(streamId: streamId)
+            XCTAssertEqual(statuses[sourceId], .pending)
+
+            let chunks = try service.loadSourceChunks(sourceId: sourceId)
+            XCTAssertEqual(chunks.count, 1)
+            XCTAssertEqual(chunks.first?.id, chunkId)
+            XCTAssertEqual(chunks.first?.seq, 4)
+            XCTAssertEqual(chunks.first?.text, "Distinct legacy chunk text")
+            XCTAssertEqual(chunks.first?.pageStart, 2)
+            XCTAssertEqual(chunks.first?.pageEnd, 2)
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let chunkColumns = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(source_chunks)").map { row -> String in
+                    row["name"]
+                }
+            }
+            XCTAssertEqual(
+                chunkColumns,
+                ["id", "source_id", "seq", "text", "page_start", "page_end", "section_path"]
+            )
+
+            let ftsExists = try dbQueue.read { db in
+                try Row.fetchOne(
+                    db,
+                    sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'source_chunks_fts'"
+                ) != nil
+            }
+            XCTAssertTrue(ftsExists)
+        }
+    }
+
+    func test_chunkerUsesOutlineSectionPathsAndPageRanges() throws {
+        let document = try makePDFDocument(pages: [
+            "Opening receipts establish the first page.",
+            "Storage receipts include the caliper phrase.",
+            "Closing receipts finish the third page."
+        ])
+        try addOutline(to: document, labels: ["1 Opening", "2 Storage", "3 Closing"])
+
+        let chunks = try ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0))
+            .chunkPDF(document: document, sourceId: UUID())
+
+        XCTAssertEqual(chunks.count, 3)
+        XCTAssertEqual(chunks.map(\.pageStart), [1, 2, 3])
+        XCTAssertEqual(chunks.map(\.pageEnd), [1, 2, 3])
+        XCTAssertEqual(chunks.map(\.sectionPath), ["1 Opening", "2 Storage", "3 Closing"])
+        XCTAssertTrue(chunks[1].text.contains("caliper phrase"))
+    }
+
+    func test_sourceChunksAndFTSRowsAreRemovedWhenSourceIsDeleted() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, _ in
+            let source = try savePDFSource(in: service)
+            let chunk = SourceChunk(
+                sourceId: source.id,
+                seq: 0,
+                text: "The ultraviolet caliper phrase should be found by FTS.",
+                pageStart: 1,
+                pageEnd: 1,
+                sectionPath: "Fixtures"
+            )
+
+            try service.saveSourceChunks([chunk], for: source.id)
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let matches = try dbQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT c.text
+                        FROM source_chunks_fts
+                        JOIN source_chunks c ON c.id = source_chunks_fts.chunk_id
+                        WHERE source_chunks_fts MATCH ?
+                    """,
+                    arguments: ["ultraviolet"]
+                ).map { row -> String in row["text"] }
+            }
+
+            XCTAssertEqual(matches, [chunk.text])
+
+            try service.deleteSource(id: source.id)
+
+            let counts = try dbQueue.read { db in
+                let chunkCount: Int = try Row.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) AS count FROM source_chunks WHERE source_id = ?",
+                    arguments: [source.id.uuidString]
+                )?["count"] ?? -1
+                let ftsCount: Int = try Row.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) AS count FROM source_chunks_fts WHERE source_id = ?",
+                    arguments: [source.id.uuidString]
+                )?["count"] ?? -1
+                return (chunkCount, ftsCount)
+            }
+
+            XCTAssertEqual(counts.0, 0)
+            XCTAssertEqual(counts.1, 0)
+        }
+    }
+
+    func test_ingestServiceIndexesPDFAndEmitsStatusTransitions() throws {
+        try withTempPersistenceServiceAndURL { service, _, fileManager in
+            let stream = Stream(title: "Ingest Ready")
+            try service.saveStream(stream)
+
+            let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { _ = try? fileManager.removeItem(at: tempDir) }
+
+            let pdfURL = tempDir.appendingPathComponent("Ready.pdf")
+            try makePDFData(pages: ["Ready receipt text with the anvil phrase."]).write(to: pdfURL)
+
+            let sourceService = SourceService(persistence: service)
+            let source = try sourceService.addSource(from: pdfURL, to: stream.id)
+            let ingestService = IngestService(
+                persistence: service,
+                sourceService: sourceService,
+                chunkingService: ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0))
+            )
+
+            let ready = expectation(description: "source indexed")
+            let lock = NSLock()
+            var statuses: [SourceIndexStatus] = []
+            ingestService.onStatusChange = { update in
+                lock.lock()
+                statuses.append(update.status)
+                lock.unlock()
+                if update.status == .ready {
+                    ready.fulfill()
+                }
+            }
+
+            ingestService.enqueue(source: source)
+            wait(for: [ready], timeout: 5)
+
+            let reloaded = try XCTUnwrap(service.loadSource(id: source.id))
+            XCTAssertEqual(reloaded.indexStatus, .ready)
+            XCTAssertFalse(try service.loadSourceChunks(sourceId: source.id).isEmpty)
+            lock.lock()
+            let capturedStatuses = statuses
+            lock.unlock()
+            XCTAssertTrue(capturedStatuses.contains(.indexing))
+            XCTAssertTrue(capturedStatuses.contains(.ready))
+        }
+    }
+
+    func test_ingestServiceMarksNoTextPDFAsFailedNoText() throws {
+        try withTempPersistenceServiceAndURL { service, _, fileManager in
+            let stream = Stream(title: "Ingest No Text")
+            try service.saveStream(stream)
+
+            let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { _ = try? fileManager.removeItem(at: tempDir) }
+
+            let pdfURL = tempDir.appendingPathComponent("Blank.pdf")
+            try makePDFData(pages: [""]).write(to: pdfURL)
+
+            let sourceService = SourceService(persistence: service)
+            let source = try sourceService.addSource(from: pdfURL, to: stream.id)
+            let ingestService = IngestService(
+                persistence: service,
+                sourceService: sourceService,
+                chunkingService: ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0))
+            )
+
+            let failed = expectation(description: "source failed without text")
+            ingestService.onStatusChange = { update in
+                if update.status == .failedNoText {
+                    failed.fulfill()
+                }
+            }
+
+            ingestService.enqueue(source: source)
+            wait(for: [failed], timeout: 5)
+
+            let reloaded = try XCTUnwrap(service.loadSource(id: source.id))
+            XCTAssertEqual(reloaded.indexStatus, .failedNoText)
+            XCTAssertTrue(try service.loadSourceChunks(sourceId: source.id).isEmpty)
+        }
     }
 
     func test_savePDFHighlightRoundTripsRects() throws {
@@ -778,6 +1004,28 @@ final class StreamDocumentTests: XCTestCase {
         try await body(service)
     }
 
+    private func withTempPersistenceServiceAndURL(
+        _ body: (PersistenceService, URL, FileManager) throws -> Void
+    ) throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+
+        var service: PersistenceService? = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        defer {
+            service = nil
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        guard let service else {
+            XCTFail("Expected persistence service")
+            return
+        }
+
+        try body(service, dbURL, fileManager)
+    }
+
     private func savePDFSource(in service: PersistenceService) throws -> SourceReference {
         let stream = Stream(title: "PDF Highlights")
         try service.saveStream(stream)
@@ -807,6 +1055,30 @@ final class StreamDocumentTests: XCTestCase {
             try createV10Schema(db)
             try seed(db)
             try markV10MigrationsApplied(db)
+        }
+        dbQueue = nil
+
+        defer {
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        try body(dbURL, fileManager)
+    }
+
+    private func withSeededV15Database(
+        seed: (Database) throws -> Void,
+        body: (URL, FileManager) throws -> Void
+    ) throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+
+        var dbQueue: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
+        try dbQueue?.write { db in
+            try createV15Schema(db)
+            try seed(db)
+            try markV15MigrationsApplied(db)
         }
         dbQueue = nil
 
@@ -877,6 +1149,47 @@ final class StreamDocumentTests: XCTestCase {
         try db.execute(sql: "CREATE TABLE grdb_migrations (identifier TEXT NOT NULL PRIMARY KEY)")
     }
 
+    private func createV15Schema(_ db: Database) throws {
+        try createV10Schema(db)
+
+        try db.execute(sql: """
+            CREATE TABLE source_chunks (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                token_count INTEGER NOT NULL,
+                page_start INTEGER,
+                page_end INTEGER,
+                embedding_status TEXT NOT NULL DEFAULT 'pending',
+                created_at DOUBLE NOT NULL
+            )
+            """)
+        try db.execute(sql: "CREATE INDEX idx_chunks_source ON source_chunks(source_id)")
+        try db.execute(sql: "CREATE INDEX idx_chunks_status ON source_chunks(embedding_status)")
+        try db.execute(sql: """
+            CREATE TABLE chunk_embeddings (
+                chunk_id TEXT PRIMARY KEY REFERENCES source_chunks(id) ON DELETE CASCADE,
+                embedding BLOB NOT NULL,
+                model TEXT NOT NULL,
+                created_at DOUBLE NOT NULL
+            )
+            """)
+        try db.execute(sql: "ALTER TABLE stream_documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+        try db.execute(sql: """
+            CREATE TABLE pdf_highlights (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                page INTEGER NOT NULL,
+                rects_json TEXT NOT NULL,
+                quote TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """)
+        try db.execute(sql: "CREATE INDEX idx_pdf_highlights_source ON pdf_highlights(source_id)")
+        try db.execute(sql: "ALTER TABLE sources ADD COLUMN original_path TEXT")
+    }
+
     private func markV10MigrationsApplied(_ db: Database) throws {
         for identifier in [
             "v1_initial",
@@ -897,6 +1210,31 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    private func markV15MigrationsApplied(_ db: Database) throws {
+        for identifier in [
+            "v1_initial",
+            "v2_cell_restatement",
+            "v3_cell_original_prompt",
+            "v4_modifier_stack",
+            "v5_processing",
+            "v6_fix_source_status",
+            "v7_rag_pipeline",
+            "v8_quick_panel",
+            "v9_heading_in_content_titles",
+            "v10_stream_documents",
+            "v11_recover_orphaned_quickpanel_cells",
+            "v12_seed_documents_from_legacy_cells",
+            "v13_stream_document_revision",
+            "v14_pdf_highlights",
+            "v15_source_original_path"
+        ] {
+            try db.execute(
+                sql: "INSERT INTO grdb_migrations (identifier) VALUES (?)",
+                arguments: [identifier]
+            )
+        }
+    }
+
     private func insertStream(_ db: Database, id: UUID, title: String, createdAt: Double) throws {
         try db.execute(
             sql: """
@@ -904,6 +1242,47 @@ final class StreamDocumentTests: XCTestCase {
                 VALUES (?, ?, ?, ?)
             """,
             arguments: [id.uuidString, title, createdAt, createdAt]
+        )
+    }
+
+    private func insertV15Source(
+        _ db: Database,
+        id: UUID,
+        streamId: UUID,
+        displayName: String,
+        fileType: String,
+        pageCount: Int?
+    ) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO sources (
+                    id,
+                    stream_id,
+                    display_name,
+                    file_type,
+                    bookmark_data,
+                    status,
+                    extracted_text,
+                    page_count,
+                    added_at,
+                    embedding_status,
+                    original_path
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            arguments: [
+                id.uuidString,
+                streamId.uuidString,
+                displayName,
+                fileType,
+                Data("bookmark".utf8),
+                "ready",
+                "legacy extracted text",
+                pageCount,
+                1_000,
+                "none",
+                nil
+            ]
         )
     }
 
@@ -975,5 +1354,61 @@ final class StreamDocumentTests: XCTestCase {
             at: backupsDirectory,
             includingPropertiesForKeys: nil
         ).filter { $0.pathExtension.lowercased() == "db" }
+    }
+
+    private func makePDFDocument(pages: [String]) throws -> PDFDocument {
+        let data = try makePDFData(pages: pages)
+        guard let document = PDFDocument(data: data) else {
+            throw TestPDFError.creationFailed
+        }
+        return document
+    }
+
+    private func makePDFData(pages: [String]) throws -> Data {
+        let data = NSMutableData()
+        guard let consumer = CGDataConsumer(data: data as CFMutableData) else {
+            throw TestPDFError.creationFailed
+        }
+
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            throw TestPDFError.creationFailed
+        }
+
+        for text in pages {
+            context.beginPDFPage(nil)
+            let graphicsContext = NSGraphicsContext(cgContext: context, flipped: false)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = graphicsContext
+
+            let attributed = NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 14),
+                    .foregroundColor: NSColor.black
+                ]
+            )
+            attributed.draw(in: CGRect(x: 72, y: 650, width: 468, height: 80))
+
+            NSGraphicsContext.restoreGraphicsState()
+            context.endPDFPage()
+        }
+
+        context.closePDF()
+        return data as Data
+    }
+
+    private func addOutline(to document: PDFDocument, labels: [String]) throws {
+        let root = PDFOutline()
+        for (index, label) in labels.enumerated() {
+            guard let page = document.page(at: index) else {
+                throw TestPDFError.creationFailed
+            }
+            let outline = PDFOutline()
+            outline.label = label
+            outline.destination = PDFDestination(page: page, at: CGPoint(x: 0, y: 0))
+            root.insertChild(outline, at: root.numberOfChildren)
+        }
+        document.outlineRoot = root
     }
 }

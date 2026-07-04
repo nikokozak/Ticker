@@ -1,16 +1,34 @@
 import Foundation
 import PDFKit
 
-/// Splits documents into semantic chunks for embedding
+/// Builds local source chunks for Reading with Receipts indexing.
 final class ChunkingService {
-
-    // MARK: - Configuration
-
     struct Config {
-        var targetTokens: Int = 500       // Target chunk size
-        var maxTokens: Int = 1000         // Hard maximum
-        var overlapTokens: Int = 50       // Overlap between chunks
-        var charsPerToken: Double = 4.0   // Token estimation (same as LLMRequest)
+        var targetTokens: Int = 800
+        var overlapTokens: Int = 100
+        var charsPerToken: Double = 4.0
+    }
+
+    private struct PageText {
+        let page: Int
+        let text: String
+    }
+
+    private struct SectionRange {
+        let pageStart: Int
+        let pageEnd: Int
+        let path: String?
+    }
+
+    private struct OutlineEntry {
+        let page: Int
+        let depth: Int
+        let path: String
+    }
+
+    private struct TextSegment {
+        let text: String
+        let page: Int
     }
 
     private let config: Config
@@ -19,334 +37,281 @@ final class ChunkingService {
         self.config = config
     }
 
-    // MARK: - Public Interface
+    func chunkPDF(
+        document: PDFDocument,
+        sourceId: UUID,
+        progress: ((Double) -> Void)? = nil,
+        shouldCancel: () -> Bool = { false }
+    ) throws -> [SourceChunk] {
+        guard document.pageCount > 0 else { return [] }
 
-    /// Chunk PDF with page tracking
-    func chunkPDF(document: PDFDocument, sourceId: UUID) -> [SourceChunk] {
-        // Extract text with page boundaries
-        var pageTexts: [(text: String, page: Int)] = []
-
-        for i in 0..<document.pageCount {
-            if let page = document.page(at: i),
-               let pageText = page.string,
-               !pageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                pageTexts.append((pageText, i + 1))  // 1-indexed pages
-            }
-        }
-
-        return chunkWithPageTracking(pageTexts: pageTexts, sourceId: sourceId)
-    }
-
-    /// Chunk plain text (no page tracking)
-    func chunkText(text: String, sourceId: UUID) -> [SourceChunk] {
-        let paragraphs = splitIntoParagraphs(text)
-        let merged = mergeIntoChunks(paragraphs: paragraphs)
-
-        return merged.enumerated().map { index, item in
-            SourceChunk(
-                sourceId: sourceId,
-                chunkIndex: index,
-                content: item.content,
-                tokenCount: item.tokenCount,
-                pageStart: nil,
-                pageEnd: nil
-            )
-        }
-    }
-
-    // MARK: - Private
-
-    private func estimateTokens(_ text: String) -> Int {
-        Int(ceil(Double(text.count) / config.charsPerToken))
-    }
-
-    /// Split text into paragraphs (respecting markdown structure)
-    private func splitIntoParagraphs(_ text: String) -> [String] {
-        // Split on double newlines, preserving structure
-        let rawParagraphs = text.components(separatedBy: "\n\n")
-
-        var paragraphs: [String] = []
-        var currentHeader: String? = nil
-
-        for paragraph in rawParagraphs {
-            let trimmed = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-
-            // Check if this is a markdown header
-            if trimmed.hasPrefix("#") {
-                // If we have content after a header, append it
-                if let header = currentHeader {
-                    paragraphs.append(header)
-                }
-                currentHeader = trimmed
-            } else if let header = currentHeader {
-                // Combine header with following content
-                paragraphs.append("\(header)\n\n\(trimmed)")
-                currentHeader = nil
-            } else {
-                paragraphs.append(trimmed)
-            }
-        }
-
-        // Don't forget trailing header
-        if let header = currentHeader {
-            paragraphs.append(header)
-        }
-
-        return paragraphs
-    }
-
-    /// Merge paragraphs into chunks of target size with overlap
-    private func mergeIntoChunks(paragraphs: [String]) -> [(content: String, tokenCount: Int)] {
-        guard !paragraphs.isEmpty else { return [] }
-
-        var chunks: [(content: String, tokenCount: Int)] = []
-        var currentContent = ""
-        var currentTokens = 0
-        var lastOverlap = ""  // Content to prepend to next chunk
-
-        for paragraph in paragraphs {
-            let paragraphTokens = estimateTokens(paragraph)
-
-            // If single paragraph exceeds max, split it
-            if paragraphTokens > config.maxTokens {
-                // Flush current chunk if any
-                if !currentContent.isEmpty {
-                    chunks.append((currentContent, currentTokens))
-                    lastOverlap = extractOverlap(from: currentContent)
-                    currentContent = ""
-                    currentTokens = 0
-                }
-
-                // Split long paragraph by sentences
-                let sentences = splitIntoSentences(paragraph)
-                for sentenceChunk in mergeSentences(sentences) {
-                    if !lastOverlap.isEmpty {
-                        let combined = lastOverlap + "\n\n" + sentenceChunk.content
-                        chunks.append((combined, estimateTokens(combined)))
-                    } else {
-                        chunks.append(sentenceChunk)
-                    }
-                    lastOverlap = extractOverlap(from: sentenceChunk.content)
-                }
-                continue
+        var pagesByNumber: [Int: PageText] = [:]
+        for index in 0..<document.pageCount {
+            if shouldCancel() {
+                throw CancellationError()
             }
 
-            // Check if adding this paragraph would exceed target
-            let separator = currentContent.isEmpty ? "" : "\n\n"
-            let newTokens = currentTokens + (currentContent.isEmpty ? 0 : 2) + paragraphTokens
-
-            if newTokens > config.targetTokens && !currentContent.isEmpty {
-                // Start new chunk
-                chunks.append((currentContent, currentTokens))
-                lastOverlap = extractOverlap(from: currentContent)
-
-                // Start new chunk with overlap + new paragraph
-                if !lastOverlap.isEmpty {
-                    currentContent = lastOverlap + "\n\n" + paragraph
-                    currentTokens = estimateTokens(currentContent)
-                } else {
-                    currentContent = paragraph
-                    currentTokens = paragraphTokens
-                }
-            } else {
-                // Add to current chunk
-                if currentContent.isEmpty && !lastOverlap.isEmpty {
-                    currentContent = lastOverlap + "\n\n" + paragraph
-                    currentTokens = estimateTokens(currentContent)
-                    lastOverlap = ""
-                } else {
-                    currentContent += separator + paragraph
-                    currentTokens = newTokens
-                }
+            if let page = document.page(at: index),
+               let text = page.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !text.isEmpty {
+                pagesByNumber[index + 1] = PageText(page: index + 1, text: text)
             }
+
+            progress?(Double(index + 1) / Double(document.pageCount))
         }
 
-        // Don't forget last chunk
-        if !currentContent.isEmpty {
-            chunks.append((currentContent, currentTokens))
-        }
+        guard !pagesByNumber.isEmpty else { return [] }
 
-        return chunks
-    }
-
-    /// Extract overlap content (last ~50 tokens) from a chunk
-    private func extractOverlap(from content: String) -> String {
-        let targetChars = Int(Double(config.overlapTokens) * config.charsPerToken)
-        guard content.count > targetChars else { return content }
-
-        // Find a good break point (sentence or paragraph boundary)
-        let suffix = String(content.suffix(targetChars * 2))  // Take more, then trim to boundary
-
-        // Try to break at sentence boundary
-        if let lastPeriod = suffix.lastIndex(of: ".") {
-            let afterPeriod = suffix.index(after: lastPeriod)
-            if afterPeriod < suffix.endIndex {
-                return String(suffix[afterPeriod...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
-
-        // Fall back to simple suffix
-        return String(content.suffix(targetChars)).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Split paragraph into sentences
-    private func splitIntoSentences(_ text: String) -> [String] {
-        var sentences: [String] = []
-        text.enumerateSubstrings(in: text.startIndex..., options: .bySentences) { substring, _, _, _ in
-            if let sentence = substring?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !sentence.isEmpty {
-                sentences.append(sentence)
-            }
-        }
-        return sentences.isEmpty ? [text] : sentences
-    }
-
-    /// Merge sentences into chunks (for long paragraphs)
-    private func mergeSentences(_ sentences: [String]) -> [(content: String, tokenCount: Int)] {
-        var chunks: [(content: String, tokenCount: Int)] = []
-        var current = ""
-        var currentTokens = 0
-
-        for sentence in sentences {
-            let sentenceTokens = estimateTokens(sentence)
-            let newTokens = currentTokens + (current.isEmpty ? 0 : 1) + sentenceTokens
-
-            if newTokens > config.maxTokens && !current.isEmpty {
-                chunks.append((current, currentTokens))
-                current = sentence
-                currentTokens = sentenceTokens
-            } else {
-                current += (current.isEmpty ? "" : " ") + sentence
-                currentTokens = newTokens
-            }
-        }
-
-        if !current.isEmpty {
-            chunks.append((current, currentTokens))
-        }
-
-        return chunks
-    }
-
-    /// Chunk with page boundary tracking
-    private func chunkWithPageTracking(pageTexts: [(text: String, page: Int)], sourceId: UUID) -> [SourceChunk] {
-        guard !pageTexts.isEmpty else { return [] }
+        let sections = sectionRanges(for: document)
+        let ranges = sections.isEmpty
+            ? [SectionRange(pageStart: 1, pageEnd: document.pageCount, path: nil)]
+            : sections
 
         var chunks: [SourceChunk] = []
-        var currentContent = ""
-        var currentTokens = 0
-        var currentStartPage: Int? = nil
-        var currentEndPage: Int? = nil
-        var chunkIndex = 0
-        var lastOverlap = ""
-
-        for (pageText, pageNum) in pageTexts {
-            let paragraphs = splitIntoParagraphs(pageText)
-
-            for paragraph in paragraphs {
-                let paragraphTokens = estimateTokens(paragraph)
-
-                // Handle very long paragraphs
-                if paragraphTokens > config.maxTokens {
-                    // Flush current
-                    if !currentContent.isEmpty {
-                        chunks.append(SourceChunk(
-                            sourceId: sourceId,
-                            chunkIndex: chunkIndex,
-                            content: currentContent,
-                            tokenCount: currentTokens,
-                            pageStart: currentStartPage,
-                            pageEnd: currentEndPage
-                        ))
-                        chunkIndex += 1
-                        lastOverlap = extractOverlap(from: currentContent)
-                        currentContent = ""
-                        currentTokens = 0
-                        currentStartPage = nil
-                        currentEndPage = nil
-                    }
-
-                    // Split and add
-                    let sentences = splitIntoSentences(paragraph)
-                    for sentenceChunk in mergeSentences(sentences) {
-                        var content = sentenceChunk.content
-                        if !lastOverlap.isEmpty {
-                            content = lastOverlap + "\n\n" + content
-                        }
-                        chunks.append(SourceChunk(
-                            sourceId: sourceId,
-                            chunkIndex: chunkIndex,
-                            content: content,
-                            tokenCount: estimateTokens(content),
-                            pageStart: pageNum,
-                            pageEnd: pageNum
-                        ))
-                        chunkIndex += 1
-                        lastOverlap = extractOverlap(from: content)
-                    }
-                    continue
-                }
-
-                let separator = currentContent.isEmpty ? "" : "\n\n"
-                let newTokens = currentTokens + (currentContent.isEmpty ? 0 : 2) + paragraphTokens
-
-                if newTokens > config.targetTokens && !currentContent.isEmpty {
-                    // Save current chunk
-                    chunks.append(SourceChunk(
-                        sourceId: sourceId,
-                        chunkIndex: chunkIndex,
-                        content: currentContent,
-                        tokenCount: currentTokens,
-                        pageStart: currentStartPage,
-                        pageEnd: currentEndPage
-                    ))
-                    chunkIndex += 1
-                    lastOverlap = extractOverlap(from: currentContent)
-
-                    // Start new chunk
-                    if !lastOverlap.isEmpty {
-                        currentContent = lastOverlap + "\n\n" + paragraph
-                        currentTokens = estimateTokens(currentContent)
-                    } else {
-                        currentContent = paragraph
-                        currentTokens = paragraphTokens
-                    }
-                    currentStartPage = pageNum
-                    currentEndPage = pageNum
-                } else {
-                    // Add to current chunk
-                    if currentContent.isEmpty {
-                        if !lastOverlap.isEmpty {
-                            currentContent = lastOverlap + "\n\n" + paragraph
-                            currentTokens = estimateTokens(currentContent)
-                            lastOverlap = ""
-                        } else {
-                            currentContent = paragraph
-                            currentTokens = paragraphTokens
-                        }
-                        currentStartPage = pageNum
-                    } else {
-                        currentContent += separator + paragraph
-                        currentTokens = newTokens
-                    }
-                    currentEndPage = pageNum
-                }
+        for range in ranges {
+            if shouldCancel() {
+                throw CancellationError()
             }
-        }
 
-        // Don't forget last chunk
-        if !currentContent.isEmpty {
-            chunks.append(SourceChunk(
+            let pageTexts = (range.pageStart...range.pageEnd)
+                .compactMap { pagesByNumber[$0] }
+            guard !pageTexts.isEmpty else { continue }
+
+            chunks.append(contentsOf: chunkPages(
+                pageTexts,
                 sourceId: sourceId,
-                chunkIndex: chunkIndex,
-                content: currentContent,
-                tokenCount: currentTokens,
-                pageStart: currentStartPage,
-                pageEnd: currentEndPage
+                sectionPath: range.path,
+                startingSeq: chunks.count
             ))
         }
 
         return chunks
+    }
+
+    private func sectionRanges(for document: PDFDocument) -> [SectionRange] {
+        guard let outlineRoot = document.outlineRoot else { return [] }
+
+        var entries: [OutlineEntry] = []
+        collectOutlineEntries(
+            from: outlineRoot,
+            document: document,
+            parentPath: [],
+            depth: 0,
+            entries: &entries
+        )
+
+        entries.sort {
+            if $0.page == $1.page { return $0.depth < $1.depth }
+            return $0.page < $1.page
+        }
+
+        guard !entries.isEmpty else { return [] }
+
+        var ranges: [SectionRange] = []
+        var entryIndex = 0
+        var activePath: String?
+        var currentStart: Int?
+
+        for page in 1...document.pageCount {
+            var pathChanged = false
+            while entryIndex < entries.count, entries[entryIndex].page <= page {
+                let nextPath = entries[entryIndex].path
+                if nextPath != activePath {
+                    pathChanged = true
+                    activePath = nextPath
+                }
+                entryIndex += 1
+            }
+
+            if currentStart == nil {
+                currentStart = page
+                continue
+            }
+
+            if pathChanged, let start = currentStart {
+                ranges.append(SectionRange(pageStart: start, pageEnd: max(start, page - 1), path: activePathForPreviousPage(entries: entries, page: page - 1)))
+                currentStart = page
+            }
+        }
+
+        if let start = currentStart {
+            ranges.append(SectionRange(pageStart: start, pageEnd: document.pageCount, path: activePath))
+        }
+
+        return ranges.filter { $0.path != nil }
+    }
+
+    private func activePathForPreviousPage(entries: [OutlineEntry], page: Int) -> String? {
+        entries.last { $0.page <= page }?.path
+    }
+
+    private func collectOutlineEntries(
+        from outline: PDFOutline,
+        document: PDFDocument,
+        parentPath: [String],
+        depth: Int,
+        entries: inout [OutlineEntry]
+    ) {
+        for childIndex in 0..<outline.numberOfChildren {
+            guard let child = outline.child(at: childIndex) else { continue }
+
+            let label = (child.label ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let path = label.isEmpty ? parentPath : parentPath + [label]
+
+            if let page = child.destination?.page {
+                let pageIndex = document.index(for: page)
+                if pageIndex != NSNotFound, !path.isEmpty {
+                    entries.append(OutlineEntry(
+                        page: pageIndex + 1,
+                        depth: depth,
+                        path: path.joined(separator: " > ")
+                    ))
+                }
+            }
+
+            collectOutlineEntries(
+                from: child,
+                document: document,
+                parentPath: path,
+                depth: depth + 1,
+                entries: &entries
+            )
+        }
+    }
+
+    private func chunkPages(
+        _ pageTexts: [PageText],
+        sourceId: UUID,
+        sectionPath: String?,
+        startingSeq: Int
+    ) -> [SourceChunk] {
+        let segments = pageTexts.flatMap { pageText in
+            splitIntoSentenceSegments(pageText.text, page: pageText.page)
+        }
+        guard !segments.isEmpty else { return [] }
+
+        var chunks: [SourceChunk] = []
+        var current: [TextSegment] = []
+        var currentTokens = 0
+
+        func flushCurrent() {
+            guard !current.isEmpty else { return }
+            chunks.append(makeChunk(
+                from: current,
+                sourceId: sourceId,
+                seq: startingSeq + chunks.count,
+                sectionPath: sectionPath
+            ))
+            current = overlapSegments(from: current)
+            currentTokens = current.reduce(0) { $0 + estimateTokens($1.text) }
+        }
+
+        for segment in segments {
+            let parts = splitLongSegmentIfNeeded(segment)
+            for part in parts {
+                let tokens = estimateTokens(part.text)
+                if currentTokens > 0, currentTokens + tokens > config.targetTokens {
+                    flushCurrent()
+                }
+                current.append(part)
+                currentTokens += tokens
+            }
+        }
+
+        if !current.isEmpty {
+            chunks.append(makeChunk(
+                from: current,
+                sourceId: sourceId,
+                seq: startingSeq + chunks.count,
+                sectionPath: sectionPath
+            ))
+        }
+
+        return chunks
+    }
+
+    private func makeChunk(
+        from segments: [TextSegment],
+        sourceId: UUID,
+        seq: Int,
+        sectionPath: String?
+    ) -> SourceChunk {
+        let text = segments
+            .map(\.text)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return SourceChunk(
+            sourceId: sourceId,
+            seq: seq,
+            text: text,
+            pageStart: segments.first?.page ?? 1,
+            pageEnd: segments.last?.page ?? segments.first?.page ?? 1,
+            sectionPath: sectionPath
+        )
+    }
+
+    private func splitIntoSentenceSegments(_ text: String, page: Int) -> [TextSegment] {
+        var segments: [TextSegment] = []
+        text.enumerateSubstrings(in: text.startIndex..., options: .bySentences) { substring, _, _, _ in
+            guard let sentence = substring?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sentence.isEmpty else { return }
+            segments.append(TextSegment(text: sentence, page: page))
+        }
+
+        if !segments.isEmpty { return segments }
+
+        return text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { TextSegment(text: $0, page: page) }
+    }
+
+    private func splitLongSegmentIfNeeded(_ segment: TextSegment) -> [TextSegment] {
+        guard estimateTokens(segment.text) > config.targetTokens else {
+            return [segment]
+        }
+
+        let targetChars = max(1, Int(Double(config.targetTokens) * config.charsPerToken))
+        var parts: [TextSegment] = []
+        var remaining = segment.text[...]
+
+        while !remaining.isEmpty {
+            if remaining.count <= targetChars {
+                parts.append(TextSegment(text: String(remaining).trimmingCharacters(in: .whitespacesAndNewlines), page: segment.page))
+                break
+            }
+
+            let tentativeEnd = remaining.index(remaining.startIndex, offsetBy: targetChars)
+            let prefix = remaining[..<tentativeEnd]
+            let breakIndex = prefix.lastIndex(where: { $0 == " " || $0 == "\n" }) ?? tentativeEnd
+            let part = remaining[..<breakIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !part.isEmpty {
+                parts.append(TextSegment(text: String(part), page: segment.page))
+            }
+            remaining = remaining[breakIndex...].trimmingCharacters(in: .whitespacesAndNewlines)[...]
+        }
+
+        return parts
+    }
+
+    private func overlapSegments(from segments: [TextSegment]) -> [TextSegment] {
+        var result: [TextSegment] = []
+        var tokens = 0
+
+        for segment in segments.reversed() {
+            let segmentTokens = estimateTokens(segment.text)
+            if !result.isEmpty, tokens + segmentTokens > config.overlapTokens {
+                break
+            }
+            result.append(segment)
+            tokens += segmentTokens
+        }
+
+        return result.reversed()
+    }
+
+    private func estimateTokens(_ text: String) -> Int {
+        max(1, Int(ceil(Double(text.count) / config.charsPerToken)))
     }
 }

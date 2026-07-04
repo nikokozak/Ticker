@@ -9,6 +9,7 @@ final class WebViewManager: NSObject {
     private let bridgeRouter: BridgeRouter
     let persistence: PersistenceService?
     private let sourceService: SourceService?
+    private let ingestService: IngestService?
     let orchestrator: AIOrchestrator
     private var mlxClassifier: MLXClassifier?
     private var classifierSkipped = false
@@ -37,6 +38,7 @@ final class WebViewManager: NSObject {
         self.orchestrator = container.orchestrator
         self.persistence = container.persistence
         self.sourceService = container.sourceService
+        self.ingestService = container.ingestService
         self.assetService = container.assetService
         super.init()
         if let streamHandler = StreamMessageHandler(container: container, delegate: self) {
@@ -276,6 +278,7 @@ final class WebViewManager: NSObject {
             let source = try withSecurityScopedAccess(url) { try sourceService.addSource(from: url, to: streamId) }
             let sourcePayload = StreamCodec.encodeSource(source)
             bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+            ingestService?.enqueue(source: source)
             if source.fileType == .pdf {
                 openSourceReference(source, sourceService: sourceService)
             }
@@ -447,22 +450,6 @@ final class WebViewManager: NSObject {
     func load() {
         loadWebContent()
         loadMLXClassifier()
-        migrateExistingSourcesToRAG()
-    }
-
-    private func migrateExistingSourcesToRAG() {
-        guard !SettingsService.proxyOnlyMode else { return }
-        guard let persistence, let sourceService else { return }
-
-        Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-
-            let migrationService = RAGMigrationService(
-                persistence: persistence,
-                sourceService: sourceService
-            )
-            await migrationService.migrateExistingSources()
-        }
     }
 
     private func loadMLXClassifier() {

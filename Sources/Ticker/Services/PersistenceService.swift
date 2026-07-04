@@ -379,6 +379,76 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v16_source_chunk_index") { db in
+            let hasLegacySourceChunks = try Row.fetchOne(
+                db,
+                sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'source_chunks'"
+            ) != nil
+
+            try db.execute(sql: "DROP TRIGGER IF EXISTS source_chunks_delete_fts")
+            try db.execute(sql: "DROP TABLE IF EXISTS source_chunks_fts")
+            try db.execute(sql: "DROP TABLE IF EXISTS chunk_embeddings")
+
+            if hasLegacySourceChunks {
+                try db.execute(sql: "ALTER TABLE source_chunks RENAME TO source_chunks_v15")
+            }
+
+            try db.create(table: "source_chunks") { t in
+                t.column("id", .text).primaryKey()
+                t.column("source_id", .text).notNull()
+                    .references("sources", onDelete: .cascade)
+                t.column("seq", .integer).notNull()
+                t.column("text", .text).notNull()
+                t.column("page_start", .integer).notNull()
+                t.column("page_end", .integer).notNull()
+                t.column("section_path", .text)
+            }
+            try db.create(index: "idx_source_chunks_source", on: "source_chunks", columns: ["source_id"])
+
+            if hasLegacySourceChunks {
+                try db.execute(sql: """
+                    INSERT INTO source_chunks (id, source_id, seq, text, page_start, page_end, section_path)
+                    SELECT
+                        id,
+                        source_id,
+                        chunk_index,
+                        content,
+                        COALESCE(page_start, 1),
+                        COALESCE(page_end, page_start, 1),
+                        NULL
+                    FROM source_chunks_v15
+                    WHERE TRIM(content) <> ''
+                      AND EXISTS (SELECT 1 FROM sources WHERE sources.id = source_chunks_v15.source_id)
+                """)
+                try db.execute(sql: "DROP TABLE source_chunks_v15")
+            }
+
+            // Standalone FTS duplicates chunk text and keeps unindexed ids so delete-by-source is a single local operation.
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE source_chunks_fts USING fts5(
+                    chunk_id UNINDEXED,
+                    source_id UNINDEXED,
+                    text
+                )
+            """)
+            try db.execute(sql: """
+                INSERT INTO source_chunks_fts (chunk_id, source_id, text)
+                SELECT id, source_id, text
+                FROM source_chunks
+            """)
+            try db.execute(sql: """
+                CREATE TRIGGER source_chunks_delete_fts
+                AFTER DELETE ON source_chunks
+                BEGIN
+                    DELETE FROM source_chunks_fts WHERE chunk_id = old.id;
+                END
+            """)
+
+            try db.alter(table: "sources") { t in
+                t.add(column: "index_status", .text).notNull().defaults(to: "pending")
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -507,6 +577,8 @@ final class PersistenceService {
             let sources = sourceRows.map { row -> SourceReference in
                 let embeddingStatusRaw: String? = row["embedding_status"]
                 let embeddingStatus = embeddingStatusRaw.flatMap { SourceEmbeddingStatus(rawValue: $0) } ?? .none
+                let indexStatusRaw: String? = row["index_status"]
+                let indexStatus = indexStatusRaw.flatMap { SourceIndexStatus(rawValue: $0) } ?? .pending
 
                 return SourceReference(
                     id: UUID(uuidString: row["id"])!,
@@ -519,6 +591,7 @@ final class PersistenceService {
                     extractedText: row["extracted_text"],
                     pageCount: row["page_count"],
                     embeddingStatus: embeddingStatus,
+                    indexStatus: indexStatus,
                     addedAt: Date(timeIntervalSince1970: row["added_at"])
                 )
             }
@@ -776,6 +849,8 @@ final class PersistenceService {
 
             let embeddingStatusRaw: String? = row["embedding_status"]
             let embeddingStatus = embeddingStatusRaw.flatMap(SourceEmbeddingStatus.init(rawValue:)) ?? .none
+            let indexStatusRaw: String? = row["index_status"]
+            let indexStatus = indexStatusRaw.flatMap(SourceIndexStatus.init(rawValue:)) ?? .pending
 
             return SourceReference(
                 id: UUID(uuidString: row["id"])!,
@@ -788,6 +863,7 @@ final class PersistenceService {
                 extractedText: row["extracted_text"],
                 pageCount: row["page_count"],
                 embeddingStatus: embeddingStatus,
+                indexStatus: indexStatus,
                 addedAt: Date(timeIntervalSince1970: row["added_at"])
             )
         }
@@ -797,15 +873,16 @@ final class PersistenceService {
         try dbQueue.write { db in
             try db.execute(
                 sql: """
-                    INSERT INTO sources (id, stream_id, display_name, file_type, bookmark_data, original_path, status, extracted_text, page_count, added_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO sources (id, stream_id, display_name, file_type, bookmark_data, original_path, status, extracted_text, page_count, index_status, added_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         display_name = excluded.display_name,
                         bookmark_data = excluded.bookmark_data,
                         original_path = excluded.original_path,
                         status = excluded.status,
                         extracted_text = excluded.extracted_text,
-                        page_count = excluded.page_count
+                        page_count = excluded.page_count,
+                        index_status = excluded.index_status
                 """,
                 arguments: [
                     source.id.uuidString,
@@ -817,6 +894,7 @@ final class PersistenceService {
                     source.status.rawValue,
                     source.extractedText,
                     source.pageCount,
+                    source.indexStatus.rawValue,
                     source.addedAt.timeIntervalSince1970
                 ]
             )
@@ -831,6 +909,7 @@ final class PersistenceService {
 
     func deleteSource(id: UUID) throws {
         try dbQueue.write { db in
+            try deleteChunksForSource(id, db: db)
             try db.execute(sql: "DELETE FROM pdf_highlights WHERE source_id = ?", arguments: [id.uuidString])
             try db.execute(sql: "DELETE FROM sources WHERE id = ?", arguments: [id.uuidString])
         }
@@ -995,117 +1074,108 @@ final class PersistenceService {
         return result as String
     }
 
-    // MARK: - Chunk Operations (RAG Pipeline)
+    // MARK: - Source Chunk Index Operations
 
-    func saveChunks(_ chunks: [SourceChunk]) throws {
+    func saveSourceChunks(_ chunks: [SourceChunk], for sourceId: UUID) throws {
         try dbQueue.write { db in
+            try deleteChunksForSource(sourceId, db: db)
+
             for chunk in chunks {
                 try db.execute(
                     sql: """
-                        INSERT INTO source_chunks (id, source_id, chunk_index, content, token_count, page_start, page_end, embedding_status, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            content = excluded.content,
-                            token_count = excluded.token_count,
-                            embedding_status = excluded.embedding_status
+                        INSERT INTO source_chunks (id, source_id, seq, text, page_start, page_end, section_path)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         chunk.id.uuidString,
-                        chunk.sourceId.uuidString,
-                        chunk.chunkIndex,
-                        chunk.content,
-                        chunk.tokenCount,
+                        sourceId.uuidString,
+                        chunk.seq,
+                        chunk.text,
                         chunk.pageStart,
                         chunk.pageEnd,
-                        chunk.embeddingStatus.rawValue,
-                        chunk.createdAt.timeIntervalSince1970
+                        chunk.sectionPath
+                    ]
+                )
+
+                try db.execute(
+                    sql: """
+                        INSERT INTO source_chunks_fts (chunk_id, source_id, text)
+                        VALUES (?, ?, ?)
+                    """,
+                    arguments: [
+                        chunk.id.uuidString,
+                        sourceId.uuidString,
+                        chunk.text
                     ]
                 )
             }
         }
     }
 
-    func saveEmbedding(chunkId: UUID, embedding: [Float], model: String) throws {
-        let blob = EmbeddingService.toBlob(embedding)
+    func loadSourceChunks(sourceId: UUID) throws -> [SourceChunk] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, source_id, seq, text, page_start, page_end, section_path
+                    FROM source_chunks
+                    WHERE source_id = ?
+                    ORDER BY seq
+                """,
+                arguments: [sourceId.uuidString]
+            ).map(Self.decodeSourceChunk)
+        }
+    }
+
+    func deleteChunksForSource(_ sourceId: UUID) throws {
+        try dbQueue.write { db in
+            try deleteChunksForSource(sourceId, db: db)
+        }
+    }
+
+    func updateSourceIndexStatus(_ sourceId: UUID, status: SourceIndexStatus) throws {
         try dbQueue.write { db in
             try db.execute(
-                sql: """
-                    INSERT INTO chunk_embeddings (chunk_id, embedding, model, created_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(chunk_id) DO UPDATE SET
-                        embedding = excluded.embedding,
-                        model = excluded.model,
-                        created_at = excluded.created_at
-                """,
-                arguments: [
-                    chunkId.uuidString,
-                    blob,
-                    model,
-                    Date().timeIntervalSince1970
-                ]
-            )
-
-            // Update chunk status to complete
-            try db.execute(
-                sql: "UPDATE source_chunks SET embedding_status = ? WHERE id = ?",
-                arguments: [EmbeddingStatus.complete.rawValue, chunkId.uuidString]
+                sql: "UPDATE sources SET index_status = ? WHERE id = ?",
+                arguments: [status.rawValue, sourceId.uuidString]
             )
         }
     }
 
-    func loadChunksWithEmbeddings(streamId: UUID) throws -> [(SourceChunk, [Float], String)] {
+    func loadSourceIndexStatuses(streamId: UUID) throws -> [UUID: SourceIndexStatus] {
         try dbQueue.read { db in
-            let sql = """
-                SELECT c.*, e.embedding, s.display_name
-                FROM source_chunks c
-                JOIN chunk_embeddings e ON c.id = e.chunk_id
-                JOIN sources s ON c.source_id = s.id
-                WHERE s.stream_id = ?
-                ORDER BY c.source_id, c.chunk_index
-            """
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, index_status
+                    FROM sources
+                    WHERE stream_id = ?
+                """,
+                arguments: [streamId.uuidString]
+            )
 
-            return try Row.fetchAll(db, sql: sql, arguments: [streamId.uuidString]).map { row in
-                let chunk = SourceChunk(
-                    id: UUID(uuidString: row["id"])!,
-                    sourceId: UUID(uuidString: row["source_id"])!,
-                    chunkIndex: row["chunk_index"],
-                    content: row["content"],
-                    tokenCount: row["token_count"],
-                    pageStart: row["page_start"],
-                    pageEnd: row["page_end"],
-                    embeddingStatus: EmbeddingStatus(rawValue: row["embedding_status"]) ?? .complete,
-                    createdAt: Date(timeIntervalSince1970: row["created_at"])
-                )
-                let embeddingData: Data = row["embedding"]
-                let embedding = EmbeddingService.fromBlob(embeddingData)
-                let sourceName: String = row["display_name"]
-                return (chunk, embedding, sourceName)
-            }
+            return Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+                guard let id = UUID(uuidString: row["id"]) else { return nil }
+                let raw: String = row["index_status"]
+                return (id, SourceIndexStatus(rawValue: raw) ?? .pending)
+            })
         }
+    }
+
+    // ponytail: Embedding helpers are inert until Roadmap 2 R3 replaces the disabled remote-embedding path.
+    func saveChunks(_ chunks: [SourceChunk]) throws {
+        guard let sourceId = chunks.first?.sourceId else { return }
+        try saveSourceChunks(chunks, for: sourceId)
+    }
+
+    func saveEmbedding(chunkId: UUID, embedding: [Float], model: String) throws {}
+
+    func loadChunksWithEmbeddings(streamId: UUID) throws -> [(SourceChunk, [Float], String)] {
+        []
     }
 
     func loadPendingChunks(limit: Int = 100) throws -> [SourceChunk] {
-        try dbQueue.read { db in
-            let sql = """
-                SELECT * FROM source_chunks
-                WHERE embedding_status = 'pending'
-                ORDER BY created_at
-                LIMIT ?
-            """
-            return try Row.fetchAll(db, sql: sql, arguments: [limit]).map { row in
-                SourceChunk(
-                    id: UUID(uuidString: row["id"])!,
-                    sourceId: UUID(uuidString: row["source_id"])!,
-                    chunkIndex: row["chunk_index"],
-                    content: row["content"],
-                    tokenCount: row["token_count"],
-                    pageStart: row["page_start"],
-                    pageEnd: row["page_end"],
-                    embeddingStatus: .pending,
-                    createdAt: Date(timeIntervalSince1970: row["created_at"])
-                )
-            }
-        }
+        []
     }
 
     func updateSourceEmbeddingStatus(_ sourceId: UUID, status: String) throws {
@@ -1118,37 +1188,30 @@ final class PersistenceService {
     }
 
     func loadSourcesNeedingEmbedding() throws -> [SourceReference] {
-        try dbQueue.read { db in
-            let sql = """
-                SELECT * FROM sources
-                WHERE embedding_status = 'none' OR embedding_status IS NULL
-                ORDER BY added_at
-            """
-            return try Row.fetchAll(db, sql: sql).map { row in
-                SourceReference(
-                    id: UUID(uuidString: row["id"])!,
-                    streamId: UUID(uuidString: row["stream_id"])!,
-                    displayName: row["display_name"],
-                    fileType: SourceFileType(rawValue: row["file_type"]) ?? .text,
-                    bookmarkData: row["bookmark_data"],
-                    originalPath: row["original_path"],
-                    status: SourceStatus(rawValue: row["status"]) ?? .pending,
-                    extractedText: row["extracted_text"],
-                    pageCount: row["page_count"],
-                    addedAt: Date(timeIntervalSince1970: row["added_at"])
-                )
-            }
-        }
+        []
     }
 
-    func deleteChunksForSource(_ sourceId: UUID) throws {
-        try dbQueue.write { db in
-            // CASCADE handles chunk_embeddings automatically
-            try db.execute(
-                sql: "DELETE FROM source_chunks WHERE source_id = ?",
-                arguments: [sourceId.uuidString]
-            )
-        }
+    private func deleteChunksForSource(_ sourceId: UUID, db: Database) throws {
+        try db.execute(
+            sql: "DELETE FROM source_chunks_fts WHERE source_id = ?",
+            arguments: [sourceId.uuidString]
+        )
+        try db.execute(
+            sql: "DELETE FROM source_chunks WHERE source_id = ?",
+            arguments: [sourceId.uuidString]
+        )
+    }
+
+    private static func decodeSourceChunk(_ row: Row) -> SourceChunk {
+        SourceChunk(
+            id: UUID(uuidString: row["id"])!,
+            sourceId: UUID(uuidString: row["source_id"])!,
+            seq: row["seq"],
+            text: row["text"],
+            pageStart: row["page_start"],
+            pageEnd: row["page_end"],
+            sectionPath: row["section_path"]
+        )
     }
 
     // MARK: - Text Search
