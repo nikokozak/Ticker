@@ -313,6 +313,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
 
         mainWindow?.title = "Ticker"
+        mainWindow?.styleMask.insert(.fullSizeContentView)
+        mainWindow?.titlebarAppearsTransparent = true
+        mainWindow?.titleVisibility = .hidden
+        mainWindow?.backgroundColor = NSColor(name: nil) { appearance in
+            switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
+            case .darkAqua:
+                return NSColor(red: 28 / 255, green: 28 / 255, blue: 27 / 255, alpha: 1)
+            default:
+                return NSColor(red: 251 / 255, green: 251 / 255, blue: 250 / 255, alpha: 1)
+            }
+        }
         mainWindow?.minSize = NSSize(width: 300, height: 400)
         mainWindow?.delegate = self  // Handle close to hide instead of quit
         mainWindow?.level = .floating  // Always on top

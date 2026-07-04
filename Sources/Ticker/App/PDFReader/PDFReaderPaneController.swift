@@ -22,6 +22,8 @@ private enum PDFReaderPanePresentationError: LocalizedError {
 }
 
 private enum PDFPaneStyle {
+    static let trafficLightSafeLeading: CGFloat = 84
+
     static let background = dynamicColor(
         light: NSColor(red: 251 / 255, green: 251 / 255, blue: 250 / 255, alpha: 1),
         dark: NSColor(red: 28 / 255, green: 28 / 255, blue: 27 / 255, alpha: 1)
@@ -391,7 +393,10 @@ final class PDFReaderPaneController: NSViewController {
             pdfPaneHeaderView.topAnchor.constraint(equalTo: pdfPaneView.topAnchor),
             pdfPaneHeaderView.heightAnchor.constraint(equalToConstant: 44),
 
-            pdfPaneTitleField.leadingAnchor.constraint(equalTo: pdfPaneHeaderView.leadingAnchor, constant: 12),
+            pdfPaneTitleField.leadingAnchor.constraint(
+                equalTo: pdfPaneHeaderView.leadingAnchor,
+                constant: PDFPaneStyle.trafficLightSafeLeading
+            ),
             pdfPaneTitleField.topAnchor.constraint(equalTo: pdfPaneHeaderView.topAnchor, constant: 6),
             pdfPaneTitleField.trailingAnchor.constraint(lessThanOrEqualTo: pdfPaneLinkButton.leadingAnchor, constant: -10),
 

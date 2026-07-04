@@ -28,6 +28,8 @@
   --overlay-scrim: rgba(31, 31, 29, 0.34);
   --focus-ring: rgba(37, 99, 235, 0.18);
   --control-shadow: 0 4px 12px rgba(31, 31, 29, 0.12);
+  --window-chrome-safe-left: 84px;
+  --window-chrome-safe-top: 36px;
 
   /* 4px spacing scale */
   --space-1: 4px;
@@ -172,7 +174,7 @@ body {
 /* ==================== Stream List ==================== */
 
 .stream-list {
-  padding: var(--spacing-xl) var(--spacing-xl);
+  padding: max(var(--spacing-xl), var(--window-chrome-safe-top)) var(--spacing-xl) var(--spacing-xl) max(var(--spacing-xl), var(--window-chrome-safe-left));
   max-width: 600px;
   margin: 0 auto;
   width: 100%;
@@ -367,7 +369,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
-  padding: var(--spacing-lg) var(--spacing-xl);
+  padding: max(var(--spacing-lg), var(--window-chrome-safe-top)) var(--spacing-xl) var(--spacing-lg) max(var(--spacing-xl), var(--window-chrome-safe-left));
   background: var(--color-bg);
   /* No border - let content flow */
 }
