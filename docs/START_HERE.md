@@ -93,15 +93,16 @@ If you hit SwiftPM/Sparkle artifact issues, run:
 
 ## Quick Panel (capture + ephemeral chat)
 
-Quick Panel is the fast capture surface (hotkey-driven) and has two distinct modes:
+Quick Panel is the fast capture surface (hotkey-driven) and has three distinct modes:
 
-- **Save** (`↵`): saves captured context and/or your input into a stream.
-- **AI + Save** (`⌘↵`): saves, then triggers AI on the saved stream context.
+- **Save** (`↵`): appends captured context and/or your input directly to the selected stream document, shows “Saved to <stream>”, then hides.
+- **AI + Save** (`⌘↵`): appends to the selected stream document, shows “Saved to <stream> — asking AI…”, then hides while the AI answer appends in the background.
 - **Ask (ephemeral)** (`⌥↵`): runs an in-memory chat turn that is **not** saved to the stream DB.
 
 Cancellation / escape behavior:
 - `Esc` cancels streaming + clears the ephemeral chat (if active).
-- Otherwise `Esc` clears input/context; a second `Esc` hides the panel.
+- Otherwise `Esc` clears input/context; the next `Esc` hides the panel.
+- Clicking outside the panel hides it immediately.
 
 ## Drag & drop (native → stream)
 
@@ -112,7 +113,7 @@ You can drag files from Finder directly onto the app window:
 
 Notes:
 - Drops are routed to the **most recently opened stream**.
-- If no stream has been opened yet, Ticker shows an error toast (“Open a stream before dropping files.”).
+- If no stream is open, dropping a PDF creates a new stream; other files show “Drop files in a stream, or return to Streams to create one from PDF.”
 
 ## Local data (what exists on disk)
 

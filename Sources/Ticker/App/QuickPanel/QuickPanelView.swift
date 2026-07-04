@@ -16,6 +16,7 @@ private struct ContentHeightKey: PreferenceKey {
 struct QuickPanelView: View {
     @ObservedObject var manager: QuickPanelManager
     @FocusState private var isInputFocused: Bool
+    @State private var isPickerExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -70,6 +71,7 @@ struct QuickPanelView: View {
         )
         .onReceive(NotificationCenter.default.publisher(for: .quickPanelDidShow)) { _ in
             isInputFocused = true
+            isPickerExpanded = false
         }
     }
 
@@ -141,49 +143,102 @@ struct QuickPanelView: View {
     // MARK: - Stream Destination Picker
 
     private var streamDestinationPicker: some View {
-        Menu {
-            ForEach(manager.availableStreams, id: \.id) { stream in
-                Button(action: { manager.selectedStreamId = stream.id }) {
-                    HStack {
-                        Text(stream.title)
-                        if manager.selectedStreamId == stream.id {
-                            Spacer()
-                            Image(systemName: "checkmark")
-                        }
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Button(action: {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isPickerExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.system(size: 11))
+                        .foregroundColor(Colors.secondaryText)
+                    Text(selectedStreamTitle)
+                        .font(.system(size: 11))
+                        .foregroundColor(Colors.secondaryText)
+                        .lineLimit(1)
+                    Image(systemName: isPickerExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(Colors.tertiaryText)
+                }
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xs)
+                .background(Colors.hoverBackground)
+                .cornerRadius(Spacing.radiusSm)
+            }
+            .buttonStyle(.plain)
+
+            if isPickerExpanded {
+                streamDestinationOptions
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var streamDestinationOptions: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(manager.availableStreams, id: \.id) { stream in
+                    streamOptionButton(title: stream.title, isSelected: manager.selectedStreamId == stream.id) {
+                        manager.selectedStreamId = stream.id
+                        isPickerExpanded = false
                     }
                 }
-            }
 
-            if !manager.availableStreams.isEmpty {
-                Divider()
-            }
+                if !manager.availableStreams.isEmpty {
+                    Divider()
+                        .padding(.vertical, 2)
+                }
 
-            Button(action: { manager.createAndSelectNewStream() }) {
-                HStack {
-                    Image(systemName: "plus")
-                    Text("New Stream...")
+                streamOptionButton(title: "New Stream...", systemImage: "plus", isSelected: false) {
+                    manager.createAndSelectNewStream()
+                    isPickerExpanded = false
                 }
             }
-        } label: {
+            .padding(4)
+        }
+        .frame(maxHeight: 180)
+        .background(Colors.windowBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: Spacing.radiusSm)
+                .stroke(Colors.secondaryText.opacity(0.16), lineWidth: 1)
+        )
+        .cornerRadius(Spacing.radiusSm)
+    }
+
+    private func streamOptionButton(
+        title: String,
+        systemImage: String? = nil,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
             HStack(spacing: Spacing.xs) {
-                Image(systemName: "tray.and.arrow.down")
-                    .font(.system(size: 11))
-                    .foregroundColor(Colors.secondaryText)
-                Text(selectedStreamTitle)
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Colors.secondaryText)
+                }
+
+                Text(title)
                     .font(.system(size: 11))
                     .foregroundColor(Colors.secondaryText)
                     .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9))
-                    .foregroundColor(Colors.tertiaryText)
+
+                Spacer(minLength: Spacing.sm)
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Colors.primaryAccent)
+                }
             }
             .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xs)
-            .background(Colors.hoverBackground)
-            .cornerRadius(Spacing.radiusSm)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
+        .buttonStyle(.plain)
     }
 
     private var selectedStreamTitle: String {

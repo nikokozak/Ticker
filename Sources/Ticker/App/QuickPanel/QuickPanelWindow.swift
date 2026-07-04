@@ -13,6 +13,8 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
 
     /// Callback when panel should dismiss
     var onDismiss: (() -> Void)?
+    /// Callback for Escape so all focus states use the same graduated handling.
+    var onEscape: (() -> Void)?
 
     // MARK: - NSPanel Overrides
 
@@ -76,9 +78,9 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
     // MARK: - Keyboard Handling
 
     override func keyDown(with event: NSEvent) {
-        // ESC dismisses the panel
+        // ESC uses the same graduated Quick Panel semantics regardless of focus.
         if event.keyCode == 53 {
-            onDismiss?()
+            onEscape?()
             return
         }
         super.keyDown(with: event)
@@ -86,7 +88,7 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
 
     override func cancelOperation(_ sender: Any?) {
         // ESC via responder chain
-        onDismiss?()
+        onEscape?()
     }
 
     // MARK: - Positioning

@@ -64,6 +64,8 @@ final class QuickPanelManager: ObservableObject {
 
     private var streamingTask: Task<Void, Never>?
     private var documentAITasks: [UUID: Task<Void, Never>] = [:]
+    private var statusClearTask: Task<Void, Never>?
+    private var saveFeedbackTask: Task<Void, Never>?
     private var isStreamingCancelled = false  // Explicit flag since nested Tasks don't inherit cancellation
 
     // MARK: - Height Management
@@ -95,6 +97,8 @@ final class QuickPanelManager: ObservableObject {
     deinit {
         streamingTask?.cancel()
         documentAITasks.values.forEach { $0.cancel() }
+        statusClearTask?.cancel()
+        saveFeedbackTask?.cancel()
     }
 
     /// Configure services after initialization (for dependency injection)
@@ -181,15 +185,7 @@ final class QuickPanelManager: ObservableObject {
         )
 
         show(with: contextWithoutClipboard, showAccessibilityWarning: false)
-        statusMessage = message
-
-        // Auto-clear after a short delay so it doesn't linger.
-        Task {
-            try? await Task.sleep(nanoseconds: 4_000_000_000)  // 4s
-            if self.statusMessage == message {
-                self.statusMessage = nil
-            }
-        }
+        showTimedStatusMessage(message, durationNanoseconds: 4_000_000_000)
     }
 
     /// Show the quick panel with specific context
@@ -230,6 +226,7 @@ final class QuickPanelManager: ObservableObject {
 
     /// Hide the quick panel
     func hide() {
+        cancelFeedbackTasks()
         // Cancel any in-flight streaming to avoid orphan AI calls
         cancelStreaming()
 
@@ -253,6 +250,45 @@ final class QuickPanelManager: ObservableObject {
         inputText = ""
         isLoading = false
         error = nil
+        statusMessage = nil
+    }
+
+    private func cancelFeedbackTasks() {
+        statusClearTask?.cancel()
+        statusClearTask = nil
+        saveFeedbackTask?.cancel()
+        saveFeedbackTask = nil
+    }
+
+    private func showTimedStatusMessage(_ message: String, durationNanoseconds: UInt64) {
+        statusClearTask?.cancel()
+        statusMessage = message
+
+        statusClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: durationNanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.statusMessage == message else { return }
+                self.statusMessage = nil
+                self.statusClearTask = nil
+            }
+        }
+    }
+
+    private func showSaveFeedbackThenHide(_ message: String) {
+        statusClearTask?.cancel()
+        statusClearTask = nil
+        saveFeedbackTask?.cancel()
+        statusMessage = message
+
+        saveFeedbackTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.statusMessage == message else { return }
+                self.hide()
+            }
+        }
     }
 
     /// Update panel appearance (light/dark mode)
@@ -433,6 +469,7 @@ final class QuickPanelManager: ObservableObject {
         do {
             // Get target stream (may create new one)
             let (streamId, isNewStream) = try getTargetStreamId()
+            let streamTitle = displayTitle(for: streamId, persistence: persistence)
 
             let fragment = try buildMarkdownFragment(streamId: streamId)
             let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
@@ -456,8 +493,13 @@ final class QuickPanelManager: ObservableObject {
                 }
             }
 
-            // Success - hide panel
-            hide()
+            inputText = ""
+            context = nil
+            isLoading = false
+            let feedbackMessage = triggerDocumentAI
+                ? "Saved to \(streamTitle) — asking AI…"
+                : "Saved to \(streamTitle)"
+            showSaveFeedbackThenHide(feedbackMessage)
 
             if let aiPrompt {
                 if let orchestratorForAI, let documentMarkdownForAI {
@@ -476,6 +518,7 @@ final class QuickPanelManager: ObservableObject {
                     )
                 }
             }
+            return
 
         } catch {
             self.error = error.localizedDescription
@@ -586,6 +629,20 @@ final class QuickPanelManager: ObservableObject {
             return nil
         }
         return trimmed
+    }
+
+    private func displayTitle(for streamId: UUID, persistence: PersistenceService) -> String {
+        if let summaryTitle = availableStreams.first(where: { $0.id == streamId })?.title,
+           let title = nonEmptyTrimmed(summaryTitle) {
+            return title
+        }
+
+        if let storedTitle = try? persistence.getStreamTitle(id: streamId),
+           let title = nonEmptyTrimmed(storedTitle) {
+            return title
+        }
+
+        return "Untitled"
     }
 
     private func escapeMarkdownEmphasis(_ text: String) -> String {
@@ -705,6 +762,9 @@ final class QuickPanelManager: ObservableObject {
 
         newPanel.onDismiss = { [weak self] in
             self?.hide()
+        }
+        newPanel.onEscape = { [weak self] in
+            self?.handleEscape()
         }
 
         let view = QuickPanelView(manager: self)
