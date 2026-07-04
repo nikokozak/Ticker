@@ -402,6 +402,73 @@ Candidates, roughly ordered by leverage:
 
 ---
 
+## Roadmap 2: Reading with Receipts (scheduled — supersedes Feature Surfaces §3/§7 scheduling)
+
+**The wedge:** ask a question about your sources and get an answer where every claim is a clickable citation that opens the PDF at the exact passage, highlighted and centered. Ticker owns both sides of the reading loop (reader with persistent positional anchors + markdown notebook where anchors are live links); no competitor owns both. The architecture goal underneath: **per-question cost scales with what's relevant, never with the size of the book** — ingest once, ask many.
+
+### Design tenets (every task below must respect these)
+
+1. **Reading is never blocked by processing.** A dropped PDF is readable instantly; extraction/indexing happen behind a quiet status. No spinners as theater — status text under the source row that resolves to *absence* when ready.
+2. **Routing is automatic; provenance makes it visible; the user can override, never must.** No "RAG mode" toggle, no settings page. The answer itself shows where it came from: citations = from your sources; no citations + a muted "from model knowledge" note = the model answered alone. A compact scope chip in the prompt popover (`Sources: Auto / All / None`) is the escape hatch when auto-dispatch guesses wrong (e.g. "current stock prices" must not be answered from a history book — threshold gating handles this without ML; see 2.4).
+3. **Citations ARE markdown links.** AI citations are ordinary `[Book p.112](ticker-pdf://…)` links — they reuse the entire existing pipeline: conceal rendering, click→open+center+pulse, GC on deletion, export. No parallel citation system.
+4. **The model never fabricates URLs.** The model emits opaque markers (`【1】`) referencing a numbered chunk manifest we assemble; post-processing swaps markers for links we generate ourselves. A citation can only point at something we actually retrieved.
+5. **Local by default, remote only for generation.** Chunking + FTS index are free and local (Phase R1 needs no model at all). Embeddings local via MLX (Phase R3). Only generation and (lazily) summarization spend proxy tokens.
+6. **Pay-per-use ingest.** Extraction/chunking/FTS at add time (free). The summary tree (which costs tokens) builds lazily on first whole-book question or reading-session use, with a one-time visible "Preparing summaries…" state — users never pay for books they don't interrogate.
+7. **Honest failure states.** Encrypted or scanned PDFs (no text layer) get a plain-language status ("No readable text — this looks like a scanned document") + retry, not silent emptiness. A question asked while indexing is answered with what's ready plus a subtle "still indexing X" notice chip — never an error.
+
+### How the user encounters it (walkthrough)
+
+- **Add a 250-page book** → row appears in the sources modal immediately, PDF opens and reads instantly; under the row: "indexing · p. 118/250" (thin, muted), then nothing. Failure → honest state + Retry.
+- **Ask about the book** (selection Send & Prompt, or ⌘L against the stream) → answer streams in with `【1】` markers that resolve to `[Forth Handbook p. 112]` links at completion; a muted trailing line: *Consulted: Forth Handbook (4 passages)*. Click a citation → pane opens, page scrolls centered, passage flashes.
+- **Ask about stock prices in the same stream** → retrieval scores fall below threshold → no chunks sent, no citations shown, answer carries *from model knowledge*. If the router guessed wrong, the scope chip on the prompt popover forces `All` next time.
+- **Multiple sources** → citations are disambiguated by short source name; the Consulted line lists per-source counts. Same click behavior per source.
+- **"Summarize chapter 3" / "what's this book about"** → routed to the summary tree; first such question triggers the one-time "Preparing summaries… (~1 min)" state, cached forever after.
+
+### Known bites (identified up front, owned by specific tasks)
+
+- **Scanned PDFs / no text layer** → honest status now (1.2); VisionKit OCR is a later phase, explicitly out of scope.
+- **Chunk anchors have page ranges, not rects** → citation click does `PDFDocument.findString` on the chunk's leading sentence *at click time* to get rects for flash; page-only fallback if not found (2.2). No rect storage for chunks.
+- **Streaming vs. post-processing** → markers stream visibly, swap to links on completion inside the existing one-undo-step apply (2.1). Brief marker flicker accepted.
+- **Deleting a source** → cascade-delete its chunks/index rows (1.1); its citations become dead links → ships with the friendlier dead-link toast (2.3, folds in the existing follow-up).
+- **Existing sources predate indexing** → backfill lazily on stream open, never a startup migration stall (1.1).
+- **Tiny sources don't need retrieval** → if a stream's total extracted text < ~8k tokens, send it whole (current behavior); retrieval engages only past that. Nobody's meal-prep plan gets worse (1.3).
+- **Embedding model download (~100 MB)** is a UX moment: explicit consent + progress in Settings, app fully functional without it (R3 only).
+- **Prompt caching needs proxy changes** → separate Ticker-Proxy work, out of scope for all phases here.
+
+### Phase R1 — Retrieval foundation (FTS5, no embeddings, no new models)
+
+- **Task 1.1 — Ingest pipeline + schema.** v16 migration: `source_chunks(id, source_id → cascade, seq, text, page_start, page_end, section_path)`, FTS5 virtual table over chunk text, `sources.index_status` (`pending/indexing/ready/failed_no_text/failed`). New `IngestService` (async, one source at a time): extract per page → outline-aware chunking via reworked `ChunkingService` (use `PDFDocument.outlineRoot` section tree when present; else ~800-token overlapping windows) → FTS insert. Bridge event `sourceIndexStatusChanged {sourceId, status, progress?}` (contract + allow-list). Lazy backfill: on stream open, enqueue any `pending` legacy sources. Files: `Services/IngestService.swift` (new), `Services/ChunkingService.swift`, `Services/PersistenceService.swift`, `Bridge/SourceMessageHandler.swift`, contract. Tests: migration, chunker page-range correctness, cascade delete.
+- **Task 1.2 — Status UI.** Sources modal rows show the quiet status line + failure states + Retry; "N pages · indexed" when ready. Answer-area notice chip for ask-while-indexing. Files: `SourcesModal.tsx`, `StreamEditor.tsx`, `index.css` (tokens only).
+- **Task 1.3 — Retrieval replaces concat.** Rework `RetrievalService`: BM25 query over the stream's sources → top-k (k≈8) with a relevance threshold. `AIMessageHandler`/`AIOrchestrator`: if total extracted text small → legacy whole-text path; else retrieved chunks only, formatted as a numbered manifest with source/page metadata. Below-threshold → no source context (sets up "from model knowledge"). Tests: threshold gating, small-source passthrough, multi-source interleave.
+- **Task 1.4 — Scope chip.** Prompt popover gains `Sources: Auto / All / None` (default Auto, session-sticky per stream). `All` forces whole-text-or-top-k-unthresholded; `None` skips retrieval. Bridge: extend thinkDocument payload with `sourceScope`.
+
+### Phase R2 — Citations (the wedge made visible)
+
+- **Task 2.1 — Marker protocol.** Prompt instructs the model to cite manifest entries as `【n】`. Post-process on completion (inside the existing one-undo apply): swap markers for `[<short-source-name> p.<page>](ticker-pdf://<sourceId>?page=<n>&chunk=<id>)` links generated from the manifest — never from model text. Unknown markers dropped silently. Web tests for the swap.
+- **Task 2.2 — Citation navigation.** Extend `openPdfDestination` handling: `chunk=<id>` → load chunk, `findString` its leading sentence → temporary flash annotation on found rects (reuse pulse), centered (existing behavior); fallback to page. Swift tests for find-fallback.
+- **Task 2.3 — Provenance strip + honest states.** Muted trailing line after cited answers (*Consulted: X (n), Y (m)*); *from model knowledge* note when no chunks were sent; friendlier dead-link toast for any `ticker-pdf://` failure (source deleted / other stream / corrupted), replacing the silent no-op.
+
+### Phase R3 — Local embeddings + hybrid retrieval
+
+- **Task 3.1 — MLX embedding backend.** Small local model (bge-small class) behind the existing `EmbeddingService` interface (replacing the 1536-dim remote assumption); Settings row with explicit download consent + progress; app fully functional without it (BM25-only).
+- **Task 3.2 — Vector store + fusion.** Chunk vectors as BLOBs in SQLite; Accelerate brute-force cosine (personal-corpus scale; no vector DB); reciprocal-rank fusion with BM25.
+- **Task 3.3 — Eval gate.** ~30-question golden set over 2–3 real PDFs in `Tests/`; hybrid must beat BM25-only on retrieval hit-rate before default-on.
+
+### Phase R4 — Summary tree + reading sessions
+
+- **Task 4.1 — Lazy summary tree.** Per-section summaries (outline tree, cheap model via proxy) rolled up to chapter/book, cached in `source_summaries`; built on first whole-book question with the one-time visible state. Router: whole-book/section questions → tree (+ top-k chunks for section questions).
+- **Task 4.2 — Reading-session basics.** Persist per-source last scroll position (resume on open); "Summarize this section" action in the PDF pane header (outline-aware) appending a cited summary block via the append API.
+
+### Phase R5 — sketched, not scheduled
+
+Cross-stream corpus ("what have I read about X"), connections/suggested passages from your own library while writing, `ticker-web://` universal capture, share/export with working citations. Plan when R1–R4 are live.
+
+### Explicitly not doing (v1)
+
+GraphRAG, ColBERT/late-interaction, external vector stores, agentic multi-hop retrieval, web search dispatch, ML-based query routing (threshold gating first; revisit the small dispatching model only if thresholds measurably misroute).
+
+---
+
 ## Codex Execution Protocol (governor rules)
 
 - One Codex session per phase, resumed each round with the explicit session id (never `resume --last`); cold-start a fresh session if the rollout shows >1 compaction. `-s workspace-write` before the `resume` subcommand.
