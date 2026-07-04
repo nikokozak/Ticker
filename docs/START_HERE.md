@@ -76,8 +76,8 @@ Common flows:
 - Prod-ish (Release + bundled web, QA lane): `./tickerctl.sh run-prod-qa`
 
 Permission debugging note:
-- Stable lane uses bundle ID `io.ticker.app` (default).
-- QA lane uses bundle ID `io.ticker.app.qa` (default) so TCC resets don't disrupt stable daily-dev permissions.
+- Stable lane uses bundle ID `io.ticker.next` (default).
+- QA lane uses bundle ID `io.ticker.next.qa` (default) so TCC resets don't disrupt stable daily-dev permissions.
 - Reset only the lane you are testing:
   - `./tickerctl.sh reset-accessibility`
   - `./tickerctl.sh reset-accessibility-qa`
@@ -118,16 +118,18 @@ Notes:
 ## Local data (what exists on disk)
 
 Ticker stores user data under:
-- `~/Library/Application Support/Ticker/`
+- `~/Library/Application Support/Ticker-Next/`
 
 Key items:
-- `ticker.db` — the SQLite database (streams, stream editor data, sources metadata)
+- `ticker.db` — the SQLite database (streams, `stream_documents`, sources metadata, and frozen legacy migration history)
 - `assets/` — local images (inserted as `ticker-asset://...`)
 - `backups/` — automatic pre-migration DB backups (created only when pending migrations are detected)
 - `device.json` — **contains the plaintext proxy device key (`tk_...`) and device id**
 
-Note:
-- Legacy builds may still contain `cells` tables/paths during migration, but active direction is a stream-document editor model.
+Document model:
+- `stream_documents.markdown` is the canonical editor content for a stream.
+- `stream_documents.revision` is the autosave conflict guard.
+- The `cells` table is frozen legacy history kept for migrations/recovery; it is not the active editor or capture contract.
 
 If you need to restore data from a backup, follow the step-by-step instructions in `docs/ALPHA_SUPPORT.md`.
 
@@ -136,4 +138,4 @@ Device key rules:
 - Never ask a tester to send `device.json`.
 - For “fresh install” QA, delete `device.json` while Ticker is fully quit, then relaunch.
 - If you ever see stale temp files next to it, remove them too:
-  - `~/Library/Application Support/Ticker/device.json.tmp*`
+  - `~/Library/Application Support/Ticker-Next/device.json.tmp*`

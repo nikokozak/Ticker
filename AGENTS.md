@@ -97,6 +97,7 @@ For editor slices, validate at minimum:
 Suggested commands:
 - `./tickerctl.sh build-dev`
 - `cd Web && npm test`
+- `node tools/contracts/check_bridge_contract.mjs`
 - targeted checks relevant to the modified area
 
 ## Repo Orientation
