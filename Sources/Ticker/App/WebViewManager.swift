@@ -65,6 +65,9 @@ final class WebViewManager: NSObject {
         if let streamHandler = StreamMessageHandler(container: container, delegate: self) {
             bridgeRouter.register(streamHandler)
         }
+        if let sourceHandler = SourceMessageHandler(container: container, delegate: self) {
+            bridgeRouter.register(sourceHandler)
+        }
 
         webView.translatesAutoresizingMaskIntoConstraints = false
         configureMainLayout()
@@ -294,7 +297,7 @@ final class WebViewManager: NSObject {
         ))
     }
 
-    private func openSourceReference(_ source: SourceReference, sourceService: SourceService) {
+    func openSourceReference(_ source: SourceReference, sourceService: SourceService) {
         do {
             let url = try sourceService.accessFile(source)
 
@@ -429,124 +432,14 @@ final class WebViewManager: NSObject {
              "exportStream":
             await bridgeRouter.route(message)
 
-        case "setFileDropContext":
-            let mode = message.payload?["mode"]?.value as? String
-            switch mode {
-            case "stream":
-                if let streamIdValue = message.payload?["streamId"]?.value as? String,
-                   let streamId = UUID(uuidString: streamIdValue) {
-                    currentStreamIdForFileDrops = streamId
-                    allowsListFileDrops = false
-                } else {
-                    currentStreamIdForFileDrops = nil
-                    allowsListFileDrops = false
-                }
-            case "list":
-                currentStreamIdForFileDrops = nil
-                allowsListFileDrops = true
-                await MainActor.run {
-                    pdfPaneController.setVisible(false)
-                    activePDFPaneStreamId = nil
-                }
-            default:
-                currentStreamIdForFileDrops = nil
-                allowsListFileDrops = false
-                await MainActor.run {
-                    pdfPaneController.setVisible(false)
-                    activePDFPaneStreamId = nil
-                }
-            }
-
-        case "addSource":
-            guard let payload = message.payload,
-                  let streamIdValue = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdValue),
-                  let sourceService else {
-                DebugLog.log("[WebViewManager] Invalid addSource payload or service unavailable")
-                return
-            }
-
-            // Must run on main thread for NSOpenPanel
-            await MainActor.run {
-                let panel = NSOpenPanel()
-                panel.canChooseFiles = true
-                panel.canChooseDirectories = false
-                panel.allowsMultipleSelection = false
-                // Note: "net.daringfireball.markdown" is the standard UTI for markdown files
-                let markdownType = UTType(filenameExtension: "md") ?? UTType.plainText
-                panel.allowedContentTypes = [.pdf, .plainText, .text, .sourceCode, markdownType, .png, .jpeg, .heic, .image]
-                panel.message = "Select a file to attach"
-
-                if panel.runModal() == .OK, let url = panel.url {
-                    do {
-                        let source = try sourceService.addSource(from: url, to: streamId)
-                        let sourcePayload = StreamCodec.encodeSource(source)
-                        bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
-                    } catch {
-                        DebugLog.log("[WebViewManager] Failed to add source (\(DebugLog.errorSummary(error)))")
-                        bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
-                    }
-                }
-            }
-
-        case "addSourceFromPath":
-            guard let payload = message.payload,
-                  let streamIdValue = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdValue),
-                  let filePath = payload["path"]?.value as? String,
-                  let sourceService else {
-                DebugLog.log("[WebViewManager] Invalid addSourceFromPath payload or service unavailable")
-                return
-            }
-
-            let url = URL(fileURLWithPath: filePath)
-            do {
-                let source = try sourceService.addSource(from: url, to: streamId)
-                let sourcePayload = StreamCodec.encodeSource(source)
-                bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to add source from path (\(DebugLog.errorSummary(error)))")
-                bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
-            }
-
-        case "removeSource":
-            guard let payload = message.payload,
-                  let idValue = payload["id"]?.value as? String,
-                  let id = UUID(uuidString: idValue),
-                  let sourceService else {
-                DebugLog.log("[WebViewManager] Invalid removeSource payload")
-                return
-            }
-            do {
-                try sourceService.removeSource(id: id)
-                bridgeService.send(BridgeMessage(type: "sourceRemoved", payload: ["id": AnyCodable(id.uuidString)]))
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to remove source (\(DebugLog.errorSummary(error)))")
-                bridgeService.send(BridgeMessage(type: "sourceRemoveError", payload: [
-                    "id": AnyCodable(id.uuidString),
-                    "error": AnyCodable(error.localizedDescription)
-                ]))
-            }
-
-        case "openSource":
-            guard let payload = message.payload,
-                  let sourceIdValue = payload["sourceId"]?.value as? String,
-                  let sourceId = UUID(uuidString: sourceIdValue),
-                  let sourceService else {
-                DebugLog.log("[WebViewManager] Invalid openSource payload")
-                return
-            }
-
-            do {
-                guard let source = try persistence.loadSource(id: sourceId) else {
-                    sendSourceError("Source not found.")
-                    return
-                }
-                openSourceReference(source, sourceService: sourceService)
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to open source (\(DebugLog.errorSummary(error)))")
-                sendSourceError(error.localizedDescription)
-            }
+        case "setFileDropContext",
+             "addSource",
+             "addSourceFromPath",
+             "removeSource",
+             "openSource",
+             "saveImage",
+             "getAssetPath":
+            await bridgeRouter.route(message)
 
         case "thinkDocument":
             guard let payload = message.payload,
@@ -943,54 +836,6 @@ final class WebViewManager: NSObject {
                     ])
                 }
             }
-        case "saveImage":
-            // Save base64-encoded image data to stream's assets folder
-            guard let payload = message.payload,
-                  let streamIdValue = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdValue),
-                  let base64Data = payload["data"]?.value as? String,
-                  let imageData = Data(base64Encoded: base64Data) else {
-                DebugLog.log("[WebViewManager] Invalid saveImage payload")
-                let requestId = message.payload?["requestId"]?.value as? String
-                bridgeService.send(BridgeMessage(type: "imageSaveError", payload: [
-                    "error": AnyCodable("Invalid image data"),
-                    "requestId": AnyCodable(requestId as Any)
-                ]))
-                return
-            }
-
-            let requestId = payload["requestId"]?.value as? String
-
-            do {
-                let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
-                let assetUrl = "ticker-asset:///\(relativePath)"
-
-                bridgeService.send(BridgeMessage(type: "imageSaved", payload: [
-                    "relativePath": AnyCodable(relativePath),
-                    "assetUrl": AnyCodable(assetUrl),
-                    "requestId": AnyCodable(requestId as Any)
-                ]))
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to save image (\(DebugLog.errorSummary(error)))")
-                bridgeService.send(BridgeMessage(type: "imageSaveError", payload: [
-                    "error": AnyCodable(error.localizedDescription),
-                    "requestId": AnyCodable(requestId as Any)
-                ]))
-            }
-
-        case "getAssetPath":
-            // Get the full file path for an asset
-            guard let payload = message.payload,
-                  let relativePath = payload["relativePath"]?.value as? String else {
-                DebugLog.log("[WebViewManager] Invalid getAssetPath payload")
-                return
-            }
-            let fullPath = assetService.assetURL(for: relativePath).path
-            bridgeService.send(BridgeMessage(type: "assetPath", payload: [
-                "relativePath": AnyCodable(relativePath),
-                "fullPath": AnyCodable(fullPath)
-            ]))
-
         case "hybridSearch":
             guard let payload = message.payload,
                   let query = payload["query"]?.value as? String,
@@ -1081,6 +926,20 @@ extension WebViewManager: StreamMessageHandlerDelegate {
                 pdfPaneController.setVisible(false)
                 activePDFPaneStreamId = nil
             }
+        }
+    }
+}
+
+extension WebViewManager: SourceMessageHandlerDelegate {
+    func setFileDropContext(streamId: UUID?, allowsListFileDrops: Bool) {
+        currentStreamIdForFileDrops = streamId
+        self.allowsListFileDrops = allowsListFileDrops
+    }
+
+    func hidePDFPane() async {
+        await MainActor.run {
+            pdfPaneController.setVisible(false)
+            activePDFPaneStreamId = nil
         }
     }
 }
