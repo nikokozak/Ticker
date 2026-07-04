@@ -373,6 +373,12 @@ final class PersistenceService {
             try db.create(index: "idx_pdf_highlights_source", on: "pdf_highlights", columns: ["source_id"])
         }
 
+        migrator.registerMigration("v15_source_original_path") { db in
+            try db.alter(table: "sources") { t in
+                t.add(column: "original_path", .text)
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -508,6 +514,7 @@ final class PersistenceService {
                     displayName: row["display_name"],
                     fileType: SourceFileType(rawValue: row["file_type"]) ?? .text,
                     bookmarkData: row["bookmark_data"],
+                    originalPath: row["original_path"],
                     status: SourceStatus(rawValue: row["status"]) ?? .pending,
                     extractedText: row["extracted_text"],
                     pageCount: row["page_count"],
@@ -776,6 +783,7 @@ final class PersistenceService {
                 displayName: row["display_name"],
                 fileType: SourceFileType(rawValue: row["file_type"]) ?? .text,
                 bookmarkData: row["bookmark_data"],
+                originalPath: row["original_path"],
                 status: SourceStatus(rawValue: row["status"]) ?? .pending,
                 extractedText: row["extracted_text"],
                 pageCount: row["page_count"],
@@ -789,10 +797,12 @@ final class PersistenceService {
         try dbQueue.write { db in
             try db.execute(
                 sql: """
-                    INSERT INTO sources (id, stream_id, display_name, file_type, bookmark_data, status, extracted_text, page_count, added_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO sources (id, stream_id, display_name, file_type, bookmark_data, original_path, status, extracted_text, page_count, added_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         display_name = excluded.display_name,
+                        bookmark_data = excluded.bookmark_data,
+                        original_path = excluded.original_path,
                         status = excluded.status,
                         extracted_text = excluded.extracted_text,
                         page_count = excluded.page_count
@@ -803,6 +813,7 @@ final class PersistenceService {
                     source.displayName,
                     source.fileType.rawValue,
                     source.bookmarkData,
+                    source.originalPath,
                     source.status.rawValue,
                     source.extractedText,
                     source.pageCount,
@@ -1080,6 +1091,7 @@ final class PersistenceService {
                     displayName: row["display_name"],
                     fileType: SourceFileType(rawValue: row["file_type"]) ?? .text,
                     bookmarkData: row["bookmark_data"],
+                    originalPath: row["original_path"],
                     status: SourceStatus(rawValue: row["status"]) ?? .pending,
                     extractedText: row["extracted_text"],
                     pageCount: row["page_count"],

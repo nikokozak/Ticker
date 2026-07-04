@@ -67,6 +67,31 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertTrue(indexExists)
     }
 
+    func test_v15MigrationAddsOriginalPathToSources() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+        defer {
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        var service: PersistenceService? = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        XCTAssertNotNil(service)
+        service = nil
+
+        let dbQueue = try DatabaseQueue(path: dbURL.path)
+        let columnExists = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "PRAGMA table_info(sources)")
+                .contains { row in
+                    let name: String = row["name"]
+                    return name == "original_path"
+                }
+        }
+
+        XCTAssertTrue(columnExists)
+    }
+
     func test_savePDFHighlightRoundTripsRects() throws {
         try withTempPersistenceService { service in
             let source = try savePDFSource(in: service)
@@ -85,6 +110,42 @@ final class StreamDocumentTests: XCTestCase {
             try service.savePDFHighlight(highlight)
 
             XCTAssertEqual(try service.loadPDFHighlights(sourceId: source.id), [highlight])
+        }
+    }
+
+    func test_sourceAccessRecoversCorruptedBookmarkFromOriginalPath() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let fileURL = tempDir.appendingPathComponent("Recovered.pdf")
+        try Data("%PDF-1.4\n%EOF\n".utf8).write(to: fileURL)
+        defer {
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Bookmark Recovery")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Recovered.pdf",
+                fileType: .pdf,
+                bookmarkData: Data("not-a-bookmark".utf8),
+                originalPath: fileURL.path,
+                status: .stale,
+                extractedText: "cached text"
+            )
+            try service.saveSource(source)
+
+            let sourceService = SourceService(persistence: service)
+            let recoveredURL = try sourceService.accessFile(source)
+            defer { recoveredURL.stopAccessingSecurityScopedResource() }
+
+            let reloaded = try XCTUnwrap(service.loadSource(id: source.id))
+            XCTAssertEqual(recoveredURL.path, fileURL.path)
+            XCTAssertEqual(reloaded.originalPath, fileURL.path)
+            XCTAssertNotEqual(reloaded.bookmarkData, source.bookmarkData)
+            XCTAssertEqual(reloaded.status, .ready)
         }
     }
 

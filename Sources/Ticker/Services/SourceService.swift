@@ -44,6 +44,7 @@ final class SourceService {
             displayName: url.lastPathComponent,
             fileType: fileType,
             bookmarkData: bookmarkData,
+            originalPath: url.path,
             status: .pending
         )
 
@@ -58,23 +59,61 @@ final class SourceService {
     /// Resolve bookmark and access the file. Returns the accessible URL.
     /// Caller is responsible for calling `stopAccessingSecurityScopedResource()`.
     func accessFile(_ source: SourceReference) throws -> URL {
-        var isStale = false
-        let url = try URL(
-            resolvingBookmarkData: source.bookmarkData,
-            options: [.withSecurityScope],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        )
+        do {
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: source.bookmarkData,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
 
-        if isStale {
-            // Bookmark is stale - mark source and try to refresh
-            var updated = source
-            updated.status = .stale
-            try? persistence.saveSource(updated)
+            if isStale {
+                // Bookmark is stale - mark source and try to refresh
+                var updated = source
+                updated.status = .stale
+                try? persistence.saveSource(updated)
+            }
+
+            guard url.startAccessingSecurityScopedResource() else {
+                return try recoverAccessFromOriginalPath(source)
+            }
+
+            return url
+        } catch let error as SourceError {
+            throw error
+        } catch {
+            if let recoveredURL = try? recoverAccessFromOriginalPath(source) {
+                return recoveredURL
+            }
+            throw SourceError.accessUnavailable(source.displayName)
+        }
+    }
+
+    private func recoverAccessFromOriginalPath(_ source: SourceReference) throws -> URL {
+        guard let originalPath = source.originalPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !originalPath.isEmpty else {
+            throw SourceError.accessUnavailable(source.displayName)
         }
 
+        let url = URL(fileURLWithPath: originalPath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw SourceError.accessUnavailable(source.displayName)
+        }
+
+        let bookmarkData = try url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+
+        var updated = source
+        updated.bookmarkData = bookmarkData
+        updated.status = updated.extractedText == nil ? .pending : .ready
+        try persistence.saveSource(updated)
+
         guard url.startAccessingSecurityScopedResource() else {
-            throw SourceError.accessDenied(source.displayName)
+            throw SourceError.accessUnavailable(source.displayName)
         }
 
         return url
@@ -304,6 +343,7 @@ final class SourceService {
 enum SourceError: LocalizedError {
     case unsupportedFileType(String)
     case accessDenied(String)
+    case accessUnavailable(String)
     case extractionFailed(String)
     case bookmarkStale(String)
 
@@ -313,6 +353,8 @@ enum SourceError: LocalizedError {
             return "Unsupported file type: \(ext)"
         case .accessDenied(let name):
             return "Cannot access file: \(name)"
+        case .accessUnavailable(let name):
+            return "Can't access \(name) — the file may have moved. Re-add the source."
         case .extractionFailed(let reason):
             return "Text extraction failed: \(reason)"
         case .bookmarkStale(let name):

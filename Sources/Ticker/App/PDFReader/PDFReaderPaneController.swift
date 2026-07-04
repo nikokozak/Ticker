@@ -726,6 +726,7 @@ final class PDFReaderPaneController: NSViewController {
 
         let pointInPDFView = pdfPanePDFView.convert(event.locationInWindow, from: nil)
         guard pdfPanePDFView.bounds.contains(pointInPDFView) else {
+            cancelAnchorPickMode()
             return event
         }
 

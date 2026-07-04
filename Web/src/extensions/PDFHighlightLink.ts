@@ -98,7 +98,7 @@ const tickerPDFLinkDecorationPlugin = ViewPlugin.fromClass(class {
 });
 
 const tickerPDFLinkTheme = EditorView.theme({
-  '.cm-ticker-pdf-link': {
+  '.cm-ticker-pdf-link, .cm-ticker-pdf-link *': {
     color: 'var(--accent)',
     cursor: 'pointer',
   },
