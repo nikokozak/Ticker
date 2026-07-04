@@ -276,6 +276,56 @@ final class PersistenceService {
             // ponytail: Retain legacy cells until Phase 2+ drops the cells table in a future migration.
         }
 
+        migrator.registerMigration("v12_seed_documents_from_legacy_cells") { db in
+            let streamRows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT s.id
+                    FROM streams s
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM stream_documents d
+                        WHERE d.stream_id = s.id
+                    )
+                    AND EXISTS (
+                        SELECT 1
+                        FROM cells c
+                        WHERE c.stream_id = s.id
+                    )
+                """
+            )
+
+            for streamRow in streamRows {
+                let streamId: String = streamRow["id"]
+                let cellRows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT content
+                        FROM cells
+                        WHERE stream_id = ?
+                        ORDER BY position ASC, created_at ASC
+                    """,
+                    arguments: [streamId]
+                )
+
+                let fragments: [String] = cellRows.compactMap { row in
+                    let content: String = row["content"]
+                    let markdown = Self.markdownishTextFromLegacyCellHTML(content)
+                    return markdown.isEmpty ? nil : markdown
+                }
+                let markdown = fragments.joined(separator: "\n\n")
+                let now = Date().timeIntervalSince1970
+
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
+                        VALUES (?, ?, ?, ?)
+                    """,
+                    arguments: [streamId, markdown, now, now]
+                )
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -506,6 +556,8 @@ final class PersistenceService {
                 )
             }
 
+            // v12 seeds stream_documents for any legacy stream that still has cells,
+            // so reaching this path means the stream is genuinely document-empty.
             let markdown = ""
             let now = Date()
             let nowTs = now.timeIntervalSince1970

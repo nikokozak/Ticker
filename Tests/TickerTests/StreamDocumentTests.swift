@@ -192,7 +192,7 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_v11MigrationDoesNotRecoverCellsCreatedBeforeDocumentRow() throws {
+    func test_v12MigrationDoesNotTouchStreamsWithExistingDocumentRow() throws {
         let streamId = UUID()
         let documentCreatedAt = 1_000.0
 
@@ -219,22 +219,58 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_v11MigrationDoesNotCreateDocumentForStreamsWithoutDocumentRow() throws {
+    func test_v12MigrationSeedsDocumentForCellOnlyStream() throws {
         let streamId = UUID()
 
         try withSeededV10Database { db in
-            try insertStream(db, id: streamId, title: "No Document", createdAt: 900)
+            try insertStream(db, id: streamId, title: "Cell-only Stream", createdAt: 900)
             try insertCell(
                 db,
                 streamId: streamId,
-                content: "<p>Invisible capture</p>",
+                content: "<p>Second legacy note</p>",
+                createdAt: 1_002,
+                position: 1
+            )
+            try insertCell(
+                db,
+                streamId: streamId,
+                content: #"<p><img src="ticker-asset:///stream/capture.png" alt="Screenshot"></p>"#,
+                createdAt: 1_003,
+                position: 1
+            )
+            try insertCell(
+                db,
+                streamId: streamId,
+                content: "<p>First legacy note</p>",
                 createdAt: 1_001,
                 position: 0
             )
         } body: { dbURL, fileManager in
             let service = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
 
+            let document = try XCTUnwrap(service.loadStreamDocument(streamId: streamId))
+            XCTAssertEqual(document.markdown, """
+            First legacy note
+
+            Second legacy note
+
+            ![capture](ticker-asset:///stream/capture.png)
+            """)
+        }
+    }
+
+    func test_v12MigrationDoesNotCreateDocumentForStreamWithoutCells() throws {
+        let streamId = UUID()
+
+        try withSeededV10Database { db in
+            try insertStream(db, id: streamId, title: "Empty Legacy Stream", createdAt: 900)
+        } body: { dbURL, fileManager in
+            let service = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+
             XCTAssertNil(try service.loadStreamDocument(streamId: streamId))
+
+            let document = try service.loadOrCreateStreamDocument(streamId: streamId)
+            XCTAssertEqual(document.markdown, "")
         }
     }
 
