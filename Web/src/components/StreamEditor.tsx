@@ -178,9 +178,6 @@ export function StreamEditor({
   }, []);
 
   const editorAPI = useMemo<EditorAPI>(() => ({
-    replaceCellHtml: () => {
-      // Document editor mode: cell updates are ignored.
-    },
     insertImage: (imageUrl: string) => insertImageAtCursor(imageUrl),
   }), [insertImageAtCursor]);
 
@@ -1077,9 +1074,6 @@ export function StreamEditor({
         {hasPdfSources && (
           <div className="stream-sources-dock">
             <SidePanel
-              cells={[]}
-              focusedCellId={null}
-              onCellClick={() => {}}
               streamId={stream.id}
               sources={pdfSources}
               onSourceRemoved={handleSourceRemoved}

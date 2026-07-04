@@ -3,7 +3,6 @@ import { bridge, Stream, StreamSummary } from './types';
 import { StreamEditor } from './components/StreamEditor';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
-import { useBlockStore } from './store/blockStore';
 import { debugError, debugLog } from './utils/debug';
 
 type View = 'list' | 'stream' | 'settings';
@@ -77,7 +76,6 @@ export function App() {
   const [isLoadingStream, setIsLoadingStream] = useState(false);
   const viewRef = useRef(view);
   const currentStreamIdRef = useRef<string | null>(currentStream?.id ?? null);
-  const clearStream = useBlockStore((state) => state.clearStream);
 
   // Proxy auth state - gates main UI until key is validated
   const [proxyAuthState, setProxyAuthState] = useState<ProxyAuthState>('validating');
@@ -194,7 +192,6 @@ export function App() {
   };
 
   const handleBackToList = () => {
-    clearStream();
     setCurrentStream(null);
     setView('list');
     bridge.send({ type: 'loadStreams' });
@@ -203,7 +200,6 @@ export function App() {
   const handleDeleteStream = () => {
     if (currentStream) {
       bridge.send({ type: 'deleteStream', payload: { id: currentStream.id } });
-      clearStream();
       setCurrentStream(null);
       setView('list');
     }

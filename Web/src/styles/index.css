@@ -1371,7 +1371,7 @@ body {
   margin: var(--spacing-xl) 0;
 }
 
-/* ==================== Side Panel (unified outline + sources) ==================== */
+/* ==================== Side Panel (sources) ==================== */
 
 .side-panel {
   background: var(--color-surface);
