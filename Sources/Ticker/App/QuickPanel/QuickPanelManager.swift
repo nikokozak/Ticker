@@ -46,6 +46,7 @@ final class QuickPanelManager: ObservableObject {
     @Published var error: String?
     @Published var statusMessage: String?  // Temporary feedback (success/info messages)
     @Published private(set) var isShowingSaveFeedback: Bool = false
+    @Published private(set) var isInputSaveFeedbackActive: Bool = false
     @Published var ephemeralConversation = EphemeralConversation()
 
     // Stream selection
@@ -284,6 +285,7 @@ final class QuickPanelManager: ObservableObject {
         error = nil
         statusMessage = nil
         isShowingSaveFeedback = false
+        isInputSaveFeedbackActive = false
     }
 
     private func cancelFeedbackTasks() {
@@ -296,6 +298,7 @@ final class QuickPanelManager: ObservableObject {
     private func showTimedStatusMessage(_ message: String, durationNanoseconds: UInt64) {
         statusClearTask?.cancel()
         isShowingSaveFeedback = false
+        isInputSaveFeedbackActive = false
         statusMessage = message
 
         statusClearTask = Task { [weak self] in
@@ -314,6 +317,7 @@ final class QuickPanelManager: ObservableObject {
         statusClearTask = nil
         saveFeedbackTask?.cancel()
         isShowingSaveFeedback = true
+        isInputSaveFeedbackActive = true
         statusMessage = message
 
         saveFeedbackTask = Task { [weak self] in
@@ -322,6 +326,27 @@ final class QuickPanelManager: ObservableObject {
             await MainActor.run {
                 guard let self, self.statusMessage == message else { return }
                 self.hide()
+            }
+        }
+    }
+
+    private func showSaveFeedbackPill(_ message: String, durationNanoseconds: UInt64 = 1_400_000_000) {
+        statusClearTask?.cancel()
+        statusClearTask = nil
+        isShowingSaveFeedback = true
+        isInputSaveFeedbackActive = false
+        statusMessage = message
+
+        statusClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: durationNanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self,
+                      self.statusMessage == message,
+                      !self.isInputSaveFeedbackActive else { return }
+                self.statusMessage = nil
+                self.isShowingSaveFeedback = false
+                self.statusClearTask = nil
             }
         }
     }
@@ -445,7 +470,7 @@ final class QuickPanelManager: ObservableObject {
             return
         }
 
-        if isShowingSaveFeedback {
+        if isInputSaveFeedbackActive {
             hide()
             return
         }
@@ -466,6 +491,11 @@ final class QuickPanelManager: ObservableObject {
     func clearContext() {
         suppressDismissedClipboardImageIfNeeded()
         context = nil
+    }
+
+    func clearEphemeralConversation() {
+        cancelStreaming()
+        ephemeralConversation.clear()
     }
 
     /// Suppress reattaching the current clipboard image on Cmd+L until clipboard changes.
@@ -578,6 +608,31 @@ final class QuickPanelManager: ObservableObject {
         }
 
         isLoading = false
+    }
+
+    func saveConversationMessage(_ message: String) {
+        guard let persistence = persistence else {
+            error = "Persistence not configured"
+            return
+        }
+
+        guard let fragment = nonEmptyTrimmed(message) else { return }
+
+        do {
+            let (streamId, isNewStream) = try getTargetStreamId()
+            let streamTitle = displayTitle(for: streamId, persistence: persistence)
+            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
+            notifyFrontend(
+                streamId: streamId,
+                fragment: result.fragment,
+                revision: result.revision,
+                isNewStream: isNewStream
+            )
+            showSaveFeedbackPill("Saved to \(streamTitle)")
+        } catch {
+            self.error = error.localizedDescription
+            DebugLog.log("[QuickPanel] Error saving conversation message (\(DebugLog.errorSummary(error)))")
+        }
     }
 
     /// Load available streams for the picker

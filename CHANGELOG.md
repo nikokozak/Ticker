@@ -6,6 +6,7 @@ All notable user-facing changes to Ticker are documented here.
 
 ### Added
 - PDF pane with continuous scrolling and stream links back to selected highlights.
+- Quick Panel ephemeral chats can save individual messages and clear the in-memory conversation.
 - Quick Panel Save and AI + Save now append directly to stream documents, including live inserts into an open editor.
 - Live markdown concealment and image widgets for a calmer document-writing surface.
 - Revision-aware stream document saves to protect external appends from stale autosaves.

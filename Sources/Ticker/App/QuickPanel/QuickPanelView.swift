@@ -102,8 +102,8 @@ struct QuickPanelView: View {
                 statusView(status)
             }
 
-            // Stream destination picker
-            streamDestinationPicker
+            // Stream destination picker and active-conversation controls
+            headerRow
 
             // Context badge (if text/image was captured)
             if let context = manager.context, context.hasContent {
@@ -245,7 +245,7 @@ struct QuickPanelView: View {
                 .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
         }
         .buttonStyle(.plain)
-        .disabled(manager.isShowingSaveFeedback)
+        .disabled(manager.isInputSaveFeedbackActive)
         .help("Clear context")
     }
 
@@ -289,6 +289,34 @@ struct QuickPanelView: View {
     }
 
     // MARK: - Stream Destination Picker
+
+    private var headerRow: some View {
+        HStack(alignment: .top, spacing: Spacing.sm) {
+            streamDestinationPicker
+
+            Spacer(minLength: Spacing.sm)
+
+            if manager.ephemeralConversation.isActive {
+                clearConversationButton
+                    .padding(.top, 1)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: manager.ephemeralConversation.isActive)
+    }
+
+    private var clearConversationButton: some View {
+        Button(action: { manager.clearEphemeralConversation() }) {
+            Image(systemName: "xmark.circle")
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, weight: .semibold))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.72))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Clear conversation")
+        .accessibilityLabel("Clear conversation")
+    }
 
     private var streamDestinationPicker: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
@@ -434,24 +462,43 @@ struct QuickPanelView: View {
     }
 
     private func turnView(_ turn: ConversationTurn, id: Int) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            // Role indicator
-            Text(turn.role == .user ? "You" : "AI")
-                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .medium))
-                .foregroundColor(QuickPanelStyle.textSubtle)
+        HStack(alignment: .top, spacing: Spacing.xs) {
+            VStack(alignment: .leading, spacing: 2) {
+                // Role indicator
+                Text(turn.role == .user ? "You" : "AI")
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .medium))
+                    .foregroundColor(QuickPanelStyle.textSubtle)
 
-            // Content - render markdown for AI responses
-            if turn.role == .assistant {
-                MarkdownContentView(content: turn.content)
-            } else {
-                Text(turn.content)
-                    .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
-                    .foregroundColor(QuickPanelStyle.textMuted)
-                    .textSelection(.enabled)
+                // Content - render markdown for AI responses
+                if turn.role == .assistant {
+                    MarkdownContentView(content: turn.content)
+                } else {
+                    Text(turn.content)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
+                        .foregroundColor(QuickPanelStyle.textMuted)
+                        .textSelection(.enabled)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            saveConversationMessageButton(content: turn.content)
         }
         .padding(.vertical, Spacing.xs)
         .id(id)
+    }
+
+    private func saveConversationMessageButton(content: String) -> some View {
+        Button(action: { manager.saveConversationMessage(content) }) {
+            Image(systemName: "tray.and.arrow.down")
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize, weight: .semibold))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.64))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Save message to stream")
+        .accessibilityLabel("Save message to stream")
+        .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     private var streamingResponseView: some View {
@@ -488,14 +535,14 @@ struct QuickPanelView: View {
     private var inputField: some View {
         let isInputDisabled = manager.isLoading ||
             manager.ephemeralConversation.isStreaming ||
-            manager.isShowingSaveFeedback
+            manager.isInputSaveFeedbackActive
 
         return HStack(spacing: Spacing.sm) {
             QuickPanelInputField(
                 text: $manager.inputText,
                 placeholder: placeholderText,
                 isLoading: isInputDisabled,
-                isShimmering: manager.isShowingSaveFeedback,
+                isShimmering: manager.isInputSaveFeedbackActive,
                 onSubmit: handleSubmit,
                 onCancel: { manager.handleEscape() },
                 onCmdEnter: handleCmdSubmit,
@@ -513,7 +560,7 @@ struct QuickPanelView: View {
                         .foregroundColor(canSubmit ? QuickPanelStyle.accent : QuickPanelStyle.textSubtle.opacity(0.5))
                 }
                 .buttonStyle(.plain)
-                .disabled(!canSubmit || manager.isShowingSaveFeedback)
+                .disabled(!canSubmit || manager.isInputSaveFeedbackActive)
             }
         }
         .padding(.horizontal, Spacing.md)
@@ -599,14 +646,14 @@ struct QuickPanelView: View {
     // MARK: - Actions
 
     private func handleSubmit() {
-        guard canSubmit, !manager.isLoading, !manager.isShowingSaveFeedback else { return }
+        guard canSubmit, !manager.isLoading, !manager.isInputSaveFeedbackActive else { return }
         Task {
             await manager.handleEnter()
         }
     }
 
     private func handleCmdSubmit() {
-        guard canSubmit, !manager.isLoading, !manager.isShowingSaveFeedback else { return }
+        guard canSubmit, !manager.isLoading, !manager.isInputSaveFeedbackActive else { return }
         Task {
             await manager.handleCmdEnter()
         }
@@ -617,7 +664,7 @@ struct QuickPanelView: View {
         guard hasInput,
               !manager.isLoading,
               !manager.ephemeralConversation.isStreaming,
-              !manager.isShowingSaveFeedback else { return }
+              !manager.isInputSaveFeedbackActive else { return }
         Task {
             await manager.handleOptionEnter()
         }
