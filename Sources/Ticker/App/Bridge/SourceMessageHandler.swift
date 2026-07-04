@@ -16,6 +16,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
         "addSource",
         "addSourceFromPath",
         "removeSource",
+        "retrySourceIndexing",
         "openSource",
         "openPdfDestination",
         "beginPdfAnchorPick",
@@ -134,6 +135,34 @@ final class SourceMessageHandler: BridgeMessageHandler {
                     "id": AnyCodable(id.uuidString),
                     "error": AnyCodable(error.localizedDescription)
                 ]))
+            }
+
+        case "retrySourceIndexing":
+            guard let payload = message.payload,
+                  let sourceIdValue = payload["sourceId"]?.value as? String,
+                  let sourceId = UUID(uuidString: sourceIdValue),
+                  let ingestService else {
+                DebugLog.log("[WebViewManager] Invalid retrySourceIndexing payload or service unavailable")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid retrySourceIndexing payload or service unavailable")
+                return
+            }
+
+            do {
+                guard var source = try persistence.loadSource(id: sourceId) else {
+                    sendSourceError("Source not found.")
+                    return
+                }
+
+                try persistence.updateSourceIndexStatus(sourceId, status: .pending)
+                source.indexStatus = .pending
+                await bridgeService.send(BridgeMessage(type: "sourceIndexStatusChanged", payload: [
+                    "sourceId": AnyCodable(sourceId.uuidString),
+                    "status": AnyCodable(SourceIndexStatus.pending.rawValue)
+                ]))
+                ingestService.enqueue(source: source)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to retry source indexing (\(DebugLog.errorSummary(error)))")
+                sendSourceError(error.localizedDescription)
             }
 
         case "openSource":

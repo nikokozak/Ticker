@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Source rows now show quiet indexing status with retry for failed source indexing.
 - Added local source chunk indexing foundations for Reading with Receipts.
 - Selection popover now includes bold, italic, and inline-code markdown formatting controls.
 - Selected stream text can now be linked to a picked PDF spot.

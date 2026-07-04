@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { SourceReference, bridge } from '../types';
+import type { SourceIndexStatus, SourceReference } from '../types';
+import { bridge } from '../types';
 import { useToastStore } from '../store/toastStore';
 import { debugError, debugLog, debugWarn } from '../utils/debug';
 
@@ -11,6 +12,14 @@ interface UseBridgeMessagesOptions {
   streamId: string;
   initialSources: SourceReference[];
   editorAPI?: EditorAPI | null;
+}
+
+function isSourceIndexStatus(value: unknown): value is SourceIndexStatus {
+  return value === 'pending'
+    || value === 'indexing'
+    || value === 'ready'
+    || value === 'failed_no_text'
+    || value === 'failed';
 }
 
 export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBridgeMessagesOptions) {
@@ -43,6 +52,16 @@ export function useBridgeMessages({ streamId, initialSources, editorAPI }: UseBr
         if (message.type === 'sourceRemoved' && message.payload?.id) {
           const removedId = message.payload.id as string;
           setSources((prev) => prev.filter((source) => source.id !== removedId));
+        }
+
+        if (message.type === 'sourceIndexStatusChanged' && message.payload?.sourceId) {
+          const sourceId = message.payload.sourceId as string;
+          const status = message.payload.status;
+          if (isSourceIndexStatus(status)) {
+            setSources((prev) => prev.map((source) => (
+              source.id === sourceId ? { ...source, indexStatus: status } : source
+            )));
+          }
         }
 
         if (message.type === 'sourceError' && message.payload?.error) {

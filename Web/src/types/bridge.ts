@@ -53,6 +53,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'openSource',
   'refreshProxyAuth',
   'removeSource',
+  'retrySourceIndexing',
   'saveImage',
   'saveSettings',
   'saveStreamDocument',

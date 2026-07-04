@@ -163,6 +163,9 @@
       "removeSource": {
         "requiredPayloadKeys": ["id"]
       },
+      "retrySourceIndexing": {
+        "requiredPayloadKeys": ["sourceId"]
+      },
       "saveImage": {
         "requiredPayloadKeys": ["streamId", "data", "requestId"]
       },
