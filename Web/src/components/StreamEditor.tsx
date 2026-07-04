@@ -3,15 +3,29 @@ import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView } from '@codemirror/view';
-import { Transaction } from '@codemirror/state';
+import { Transaction, type Extension } from '@codemirror/state';
+import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { bridge, Stream, SourceReference } from '../types';
-import { SidePanel } from './SidePanel';
+import { SourcesModal } from './SourcesModal';
 import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
+import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
+import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
+import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
+import { computeAppendInsertion } from '../utils/appendInsertion';
+import { debugWarn } from '../utils/debug';
+import {
+  buildPDFAnchorLinkEdit,
+  buildTickerPDFLinkURL,
+  mapPendingPDFAnchorSelection,
+  type PendingPDFAnchorSelection,
+} from '../utils/pdfAnchorSelection';
+import { toggleInlineMark } from '../utils/inlineMarks';
+import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 
 interface StreamEditorProps {
   stream: Stream;
@@ -37,26 +51,77 @@ interface FloatingMenuState {
   top: number;
 }
 
+interface AiFeedbackState {
+  visible: boolean;
+  kind: 'writing' | 'error';
+  message: string;
+}
+
+interface PDFPaneState {
+  visible: boolean;
+  streamId?: string;
+  sourceId?: string;
+  sourceName?: string;
+}
+
+const SELECTION_MENU_DELAY_MS = 180;
+const AI_ERROR_FEEDBACK_MS = 2200;
+
+function focusEditorAtDocumentEnd(view: EditorView) {
+  const end = view.state.doc.length;
+  view.dispatch({
+    selection: { anchor: end },
+    effects: EditorView.scrollIntoView(end, { y: 'nearest' }),
+    userEvent: 'select',
+  });
+  view.focus();
+}
+
+const clickToDocumentEndExtension: Extension = EditorView.domEventHandlers({
+  mousedown: (event, view) => {
+    if (event.button !== 0 || event.defaultPrevented) return false;
+    if (!(event.target instanceof Node) || !view.scrollDOM.contains(event.target)) return false;
+
+    const endCoords = view.coordsAtPos(view.state.doc.length, 1);
+    if (!endCoords) return false;
+
+    const scrollerRect = view.scrollDOM.getBoundingClientRect();
+    const isBelowLastLine = event.clientY > endCoords.bottom + 6 && event.clientY <= scrollerRect.bottom;
+    if (!isBelowLastLine) return false;
+
+    event.preventDefault();
+    focusEditorAtDocumentEnd(view);
+    return true;
+  },
+});
+
+function dispatchAiRangeClear(view: EditorView) {
+  view.dispatch({
+    effects: setAiWritingRangeEffect.of(null),
+    annotations: Transaction.addToHistory.of(false),
+  });
+}
+
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.heading,
-    color: 'var(--color-text)',
+    color: 'var(--text)',
     textDecoration: 'none',
     fontWeight: '620',
   },
   {
     tag: t.heading1,
-    fontSize: '1.26em',
+    fontSize: 'var(--editor-heading-1)',
     fontWeight: '650',
   },
   {
     tag: t.heading2,
-    fontSize: '1.16em',
+    fontSize: 'var(--editor-heading-2)',
     fontWeight: '640',
   },
   {
     tag: t.heading3,
-    fontSize: '1.08em',
+    fontSize: 'var(--editor-heading-3)',
     fontWeight: '630',
   },
   {
@@ -70,12 +135,12 @@ const markdownHighlightStyle = HighlightStyle.define([
   },
   {
     tag: t.emphasis,
-    color: 'var(--color-text)',
+    color: 'var(--text)',
     fontStyle: 'italic',
   },
   {
     tag: t.strong,
-    color: 'var(--color-text)',
+    color: 'var(--text)',
     fontWeight: '640',
   },
   {
@@ -109,6 +174,7 @@ export function StreamEditor({
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
@@ -120,19 +186,32 @@ export function StreamEditor({
     left: 0,
     top: 0,
   });
+  const [aiFeedback, setAiFeedback] = useState<AiFeedbackState>({
+    visible: false,
+    kind: 'writing',
+    message: 'AI is writing',
+  });
+  const [pdfPaneState, setPDFPaneState] = useState<PDFPaneState>({ visible: false });
 
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  const selectionActionMenuRef = useRef<HTMLDivElement>(null);
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
+  const markdownContentRef = useRef(stream.document?.markdown ?? '');
+  const revisionRef = useRef(stream.document?.revision ?? 0);
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
+  const aiFeedbackTimerRef = useRef<number | null>(null);
+  const pendingPDFAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
+  const showPromptRef = useRef(showPrompt);
+  const isAiThinkingRef = useRef(false);
   const aiRequestRef = useRef<{
     id: string;
     buffer: string;
-    from: number;
-    to: number;
     mode: 'replace' | 'after';
+    originalText: string;
+    prefix: string;
   } | null>(null);
 
   const insertImageAtCursor = useCallback((imageUrl: string, altText = 'image') => {
@@ -178,9 +257,6 @@ export function StreamEditor({
   }, []);
 
   const editorAPI = useMemo<EditorAPI>(() => ({
-    replaceCellHtml: () => {
-      // Document editor mode: cell updates are ignored.
-    },
     insertImage: (imageUrl: string) => insertImageAtCursor(imageUrl),
   }), [insertImageAtCursor]);
 
@@ -189,12 +265,6 @@ export function StreamEditor({
     initialSources: stream.sources,
     editorAPI,
   });
-  const pdfSources = useMemo(
-    () => sources.filter((source) => source.fileType === 'pdf'),
-    [sources],
-  );
-  const hasPdfSources = pdfSources.length > 0;
-
   const isAiThinking = aiStatus === 'thinking';
 
   const isEditorActive = useCallback(() => {
@@ -204,31 +274,88 @@ export function StreamEditor({
     return shell.contains(active);
   }, []);
 
+  const clearAiFeedbackTimer = useCallback(() => {
+    if (aiFeedbackTimerRef.current !== null) {
+      window.clearTimeout(aiFeedbackTimerRef.current);
+      aiFeedbackTimerRef.current = null;
+    }
+  }, []);
+
+  const showAiWritingFeedback = useCallback(() => {
+    clearAiFeedbackTimer();
+    setAiFeedback({
+      visible: true,
+      kind: 'writing',
+      message: 'AI is writing',
+    });
+  }, [clearAiFeedbackTimer]);
+
+  const hideAiFeedback = useCallback(() => {
+    clearAiFeedbackTimer();
+    setAiFeedback((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+  }, [clearAiFeedbackTimer]);
+
+  const showAiErrorFeedback = useCallback((message: string) => {
+    clearAiFeedbackTimer();
+    setAiFeedback({
+      visible: true,
+      kind: 'error',
+      message,
+    });
+    aiFeedbackTimerRef.current = window.setTimeout(() => {
+      aiFeedbackTimerRef.current = null;
+      setAiFeedback((previous) => (previous.kind === 'error' ? { ...previous, visible: false } : previous));
+    }, AI_ERROR_FEEDBACK_MS);
+  }, [clearAiFeedbackTimer]);
+
   useEffect(() => {
     setMarkdownContent(stream.document?.markdown ?? '');
     lastSavedContentRef.current = stream.document?.markdown ?? '';
+    markdownContentRef.current = stream.document?.markdown ?? '';
+    revisionRef.current = stream.document?.revision ?? 0;
     setTitle(stream.title);
     setSaveState('saved');
     setAiStatus('idle');
+    hideAiFeedback();
     setFloatingMenu({ visible: false, left: 0, top: 0 });
     setShowPrompt(false);
     setPromptValue('');
     promptContextRef.current = null;
     aiRequestRef.current = null;
-  }, [stream.id, stream.document?.markdown, stream.title]);
+    const view = editorViewRef.current;
+    if (view) {
+      dispatchAiRangeClear(view);
+    }
+  }, [hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.title]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const view = editorViewRef.current;
+      if (view) {
+        focusEditorAtDocumentEnd(view);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [stream.id]);
+
+  useEffect(() => {
+    markdownContentRef.current = markdownContent;
+  }, [markdownContent]);
 
   useEffect(() => {
     if (!pendingSourceId) return;
-    if (pdfSources.some((source) => source.id === pendingSourceId)) {
+    if (sources.some((source) => source.id === pendingSourceId)) {
       setHighlightedSourceId(pendingSourceId);
+      setShowSourcesModal(true);
+      return;
     }
-  }, [pdfSources, pendingSourceId]);
 
-  useEffect(() => {
-    if (hasPdfSources) return;
-    setHighlightedSourceId(null);
-    onClearPendingSource?.();
-  }, [hasPdfSources, onClearPendingSource]);
+    if (sources.length === 0) {
+      setHighlightedSourceId(null);
+      onClearPendingSource?.();
+    }
+  }, [onClearPendingSource, pendingSourceId, sources]);
 
   useEffect(() => {
     if (pendingCellId) {
@@ -242,15 +369,28 @@ export function StreamEditor({
     setSaveState('saving');
 
     const timer = window.setTimeout(() => {
-      bridge.send({
-        type: 'saveStreamDocument',
-        payload: {
+      const contentToSave = markdownContent;
+      const baseRevision = revisionRef.current;
+
+      void bridge.sendAsync<{ revision: number }>('saveStreamDocument', {
+        streamId: stream.id,
+        markdown: contentToSave,
+        baseRevision,
+      }).then((response) => {
+        if (Number.isFinite(response.revision)) {
+          revisionRef.current = response.revision;
+        }
+        lastSavedContentRef.current = contentToSave;
+        if (markdownContentRef.current === contentToSave) {
+          setSaveState('saved');
+        }
+      }).catch((error) => {
+        debugWarn('[StreamEditor] Failed to save stream document', {
           streamId: stream.id,
-          markdown: markdownContent,
-        },
+          baseRevision,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
-      lastSavedContentRef.current = markdownContent;
-      setSaveState('saved');
     }, 350);
 
     return () => window.clearTimeout(timer);
@@ -258,6 +398,71 @@ export function StreamEditor({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
+      if (message.type === 'streamDocumentConflict') {
+        const payloadStreamId = message.payload?.streamId as string | undefined;
+        const markdown = message.payload?.markdown as string | undefined;
+        const revision = Number(message.payload?.revision);
+
+        if (!payloadStreamId || payloadStreamId !== stream.id || typeof markdown !== 'string' || !Number.isFinite(revision)) {
+          return;
+        }
+
+        const view = editorViewRef.current;
+        if (view) {
+          view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: markdown },
+          });
+        }
+
+        revisionRef.current = revision;
+        markdownContentRef.current = markdown;
+        lastSavedContentRef.current = markdown;
+        setMarkdownContent(markdown);
+        setSaveState('saved');
+
+        debugWarn('[StreamEditor] Reloaded document after revision conflict', {
+          streamId: stream.id,
+          revision,
+        });
+        return;
+      }
+
+      if (message.type === 'streamDocumentAppended') {
+        const payloadStreamId = message.payload?.streamId as string | undefined;
+        const fragment = message.payload?.fragment as string | undefined;
+        const revision = Number(message.payload?.revision);
+
+        if (!payloadStreamId || payloadStreamId !== stream.id || typeof fragment !== 'string' || fragment.length === 0) {
+          return;
+        }
+
+        const view = editorViewRef.current;
+        const currentMarkdown = view?.state.doc.toString() ?? markdownContentRef.current;
+        const hadUnsavedChanges = currentMarkdown !== lastSavedContentRef.current;
+
+        const insertion = computeAppendInsertion(currentMarkdown.length, fragment);
+        const insert = insertion.insert;
+        const nextMarkdown = `${currentMarkdown}${insert}`;
+
+        if (view) {
+          view.dispatch({
+            changes: { from: insertion.from, insert },
+            effects: EditorView.scrollIntoView(insertion.insertedEnd, { y: 'nearest' }),
+          });
+        }
+
+        if (Number.isFinite(revision)) {
+          revisionRef.current = revision;
+        }
+        markdownContentRef.current = nextMarkdown;
+        if (!hadUnsavedChanges) {
+          lastSavedContentRef.current = nextMarkdown;
+          setSaveState('saved');
+        }
+        setMarkdownContent(nextMarkdown);
+        return;
+      }
+
       const active = aiRequestRef.current;
       if (!active) return;
 
@@ -266,6 +471,16 @@ export function StreamEditor({
         const chunk = message.payload?.chunk as string | undefined;
         if (!requestId || requestId !== active.id || !chunk) return;
         active.buffer += chunk;
+
+        const view = editorViewRef.current;
+        const range = view ? getAiWritingRange(view.state) : null;
+        if (view && range) {
+          view.dispatch({
+            changes: { from: range.to, insert: chunk },
+            effects: setAiWritingRangeEffect.of({ from: range.from, to: range.to + chunk.length }),
+            annotations: Transaction.addToHistory.of(false),
+          });
+        }
         return;
       }
 
@@ -310,8 +525,23 @@ export function StreamEditor({
           }
         }
 
+        const view = editorViewRef.current;
+        const range = view ? getAiWritingRange(view.state) : null;
+        if (view && range) {
+          view.dispatch({
+            changes: { from: range.from, to: range.to, insert: active.originalText },
+            selection: { anchor: range.from + active.originalText.length },
+            effects: setAiWritingRangeEffect.of(null),
+            annotations: Transaction.addToHistory.of(false),
+          });
+          view.focus();
+        } else if (view) {
+          dispatchAiRangeClear(view);
+        }
+
         setAiStatus('idle');
         aiRequestRef.current = null;
+        showAiErrorFeedback(displayError);
         addToast(displayError, 'error');
         return;
       }
@@ -324,48 +554,70 @@ export function StreamEditor({
         if (!view) {
           setAiStatus('idle');
           aiRequestRef.current = null;
+          hideAiFeedback();
           return;
         }
 
         const rawOutput = active.buffer.trim();
         if (!rawOutput) {
+          const range = getAiWritingRange(view.state);
+          if (range) {
+            view.dispatch({
+              changes: { from: range.from, to: range.to, insert: active.originalText },
+              selection: { anchor: range.from + active.originalText.length },
+              effects: setAiWritingRangeEffect.of(null),
+              annotations: Transaction.addToHistory.of(false),
+            });
+          } else {
+            dispatchAiRangeClear(view);
+          }
+          view.focus();
           setAiStatus('idle');
           aiRequestRef.current = null;
+          showAiErrorFeedback('AI returned empty output.');
           addToast('AI returned empty output.', 'warning');
           return;
         }
 
-        let insertText = rawOutput;
-        let from = active.from;
-        let to = active.to;
-
-        if (active.mode === 'after') {
-          const doc = view.state.doc;
-          const before = doc.sliceString(Math.max(0, active.to - 2), active.to);
-          const needsBlankLine = !before.endsWith('\n\n');
-          const needsSingleBreak = before.endsWith('\n') && !before.endsWith('\n\n');
-          const prefix = needsBlankLine ? '\n\n' : needsSingleBreak ? '\n' : '';
-          const suffix = insertText.endsWith('\n') ? '' : '\n';
-          insertText = `${prefix}${insertText}${suffix}`;
-          from = active.to;
-          to = active.to;
+        const range = getAiWritingRange(view.state);
+        if (!range) {
+          setAiStatus('idle');
+          aiRequestRef.current = null;
+          hideAiFeedback();
+          return;
         }
 
+        const suffix = active.mode === 'after' && !rawOutput.endsWith('\n') ? '\n' : '';
+        const insertText = `${active.prefix}${rawOutput}${suffix}`;
+        const finalFrom = range.from;
+        const originalTo = finalFrom + active.originalText.length;
+
         view.dispatch({
-          changes: { from, to, insert: insertText },
-          selection: { anchor: from + insertText.length },
-          annotations: Transaction.addToHistory.of(true),
+          changes: { from: range.from, to: range.to, insert: active.originalText },
+          annotations: Transaction.addToHistory.of(false),
+        });
+
+        view.dispatch({
+          changes: { from: finalFrom, to: originalTo, insert: insertText },
+          selection: { anchor: finalFrom + insertText.length },
+          effects: setAiWritingRangeEffect.of(null),
+          annotations: [
+            Transaction.addToHistory.of(true),
+            Transaction.userEvent.of(AI_HISTORY_USER_EVENT),
+            isolateHistory.of('full'),
+          ],
         });
         view.focus();
 
         setAiStatus('idle');
         aiRequestRef.current = null;
+        hideAiFeedback();
         return;
       }
     });
 
     return () => unsubscribe();
-  }, [addToast]);
+  }, [addToast, hideAiFeedback, showAiErrorFeedback, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
@@ -395,6 +647,80 @@ export function StreamEditor({
 
     return () => unsubscribe();
   }, [addToast, insertTextAtCursor, stream.id]);
+
+  useEffect(() => {
+    pendingPDFAnchorSelectionRef.current = null;
+    setPDFPaneState((previous) => (
+      previous.streamId && previous.streamId !== stream.id ? { visible: false } : previous
+    ));
+  }, [stream.id]);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type === 'pdfPaneStateChanged') {
+        const visible = message.payload?.visible === true;
+        const nextState: PDFPaneState = {
+          visible,
+          streamId: message.payload?.streamId as string | undefined,
+          sourceId: message.payload?.sourceId as string | undefined,
+          sourceName: message.payload?.sourceName as string | undefined,
+        };
+        setPDFPaneState(nextState);
+        if (!visible || nextState.streamId !== stream.id) {
+          pendingPDFAnchorSelectionRef.current = null;
+        }
+        return;
+      }
+
+      if (message.type === 'pdfAnchorPickCancelled') {
+        const payloadStreamId = message.payload?.streamId as string | undefined;
+        if (payloadStreamId === stream.id) {
+          pendingPDFAnchorSelectionRef.current = null;
+        }
+        return;
+      }
+
+      if (message.type !== 'pdfAnchorPlaced') return;
+
+      const payloadStreamId = message.payload?.streamId as string | undefined;
+      if (payloadStreamId !== stream.id) return;
+
+      const pendingSelection = pendingPDFAnchorSelectionRef.current;
+      pendingPDFAnchorSelectionRef.current = null;
+
+      const sourceId = message.payload?.sourceId as string | undefined;
+      const highlightId = message.payload?.highlightId as string | undefined;
+      const page = message.payload?.page as number | undefined;
+      if (!sourceId || !highlightId) return;
+
+      const view = editorViewRef.current;
+      if (!view || !pendingSelection) {
+        addToast('The original selection is no longer available.', 'warning');
+        return;
+      }
+
+      const pageNumber = Number.isFinite(page) ? Math.max(1, Math.round(page as number)) : 1;
+      const linkURL = buildTickerPDFLinkURL({ sourceId, highlightId, page: pageNumber });
+      const edit = buildPDFAnchorLinkEdit(view.state.doc.toString(), pendingSelection, linkURL);
+      if (!edit) {
+        addToast('The original selection is no longer available.', 'warning');
+        return;
+      }
+
+      view.dispatch({
+        changes: { from: edit.from, to: edit.to, insert: edit.insert },
+        selection: { anchor: edit.from + edit.insert.length },
+        annotations: [
+          Transaction.userEvent.of('input'),
+          isolateHistory.of('full'),
+        ],
+      });
+      view.focus();
+      addToast('Linked selection to PDF.', 'success');
+    });
+
+    return () => unsubscribe();
+  }, [addToast, stream.id]);
 
   const startEditingTitle = useCallback(() => {
     setIsEditingTitle(true);
@@ -505,7 +831,7 @@ export function StreamEditor({
     const doc = view.state.doc;
 
     if (selection.from !== selection.to) {
-      const text = doc.sliceString(selection.from, selection.to);
+      const text = view.state.sliceDoc(selection.from, selection.to);
       return {
         text,
         from: selection.from,
@@ -534,10 +860,10 @@ export function StreamEditor({
 
     const from = doc.line(startLine).from;
     const to = doc.line(endLine).to;
-    let text = doc.sliceString(from, to).trim();
+    let text = view.state.sliceDoc(from, to).trim();
 
     if (!text) {
-      text = doc.toString().trim();
+      text = view.state.sliceDoc(0, doc.length).trim();
       if (!text) return null;
       return {
         text,
@@ -567,51 +893,103 @@ export function StreamEditor({
     setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearSelectionMenuTimer]);
 
-  const getFloatingMenuPlacement = useCallback((): { left: number; top: number } | null => {
+  const getSelectionMenuPlacement = useCallback((view: EditorView): { left: number; top: number } | null => {
     const shell = editorShellRef.current;
     if (!shell) return null;
 
-    const domSelection = window.getSelection();
-    if (!domSelection || domSelection.rangeCount === 0) return null;
-    if (!domSelection.anchorNode || !domSelection.focusNode) return null;
-    if (!shell.contains(domSelection.anchorNode) || !shell.contains(domSelection.focusNode)) return null;
-    if (domSelection.isCollapsed) return null;
+    const selection = view.state.selection.main;
+    const coords = view.coordsAtPos(selection.head) ?? view.coordsAtPos(selection.anchor);
+    if (!coords) return null;
 
-    const range = domSelection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return null;
-
-    const horizontalPadding = 16;
-    const left = Math.min(
-      window.innerWidth - horizontalPadding,
-      Math.max(horizontalPadding, rect.left + rect.width / 2),
-    );
-    const top = rect.bottom + 10;
-
-    return { left, top };
+    const shellRect = shell.getBoundingClientRect();
+    const menu = selectionActionMenuRef.current;
+    return computeSelectionMenuPlacement({
+      coords,
+      shellRect,
+      menuSize: {
+        width: menu?.offsetWidth,
+        height: menu?.offsetHeight,
+      },
+      viewportHeight: window.innerHeight,
+    });
   }, []);
 
-  const scheduleSelectionMenu = useCallback(() => {
+  const scheduleSelectionMenu = useCallback((view: EditorView) => {
     clearSelectionMenuTimer();
-    if (showPrompt || isAiThinking) {
-      setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+
+    if (showPromptRef.current || isAiThinkingRef.current) {
+      hideSelectionMenu();
+      return;
+    }
+
+    const selection = view.state.selection.main;
+    if (selection.empty || !view.state.sliceDoc(selection.from, selection.to).trim()) {
+      hideSelectionMenu();
       return;
     }
 
     selectionMenuTimerRef.current = window.setTimeout(() => {
-      const selection = getSelectionContext(false);
-      const placement = getFloatingMenuPlacement();
-      if (!selection || !selection.text.trim() || !placement) {
-        setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+      selectionMenuTimerRef.current = null;
+
+      const currentView = editorViewRef.current;
+      if (!currentView || currentView !== view || showPromptRef.current || isAiThinkingRef.current) {
+        hideSelectionMenu();
         return;
       }
+
+      const currentSelection = currentView.state.selection.main;
+      const selectedText = currentView.state.sliceDoc(currentSelection.from, currentSelection.to);
+      const placement = getSelectionMenuPlacement(currentView);
+      if (currentSelection.empty || !selectedText.trim() || !placement) {
+        hideSelectionMenu();
+        return;
+      }
+
       setFloatingMenu({
         visible: true,
         left: placement.left,
         top: placement.top,
       });
-    }, 180);
-  }, [clearSelectionMenuTimer, getFloatingMenuPlacement, getSelectionContext, isAiThinking, showPrompt]);
+    }, SELECTION_MENU_DELAY_MS);
+  }, [clearSelectionMenuTimer, getSelectionMenuPlacement, hideSelectionMenu]);
+
+  useEffect(() => {
+    showPromptRef.current = showPrompt;
+    isAiThinkingRef.current = isAiThinking;
+
+    if (showPrompt || isAiThinking) {
+      hideSelectionMenu();
+    }
+  }, [hideSelectionMenu, isAiThinking, showPrompt]);
+
+  const selectionMenuExtension = useMemo<Extension>(() => [
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged && pendingPDFAnchorSelectionRef.current) {
+        pendingPDFAnchorSelectionRef.current = mapPendingPDFAnchorSelection(
+          pendingPDFAnchorSelectionRef.current,
+          update.changes
+        );
+      }
+
+      const selection = update.state.selection.main;
+
+      if (selection.empty) {
+        if (update.selectionSet || update.docChanged) {
+          hideSelectionMenu();
+        }
+        return;
+      }
+
+      if (update.selectionSet || update.geometryChanged) {
+        scheduleSelectionMenu(update.view);
+      }
+    }),
+    EditorView.domEventHandlers({
+      blur: () => {
+        hideSelectionMenu();
+      },
+    }),
+  ], [hideSelectionMenu, scheduleSelectionMenu]);
 
   const startDocumentAI = useCallback((options: {
     query: string;
@@ -626,15 +1004,60 @@ export function StreamEditor({
       return;
     }
 
+    const view = editorViewRef.current;
+    if (!view) {
+      addToast('Editor is not ready yet.', 'warning');
+      return;
+    }
+
+    const docLength = view.state.doc.length;
+    const from = Math.max(0, Math.min(options.from, docLength));
+    const to = Math.max(from, Math.min(options.to, docLength));
+    const originalText = options.mode === 'replace' ? view.state.doc.sliceString(from, to) : '';
+    let rangeFrom = from;
+    let rangeTo = from;
+    let prefix = '';
+
+    if (options.mode === 'after') {
+      rangeFrom = to;
+      rangeTo = to;
+      const before = view.state.doc.sliceString(Math.max(0, to - 2), to);
+      const needsBlankLine = !before.endsWith('\n\n');
+      const needsSingleBreak = before.endsWith('\n') && !before.endsWith('\n\n');
+      prefix = needsBlankLine ? '\n\n' : needsSingleBreak ? '\n' : '';
+      rangeTo += prefix.length;
+    }
+
+    const initialChange = options.mode === 'replace'
+      ? { from, to, insert: '' }
+      : prefix
+        ? { from: to, insert: prefix }
+        : null;
+
+    view.dispatch({
+      changes: initialChange ?? undefined,
+      selection: { anchor: rangeTo },
+      effects: [
+        setAiWritingRangeEffect.of({ from: rangeFrom, to: rangeTo }),
+        EditorView.scrollIntoView(rangeTo, { y: 'nearest' }),
+      ],
+      annotations: [
+        Transaction.addToHistory.of(false),
+        isolateHistory.of('before'),
+      ],
+    });
+    view.focus();
+
     const requestId = crypto.randomUUID();
     aiRequestRef.current = {
       id: requestId,
       buffer: '',
-      from: options.from,
-      to: options.to,
       mode: options.mode,
+      originalText,
+      prefix,
     };
     setAiStatus('thinking');
+    showAiWritingFeedback();
 
     bridge.send({
       type: 'thinkDocument',
@@ -646,7 +1069,7 @@ export function StreamEditor({
         imageURLs: options.imageUrls ?? [],
       },
     });
-  }, [addToast, isAiThinking, stream.id]);
+  }, [addToast, isAiThinking, showAiWritingFeedback, stream.id]);
 
   const handleSend = useCallback(() => {
     const context = getSelectionContext(true);
@@ -685,6 +1108,29 @@ export function StreamEditor({
     openPromptWithContext(context);
   }, [addToast, getSelectionContext, isAiThinking, openPromptWithContext]);
 
+  const canLinkSelectionToPDF = pdfPaneState.visible && pdfPaneState.streamId === stream.id;
+
+  const handleSelectionFormat = useCallback((marker: string) => {
+    const view = editorViewRef.current;
+    if (!view) {
+      hideSelectionMenu();
+      return;
+    }
+
+    const edit = toggleInlineMark(view.state, view.state.selection.main, marker);
+    if (!edit) {
+      hideSelectionMenu();
+      return;
+    }
+
+    view.dispatch({
+      changes: edit.changes,
+      selection: edit.newSelection,
+      annotations: Transaction.userEvent.of('input.format'),
+    });
+    view.focus();
+  }, [hideSelectionMenu]);
+
   const handleSelectionSend = useCallback(() => {
     const context = getSelectionContext(false);
     if (!context || !context.text.trim()) {
@@ -710,6 +1156,27 @@ export function StreamEditor({
     }
     openPromptWithContext(context);
   }, [getSelectionContext, hideSelectionMenu, openPromptWithContext]);
+
+  const handleSelectionLinkToPDF = useCallback(() => {
+    const context = getSelectionContext(false);
+    if (!context || !context.text.trim()) {
+      hideSelectionMenu();
+      return;
+    }
+    if (!canLinkSelectionToPDF) {
+      pendingPDFAnchorSelectionRef.current = null;
+      hideSelectionMenu();
+      addToast('Open a PDF source before linking to PDF.', 'info');
+      return;
+    }
+
+    pendingPDFAnchorSelectionRef.current = { from: context.from, to: context.to };
+    hideSelectionMenu();
+    bridge.send({
+      type: 'beginPdfAnchorPick',
+      payload: { streamId: stream.id },
+    });
+  }, [addToast, canLinkSelectionToPDF, getSelectionContext, hideSelectionMenu, stream.id]);
 
   const closePrompt = useCallback(() => {
     setShowPrompt(false);
@@ -767,44 +1234,8 @@ export function StreamEditor({
   }, [clearSelectionMenuTimer]);
 
   useEffect(() => {
-    const handleSelectionChange = () => {
-      const selection = window.getSelection();
-      if (!selection || selection.rangeCount === 0) {
-        hideSelectionMenu();
-        return;
-      }
-      scheduleSelectionMenu();
-    };
-
-    document.addEventListener('selectionchange', handleSelectionChange);
-    return () => document.removeEventListener('selectionchange', handleSelectionChange);
-  }, [hideSelectionMenu, scheduleSelectionMenu]);
-
-  useEffect(() => {
-    if (!floatingMenu.visible) return;
-
-    const updatePlacement = () => {
-      const selection = getSelectionContext(false);
-      const placement = getFloatingMenuPlacement();
-      if (!selection || !placement) {
-        hideSelectionMenu();
-        return;
-      }
-      setFloatingMenu((previous) => ({
-        ...previous,
-        visible: true,
-        left: placement.left,
-        top: placement.top,
-      }));
-    };
-
-    window.addEventListener('resize', updatePlacement);
-    window.addEventListener('scroll', updatePlacement, true);
-    return () => {
-      window.removeEventListener('resize', updatePlacement);
-      window.removeEventListener('scroll', updatePlacement, true);
-    };
-  }, [floatingMenu.visible, getFloatingMenuPlacement, getSelectionContext, hideSelectionMenu]);
+    return () => clearAiFeedbackTimer();
+  }, [clearAiFeedbackTimer]);
 
   useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
@@ -827,14 +1258,6 @@ export function StreamEditor({
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [insertImageFiles, isEditorActive]);
-
-  useEffect(() => {
-    if (!showPrompt) {
-      scheduleSelectionMenu();
-    } else {
-      hideSelectionMenu();
-    }
-  }, [hideSelectionMenu, scheduleSelectionMenu, showPrompt]);
 
   const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     const files = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith('image/'));
@@ -866,12 +1289,13 @@ export function StreamEditor({
   }, [addToast]);
 
   const handleNavigateToSource = useCallback((sourceId: string) => {
-    if (!pdfSources.some((source) => source.id === sourceId)) {
-      addToast('Source panel is available for PDF sources only.', 'info');
+    if (!sources.some((source) => source.id === sourceId)) {
+      addToast('Source is not attached to this stream.', 'info');
       return;
     }
     setHighlightedSourceId(sourceId);
-  }, [addToast, pdfSources]);
+    setShowSourcesModal(true);
+  }, [addToast, sources]);
 
   return (
     <div className="stream-editor">
@@ -898,6 +1322,15 @@ export function StreamEditor({
         <span className={`stream-save-status stream-save-status--${saveState}`}>
           {saveState === 'saving' ? 'Saving…' : 'Saved'}
         </span>
+        <button
+          onClick={() => setShowSourcesModal(true)}
+          className="stream-sources-button"
+          title="Sources"
+          type="button"
+          aria-label={`Sources, ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
+        >
+          Sources · {sources.length}
+        </button>
         <button
           onClick={() => setShowDeleteConfirm(true)}
           className="delete-stream-button"
@@ -979,9 +1412,41 @@ export function StreamEditor({
 
       {floatingMenu.visible && (
         <div
+          ref={selectionActionMenuRef}
           className="selection-action-menu"
           style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
         >
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--bold"
+            title="Bold"
+            aria-label="Bold"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat('**')}
+          >
+            B
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--italic"
+            title="Italic"
+            aria-label="Italic"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat('*')}
+          >
+            I
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--code"
+            title="Code"
+            aria-label="Code"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat('`')}
+          >
+            &lt;/&gt;
+          </button>
+          <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"
             className="selection-action-button"
@@ -1008,6 +1473,20 @@ export function StreamEditor({
               <path d="M4 3h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-4 4v-4H4a1 1 0 01-1-1V4a1 1 0 011-1zm1 2v9h1v1.6L7.6 14H19V5H5zm3 2h8v1H8V7zm0 3h5v1H8v-1z" />
             </svg>
           </button>
+          {canLinkSelectionToPDF && (
+            <button
+              type="button"
+              className="selection-action-button"
+              title="Link to PDF"
+              aria-label="Link to PDF"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleSelectionLinkToPDF}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M8.8 12.9a1 1 0 010-1.4l3.7-3.7a3.4 3.4 0 114.8 4.8l-1.5 1.5-.7-.7 1.5-1.5a2.4 2.4 0 10-3.4-3.4l-3.7 3.7a1 1 0 001.4 1.4l2.5-2.5.7.7-2.5 2.5a2 2 0 01-2.8 0zm-2.1 7a3.4 3.4 0 010-4.8l1.5-1.5.7.7-1.5 1.5a2.4 2.4 0 103.4 3.4l3.7-3.7a1 1 0 00-1.4-1.4l-2.5 2.5-.7-.7 2.5-2.5a2 2 0 112.8 2.8l-3.7 3.7a3.4 3.4 0 01-4.8 0z" />
+              </svg>
+            </button>
+          )}
         </div>
       )}
 
@@ -1035,40 +1514,55 @@ export function StreamEditor({
                   autocomplete: 'on',
                   autocorrect: 'on',
                 }),
-                EditorView.editable.of(!isAiThinking),
+                selectionMenuExtension,
+                clickToDocumentEndExtension,
+                aiWritingExtension,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
+                markdownConcealExtension,
                 markdownImageWidgetExtension,
+                tickerPDFLinkExtension(stream.id),
               ]}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
+                window.setTimeout(() => {
+                  if (editorViewRef.current === view) {
+                    focusEditorAtDocumentEnd(view);
+                  }
+                }, 0);
               }}
               onChange={(value) => {
                 setMarkdownContent(value);
               }}
               className="document-editor-codemirror"
             />
+            {aiFeedback.visible && (
+              <div
+                className={`document-ai-status-pill document-ai-status-pill--${aiFeedback.kind}`}
+                role="status"
+                aria-live="polite"
+              >
+                <span className="document-ai-status-dot" aria-hidden="true" />
+                <span>{aiFeedback.message}</span>
+              </div>
+            )}
           </div>
         </div>
-        {hasPdfSources && (
-          <div className="stream-sources-dock">
-            <SidePanel
-              cells={[]}
-              focusedCellId={null}
-              onCellClick={() => {}}
-              streamId={stream.id}
-              sources={pdfSources}
-              onSourceRemoved={handleSourceRemoved}
-              onSourceOpen={handleOpenSource}
-              highlightedSourceId={highlightedSourceId || pendingSourceId}
-              onClearHighlight={() => {
-                setHighlightedSourceId(null);
-                onClearPendingSource?.();
-              }}
-            />
-          </div>
-        )}
       </div>
+
+      <SourcesModal
+        isOpen={showSourcesModal}
+        streamId={stream.id}
+        sources={sources}
+        onClose={() => setShowSourcesModal(false)}
+        onSourceRemoved={handleSourceRemoved}
+        onSourceOpen={handleOpenSource}
+        highlightedSourceId={highlightedSourceId || pendingSourceId}
+        onClearHighlight={() => {
+          setHighlightedSourceId(null);
+          onClearPendingSource?.();
+        }}
+      />
 
       <SearchModal
         isOpen={showSearch}

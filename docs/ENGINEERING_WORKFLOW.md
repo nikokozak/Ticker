@@ -55,6 +55,7 @@ Every PR includes:
 - Preferred single entry point: `./tickerctl.sh preflight-alpha`
 - Swift: `./tickerctl.sh swift-test` (runs `xcodebuild test`, no code signing)
 - Web: `./tickerctl.sh web-typecheck`
+- Web unit tests: `cd Web && npm test`
 - Bridge contract: `./tickerctl.sh contracts`
 
 ## Review checklist (fast but strict)

@@ -1,11 +1,10 @@
 import Foundation
 
-/// A thinking session containing cells and source references
+/// A thinking session containing a Markdown document and source references.
 struct Stream: Identifiable, Codable {
     let id: UUID
     var title: String
     var sources: [SourceReference]
-    var cells: [Cell]
     let createdAt: Date
     var updatedAt: Date
 
@@ -13,14 +12,12 @@ struct Stream: Identifiable, Codable {
         id: UUID = UUID(),
         title: String = "Untitled",
         sources: [SourceReference] = [],
-        cells: [Cell] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
         self.title = title
         self.sources = sources
-        self.cells = cells
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -32,6 +29,8 @@ struct StreamSummary: Identifiable, Codable {
     let title: String
     let sourceCount: Int
     let cellCount: Int
+    let charCount: Int
+    let imageCount: Int
     let updatedAt: Date
     let previewText: String?
 }
@@ -40,17 +39,20 @@ struct StreamSummary: Identifiable, Codable {
 struct StreamDocument: Codable {
     let streamId: UUID
     var markdown: String
+    var revision: Int
     let createdAt: Date
     var updatedAt: Date
 
     init(
         streamId: UUID,
         markdown: String = "",
+        revision: Int = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.streamId = streamId
         self.markdown = markdown
+        self.revision = revision
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

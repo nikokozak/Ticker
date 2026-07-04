@@ -19,7 +19,7 @@ final class SourceService {
         self.embeddingService = embeddingService
     }
 
-    /// Check if embedding service is configured (has OpenAI API key)
+    /// Check if embedding service is configured and enabled
     var isEmbeddingConfigured: Bool {
         embeddingService.isConfigured
     }
@@ -44,6 +44,7 @@ final class SourceService {
             displayName: url.lastPathComponent,
             fileType: fileType,
             bookmarkData: bookmarkData,
+            originalPath: url.path,
             status: .pending
         )
 
@@ -58,23 +59,61 @@ final class SourceService {
     /// Resolve bookmark and access the file. Returns the accessible URL.
     /// Caller is responsible for calling `stopAccessingSecurityScopedResource()`.
     func accessFile(_ source: SourceReference) throws -> URL {
-        var isStale = false
-        let url = try URL(
-            resolvingBookmarkData: source.bookmarkData,
-            options: [.withSecurityScope],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        )
+        do {
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: source.bookmarkData,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
 
-        if isStale {
-            // Bookmark is stale - mark source and try to refresh
-            var updated = source
-            updated.status = .stale
-            try? persistence.saveSource(updated)
+            if isStale {
+                // Bookmark is stale - mark source and try to refresh
+                var updated = source
+                updated.status = .stale
+                try? persistence.saveSource(updated)
+            }
+
+            guard url.startAccessingSecurityScopedResource() else {
+                return try recoverAccessFromOriginalPath(source)
+            }
+
+            return url
+        } catch let error as SourceError {
+            throw error
+        } catch {
+            if let recoveredURL = try? recoverAccessFromOriginalPath(source) {
+                return recoveredURL
+            }
+            throw SourceError.accessUnavailable(source.displayName)
+        }
+    }
+
+    private func recoverAccessFromOriginalPath(_ source: SourceReference) throws -> URL {
+        guard let originalPath = source.originalPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !originalPath.isEmpty else {
+            throw SourceError.accessUnavailable(source.displayName)
         }
 
+        let url = URL(fileURLWithPath: originalPath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw SourceError.accessUnavailable(source.displayName)
+        }
+
+        let bookmarkData = try url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+
+        var updated = source
+        updated.bookmarkData = bookmarkData
+        updated.status = updated.extractedText == nil ? .pending : .ready
+        try persistence.saveSource(updated)
+
         guard url.startAccessingSecurityScopedResource() else {
-            throw SourceError.accessDenied(source.displayName)
+            throw SourceError.accessUnavailable(source.displayName)
         }
 
         return url
@@ -193,6 +232,10 @@ final class SourceService {
 
         // Trigger RAG processing asynchronously if text was extracted
         if source.status == .ready, source.extractedText != nil {
+            guard !SettingsService.proxyOnlyMode else {
+                // ponytail: RAG indexing is parked until Ticker Proxy supports embeddings.
+                return source
+            }
             Task {
                 await processSourceForRAG(source: source)
             }
@@ -205,6 +248,11 @@ final class SourceService {
 
     /// Process a source for RAG: chunk, embed, and store
     func processSourceForRAG(source: SourceReference) async {
+        guard !SettingsService.proxyOnlyMode else {
+            DebugLog.log("RAG: Proxy-only mode, skipping sourceId=\(source.id)")
+            return
+        }
+
         guard let text = source.extractedText, !text.isEmpty else {
             DebugLog.log("RAG: No text to process for sourceId=\(source.id)")
             return
@@ -295,6 +343,7 @@ final class SourceService {
 enum SourceError: LocalizedError {
     case unsupportedFileType(String)
     case accessDenied(String)
+    case accessUnavailable(String)
     case extractionFailed(String)
     case bookmarkStale(String)
 
@@ -304,6 +353,8 @@ enum SourceError: LocalizedError {
             return "Unsupported file type: \(ext)"
         case .accessDenied(let name):
             return "Cannot access file: \(name)"
+        case .accessUnavailable(let name):
+            return "Can't access \(name) — the file may have moved. Re-add the source."
         case .extractionFailed(let reason):
             return "Text extraction failed: \(reason)"
         case .bookmarkStale(let name):

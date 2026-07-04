@@ -16,6 +16,27 @@ class DroppableWebView: WKWebView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func mouseDown(with event: NSEvent) {
+        guard let window else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        let measuredStripHeight = window.frame.height - window.contentLayoutRect.height
+        let titlebarStripHeight = measuredStripHeight > 0 ? measuredStripHeight : 28
+        guard event.locationInWindow.y >= window.frame.height - titlebarStripHeight else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        if event.clickCount == 2 {
+            window.performZoom(nil)
+            return
+        }
+
+        window.performDrag(with: event)
+    }
+
     // MARK: - NSDraggingDestination
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

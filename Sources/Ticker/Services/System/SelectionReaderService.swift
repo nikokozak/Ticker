@@ -235,6 +235,9 @@ final class SelectionReaderService {
     /// Build a context from available selection, app info, and position
     /// Captures everything at once BEFORE focus changes
     func buildContext() -> QuickPanelContext {
+        let axTrusted = cursorService.hasAccessibilityPermission
+        DebugLog.log("[SelectionReader] buildContext axTrusted=\(axTrusted)")
+
         // Capture position first (uses selection bounds if available, else mouse)
         let panelSize = CGSize(width: 350, height: 80)  // Default panel size
         let position = cursorService.calculatePanelPosition(panelSize: panelSize)
@@ -247,7 +250,7 @@ final class SelectionReaderService {
             clipboardImageData = getRecentClipboardImage()
         }
 
-        return QuickPanelContext(
+        let context = QuickPanelContext(
             selectedText: selectedText,
             activeApp: getActiveApp(),
             windowTitle: getActiveWindowTitle(),
@@ -255,6 +258,14 @@ final class SelectionReaderService {
             clipboardImage: clipboardImageData,
             isScreenshot: false
         )
+        DebugLog.log(
+            "[SelectionReader] buildContext result " +
+            "hasSelection=\(context.hasSelection) " +
+            "selectedLength=\(context.trimmedSelectedText?.count ?? 0) " +
+            "hasImage=\(context.hasImage) " +
+            "activeApp=\(context.activeApp ?? "unknown")"
+        )
+        return context
     }
 
     /// Get clipboard image if it was copied recently (within threshold)
@@ -285,8 +296,16 @@ struct QuickPanelContext {
     /// Clipboard-derived images should keep this false.
     let isScreenshot: Bool
 
+    var trimmedSelectedText: String? {
+        guard let trimmed = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
     var hasSelection: Bool {
-        selectedText != nil && !(selectedText?.isEmpty ?? true)
+        trimmedSelectedText != nil
     }
 
     var hasImage: Bool {
@@ -299,7 +318,7 @@ struct QuickPanelContext {
 
     /// Truncated preview of selected text for display
     var selectionPreview: String? {
-        guard let text = selectedText else { return nil }
+        guard let text = trimmedSelectedText else { return nil }
         if text.count <= 100 {
             return text
         }

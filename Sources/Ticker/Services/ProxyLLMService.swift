@@ -2,10 +2,10 @@ import Foundation
 
 /// LLM provider that routes requests through the Ticker proxy
 /// Used when device key is active; handles proxy-specific error codes
-final class ProxyLLMService: LLMProvider {
+final class ProxyLLMService {
     private let deviceKeyService: DeviceKeyService
 
-    // MARK: - LLMProvider
+    // MARK: - Metadata
 
     let id = "proxy"
     let name = "Ticker Proxy"
@@ -44,9 +44,7 @@ final class ProxyLLMService: LLMProvider {
     }
 
     var isConfigured: Bool {
-        // Proxy service is always "configured" from a protocol perspective.
-        // The actual proxy mode check happens in AIOrchestrator.route() which
-        // verifies DeviceKeyService.currentState.isUsable before selecting this provider.
+        // Proxy service availability is enforced by DeviceKeyService at request time.
         true
     }
 
@@ -396,106 +394,6 @@ final class ProxyLLMService: LLMProvider {
             debugLog("Restatement failed: \(error.localizedDescription)")
             return nil
         }
-    }
-
-    /// Generate a short label for a modifier prompt (non-streaming)
-    func generateLabel(for prompt: String) async throws -> String {
-        // Get credentials from device key service
-        let headers = await deviceKeyService.getProxyHeaders()
-        guard let headers else {
-            throw ProxyLLMError.invalidKey
-        }
-
-        // Build request URL
-        guard let url = URL(string: "\(proxyBaseURL)/v1/llm/request") else {
-            throw ProxyLLMError.validationError("Invalid proxy URL")
-        }
-
-        // Build request body (non-streaming)
-        let provider = determineProvider(for: LLMRequest(systemPrompt: "", messages: []))
-        let messages: [[String: Any]] = [
-            ["role": "system", "content": Prompts.modifierLabel],
-            ["role": "user", "content": prompt]
-        ]
-        let requestBody: [String: Any] = [
-            "model": "default",
-            "messages": messages,
-            "provider": provider,
-            "stream": false
-        ]
-
-        guard let bodyData = try? JSONSerialization.data(withJSONObject: requestBody) else {
-            throw ProxyLLMError.validationError("Failed to encode request")
-        }
-
-        // Build URL request
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.httpBody = bodyData
-        urlRequest.timeoutInterval = 30
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        // Add functional headers
-        for (key, value) in headers {
-            urlRequest.setValue(value, forHTTPHeaderField: key)
-        }
-
-        // Add diagnostic headers
-        let requestId = await deviceKeyService.applyDiagnosticsHeaders(to: &urlRequest)
-        debugLog("Label generation request requestId=\(requestId ?? "nil")")
-
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw ProxyLLMError.validationError("Invalid response")
-        }
-
-        // Record request ID if available
-        if let id = httpResponse.value(forHTTPHeaderField: "X-Ticker-Request-Id") ?? requestId {
-            await deviceKeyService.recordRequestId(id, endpoint: "llm")
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            debugLog("Label generation failed: status \(httpResponse.statusCode)")
-            throw ProxyLLMError.serverError(statusCode: httpResponse.statusCode, requestId: requestId)
-        }
-
-        // Parse response
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let outputText = json["output_text"] as? String else {
-            throw ProxyLLMError.validationError("Invalid response format")
-        }
-
-        let label = outputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        debugLog("Label generated (len=\(label.count))")
-        return label
-    }
-
-    /// Apply a modifier to content with streaming
-    func applyModifier(
-        currentContent: String,
-        modifierPrompt: String,
-        onChunk: @escaping (String) -> Void,
-        onComplete: @escaping () -> Void,
-        onError: @escaping (Error) -> Void
-    ) async {
-        // Build a streaming request for the modifier
-        let userPrompt = "Content to transform:\n\n\(currentContent)\n\n---\n\nInstruction: \(modifierPrompt)"
-        let request = LLMRequest(
-            systemPrompt: Prompts.applyModifier,
-            messages: [LLMMessage(role: "user", content: userPrompt)],
-            temperature: 0.7,
-            maxTokens: 2048
-        )
-
-        // Use the existing stream method
-        await stream(
-            request: request,
-            onChunk: onChunk,
-            onComplete: onComplete,
-            onError: onError
-        )
     }
 
     // MARK: - Message Building

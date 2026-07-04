@@ -45,6 +45,8 @@ final class QuickPanelManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var statusMessage: String?  // Temporary feedback (success/info messages)
+    @Published private(set) var isShowingSaveFeedback: Bool = false
+    @Published private(set) var isInputSaveFeedbackActive: Bool = false
     @Published var ephemeralConversation = EphemeralConversation()
 
     // Stream selection
@@ -63,6 +65,9 @@ final class QuickPanelManager: ObservableObject {
     // MARK: - Streaming Task
 
     private var streamingTask: Task<Void, Never>?
+    private var documentAITasks: [UUID: Task<Void, Never>] = [:]
+    private var statusClearTask: Task<Void, Never>?
+    private var saveFeedbackTask: Task<Void, Never>?
     private var isStreamingCancelled = false  // Explicit flag since nested Tasks don't inherit cancellation
 
     // MARK: - Height Management
@@ -77,6 +82,7 @@ final class QuickPanelManager: ObservableObject {
     private var hostingView: NSHostingView<QuickPanelView>?
     private var currentAppearance: NSAppearance?  // Stored to apply when panel is created
     private var suppressedClipboardImageChangeCount: Int?
+    private var presentationGeneration: Int = 0
 
     // MARK: - Initialization
 
@@ -89,6 +95,13 @@ final class QuickPanelManager: ObservableObject {
         self.selectionService = SelectionReaderService(cursorService: cursor)
         self.persistence = persistence
         self.bridgeService = bridgeService
+    }
+
+    deinit {
+        streamingTask?.cancel()
+        documentAITasks.values.forEach { $0.cancel() }
+        statusClearTask?.cancel()
+        saveFeedbackTask?.cancel()
     }
 
     /// Configure services after initialization (for dependency injection)
@@ -104,12 +117,23 @@ final class QuickPanelManager: ObservableObject {
         self.orchestrator = orchestrator
     }
 
+    func configure(container: ServiceContainer) {
+        guard let persistence = container.persistence else { return }
+        configure(
+            persistence: persistence,
+            bridgeService: container.bridgeService,
+            assetService: container.assetService,
+            orchestrator: container.orchestrator
+        )
+    }
+
     // MARK: - Public API
 
     /// Toggle the quick panel
     func toggle() {
         // Capture context BEFORE we steal focus
         let capturedContext = contextRespectingDismissedClipboardImage(selectionService.buildContext())
+        logCapturedContext(capturedContext)
 
         if isVisible {
             // Check if there's a new selection
@@ -175,19 +199,13 @@ final class QuickPanelManager: ObservableObject {
         )
 
         show(with: contextWithoutClipboard, showAccessibilityWarning: false)
-        statusMessage = message
-
-        // Auto-clear after a short delay so it doesn't linger.
-        Task {
-            try? await Task.sleep(nanoseconds: 4_000_000_000)  // 4s
-            if self.statusMessage == message {
-                self.statusMessage = nil
-            }
-        }
+        showTimedStatusMessage(message, durationNanoseconds: 4_000_000_000)
     }
 
     /// Show the quick panel with specific context
     private func show(with capturedContext: QuickPanelContext, showAccessibilityWarning: Bool) {
+        presentationGeneration += 1
+        cancelFeedbackTasks()
         self.context = capturedContext
         resetState()
 
@@ -196,7 +214,7 @@ final class QuickPanelManager: ObservableObject {
 
         // If Accessibility isn't granted, just show a soft warning (don't prompt).
         // Onboarding is responsible for prompting; repeated system prompts here are jarring.
-        if showAccessibilityWarning && !cursorService.hasAccessibilityPermission && !capturedContext.hasContent {
+        if showAccessibilityWarning && !cursorService.hasAccessibilityPermission && !capturedContext.hasSelection {
             statusMessage = "Grant Accessibility permission to capture text selections"
         }
 
@@ -207,11 +225,15 @@ final class QuickPanelManager: ObservableObject {
 
         guard let panel = panel else { return }
 
+        heightDebounceTimer?.invalidate()
+        targetHeight = QuickPanelWindow.minHeight
+        panel.resetToMinHeight()
+
         // Position at captured location
         panel.position(at: capturedContext.panelPosition)
 
         // Show panel without bringing main window forward
-        panel.orderFrontRegardless()
+        panel.fadeIn()
         panel.makeKey()
 
         isVisible = true
@@ -224,13 +246,27 @@ final class QuickPanelManager: ObservableObject {
 
     /// Hide the quick panel
     func hide() {
+        presentationGeneration += 1
+        let generation = presentationGeneration
+        cancelFeedbackTasks()
         // Cancel any in-flight streaming to avoid orphan AI calls
         cancelStreaming()
 
-        panel?.orderOut(nil)
         isVisible = false
-        resetState()
-        statusMessage = nil
+
+        let finishHide = { [weak self] in
+            guard let self, generation == self.presentationGeneration else { return }
+            self.resetState()
+            self.context = nil
+            self.statusMessage = nil
+        }
+
+        guard let panel, panel.isVisible else {
+            finishHide()
+            return
+        }
+
+        panel.fadeOut(completion: finishHide)
         // Note: ephemeralConversation is intentionally preserved so user can re-reference
     }
 
@@ -247,6 +283,86 @@ final class QuickPanelManager: ObservableObject {
         inputText = ""
         isLoading = false
         error = nil
+        statusMessage = nil
+        isShowingSaveFeedback = false
+        isInputSaveFeedbackActive = false
+    }
+
+    private func cancelFeedbackTasks() {
+        statusClearTask?.cancel()
+        statusClearTask = nil
+        saveFeedbackTask?.cancel()
+        saveFeedbackTask = nil
+    }
+
+    private func showTimedStatusMessage(_ message: String, durationNanoseconds: UInt64) {
+        statusClearTask?.cancel()
+        isShowingSaveFeedback = false
+        isInputSaveFeedbackActive = false
+        statusMessage = message
+
+        statusClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: durationNanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.statusMessage == message else { return }
+                self.statusMessage = nil
+                self.statusClearTask = nil
+            }
+        }
+    }
+
+    private func showSaveFeedbackThenHide(_ message: String) {
+        statusClearTask?.cancel()
+        statusClearTask = nil
+        saveFeedbackTask?.cancel()
+        isShowingSaveFeedback = true
+        isInputSaveFeedbackActive = true
+        statusMessage = message
+
+        saveFeedbackTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.statusMessage == message else { return }
+                self.hide()
+            }
+        }
+    }
+
+    private func showSaveFeedbackPill(_ message: String, durationNanoseconds: UInt64 = 1_400_000_000) {
+        statusClearTask?.cancel()
+        statusClearTask = nil
+        isShowingSaveFeedback = true
+        isInputSaveFeedbackActive = false
+        statusMessage = message
+
+        statusClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: durationNanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self,
+                      self.statusMessage == message,
+                      !self.isInputSaveFeedbackActive else { return }
+                self.statusMessage = nil
+                self.isShowingSaveFeedback = false
+                self.statusClearTask = nil
+            }
+        }
+    }
+
+    private func logCapturedContext(_ capturedContext: QuickPanelContext) {
+        let selectedLength = capturedContext.selectedText?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .count ?? 0
+        DebugLog.log(
+            "[QuickPanel] toggle captured context " +
+            "axTrusted=\(cursorService.hasAccessibilityPermission) " +
+            "hasSelection=\(capturedContext.hasSelection) " +
+            "selectedLength=\(selectedLength) " +
+            "hasImage=\(capturedContext.hasImage) " +
+            "activeApp=\(capturedContext.activeApp ?? "unknown")"
+        )
     }
 
     /// Update panel appearance (light/dark mode)
@@ -259,12 +375,12 @@ final class QuickPanelManager: ObservableObject {
 
     /// Handle Enter key - add content to stream
     func handleEnter() async {
-        await addToStream(triggerAI: false)
+        await addToStream()
     }
 
     /// Handle Cmd+Enter - add content and trigger AI
     func handleCmdEnter() async {
-        await addToStream(triggerAI: true)
+        await addToStream(triggerDocumentAI: true)
     }
 
     /// Handle Option+Enter - ephemeral AI conversation (not saved)
@@ -354,6 +470,11 @@ final class QuickPanelManager: ObservableObject {
             return
         }
 
+        if isInputSaveFeedbackActive {
+            hide()
+            return
+        }
+
         // Second: clear input/context
         if !inputText.isEmpty || context?.hasContent == true {
             suppressDismissedClipboardImageIfNeeded()
@@ -370,6 +491,11 @@ final class QuickPanelManager: ObservableObject {
     func clearContext() {
         suppressDismissedClipboardImageIfNeeded()
         context = nil
+    }
+
+    func clearEphemeralConversation() {
+        cancelStreaming()
+        ephemeralConversation.clear()
     }
 
     /// Suppress reattaching the current clipboard image on Cmd+L until clipboard changes.
@@ -402,17 +528,18 @@ final class QuickPanelManager: ObservableObject {
         )
     }
 
-    // MARK: - Cell Creation
+    // MARK: - Markdown Capture
 
     /// Add captured content and/or input to the active stream
-    private func addToStream(triggerAI: Bool) async {
+    private func addToStream(triggerDocumentAI: Bool = false) async {
         guard let persistence = persistence else {
             error = "Persistence not configured"
             return
         }
 
-        let hasContext = context?.hasContent == true
-        let hasInput = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasContext = nonEmptyTrimmed(context?.selectedText) != nil || context?.clipboardImage != nil
+        let prompt = nonEmptyTrimmed(inputText)
+        let hasInput = prompt != nil
 
         // Must have something to add
         guard hasContext || hasInput else {
@@ -426,51 +553,54 @@ final class QuickPanelManager: ObservableObject {
         do {
             // Get target stream (may create new one)
             let (streamId, isNewStream) = try getTargetStreamId()
+            let streamTitle = displayTitle(for: streamId, persistence: persistence)
 
-            var pendingCells: [Cell] = []
-            var contextCellId: UUID?
-            var triggerAICellId: UUID?
+            let fragment = try buildMarkdownFragment(streamId: streamId)
+            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
+            notifyFrontend(streamId: streamId, fragment: result.fragment, revision: result.revision, isNewStream: isNewStream)
 
-            // 1. If we have context (selection or image), create a quote cell
-            if let ctx = context, ctx.hasContent {
-                let contextCell = createContextCell(from: ctx, streamId: streamId)
-                pendingCells.append(contextCell)
-                contextCellId = contextCell.id
-            }
+            let aiPrompt = triggerDocumentAI ? prompt : nil
+            let orchestratorForAI = orchestrator
+            var documentMarkdownForAI: String?
+            var aiStartupError: String?
 
-            // 2. If we have input text
-            if hasInput {
-                let trimmedInput = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                if triggerAI {
-                    // Create AI response cell that references context
-                    let aiCell = Cell(
-                        streamId: streamId,
-                        content: "",  // Will be filled by AI
-                        originalPrompt: trimmedInput,
-                        type: .aiResponse,
-                        order: 0,  // Final order assigned atomically at persistence time.
-                        references: contextCellId.map { [$0] }
-                    )
-                    pendingCells.append(aiCell)
-                    triggerAICellId = aiCell.id
+            if aiPrompt != nil {
+                if orchestratorForAI == nil {
+                    aiStartupError = "AI is not configured"
                 } else {
-                    // Create plain text cell
-                    let textCell = Cell(
-                        streamId: streamId,
-                        content: "<p>\(escapeHtml(trimmedInput))</p>",
-                        type: .text,
-                        order: 0  // Final order assigned atomically at persistence time.
-                    )
-                    pendingCells.append(textCell)
+                    do {
+                        documentMarkdownForAI = try persistence.loadOrCreateStreamDocument(streamId: streamId).markdown
+                    } catch {
+                        aiStartupError = "Could not load document context"
+                        DebugLog.log("[QuickPanel] Failed to load document context for AI (\(DebugLog.errorSummary(error)))")
+                    }
                 }
             }
 
-            let persistedCells = try persistence.insertQuickPanelCells(streamId: streamId, cells: pendingCells)
-            notifyFrontend(streamId: streamId, cells: persistedCells, triggerAI: triggerAICellId, isNewStream: isNewStream)
+            isLoading = false
+            let feedbackMessage = triggerDocumentAI
+                ? "Saved to \(streamTitle) — asking AI…"
+                : "Saved to \(streamTitle)"
+            showSaveFeedbackThenHide(feedbackMessage)
 
-            // Success - hide panel
-            hide()
+            if let aiPrompt {
+                if let orchestratorForAI, let documentMarkdownForAI {
+                    startDocumentAI(
+                        streamId: streamId,
+                        prompt: aiPrompt,
+                        documentMarkdown: documentMarkdownForAI,
+                        persistence: persistence,
+                        orchestrator: orchestratorForAI
+                    )
+                } else {
+                    appendQuickPanelAIError(
+                        streamId: streamId,
+                        summary: aiStartupError ?? "AI request could not start",
+                        persistence: persistence
+                    )
+                }
+            }
+            return
 
         } catch {
             self.error = error.localizedDescription
@@ -478,6 +608,31 @@ final class QuickPanelManager: ObservableObject {
         }
 
         isLoading = false
+    }
+
+    func saveConversationMessage(_ message: String) {
+        guard let persistence = persistence else {
+            error = "Persistence not configured"
+            return
+        }
+
+        guard let fragment = nonEmptyTrimmed(message) else { return }
+
+        do {
+            let (streamId, isNewStream) = try getTargetStreamId()
+            let streamTitle = displayTitle(for: streamId, persistence: persistence)
+            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
+            notifyFrontend(
+                streamId: streamId,
+                fragment: result.fragment,
+                revision: result.revision,
+                isNewStream: isNewStream
+            )
+            showSaveFeedbackPill("Saved to \(streamTitle)")
+        } catch {
+            self.error = error.localizedDescription
+            DebugLog.log("[QuickPanel] Error saving conversation message (\(DebugLog.errorSummary(error)))")
+        }
     }
 
     /// Load available streams for the picker
@@ -538,115 +693,141 @@ final class QuickPanelManager: ObservableObject {
         return (newStream.id, true)
     }
 
-    /// Create a quote cell from captured context
-    private func createContextCell(from ctx: QuickPanelContext, streamId: UUID) -> Cell {
-        var content = ""
-
-        // Build source attribution: "App — Window Title" or just "App"
-        let sourceAttribution = buildSourceAttribution(app: ctx.activeApp, windowTitle: ctx.windowTitle)
-
-        if let text = ctx.selectedText {
-            // Format as italicized quote with source info
-            let escapedText = escapeHtml(text)
-            content = "<p><em>\(escapedText)</em></p>"
-
-            if let source = sourceAttribution {
-                content += "<p class=\"source-info\">— \(source)</p>"
+    private func buildMarkdownFragment(streamId: UUID) throws -> String {
+        try QuickPanelMarkdownFormatter.buildFragment(
+            context: context,
+            inputText: inputText
+        ) { imageData in
+            guard let assetService = assetService else {
+                throw QuickPanelError.assetServiceNotConfigured
             }
-        } else if let imageData = ctx.clipboardImage, let assetService = assetService {
-            // Save image via AssetService and embed as img tag
-            do {
-                let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
-                // Use relative path for portability - AssetSchemeHandler resolves at render time
-                // Note: ticker-asset:/// (three slashes) ensures the path isn't parsed as host
-                let assetUrl = "ticker-asset:///\(relativePath)"
-                content = "<p><img src=\"\(assetUrl)\" alt=\"Screenshot\" style=\"max-width: 100%;\"></p>"
 
-                if let source = sourceAttribution {
-                    content += "<p class=\"source-info\">— Screenshot from \(source)</p>"
-                }
-            } catch {
-                DebugLog.log("[QuickPanel] Failed to save screenshot (\(DebugLog.errorSummary(error)))")
-                content = "<p>[Screenshot failed to save]</p>"
-            }
+            let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
+            return "![capture](ticker-asset:///\(relativePath))"
+        }
+    }
+
+    private func nonEmptyTrimmed(_ text: String?) -> String? {
+        QuickPanelMarkdownFormatter.nonEmptyTrimmed(text)
+    }
+
+    private func displayTitle(for streamId: UUID, persistence: PersistenceService) -> String {
+        if let summaryTitle = availableStreams.first(where: { $0.id == streamId })?.title,
+           let title = nonEmptyTrimmed(summaryTitle) {
+            return title
         }
 
-        return Cell(
+        if let storedTitle = try? persistence.getStreamTitle(id: streamId),
+           let title = nonEmptyTrimmed(storedTitle) {
+            return title
+        }
+
+        return "Untitled"
+    }
+
+    private func startDocumentAI(
+        streamId: UUID,
+        prompt: String,
+        documentMarkdown: String,
+        persistence: PersistenceService,
+        orchestrator: AIOrchestrator
+    ) {
+        let taskId = UUID()
+        var responseMarkdown = ""
+
+        documentAITasks[taskId] = Task { [weak self] in
+            await orchestrator.route(
+                query: prompt,
+                streamId: nil,
+                priorCells: [],
+                sourceContext: documentMarkdown,
+                includeHeading: false,
+                onChunk: { chunk in
+                    responseMarkdown += chunk
+                },
+                onComplete: { [weak self] in
+                    Task { @MainActor in
+                        guard let self else { return }
+
+                        let fragment = responseMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if fragment.isEmpty {
+                            self.appendQuickPanelAIError(
+                                streamId: streamId,
+                                summary: "AI returned an empty response",
+                                persistence: persistence
+                            )
+                        } else {
+                            self.appendQuickPanelAIFragment(
+                                streamId: streamId,
+                                fragment: fragment,
+                                persistence: persistence
+                            )
+                        }
+
+                        self.documentAITasks[taskId] = nil
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor in
+                        guard let self else { return }
+
+                        self.appendQuickPanelAIError(
+                            streamId: streamId,
+                            summary: error.localizedDescription,
+                            persistence: persistence
+                        )
+                        self.documentAITasks[taskId] = nil
+                    }
+                }
+            )
+        }
+    }
+
+    private func appendQuickPanelAIFragment(streamId: UUID, fragment: String, persistence: PersistenceService) {
+        do {
+            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
+            notifyFrontend(streamId: streamId, fragment: result.fragment, revision: result.revision, source: "quickPanelAI")
+        } catch {
+            DebugLog.log("[QuickPanel] Failed to append AI response (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    private func appendQuickPanelAIError(streamId: UUID, summary: String, persistence: PersistenceService) {
+        appendQuickPanelAIFragment(
             streamId: streamId,
-            content: content,
-            type: .quote,
-            order: 0,  // Final order assigned atomically at persistence time.
-            sourceApp: ctx.activeApp
+            fragment: quickPanelAIErrorFragment(summary: summary),
+            persistence: persistence
         )
     }
 
-    /// Build source attribution string from app name and window title
-    private func buildSourceAttribution(app: String?, windowTitle: String?) -> String? {
-        let escapedApp = app.map { escapeHtml($0) }
-        let escapedTitle = windowTitle.map { escapeHtml($0) }
-
-        switch (escapedApp, escapedTitle) {
-        case let (app?, title?) where !title.isEmpty:
-            // Truncate long titles
-            let truncatedTitle = title.count > 60 ? String(title.prefix(57)) + "..." : title
-            return "\(app) — \(truncatedTitle)"
-        case let (app?, _):
-            return app
-        case let (nil, title?) where !title.isEmpty:
-            return title
-        default:
-            return nil
-        }
+    private func quickPanelAIErrorFragment(summary: String) -> String {
+        let compact = summary
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = compact.isEmpty ? "Unknown error" : compact
+        let shortened = fallback.count > 180 ? "\(fallback.prefix(177))..." : fallback
+        return "*AI request failed: \(QuickPanelMarkdownFormatter.escapeMarkdownEmphasis(shortened))*"
     }
 
-    /// Notify the React frontend about new cells
-    /// When isNewStream is true, includes stream metadata so frontend can add it without creating a blank cell
-    private func notifyFrontend(streamId: UUID, cells: [Cell], triggerAI: UUID?, isNewStream: Bool = false) {
+    /// Notify the React frontend about document appends.
+    private func notifyFrontend(
+        streamId: UUID,
+        fragment: String,
+        revision: Int,
+        isNewStream: Bool = false,
+        source: String = "quickPanel"
+    ) {
         guard let bridgeService = bridgeService else { return }
 
-        var payload: [String: AnyCodable] = [
+        let payload: [String: AnyCodable] = [
             "streamId": AnyCodable(streamId.uuidString),
-            "cells": AnyCodable(cells.map { cellToDict($0) }),
-            "isNewStream": AnyCodable(isNewStream)
+            "fragment": AnyCodable(fragment),
+            "revision": AnyCodable(revision),
+            "isNewStream": AnyCodable(isNewStream),
+            "source": AnyCodable(source)
         ]
 
-        if let aiCellId = triggerAI {
-            payload["triggerAI"] = AnyCodable(aiCellId.uuidString)
-        }
-
-        bridgeService.send(BridgeMessage(type: "quickPanelCellsAdded", payload: payload))
-    }
-
-    /// Convert Cell to dictionary for bridge
-    private func cellToDict(_ cell: Cell) -> [String: Any] {
-        var dict: [String: Any] = [
-            "id": cell.id.uuidString,
-            "streamId": cell.streamId.uuidString,
-            "content": cell.content,
-            "type": cell.type.rawValue,
-            "order": cell.order,
-            "createdAt": ISO8601DateFormatter().string(from: cell.createdAt),
-            "updatedAt": ISO8601DateFormatter().string(from: cell.updatedAt)
-        ]
-        if let sourceApp = cell.sourceApp {
-            dict["sourceApp"] = sourceApp
-        }
-        if let originalPrompt = cell.originalPrompt {
-            dict["originalPrompt"] = originalPrompt
-        }
-        if let references = cell.references {
-            dict["references"] = references.map { $0.uuidString }
-        }
-        return dict
-    }
-
-    /// Simple HTML escaping
-    private func escapeHtml(_ text: String) -> String {
-        text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
+        bridgeService.send(BridgeMessage(type: "streamDocumentAppended", payload: payload))
     }
 
     // MARK: - Panel Creation
@@ -656,6 +837,9 @@ final class QuickPanelManager: ObservableObject {
 
         newPanel.onDismiss = { [weak self] in
             self?.hide()
+        }
+        newPanel.onEscape = { [weak self] in
+            self?.handleEscape()
         }
 
         let view = QuickPanelView(manager: self)
@@ -723,16 +907,93 @@ final class QuickPanelManager: ObservableObject {
     }
 }
 
+enum QuickPanelMarkdownFormatter {
+    static func buildFragment(
+        context: QuickPanelContext?,
+        inputText: String,
+        imageMarkdown: (Data) throws -> String
+    ) throws -> String {
+        var blocks: [String] = []
+
+        if let context {
+            if let selectedText = nonEmptyTrimmed(context.selectedText) {
+                blocks.append(markdownBlockquote(selectedText))
+
+                if let source = sourceAttribution(for: context) {
+                    blocks.append("*— \(escapeMarkdownEmphasis(source))*")
+                }
+            }
+
+            if let imageData = context.clipboardImage {
+                blocks.append(try imageMarkdown(imageData))
+            }
+        }
+
+        if let input = nonEmptyTrimmed(inputText) {
+            blocks.append(input)
+        }
+
+        return blocks.joined(separator: "\n\n")
+    }
+
+    static func nonEmptyTrimmed(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    static func escapeMarkdownEmphasis(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "*", with: "\\*")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    private static func markdownBlockquote(_ text: String) -> String {
+        text.components(separatedBy: CharacterSet.newlines)
+            .map { line in
+                line.isEmpty ? ">" : "> \(line)"
+            }
+            .joined(separator: "\n")
+    }
+
+    private static func sourceAttribution(for context: QuickPanelContext) -> String? {
+        let app = nonEmptyTrimmed(context.activeApp)
+        let title = nonEmptyTrimmed(context.windowTitle).map { truncate($0, maxLength: 60) }
+
+        switch (app, title) {
+        case let (app?, title?):
+            return "\(app) — \(title)"
+        case let (app?, nil):
+            return app
+        case let (nil, title?):
+            return title
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private static func truncate(_ text: String, maxLength: Int) -> String {
+        guard text.count > maxLength else { return text }
+        return "\(text.prefix(maxLength - 3))..."
+    }
+}
+
 // MARK: - Errors
 
 enum QuickPanelError: Error, LocalizedError {
     case persistenceNotConfigured
+    case assetServiceNotConfigured
     case noActiveStream
 
     var errorDescription: String? {
         switch self {
         case .persistenceNotConfigured:
             return "Database not configured"
+        case .assetServiceNotConfigured:
+            return "Asset storage not configured"
         case .noActiveStream:
             return "No active stream"
         }

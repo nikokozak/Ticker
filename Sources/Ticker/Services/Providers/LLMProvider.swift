@@ -1,42 +1,5 @@
 import Foundation
 
-/// Protocol for AI service providers
-/// Abstracts different LLM backends (OpenAI, Perplexity, etc.) behind a common interface
-protocol LLMProvider {
-    /// Unique identifier for this provider
-    var id: String { get }
-
-    /// Human-readable name for display
-    var name: String { get }
-
-    /// The specific model ID used by this provider (e.g., "gpt-4o", "sonar")
-    var modelId: String { get }
-
-    /// Whether the provider is properly configured (API key set, etc.)
-    var isConfigured: Bool { get }
-
-    /// Stream a completion request
-    /// - Parameters:
-    ///   - request: The LLM request parameters
-    ///   - onModelSelected: Optional callback with resolved (provider, model) from proxy headers
-    ///   - onChunk: Called for each streamed chunk of content
-    ///   - onComplete: Called when streaming finishes
-    ///   - onError: Called if an error occurs
-    func stream(
-        request: LLMRequest,
-        onModelSelected: ((String, String) -> Void)?,
-        onChunk: @escaping (String) -> Void,
-        onComplete: @escaping () -> Void,
-        onError: @escaping (Error) -> Void
-    ) async
-}
-
-/// Content part for multimodal messages
-enum LLMContentPart {
-    case text(String)
-    case imageURL(String)  // URL to image (can be data URL or http URL)
-}
-
 /// A message in an LLM conversation
 struct LLMMessage {
     var role: String
@@ -202,27 +165,6 @@ struct LLMRequest {
             maxTokens: maxTokens,
             intent: intent
         )
-    }
-}
-
-/// Errors that can occur in LLM providers
-enum LLMProviderError: LocalizedError {
-    case notConfigured(String)
-    case invalidRequest
-    case invalidResponse
-    case apiError(Int, String)
-
-    var errorDescription: String? {
-        switch self {
-        case .notConfigured(let provider):
-            return "\(provider) API key not configured. Go to Settings to add your key."
-        case .invalidRequest:
-            return "Failed to build API request"
-        case .invalidResponse:
-            return "Invalid response from API"
-        case .apiError(let code, let message):
-            return "API error (\(code)): \(message)"
-        }
     }
 }
 

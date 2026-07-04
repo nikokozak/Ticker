@@ -1,3 +1,10 @@
+# Branch protection is a repository setting, not repo code. After this lands,
+# require this workflow's jobs on main in GitHub branch protection settings.
+#
+# macOS intentionally does not cache DerivedData/SPM artifacts here. This app
+# depends on binary SwiftPM artifacts, and stale DerivedData can leave incomplete
+# XCFramework directories behind. npm uses setup-node caching below.
+
 name: CI
 
 on:
@@ -14,127 +21,94 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  bridge-contract:
-    name: bridge-contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: tools/contracts/package-lock.json
-      - name: Install contract tooling deps
-        working-directory: tools/contracts
-        run: npm ci
-      - name: Bridge contract tests
-        run: node tools/contracts/check_bridge_contract.mjs
-      - name: Validate vendored proxy OpenAPI
-        working-directory: tools/contracts
-        run: node validate_proxy_openapi.mjs
-
-  swift-build:
-    name: swift-build
+  swift:
+    name: swift-build-test
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Decide whether to run Swift build
-        id: swift_changes
-        uses: dorny/paths-filter@v3
-        if: github.event_name == 'pull_request'
-        continue-on-error: true
-        with:
-          token: ${{ github.token }}
-          filters: |
-            swift:
-              - 'Sources/**'
-              - 'Tests/**'
-              - 'Package.swift'
-              - 'Package.resolved'
-              - '.swiftpm/**'
-              - 'Ticker.xcodeproj/**'
-      - name: Set build flag (push to main always builds)
-        id: swift_should_build
-        run: |
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
-          if [[ "${{ steps.swift_changes.outcome }}" != "success" ]]; then
-            echo "Swift change detection failed; defaulting to build."
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ "${{ steps.swift_changes.outputs.swift }}" == "true" ]]; then
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Skip Swift build (no relevant changes)
-        if: steps.swift_should_build.outputs.should_build != 'true'
-        run: echo "No Swift/SPM changes detected; skipping Swift build."
       - uses: maxim-lobanov/setup-xcode@v1
-        if: steps.swift_should_build.outputs.should_build == 'true'
         with:
           xcode-version: latest-stable
+
       - uses: actions/setup-node@v4
-        if: steps.swift_should_build.outputs.should_build == 'true'
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: Web/package-lock.json
-      - name: Build Web assets
-        if: steps.swift_should_build.outputs.should_build == 'true'
+
+      - name: Install Web dependencies
         working-directory: Web
-        run: npm ci && npm run build
-      - name: Test (no code signing)
-        if: steps.swift_should_build.outputs.should_build == 'true'
+        run: npm ci
+
+      - name: Build Web assets
+        working-directory: Web
+        run: npm run build
+
+      - name: Swift build
+        run: |
+          BUILD_NUMBER=$(git rev-list --count HEAD)
+          xcodebuild build \
+            -project Ticker.xcodeproj \
+            -scheme Ticker \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build/ci-xcode \
+            CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            PRODUCT_BUNDLE_IDENTIFIER=io.ticker.next \
+            INFOPLIST_KEY_CFBundleDisplayName="Ticker Next" \
+            -quiet
+
+      - name: Swift tests
         run: |
           BUILD_NUMBER=$(git rev-list --count HEAD)
           xcodebuild test \
             -project Ticker.xcodeproj \
             -scheme Ticker \
             -destination 'platform=macOS' \
-            -derivedDataPath .build/xcode \
+            -derivedDataPath .build/ci-xcode \
             CODE_SIGNING_ALLOWED=NO \
-            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            -quiet
 
-  web-typecheck:
-    name: web-typecheck
+  web:
+    name: web-contracts
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Decide whether to run Web typecheck
-        id: web_changes
-        uses: dorny/paths-filter@v3
-        if: github.event_name == 'pull_request'
-        continue-on-error: true
-        with:
-          token: ${{ github.token }}
-          filters: |
-            web:
-              - 'Web/**'
+
       - uses: actions/setup-node@v4
-        if: github.event_name != 'pull_request' || steps.web_changes.outcome != 'success' || steps.web_changes.outputs.web == 'true'
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: Web/package-lock.json
-      - name: Install
-        if: github.event_name != 'pull_request' || steps.web_changes.outcome != 'success' || steps.web_changes.outputs.web == 'true'
+          cache-dependency-path: |
+            Web/package-lock.json
+            tools/contracts/package-lock.json
+
+      - name: Install Web dependencies
         working-directory: Web
         run: npm ci
-      - name: Typecheck
-        if: github.event_name != 'pull_request' || steps.web_changes.outcome != 'success' || steps.web_changes.outputs.web == 'true'
+
+      - name: Web typecheck
         working-directory: Web
         run: npm run typecheck
-      - name: Skip Web typecheck (no relevant changes)
-        if: github.event_name == 'pull_request' && steps.web_changes.outcome == 'success' && steps.web_changes.outputs.web != 'true'
-        run: echo "No Web changes detected; skipping Web typecheck."
+
+      - name: Web tests
+        working-directory: Web
+        run: npm test
+
+      - name: Web build
+        working-directory: Web
+        run: npm run build
+
+      - name: Install contract tooling dependencies
+        working-directory: tools/contracts
+        run: npm ci
+
+      - name: Bridge contract check
+        run: node tools/contracts/check_bridge_contract.mjs

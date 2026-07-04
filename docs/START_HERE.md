@@ -42,10 +42,7 @@ This folder defines the “professional mode” workflow for Ticker and the mini
   - Read `docs/contracts/README.md` before editing bridge payloads
   - Use `docs/GITHUB_BACKLOG_ALPHA.md` as a working alpha issue list for non-editor operational work
 
-6) **Historical stability context (optional)**
-   - `docs/ALPHA_STABILITY_PLAN.md` is historical context only; it is not the editor direction doc
-
-7) **Alpha ops**
+6) **Alpha ops**
   - Read `docs/ALPHA_READINESS_CHECKLIST.md`
   - Read `docs/ALPHA_SUPPORT.md` (in-app feedback → manual triage)
   - Read `docs/WEBSITE_REQUIREMENTS.md`
@@ -76,8 +73,8 @@ Common flows:
 - Prod-ish (Release + bundled web, QA lane): `./tickerctl.sh run-prod-qa`
 
 Permission debugging note:
-- Stable lane uses bundle ID `io.ticker.app` (default).
-- QA lane uses bundle ID `io.ticker.app.qa` (default) so TCC resets don't disrupt stable daily-dev permissions.
+- Stable lane uses bundle ID `io.ticker.next` (default).
+- QA lane uses bundle ID `io.ticker.next.qa` (default) so TCC resets don't disrupt stable daily-dev permissions.
 - Reset only the lane you are testing:
   - `./tickerctl.sh reset-accessibility`
   - `./tickerctl.sh reset-accessibility-qa`
@@ -93,15 +90,16 @@ If you hit SwiftPM/Sparkle artifact issues, run:
 
 ## Quick Panel (capture + ephemeral chat)
 
-Quick Panel is the fast capture surface (hotkey-driven) and has two distinct modes:
+Quick Panel is the fast capture surface (hotkey-driven) and has three distinct modes:
 
-- **Save** (`↵`): saves captured context and/or your input into a stream.
-- **AI + Save** (`⌘↵`): saves, then triggers AI on the saved stream context.
+- **Save** (`↵`): appends captured context and/or your input directly to the selected stream document, shows “Saved to <stream>”, then hides.
+- **AI + Save** (`⌘↵`): appends to the selected stream document, shows “Saved to <stream> — asking AI…”, then hides while the AI answer appends in the background.
 - **Ask (ephemeral)** (`⌥↵`): runs an in-memory chat turn that is **not** saved to the stream DB.
 
 Cancellation / escape behavior:
 - `Esc` cancels streaming + clears the ephemeral chat (if active).
-- Otherwise `Esc` clears input/context; a second `Esc` hides the panel.
+- Otherwise `Esc` clears input/context; the next `Esc` hides the panel.
+- Clicking outside the panel hides it immediately.
 
 ## Drag & drop (native → stream)
 
@@ -112,21 +110,23 @@ You can drag files from Finder directly onto the app window:
 
 Notes:
 - Drops are routed to the **most recently opened stream**.
-- If no stream has been opened yet, Ticker shows an error toast (“Open a stream before dropping files.”).
+- If no stream is open, dropping a PDF creates a new stream; other files show “Drop files in a stream, or return to Streams to create one from PDF.”
 
 ## Local data (what exists on disk)
 
 Ticker stores user data under:
-- `~/Library/Application Support/Ticker/`
+- `~/Library/Application Support/Ticker-Next/`
 
 Key items:
-- `ticker.db` — the SQLite database (streams, stream editor data, sources metadata)
+- `ticker.db` — the SQLite database (streams, `stream_documents`, sources metadata, and frozen legacy migration history)
 - `assets/` — local images (inserted as `ticker-asset://...`)
 - `backups/` — automatic pre-migration DB backups (created only when pending migrations are detected)
 - `device.json` — **contains the plaintext proxy device key (`tk_...`) and device id**
 
-Note:
-- Legacy builds may still contain `cells` tables/paths during migration, but active direction is a stream-document editor model.
+Document model:
+- `stream_documents.markdown` is the canonical editor content for a stream.
+- `stream_documents.revision` is the autosave conflict guard.
+- The `cells` table is frozen legacy history kept for migrations/recovery; it is not the active editor or capture contract.
 
 If you need to restore data from a backup, follow the step-by-step instructions in `docs/ALPHA_SUPPORT.md`.
 
@@ -135,4 +135,4 @@ Device key rules:
 - Never ask a tester to send `device.json`.
 - For “fresh install” QA, delete `device.json` while Ticker is fully quit, then relaunch.
 - If you ever see stale temp files next to it, remove them too:
-  - `~/Library/Application Support/Ticker/device.json.tmp*`
+  - `~/Library/Application Support/Ticker-Next/device.json.tmp*`

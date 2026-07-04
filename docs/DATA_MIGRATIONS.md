@@ -5,10 +5,27 @@ Ticker is a note-taking app. Data integrity is a core product feature.
 ## Standard data location (macOS)
 
 Use:
-- `~/Library/Application Support/Ticker/`
+- `~/Library/Application Support/Ticker-Next/`
+
+This fork-isolated directory is intentional. Ticker-Next must not read from or write to the legacy Ticker app's Application Support directory unless a future migration explicitly asks the user to import that data.
 
 Avoid:
 - `~/.config/ticker/` (non-standard on macOS, surprises users and support)
+- `~/Library/Application Support/Ticker/` for Ticker-Next runtime writes (belongs to the legacy app)
+
+Key files:
+- `ticker.db` — SQLite database for streams, stream documents, sources, legacy migration history, and device metadata references.
+- `assets/` — local asset files addressed from markdown as `ticker-asset://...`.
+- `backups/` — timestamped SQLite backups created before pending schema/content migrations.
+
+## Current document-model migrations
+
+- `v10_stream_documents` creates `stream_documents` as the canonical stream markdown table.
+- `v11_recover_orphaned_quickpanel_cells` folds captures that were stranded in legacy `cells` rows into existing documents.
+- `v12_seed_documents_from_legacy_cells` seeds document rows for legacy streams that only had cells.
+- `v13_stream_document_revision` adds document revisions for conflict-aware saves.
+
+The `cells` table is frozen legacy history. It remains available to migrations/recovery, but active editor and capture writes target `stream_documents`.
 
 ## Migration policy (non-negotiable)
 
@@ -16,7 +33,7 @@ Avoid:
 - Copy the SQLite DB to a timestamped backup:
   - Create backups only when migrations are pending (avoid doing this on every launch)
   - Keep last N backups (alpha default: 5)
-  - Store alongside the DB under Application Support
+  - Store alongside the DB under `~/Library/Application Support/Ticker-Next/backups/`
 
 ### Before any content migration
 - Treat rewrites of stream document content as migrations (not “just a UI change”) and follow the same backup/rollback posture.

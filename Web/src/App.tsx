@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { bridge, Stream, StreamSummary } from './types';
 import { StreamEditor } from './components/StreamEditor';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
-import { useBlockStore } from './store/blockStore';
+import { useToastStore } from './store/toastStore';
 import { debugError, debugLog } from './utils/debug';
 
 type View = 'list' | 'stream' | 'settings';
@@ -75,7 +75,9 @@ export function App() {
   const [currentStream, setCurrentStream] = useState<Stream | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingStream, setIsLoadingStream] = useState(false);
-  const clearStream = useBlockStore((state) => state.clearStream);
+  const addToast = useToastStore((state) => state.addToast);
+  const viewRef = useRef(view);
+  const currentStreamIdRef = useRef<string | null>(currentStream?.id ?? null);
 
   // Proxy auth state - gates main UI until key is validated
   const [proxyAuthState, setProxyAuthState] = useState<ProxyAuthState>('validating');
@@ -96,6 +98,11 @@ export function App() {
   useEffect(() => {
     bridge.send({ type: 'loadSettings' });
   }, []);
+
+  useEffect(() => {
+    viewRef.current = view;
+    currentStreamIdRef.current = currentStream?.id ?? null;
+  }, [view, currentStream?.id]);
 
   // Keep native file-drop routing in sync with the active page.
   useEffect(() => {
@@ -125,6 +132,13 @@ export function App() {
     // Subscribe to bridge messages
     const unsubscribe = bridge.onMessage((message) => {
       switch (message.type) {
+        case 'bridgeError':
+          if (import.meta.env.DEV) {
+            const originalType = String(message.payload?.originalType ?? 'unknown');
+            const reason = String(message.payload?.reason ?? 'Unknown bridge error');
+            addToast(`Bridge error (${originalType}): ${reason}`, 'error', 10000);
+          }
+          break;
         case 'proxyAuthState':
           // State change pushed from Swift
           setProxyAuthState(message.payload?.state as ProxyAuthState);
@@ -133,38 +147,31 @@ export function App() {
           setStreams((message.payload?.streams as StreamSummary[]) || []);
           setIsLoading(false);
           break;
-        case 'streamLoaded':
-          setCurrentStream(message.payload?.stream as Stream);
+        case 'streamLoaded': {
+          const loadedStream = message.payload?.stream as Stream;
+          currentStreamIdRef.current = loadedStream?.id ?? null;
+          viewRef.current = 'stream';
+          setCurrentStream(loadedStream);
           setIsLoadingStream(false);
           setView('stream');
           break;
+        }
         case 'settingsLoaded': {
           const raw = message.payload?.settings as Partial<EditorTypographySettings> | undefined;
           applyEditorTypography(normalizeEditorTypography(raw));
           break;
         }
-        case 'quickPanelCellsAdded':
-          // Quick Panel added cells - if it's a new stream, load it and update list
+        case 'streamDocumentAppended':
+          // Quick Panel appended to a document - if it's a new stream, load it.
           if (message.payload?.isNewStream && message.payload?.streamId) {
             const streamId = message.payload.streamId as string;
-            const cellCount = (message.payload.cells as unknown[])?.length || 0;
-            debugLog('[App] Quick Panel created new stream with cells', { streamId, cellCount });
+            if (viewRef.current === 'stream' && currentStreamIdRef.current === streamId) {
+              debugLog('[App] Quick Panel appended to current stream document; editor handler owns it', { streamId });
+              break;
+            }
 
-            // Add to streams list so it appears when navigating back
-            setStreams(prev => {
-              // Avoid duplicates
-              if (prev.some(s => s.id === streamId)) return prev;
-              return [{
-                id: streamId,
-                title: 'Untitled',
-                sourceCount: 0,
-                cellCount,
-                updatedAt: new Date().toISOString(),
-                previewText: null
-              }, ...prev];
-            });
+            debugLog('[App] Quick Panel created new stream document', { streamId });
 
-            // Load the stream from DB - cells are already saved
             bridge.send({ type: 'loadStream', payload: { id: streamId } });
           }
           break;
@@ -182,7 +189,7 @@ export function App() {
     }, 100);
 
     return unsubscribe;
-  }, []);
+  }, [addToast]);
 
   const handleCreateStream = () => {
     bridge.send({ type: 'createStream' });
@@ -194,7 +201,6 @@ export function App() {
   };
 
   const handleBackToList = () => {
-    clearStream();
     setCurrentStream(null);
     setView('list');
     bridge.send({ type: 'loadStreams' });
@@ -203,7 +209,6 @@ export function App() {
   const handleDeleteStream = () => {
     if (currentStream) {
       bridge.send({ type: 'deleteStream', payload: { id: currentStream.id } });
-      clearStream();
       setCurrentStream(null);
       setView('list');
     }
@@ -310,6 +315,29 @@ function formatRelativeTime(dateString: string): string {
   return date.toLocaleDateString();
 }
 
+function formatCompactCount(count: number): string {
+  if (count < 1000) {
+    return new Intl.NumberFormat().format(count);
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(count / 1000)}k`;
+}
+
+function formatStreamMetadata(stream: StreamSummary): string {
+  const segments = [formatRelativeTime(stream.updatedAt)];
+
+  if (stream.sourceCount > 0) {
+    segments.push(`${stream.sourceCount} ${stream.sourceCount === 1 ? 'source' : 'sources'}`);
+  }
+  if (stream.charCount > 0) {
+    segments.push(`${formatCompactCount(stream.charCount)} chars`);
+  }
+  if (stream.imageCount > 0) {
+    segments.push(`${stream.imageCount} ${stream.imageCount === 1 ? 'image' : 'images'}`);
+  }
+
+  return segments.join(' · ');
+}
+
 function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreate, onSettings }: StreamListViewProps) {
   // Sort streams by updatedAt (most recent first)
   const sortedStreams = [...streams].sort((a, b) =>
@@ -350,7 +378,7 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
             >
               <span className="stream-title">{stream.title}</span>
               <span className="stream-meta">
-                {formatRelativeTime(stream.updatedAt)} · {stream.sourceCount} {stream.sourceCount === 1 ? 'source' : 'sources'}
+                {formatStreamMetadata(stream)}
               </span>
             </button>
           ))

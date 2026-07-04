@@ -1,7 +1,18 @@
 {
   "version": 2,
+  "status": "live",
   "swiftToWeb": {
     "messages": {
+      "assetPath": {
+        "requiredPayloadKeys": ["relativePath", "fullPath"]
+      },
+      "bridgeError": {
+        "requiredPayloadKeys": ["originalType", "reason"]
+      },
+      "callback": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
       "documentAIChunk": {
         "requiredPayloadKeys": ["requestId", "chunk"]
       },
@@ -22,6 +33,173 @@
       },
       "documentModelSelected": {
         "requiredPayloadKeys": ["requestId", "modelId"]
+      },
+      "exportCanceled": {
+        "requiredPayloadKeys": ["streamId"]
+      },
+      "exportComplete": {
+        "requiredPayloadKeys": ["streamId", "path"]
+      },
+      "exportError": {
+        "requiredPayloadKeys": ["streamId", "error"]
+      },
+      "fileDropError": {
+        "requiredPayloadKeys": ["error"]
+      },
+      "imageDropped": {
+        "requiredPayloadKeys": ["relativePath", "assetUrl", "streamId"]
+      },
+      "imageSaveError": {
+        "requiredPayloadKeys": ["error", "requestId"]
+      },
+      "imageSaved": {
+        "requiredPayloadKeys": ["relativePath", "assetUrl", "requestId"]
+      },
+      "pdfHighlightLinked": {
+        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "highlightId", "page", "quote"]
+      },
+      "pdfPaneStateChanged": {
+        "requiredPayloadKeys": ["visible"],
+        "optionalPayloadKeys": ["streamId", "sourceId", "sourceName"]
+      },
+      "pdfAnchorPlaced": {
+        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "highlightId", "page"]
+      },
+      "pdfAnchorPickCancelled": {
+        "requiredPayloadKeys": ["streamId"]
+      },
+      "proxyAuthState": {
+        "requiredPayloadKeys": ["state"]
+      },
+      "settingsLoaded": {
+        "requiredPayloadKeys": ["settings"]
+      },
+      "sourceAdded": {
+        "requiredPayloadKeys": ["source"]
+      },
+      "sourceError": {
+        "requiredPayloadKeys": ["error"]
+      },
+      "sourceRemoveError": {
+        "requiredPayloadKeys": ["id", "error"]
+      },
+      "sourceRemoved": {
+        "requiredPayloadKeys": ["id"]
+      },
+      "streamDocumentAppended": {
+        "requiredPayloadKeys": ["streamId", "fragment", "revision", "isNewStream", "source"]
+      },
+      "streamDocumentConflict": {
+        "requiredPayloadKeys": ["streamId", "markdown", "revision"]
+      },
+      "streamLoaded": {
+        "requiredPayloadKeys": ["stream"]
+      },
+      "streamTitleUpdated": {
+        "requiredPayloadKeys": ["id", "title"]
+      },
+      "streamsChanged": {
+        "requiredPayloadKeys": []
+      },
+      "streamsLoaded": {
+        "requiredPayloadKeys": ["streams"]
+      }
+    }
+  },
+  "webToSwift": {
+    "messages": {
+      "addSource": {
+        "requiredPayloadKeys": ["streamId"]
+      },
+      "beginPdfAnchorPick": {
+        "requiredPayloadKeys": ["streamId"]
+      },
+      "clearProxyDeviceKey": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
+      "createStream": {
+        "requiredPayloadKeys": []
+      },
+      "deleteStream": {
+        "requiredPayloadKeys": ["id"]
+      },
+      "getSupportBundle": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
+      "hybridSearch": {
+        "requiredPayloadKeys": ["query", "currentStreamId", "limit"],
+        "requiredCallbackId": true
+      },
+      "loadProxyAuth": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
+      "loadSettings": {
+        "requiredPayloadKeys": []
+      },
+      "loadStream": {
+        "requiredPayloadKeys": ["id"]
+      },
+      "loadStreams": {
+        "requiredPayloadKeys": []
+      },
+      "openSource": {
+        "requiredPayloadKeys": ["sourceId"]
+      },
+      "openPdfDestination": {
+        "requiredPayloadKeys": ["streamId", "sourceId"],
+        "optionalPayloadKeys": ["highlightId", "page"]
+      },
+      "refreshProxyAuth": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
+      "removeSource": {
+        "requiredPayloadKeys": ["id"]
+      },
+      "saveImage": {
+        "requiredPayloadKeys": ["streamId", "data", "requestId"]
+      },
+      "saveSettings": {
+        "requiredPayloadKeys": [],
+        "optionalPayloadKeys": [
+          "openaiAPIKey",
+          "anthropicAPIKey",
+          "perplexityAPIKey",
+          "smartRoutingEnabled",
+          "defaultModel",
+          "appearance",
+          "diagnosticsEnabled",
+          "editorFont",
+          "editorFontSize",
+          "editorLineSpacing"
+        ]
+      },
+      "saveStreamDocument": {
+        "requiredPayloadKeys": ["streamId", "markdown", "baseRevision"],
+        "requiredCallbackId": true
+      },
+      "setFileDropContext": {
+        "requiredPayloadKeys": ["mode"],
+        "optionalPayloadKeys": ["streamId"]
+      },
+      "setProxyDeviceKey": {
+        "requiredPayloadKeys": ["key"],
+        "requiredCallbackId": true
+      },
+      "submitFeedback": {
+        "requiredPayloadKeys": ["type", "title"],
+        "optionalPayloadKeys": ["description", "screenshot", "screenshotContentType"],
+        "requiredCallbackId": true
+      },
+      "thinkDocument": {
+        "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
+        "optionalPayloadKeys": ["context"]
+      },
+      "updateStreamTitle": {
+        "requiredPayloadKeys": ["id", "title"]
       }
     }
   }

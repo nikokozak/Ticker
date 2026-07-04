@@ -7,6 +7,7 @@ struct SourceReference: Identifiable, Codable {
     var displayName: String
     var fileType: SourceFileType
     var bookmarkData: Data
+    var originalPath: String?
     var status: SourceStatus
     var extractedText: String?
     var pageCount: Int?
@@ -19,6 +20,7 @@ struct SourceReference: Identifiable, Codable {
         displayName: String,
         fileType: SourceFileType,
         bookmarkData: Data,
+        originalPath: String? = nil,
         status: SourceStatus = .pending,
         extractedText: String? = nil,
         pageCount: Int? = nil,
@@ -30,6 +32,7 @@ struct SourceReference: Identifiable, Codable {
         self.displayName = displayName
         self.fileType = fileType
         self.bookmarkData = bookmarkData
+        self.originalPath = originalPath
         self.status = status
         self.extractedText = extractedText
         self.pageCount = pageCount

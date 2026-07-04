@@ -1,11 +1,11 @@
-import { RangeSetBuilder } from '@codemirror/state';
+import { RangeSetBuilder, type Range } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from '@codemirror/view';
 
 const MARKDOWN_IMAGE_TOKEN_REGEX = /!\[([^\]]*)\]\((ticker-asset:\/\/[^)]+)\)(?:\{width=(\d{2,4})\})?/g;
 const MIN_IMAGE_WIDTH = 120;
 const DEFAULT_MAX_IMAGE_WIDTH = 920;
 
-interface MarkdownImageToken {
+export interface MarkdownImageToken {
   raw: string;
   from: number;
   to: number;
@@ -59,7 +59,7 @@ export function extractMarkdownImageUrls(markdownText: string): string[] {
   return urls;
 }
 
-function parseMarkdownImageTokens(text: string): MarkdownImageToken[] {
+export function findImageTokens(text: string, offset = 0): MarkdownImageToken[] {
   const tokens: MarkdownImageToken[] = [];
   const regex = new RegExp(MARKDOWN_IMAGE_TOKEN_REGEX.source, 'g');
 
@@ -75,8 +75,8 @@ function parseMarkdownImageTokens(text: string): MarkdownImageToken[] {
 
     tokens.push({
       raw,
-      from: match.index,
-      to: match.index + raw.length,
+      from: offset + match.index,
+      to: offset + match.index + raw.length,
       alt,
       url: normalizeTickerAssetUrl(url),
       width,
@@ -86,13 +86,19 @@ function parseMarkdownImageTokens(text: string): MarkdownImageToken[] {
   return tokens;
 }
 
+function imageDecorationForToken(token: MarkdownImageToken): Range<Decoration> {
+  return Decoration.replace({
+    widget: new MarkdownImageBlockWidget(token),
+  }).range(token.from, token.to);
+}
+
 class MarkdownImageBlockWidget extends WidgetType {
   constructor(private readonly token: MarkdownImageToken) {
     super();
   }
 
   eq(other: MarkdownImageBlockWidget): boolean {
-    return this.token.raw === other.token.raw && this.token.from === other.token.from && this.token.to === other.token.to;
+    return this.token.raw === other.token.raw;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -167,20 +173,75 @@ function buildImageDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const text = view.state.doc.toString();
 
-  for (const token of parseMarkdownImageTokens(text)) {
-    builder.add(
-      token.from,
-      token.to,
-      Decoration.replace({
-        widget: new MarkdownImageBlockWidget(token),
-      }),
-    );
+  for (const token of findImageTokens(text)) {
+    builder.add(token.from, token.to, Decoration.replace({ widget: new MarkdownImageBlockWidget(token) }));
   }
 
   return builder.finish();
 }
 
-export const markdownImageWidgetExtension = ViewPlugin.fromClass(class {
+function changedLineRanges(update: ViewUpdate): Array<{ from: number; to: number }> {
+  const doc = update.state.doc;
+  const ranges: Array<{ from: number; to: number }> = [];
+
+  update.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    if (doc.length === 0) {
+      ranges.push({ from: 0, to: 0 });
+      return;
+    }
+
+    const fromLine = doc.lineAt(Math.min(fromB, doc.length));
+    const toLine = doc.lineAt(Math.min(Math.max(fromB, toB), doc.length));
+    ranges.push({
+      from: fromLine.from,
+      to: toLine.to,
+    });
+  });
+
+  return mergeRanges(ranges);
+}
+
+function mergeRanges(ranges: Array<{ from: number; to: number }>): Array<{ from: number; to: number }> {
+  if (ranges.length < 2) return ranges;
+
+  const sorted = [...ranges].sort((a, b) => a.from - b.from || a.to - b.to);
+  const merged: Array<{ from: number; to: number }> = [];
+
+  for (const range of sorted) {
+    const previous = merged[merged.length - 1];
+    if (!previous || range.from > previous.to) {
+      merged.push({ ...range });
+      continue;
+    }
+
+    previous.to = Math.max(previous.to, range.to);
+  }
+
+  return merged;
+}
+
+function refreshChangedImageDecorations(decorations: DecorationSet, update: ViewUpdate): DecorationSet {
+  let nextDecorations = decorations.map(update.changes);
+  const additions: Array<Range<Decoration>> = [];
+
+  for (const range of changedLineRanges(update)) {
+    nextDecorations = nextDecorations.update({
+      filterFrom: range.from,
+      filterTo: range.to,
+      filter: () => false,
+    });
+
+    const text = update.state.doc.sliceString(range.from, range.to);
+    for (const token of findImageTokens(text, range.from)) {
+      additions.push(imageDecorationForToken(token));
+    }
+  }
+
+  if (additions.length === 0) return nextDecorations;
+  return nextDecorations.update({ add: additions, sort: true });
+}
+
+const markdownImageWidgetPlugin = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
 
   constructor(view: EditorView) {
@@ -188,10 +249,12 @@ export const markdownImageWidgetExtension = ViewPlugin.fromClass(class {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.viewportChanged) {
-      this.decorations = buildImageDecorations(update.view);
-    }
+    if (!update.docChanged) return;
+    this.decorations = refreshChangedImageDecorations(this.decorations, update);
   }
 }, {
   decorations: (value) => value.decorations,
+  provide: (plugin) => EditorView.atomicRanges.of((view) => view.plugin(plugin)?.decorations ?? Decoration.none),
 });
+
+export const markdownImageWidgetExtension = markdownImageWidgetPlugin;

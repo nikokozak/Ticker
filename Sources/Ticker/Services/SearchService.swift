@@ -25,7 +25,7 @@ final class SearchService {
         limit: Int = 20
     ) async throws -> HybridSearchResults {
         // 1. Text search with separate limits per stream category (ensures cross-stream coverage)
-        let (currentTextResults, otherTextResults) = try persistence.textSearchCells(
+        let (currentTextResults, otherTextResults) = try persistence.textSearchStreamDocuments(
             query: query,
             currentStreamId: currentStreamId,
             limitPerCategory: limit
@@ -39,7 +39,7 @@ final class SearchService {
         // already have embeddings. If the key is removed, semantic search stops working.
         // This is intentional - we can't perform similarity search without embedding the query.
         var semanticResults: [RetrievedChunk] = []
-        if embedding.isConfigured {
+        if !SettingsService.proxyOnlyMode && embedding.isConfigured {
             semanticResults = try await retrieval.retrieve(query: query, streamId: currentStreamId)
         }
 
@@ -49,21 +49,19 @@ final class SearchService {
 
         // Add text results for current stream
         for textResult in currentTextResults {
-            let title = textResult.blockName
-                ?? extractFirstHeadingFromHtml(textResult.content)
-                ?? textResult.originalPrompt
-                ?? truncateHtml(textResult.content, maxLength: 50)
+            let title = extractFirstHeading(from: textResult.markdown)
+                ?? textResult.streamTitle
 
-            let snippet = extractSnippet(from: textResult.content, query: query)
+            let snippet = extractSnippet(from: textResult.markdown, query: query)
 
             currentStreamResults.append(SearchResult(
-                id: textResult.cellId.uuidString,
+                id: textResult.streamId.uuidString,
                 streamId: textResult.streamId.uuidString,
                 streamTitle: textResult.streamTitle,
                 sourceType: .cell,
                 title: title,
                 snippet: snippet,
-                cellType: textResult.cellType,
+                cellType: "text",
                 sourceId: nil,
                 sourceName: nil,
                 similarity: nil,
@@ -73,21 +71,19 @@ final class SearchService {
 
         // Add text results for other streams
         for textResult in otherTextResults {
-            let title = textResult.blockName
-                ?? extractFirstHeadingFromHtml(textResult.content)
-                ?? textResult.originalPrompt
-                ?? truncateHtml(textResult.content, maxLength: 50)
+            let title = extractFirstHeading(from: textResult.markdown)
+                ?? textResult.streamTitle
 
-            let snippet = extractSnippet(from: textResult.content, query: query)
+            let snippet = extractSnippet(from: textResult.markdown, query: query)
 
             otherStreamResults.append(SearchResult(
-                id: textResult.cellId.uuidString,
+                id: textResult.streamId.uuidString,
                 streamId: textResult.streamId.uuidString,
                 streamTitle: textResult.streamTitle,
                 sourceType: .cell,
                 title: title,
                 snippet: snippet,
-                cellType: textResult.cellType,
+                cellType: "text",
                 sourceId: nil,
                 sourceName: nil,
                 similarity: nil,
@@ -150,7 +146,7 @@ final class SearchService {
 
     private func deduplicateResults(_ results: [SearchResult]) -> [SearchResult] {
         // Deduplicate by streamId + sourceType + id
-        // Note: text search returns cells, semantic search returns chunks - these are
+        // Note: text search returns stream documents, semantic search returns chunks - these are
         // different entity types with different IDs, so true duplicates are rare.
         // This mainly guards against the same result appearing twice if both search
         // methods somehow return it.
@@ -163,40 +159,20 @@ final class SearchService {
         }
     }
 
-    private func truncateHtml(_ html: String, maxLength: Int) -> String {
-        // Strip HTML tags and truncate
-        let stripped = html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    private func extractFirstHeading(from markdown: String) -> String? {
+        for line in markdown.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("#") else { continue }
 
-        return truncate(stripped, maxLength: maxLength)
-    }
+            let title = trimmed
+                .drop { $0 == "#" }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
 
-    private func extractFirstHeadingFromHtml(_ html: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: "<h[1-6][^>]*>([\\s\\S]*?)</h[1-6]>", options: [.caseInsensitive]) else {
-            return nil
+            if !title.isEmpty {
+                return truncate(title, maxLength: 80)
+            }
         }
-
-        let range = NSRange(html.startIndex..<html.endIndex, in: html)
-        guard let match = regex.firstMatch(in: html, options: [], range: range),
-              match.numberOfRanges >= 2,
-              let innerRange = Range(match.range(at: 1), in: html) else {
-            return nil
-        }
-
-        let innerHtml = String(html[innerRange])
-        let stripped = innerHtml
-            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return stripped.isEmpty ? nil : stripped
+        return nil
     }
 
     private func truncate(_ text: String, maxLength: Int) -> String {
@@ -207,7 +183,8 @@ final class SearchService {
     }
 
     private func extractSnippet(from content: String, query: String, contextLength: Int = 60) -> String {
-        let stripped = content.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        let stripped = content
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Find query position (case-insensitive)

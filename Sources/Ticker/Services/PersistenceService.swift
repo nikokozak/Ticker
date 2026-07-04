@@ -1,7 +1,30 @@
 import Foundation
 import GRDB
 
-/// Manages SQLite persistence for streams, cells, and sources
+struct AppendResult {
+    let fragment: String
+    let isNewDocument: Bool
+    let revision: Int
+}
+
+struct StreamDocumentRevisionConflict: Error {
+    let streamId: UUID
+    let markdown: String
+    let revision: Int
+}
+
+enum PersistenceError: LocalizedError {
+    case encodingFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .encodingFailed(let message):
+            return message
+        }
+    }
+}
+
+/// Manages SQLite persistence for streams, stream documents, and sources
 final class PersistenceService {
     private let dbQueue: DatabaseQueue
     private let databaseURL: URL
@@ -12,6 +35,16 @@ final class PersistenceService {
 #if DEBUG
         print(message)
 #endif
+    }
+
+    private static func countMarkdownImageTokens(in markdown: String) -> Int {
+        var count = 0
+        var searchStart = markdown.startIndex
+        while let range = markdown.range(of: "![", range: searchStart..<markdown.endIndex) {
+            count += 1
+            searchStart = range.upperBound
+        }
+        return count
     }
 
     init(databaseURL: URL? = nil, fileManager: FileManager = .default) throws {
@@ -217,6 +250,135 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v11_recover_orphaned_quickpanel_cells") { db in
+            let documentRows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT stream_id, markdown, created_at
+                    FROM stream_documents
+                """
+            )
+
+            for documentRow in documentRows {
+                let streamId: String = documentRow["stream_id"]
+                let documentMarkdown: String = documentRow["markdown"]
+                let documentCreatedAt: Double = documentRow["created_at"]
+
+                let cellRows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT content
+                        FROM cells
+                        WHERE stream_id = ?
+                          AND created_at > ?
+                        ORDER BY created_at ASC, position ASC
+                    """,
+                    arguments: [streamId, documentCreatedAt]
+                )
+
+                let recoveredFragments: [String] = cellRows.compactMap { row in
+                    let content: String = row["content"]
+                    let markdown = Self.markdownishTextFromLegacyCellHTML(content)
+                    return markdown.isEmpty ? nil : markdown
+                }
+
+                guard !recoveredFragments.isEmpty else { continue }
+
+                let recoveryBlock = (["## Recovered captures"] + recoveredFragments)
+                    .joined(separator: "\n\n")
+                let recoveredMarkdown = documentMarkdown.isEmpty
+                    ? recoveryBlock
+                    : "\(documentMarkdown)\n\n\(recoveryBlock)"
+                let now = Date().timeIntervalSince1970
+
+                try db.execute(
+                    sql: """
+                        UPDATE stream_documents
+                        SET markdown = ?, updated_at = ?
+                        WHERE stream_id = ?
+                    """,
+                    arguments: [recoveredMarkdown, now, streamId]
+                )
+            }
+
+            // ponytail: Retain legacy cells until Phase 2+ drops the cells table in a future migration.
+        }
+
+        migrator.registerMigration("v12_seed_documents_from_legacy_cells") { db in
+            let streamRows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT s.id
+                    FROM streams s
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM stream_documents d
+                        WHERE d.stream_id = s.id
+                    )
+                    AND EXISTS (
+                        SELECT 1
+                        FROM cells c
+                        WHERE c.stream_id = s.id
+                    )
+                """
+            )
+
+            for streamRow in streamRows {
+                let streamId: String = streamRow["id"]
+                let cellRows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT content
+                        FROM cells
+                        WHERE stream_id = ?
+                        ORDER BY position ASC, created_at ASC
+                    """,
+                    arguments: [streamId]
+                )
+
+                let fragments: [String] = cellRows.compactMap { row in
+                    let content: String = row["content"]
+                    let markdown = Self.markdownishTextFromLegacyCellHTML(content)
+                    return markdown.isEmpty ? nil : markdown
+                }
+                let markdown = fragments.joined(separator: "\n\n")
+                let now = Date().timeIntervalSince1970
+
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
+                        VALUES (?, ?, ?, ?)
+                    """,
+                    arguments: [streamId, markdown, now, now]
+                )
+            }
+        }
+
+        migrator.registerMigration("v13_stream_document_revision") { db in
+            try db.alter(table: "stream_documents") { t in
+                t.add(column: "revision", .integer).notNull().defaults(to: 0)
+            }
+        }
+
+        migrator.registerMigration("v14_pdf_highlights") { db in
+            try db.create(table: "pdf_highlights") { t in
+                t.column("id", .text).primaryKey()
+                t.column("source_id", .text).notNull()
+                    .references("sources", onDelete: .cascade)
+                t.column("page", .integer).notNull()
+                t.column("rects_json", .text).notNull()
+                t.column("quote", .text).notNull()
+                t.column("created_at", .text).notNull()
+            }
+            try db.create(index: "idx_pdf_highlights_source", on: "pdf_highlights", columns: ["source_id"])
+        }
+
+        migrator.registerMigration("v15_source_original_path") { db in
+            try db.alter(table: "sources") { t in
+                t.add(column: "original_path", .text)
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -287,6 +449,12 @@ final class PersistenceService {
         return formatter
     }()
 
+    private static let pdfHighlightDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
     // MARK: - Stream Operations
 
     func loadStreamSummaries() throws -> [StreamSummary] {
@@ -296,6 +464,7 @@ final class PersistenceService {
                     s.id, s.title, s.updated_at,
                     (SELECT COUNT(*) FROM sources WHERE stream_id = s.id) as source_count,
                     (SELECT COUNT(*) FROM cells WHERE stream_id = s.id) as cell_count,
+                    (SELECT markdown FROM stream_documents WHERE stream_id = s.id) as document_markdown,
                     COALESCE(
                         (SELECT markdown FROM stream_documents WHERE stream_id = s.id),
                         (SELECT content FROM cells WHERE stream_id = s.id ORDER BY position LIMIT 1)
@@ -304,11 +473,17 @@ final class PersistenceService {
                 ORDER BY s.updated_at DESC
             """
             return try Row.fetchAll(db, sql: sql).map { row in
-                StreamSummary(
+                let documentMarkdown: String = row["document_markdown"] ?? ""
+                // ponytail: raw markdown counts are the ceiling here; upgrade to parser-backed rendered-text/image metrics if list metadata needs semantic precision.
+                let charCount = documentMarkdown.count
+                let imageCount = Self.countMarkdownImageTokens(in: documentMarkdown)
+                return StreamSummary(
                     id: UUID(uuidString: row["id"])!,
                     title: row["title"],
                     sourceCount: row["source_count"],
                     cellCount: row["cell_count"],
+                    charCount: charCount,
+                    imageCount: imageCount,
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
                     previewText: row["preview_text"]
                 )
@@ -329,13 +504,6 @@ final class PersistenceService {
             }
 
             let sourceRows = try Row.fetchAll(db, sql: "SELECT * FROM sources WHERE stream_id = ? ORDER BY added_at", arguments: [id.uuidString])
-            let cellRows = try Row.fetchAll(db, sql: """
-                SELECT id, stream_id, type, content, original_prompt, state, source_binding_json, metadata_json, created_at, updated_at, position, modifiers_json, versions_json, active_version_id, processing_config_json, references_json, block_name, source_app
-                FROM cells
-                WHERE stream_id = ?
-                ORDER BY position
-            """, arguments: [id.uuidString])
-
             let sources = sourceRows.map { row -> SourceReference in
                 let embeddingStatusRaw: String? = row["embedding_status"]
                 let embeddingStatus = embeddingStatusRaw.flatMap { SourceEmbeddingStatus(rawValue: $0) } ?? .none
@@ -346,6 +514,7 @@ final class PersistenceService {
                     displayName: row["display_name"],
                     fileType: SourceFileType(rawValue: row["file_type"]) ?? .text,
                     bookmarkData: row["bookmark_data"],
+                    originalPath: row["original_path"],
                     status: SourceStatus(rawValue: row["status"]) ?? .pending,
                     extractedText: row["extracted_text"],
                     pageCount: row["page_count"],
@@ -354,69 +523,10 @@ final class PersistenceService {
                 )
             }
 
-            let cells = try cellRows.map { row -> Cell in
-                var sourceBinding: SourceBinding? = nil
-                if let bindingJson: String = row["source_binding_json"] {
-                    sourceBinding = try JSONDecoder().decode(SourceBinding.self, from: Data(bindingJson.utf8))
-                }
-
-                let originalPrompt: String? = row["original_prompt"]
-
-                // Decode modifier stack fields
-                var modifiers: [Modifier]? = nil
-                if let modifiersJson: String = row["modifiers_json"] {
-                    modifiers = try JSONDecoder().decode([Modifier].self, from: Data(modifiersJson.utf8))
-                }
-
-                var versions: [CellVersion]? = nil
-                if let versionsJson: String = row["versions_json"] {
-                    versions = try JSONDecoder().decode([CellVersion].self, from: Data(versionsJson.utf8))
-                }
-
-                var activeVersionId: UUID? = nil
-                if let activeVersionIdStr: String = row["active_version_id"] {
-                    activeVersionId = UUID(uuidString: activeVersionIdStr)
-                }
-
-                // Decode processing fields
-                var processingConfig: ProcessingConfig? = nil
-                if let processingConfigJson: String = row["processing_config_json"] {
-                    processingConfig = try JSONDecoder().decode(ProcessingConfig.self, from: Data(processingConfigJson.utf8))
-                }
-
-                var references: [UUID]? = nil
-                if let referencesJson: String = row["references_json"] {
-                    references = try JSONDecoder().decode([UUID].self, from: Data(referencesJson.utf8))
-                }
-
-                let blockName: String? = row["block_name"]
-                let sourceApp: String? = row["source_app"]
-
-                return Cell(
-                    id: UUID(uuidString: row["id"])!,
-                    streamId: UUID(uuidString: row["stream_id"])!,
-                    content: row["content"],
-                    originalPrompt: originalPrompt,
-                    type: CellType(rawValue: row["type"]) ?? .text,
-                    sourceBinding: sourceBinding,
-                    order: row["position"],
-                    createdAt: Date(timeIntervalSince1970: row["created_at"]),
-                    updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
-                    modifiers: modifiers,
-                    versions: versions,
-                    activeVersionId: activeVersionId,
-                    processingConfig: processingConfig,
-                    references: references,
-                    blockName: blockName,
-                    sourceApp: sourceApp
-                )
-            }
-
             return Stream(
                 id: UUID(uuidString: streamRow["id"])!,
                 title: streamRow["title"],
                 sources: sources,
-                cells: cells,
                 createdAt: Date(timeIntervalSince1970: streamRow["created_at"]),
                 updatedAt: Date(timeIntervalSince1970: streamRow["updated_at"])
             )
@@ -482,7 +592,7 @@ final class PersistenceService {
         try dbQueue.read { db in
             guard let row = try Row.fetchOne(
                 db,
-                sql: "SELECT stream_id, markdown, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+                sql: "SELECT stream_id, markdown, revision, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
                 arguments: [streamId.uuidString]
             ) else {
                 return nil
@@ -491,6 +601,7 @@ final class PersistenceService {
             return StreamDocument(
                 streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
                 markdown: row["markdown"],
+                revision: row["revision"],
                 createdAt: Date(timeIntervalSince1970: row["created_at"]),
                 updatedAt: Date(timeIntervalSince1970: row["updated_at"])
             )
@@ -502,18 +613,21 @@ final class PersistenceService {
         try dbQueue.write { db in
             if let row = try Row.fetchOne(
                 db,
-                sql: "SELECT stream_id, markdown, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+                sql: "SELECT stream_id, markdown, revision, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
                 arguments: [streamId.uuidString]
             ) {
                 return StreamDocument(
                     streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
                     markdown: row["markdown"],
+                    revision: row["revision"],
                     createdAt: Date(timeIntervalSince1970: row["created_at"]),
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"])
                 )
             }
 
-            let markdown = try initialMarkdownFromLegacyCells(streamId: streamId, db: db)
+            // v12 seeds stream_documents for any legacy stream that still has cells,
+            // so reaching this path means the stream is genuinely document-empty.
+            let markdown = ""
             let now = Date()
             let nowTs = now.timeIntervalSince1970
 
@@ -528,274 +642,127 @@ final class PersistenceService {
             return StreamDocument(
                 streamId: streamId,
                 markdown: markdown,
+                revision: 0,
                 createdAt: now,
                 updatedAt: now
             )
         }
     }
 
-    func saveStreamDocument(streamId: UUID, markdown: String) throws {
+    @discardableResult
+    func saveStreamDocument(streamId: UUID, markdown: String) throws -> Int {
+        let document = try loadOrCreateStreamDocument(streamId: streamId)
+        return try saveStreamDocument(streamId: streamId, markdown: markdown, baseRevision: document.revision)
+    }
+
+    @discardableResult
+    func saveStreamDocument(streamId: UUID, markdown: String, baseRevision: Int) throws -> Int {
         let now = Date().timeIntervalSince1970
-        try dbQueue.write { db in
-            try db.execute(
-                sql: """
-                    INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(stream_id) DO UPDATE SET
-                        markdown = excluded.markdown,
-                        updated_at = excluded.updated_at
-                """,
-                arguments: [streamId.uuidString, markdown, now, now]
-            )
-
-            try db.execute(
-                sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
-                arguments: [now, streamId.uuidString]
-            )
-        }
-    }
-
-    /// Get the next cell order for a stream
-    func getNextCellOrder(streamId: UUID) throws -> Int {
-        try dbQueue.read { db in
-            let row = try Row.fetchOne(db, sql: """
-                SELECT COALESCE(MAX(position), -1) + 1 as next_order
-                FROM cells
-                WHERE stream_id = ?
-            """, arguments: [streamId.uuidString])
-            return row?["next_order"] ?? 0
-        }
-    }
-
-    /// Get the insertion order for Quick Panel content
-    /// Inserts before any trailing empty cell (like Notion's always-present empty block)
-    /// Also bumps the order of the trailing empty cell if one exists
-    func getInsertionOrderForQuickPanel(streamId: UUID) throws -> Int {
-        try dbQueue.write { db in
-            try getInsertionOrderForQuickPanel(streamId: streamId, insertionCount: 1, db: db)
-        }
-    }
-
-    /// Insert a batch of Quick Panel cells atomically at the next insertion point.
-    /// Returns the persisted cells with finalized sequential order values.
-    func insertQuickPanelCells(streamId: UUID, cells: [Cell]) throws -> [Cell] {
-        guard !cells.isEmpty else { return [] }
-
         return try dbQueue.write { db in
-            let insertionOrder = try getInsertionOrderForQuickPanel(
-                streamId: streamId,
-                insertionCount: cells.count,
-                db: db
-            )
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT markdown, revision FROM stream_documents WHERE stream_id = ?",
+                arguments: [streamId.uuidString]
+            ) {
+                let currentMarkdown: String = row["markdown"]
+                let currentRevision: Int = row["revision"]
 
-            var persisted: [Cell] = []
-            persisted.reserveCapacity(cells.count)
+                guard baseRevision == currentRevision else {
+                    throw StreamDocumentRevisionConflict(
+                        streamId: streamId,
+                        markdown: currentMarkdown,
+                        revision: currentRevision
+                    )
+                }
 
-            for (offset, baseCell) in cells.enumerated() {
-                var cell = baseCell
-                cell.order = insertionOrder + offset
-                try saveCell(cell, in: db, updateStreamTimestamp: false)
-                persisted.append(cell)
+                let newRevision = currentRevision + 1
+                try db.execute(
+                    sql: """
+                        UPDATE stream_documents
+                        SET markdown = ?, revision = ?, updated_at = ?
+                        WHERE stream_id = ?
+                    """,
+                    arguments: [markdown, newRevision, now, streamId.uuidString]
+                )
+
+                try db.execute(
+                    sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
+                    arguments: [now, streamId.uuidString]
+                )
+
+                return newRevision
             }
 
-            try db.execute(
-                sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
-                arguments: [Date().timeIntervalSince1970, streamId.uuidString]
-            )
-
-            return persisted
-        }
-    }
-
-    // MARK: - Cell Operations
-
-    func saveCell(_ cell: Cell) throws {
-        try dbQueue.write { db in
-            try saveCell(cell, in: db, updateStreamTimestamp: true)
-        }
-    }
-
-    private func saveCell(_ cell: Cell, in db: Database, updateStreamTimestamp: Bool) throws {
-        let bindingJson: String?
-        if let binding = cell.sourceBinding {
-            bindingJson = String(data: try JSONEncoder().encode(binding), encoding: .utf8)
-        } else {
-            bindingJson = nil
-        }
-
-        let metadataJson = "{}"  // Simplified for now
-
-        // Encode modifier stack fields
-        let modifiersJson: String?
-        if let modifiers = cell.modifiers {
-            modifiersJson = String(data: try JSONEncoder().encode(modifiers), encoding: .utf8)
-        } else {
-            modifiersJson = nil
-        }
-
-        let versionsJson: String?
-        if let versions = cell.versions {
-            versionsJson = String(data: try JSONEncoder().encode(versions), encoding: .utf8)
-        } else {
-            versionsJson = nil
-        }
-
-        let activeVersionIdStr = cell.activeVersionId?.uuidString
-
-        // Encode processing fields
-        let processingConfigJson: String?
-        if let processingConfig = cell.processingConfig {
-            processingConfigJson = String(data: try JSONEncoder().encode(processingConfig), encoding: .utf8)
-        } else {
-            processingConfigJson = nil
-        }
-
-        let referencesJson: String?
-        if let references = cell.references {
-            referencesJson = String(data: try JSONEncoder().encode(references), encoding: .utf8)
-        } else {
-            referencesJson = nil
-        }
-
-        try db.execute(
-            sql: """
-                INSERT INTO cells (id, stream_id, type, content, original_prompt, state, source_binding_json, metadata_json, created_at, updated_at, position, modifiers_json, versions_json, active_version_id, processing_config_json, references_json, block_name, source_app)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    content = excluded.content,
-                    original_prompt = CASE
-                        WHEN excluded.type = 'aiResponse' AND excluded.original_prompt IS NULL
-                        THEN cells.original_prompt
-                        ELSE excluded.original_prompt
-                    END,
-                    type = excluded.type,
-                    state = excluded.state,
-                    source_binding_json = excluded.source_binding_json,
-                    updated_at = excluded.updated_at,
-                    position = excluded.position,
-                    modifiers_json = excluded.modifiers_json,
-                    versions_json = excluded.versions_json,
-                    active_version_id = excluded.active_version_id,
-                    processing_config_json = excluded.processing_config_json,
-                    references_json = excluded.references_json,
-                    block_name = excluded.block_name,
-                    source_app = excluded.source_app
-            """,
-            arguments: [
-                cell.id.uuidString,
-                cell.streamId.uuidString,
-                cell.type.rawValue,
-                cell.content,
-                cell.originalPrompt,
-                "idle",
-                bindingJson,
-                metadataJson,
-                cell.createdAt.timeIntervalSince1970,
-                cell.updatedAt.timeIntervalSince1970,
-                cell.order,
-                modifiersJson,
-                versionsJson,
-                activeVersionIdStr,
-                processingConfigJson,
-                referencesJson,
-                cell.blockName,
-                cell.sourceApp
-            ]
-        )
-
-        if updateStreamTimestamp {
-            // Update stream's updated_at
-            try db.execute(
-                sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
-                arguments: [Date().timeIntervalSince1970, cell.streamId.uuidString]
-            )
-        }
-    }
-
-    private func getInsertionOrderForQuickPanel(
-        streamId: UUID,
-        insertionCount: Int,
-        db: Database
-    ) throws -> Int {
-        precondition(insertionCount > 0)
-
-        struct LastQuickPanelCell: FetchableRecord, Decodable {
-            let id: String
-            let position: Int
-            let content: String
-        }
-
-        // Find the last cell - check if it's empty.
-        let lastCell = try LastQuickPanelCell.fetchOne(db, sql: """
-            SELECT id, position, content
-            FROM cells
-            WHERE stream_id = ?
-            ORDER BY position DESC
-            LIMIT 1
-        """, arguments: [streamId.uuidString])
-
-        guard let lastCell else {
-            // No cells - start at 0.
-            return 0
-        }
-
-        if isQuickPanelEmptyCellContent(lastCell.content) {
-            // Keep a trailing empty cell at the end by shifting it exactly by the insertion batch size.
-            try db.execute(
-                sql: "UPDATE cells SET position = position + ? WHERE id = ?",
-                arguments: [insertionCount, lastCell.id]
-            )
-            return lastCell.position
-        }
-
-        // Last cell has meaningful content - append after it.
-        return lastCell.position + 1
-    }
-
-    private func isQuickPanelEmptyCellContent(_ html: String) -> Bool {
-        // Images and other embedded media count as meaningful content even if text is empty.
-        let lowered = html.lowercased()
-        if lowered.contains("<img") || lowered.contains("<video") || lowered.contains("<audio")
-            || lowered.contains("<iframe") || lowered.contains("<object") || lowered.contains("<embed") {
-            return false
-        }
-
-        let textOnly = lowered
-            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return textOnly.isEmpty
-    }
-
-    /// Fetch a single cell's content by ID (used for asset cleanup)
-    func getCellContent(id: UUID) throws -> String? {
-        try dbQueue.read { db in
-            try String.fetchOne(db, sql: "SELECT content FROM cells WHERE id = ?", arguments: [id.uuidString])
-        }
-    }
-
-    func deleteCell(id: UUID) throws {
-        try dbQueue.write { db in
-            try db.execute(sql: "DELETE FROM cells WHERE id = ?", arguments: [id.uuidString])
-        }
-    }
-
-    /// Update cell positions in bulk (for drag/drop reordering)
-    func updateCellOrders(_ orders: [(id: UUID, order: Int)], streamId: UUID) throws {
-        let now = Date().timeIntervalSince1970
-        try dbQueue.write { db in
-            for (id, order) in orders {
-                try db.execute(
-                    sql: "UPDATE cells SET position = ?, updated_at = ? WHERE id = ?",
-                    arguments: [order, now, id.uuidString]
+            guard baseRevision == 0 else {
+                throw StreamDocumentRevisionConflict(
+                    streamId: streamId,
+                    markdown: "",
+                    revision: 0
                 )
             }
-            // Also update stream's updated_at
+
+            let newRevision = 1
+            try db.execute(
+                sql: """
+                    INSERT INTO stream_documents (stream_id, markdown, revision, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """,
+                arguments: [streamId.uuidString, markdown, newRevision, now, now]
+            )
+
             try db.execute(
                 sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
                 arguments: [now, streamId.uuidString]
             )
+
+            return newRevision
+        }
+    }
+
+    func appendToStreamDocument(streamId: UUID, fragment: String) throws -> AppendResult {
+        try dbQueue.write { db in
+            let now = Date().timeIntervalSince1970
+            let existingMarkdown: String
+            let existingRevision: Int
+            let isNewDocument: Bool
+
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT markdown, revision FROM stream_documents WHERE stream_id = ?",
+                arguments: [streamId.uuidString]
+            ) {
+                existingMarkdown = row["markdown"]
+                existingRevision = row["revision"]
+                isNewDocument = false
+            } else {
+                existingMarkdown = ""
+                existingRevision = 0
+                isNewDocument = true
+            }
+
+            let markdown = existingMarkdown.isEmpty
+                ? fragment
+                : "\(existingMarkdown)\n\n\(fragment)"
+            let newRevision = existingRevision + 1
+
+            try db.execute(
+                sql: """
+                    INSERT INTO stream_documents (stream_id, markdown, revision, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(stream_id) DO UPDATE SET
+                        markdown = excluded.markdown,
+                        revision = excluded.revision,
+                        updated_at = excluded.updated_at
+                """,
+                arguments: [streamId.uuidString, markdown, newRevision, now, now]
+            )
+
+            try db.execute(
+                sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
+                arguments: [now, streamId.uuidString]
+            )
+
+            return AppendResult(fragment: fragment, isNewDocument: isNewDocument, revision: newRevision)
         }
     }
 
@@ -816,6 +783,7 @@ final class PersistenceService {
                 displayName: row["display_name"],
                 fileType: SourceFileType(rawValue: row["file_type"]) ?? .text,
                 bookmarkData: row["bookmark_data"],
+                originalPath: row["original_path"],
                 status: SourceStatus(rawValue: row["status"]) ?? .pending,
                 extractedText: row["extracted_text"],
                 pageCount: row["page_count"],
@@ -829,10 +797,12 @@ final class PersistenceService {
         try dbQueue.write { db in
             try db.execute(
                 sql: """
-                    INSERT INTO sources (id, stream_id, display_name, file_type, bookmark_data, status, extracted_text, page_count, added_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO sources (id, stream_id, display_name, file_type, bookmark_data, original_path, status, extracted_text, page_count, added_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         display_name = excluded.display_name,
+                        bookmark_data = excluded.bookmark_data,
+                        original_path = excluded.original_path,
                         status = excluded.status,
                         extracted_text = excluded.extracted_text,
                         page_count = excluded.page_count
@@ -843,6 +813,7 @@ final class PersistenceService {
                     source.displayName,
                     source.fileType.rawValue,
                     source.bookmarkData,
+                    source.originalPath,
                     source.status.rawValue,
                     source.extractedText,
                     source.pageCount,
@@ -860,29 +831,79 @@ final class PersistenceService {
 
     func deleteSource(id: UUID) throws {
         try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM pdf_highlights WHERE source_id = ?", arguments: [id.uuidString])
             try db.execute(sql: "DELETE FROM sources WHERE id = ?", arguments: [id.uuidString])
         }
     }
 
-    private func initialMarkdownFromLegacyCells(streamId: UUID, db: Database) throws -> String {
-        let rows = try Row.fetchAll(
-            db,
-            sql: """
-                SELECT content
-                FROM cells
-                WHERE stream_id = ?
-                ORDER BY position
-            """,
-            arguments: [streamId.uuidString]
-        )
+    // MARK: - PDF Highlight Operations
 
-        let chunks: [String] = rows.compactMap { row in
-            let content: String = row["content"]
-            let plain = Self.htmlToPlainText(content).trimmingCharacters(in: .whitespacesAndNewlines)
-            return plain.isEmpty ? nil : plain
+    func savePDFHighlight(_ highlight: PDFHighlightRecord) throws {
+        let rectsData = try JSONEncoder().encode(highlight.rects)
+        guard let rectsJSON = String(data: rectsData, encoding: .utf8) else {
+            throw PersistenceError.encodingFailed("Could not encode PDF highlight rects.")
         }
 
-        return chunks.joined(separator: "\n\n")
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO pdf_highlights (id, source_id, page, rects_json, quote, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        source_id = excluded.source_id,
+                        page = excluded.page,
+                        rects_json = excluded.rects_json,
+                        quote = excluded.quote,
+                        created_at = excluded.created_at
+                """,
+                arguments: [
+                    highlight.id.uuidString,
+                    highlight.sourceId.uuidString,
+                    highlight.page,
+                    rectsJSON,
+                    highlight.quote,
+                    Self.pdfHighlightDateFormatter.string(from: highlight.createdAt)
+                ]
+            )
+        }
+    }
+
+    func loadPDFHighlights(sourceId: UUID) throws -> [PDFHighlightRecord] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, source_id, page, rects_json, quote, created_at
+                    FROM pdf_highlights
+                    WHERE source_id = ?
+                    ORDER BY created_at ASC
+                """,
+                arguments: [sourceId.uuidString]
+            )
+
+            return try rows.map { row in
+                try decodePDFHighlight(row)
+            }
+        }
+    }
+
+    private func decodePDFHighlight(_ row: Row) throws -> PDFHighlightRecord {
+        let rectsJSON: String = row["rects_json"]
+        guard let rectsData = rectsJSON.data(using: .utf8) else {
+            throw PersistenceError.encodingFailed("Could not read PDF highlight rects.")
+        }
+        let rects = try JSONDecoder().decode([PDFHighlightRect].self, from: rectsData)
+        let createdAtValue: String = row["created_at"]
+        let createdAt = Self.pdfHighlightDateFormatter.date(from: createdAtValue) ?? Date(timeIntervalSince1970: 0)
+
+        return PDFHighlightRecord(
+            id: UUID(uuidString: row["id"])!,
+            sourceId: UUID(uuidString: row["source_id"])!,
+            page: row["page"],
+            rects: rects,
+            quote: row["quote"],
+            createdAt: createdAt
+        )
     }
 
     private static func htmlToPlainText(_ html: String) -> String {
@@ -906,6 +927,32 @@ final class PersistenceService {
         }
 
         return attributed.string.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func markdownishTextFromLegacyCellHTML(_ html: String) -> String {
+        let rewrittenHTML = rewriteImageTagsToMarkdown(html)
+        return htmlToPlainText(rewrittenHTML).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func rewriteImageTagsToMarkdown(_ html: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"<img\b[^>]*\bsrc\s*=\s*(['"])(.*?)\1[^>]*>"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return html
+        }
+
+        let original = html as NSString
+        let result = NSMutableString(string: html)
+        let fullRange = NSRange(location: 0, length: original.length)
+
+        for match in regex.matches(in: html, range: fullRange).reversed() {
+            guard match.numberOfRanges >= 3 else { continue }
+            let src = original.substring(with: match.range(at: 2))
+            result.replaceCharacters(in: match.range, with: "![capture](\(src))")
+        }
+
+        return result as String
     }
 
     // MARK: - Chunk Operations (RAG Pipeline)
@@ -1044,6 +1091,7 @@ final class PersistenceService {
                     displayName: row["display_name"],
                     fileType: SourceFileType(rawValue: row["file_type"]) ?? .text,
                     bookmarkData: row["bookmark_data"],
+                    originalPath: row["original_path"],
                     status: SourceStatus(rawValue: row["status"]) ?? .pending,
                     extractedText: row["extracted_text"],
                     pageCount: row["page_count"],
@@ -1065,14 +1113,13 @@ final class PersistenceService {
 
     // MARK: - Text Search
 
-    /// Search cells by text, returning results split by current vs other streams.
+    /// Search stream documents by text, returning results split by current vs other streams.
     /// Each stream category gets its own limit to ensure cross-stream coverage.
-    /// Searches across content, originalPrompt, and blockName fields.
-    func textSearchCells(
+    func textSearchStreamDocuments(
         query: String,
         currentStreamId: UUID,
         limitPerCategory: Int = 15
-    ) throws -> (currentStream: [CellSearchResult], otherStreams: [CellSearchResult]) {
+    ) throws -> (currentStream: [StreamDocumentSearchResult], otherStreams: [StreamDocumentSearchResult]) {
         // Escape SQL LIKE special characters to prevent injection
         let escaped = query
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -1083,51 +1130,39 @@ final class PersistenceService {
         return try dbQueue.read { db in
             // Search current stream
             let currentResults = try Row.fetchAll(db, sql: """
-                SELECT c.id, c.stream_id, s.title as stream_title,
-                       c.content, c.type, c.original_prompt, c.block_name
-                FROM cells c
-                JOIN streams s ON c.stream_id = s.id
-                WHERE c.stream_id = ?
-                  AND (c.content LIKE ? ESCAPE '\\' COLLATE NOCASE
-                       OR c.original_prompt LIKE ? ESCAPE '\\' COLLATE NOCASE
-                       OR c.block_name LIKE ? ESCAPE '\\' COLLATE NOCASE)
-                ORDER BY c.updated_at DESC
+                SELECT d.stream_id, s.title as stream_title, d.markdown, d.updated_at
+                FROM stream_documents d
+                JOIN streams s ON d.stream_id = s.id
+                WHERE d.stream_id = ?
+                  AND d.markdown LIKE ? ESCAPE '\\' COLLATE NOCASE
+                ORDER BY d.updated_at DESC
                 LIMIT ?
-            """, arguments: [currentStreamId.uuidString, pattern, pattern, pattern, limitPerCategory])
+            """, arguments: [currentStreamId.uuidString, pattern, limitPerCategory])
             .map { row in
-                CellSearchResult(
-                    cellId: UUID(uuidString: row["id"])!,
+                StreamDocumentSearchResult(
                     streamId: UUID(uuidString: row["stream_id"])!,
                     streamTitle: row["stream_title"],
-                    content: row["content"],
-                    cellType: row["type"],
-                    originalPrompt: row["original_prompt"],
-                    blockName: row["block_name"]
+                    markdown: row["markdown"],
+                    updatedAt: Date(timeIntervalSince1970: row["updated_at"])
                 )
             }
 
             // Search other streams
             let otherResults = try Row.fetchAll(db, sql: """
-                SELECT c.id, c.stream_id, s.title as stream_title,
-                       c.content, c.type, c.original_prompt, c.block_name
-                FROM cells c
-                JOIN streams s ON c.stream_id = s.id
-                WHERE c.stream_id != ?
-                  AND (c.content LIKE ? ESCAPE '\\' COLLATE NOCASE
-                       OR c.original_prompt LIKE ? ESCAPE '\\' COLLATE NOCASE
-                       OR c.block_name LIKE ? ESCAPE '\\' COLLATE NOCASE)
-                ORDER BY c.updated_at DESC
+                SELECT d.stream_id, s.title as stream_title, d.markdown, d.updated_at
+                FROM stream_documents d
+                JOIN streams s ON d.stream_id = s.id
+                WHERE d.stream_id != ?
+                  AND d.markdown LIKE ? ESCAPE '\\' COLLATE NOCASE
+                ORDER BY d.updated_at DESC
                 LIMIT ?
-            """, arguments: [currentStreamId.uuidString, pattern, pattern, pattern, limitPerCategory])
+            """, arguments: [currentStreamId.uuidString, pattern, limitPerCategory])
             .map { row in
-                CellSearchResult(
-                    cellId: UUID(uuidString: row["id"])!,
+                StreamDocumentSearchResult(
                     streamId: UUID(uuidString: row["stream_id"])!,
                     streamTitle: row["stream_title"],
-                    content: row["content"],
-                    cellType: row["type"],
-                    originalPrompt: row["original_prompt"],
-                    blockName: row["block_name"]
+                    markdown: row["markdown"],
+                    updatedAt: Date(timeIntervalSince1970: row["updated_at"])
                 )
             }
 
@@ -1136,13 +1171,10 @@ final class PersistenceService {
     }
 }
 
-/// Result from text search on cells
-struct CellSearchResult {
-    let cellId: UUID
+/// Result from text search on stream documents.
+struct StreamDocumentSearchResult {
     let streamId: UUID
     let streamTitle: String
-    let content: String
-    let cellType: String
-    let originalPrompt: String?
-    let blockName: String?
+    let markdown: String
+    let updatedAt: Date
 }
