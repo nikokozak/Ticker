@@ -1,8 +1,5 @@
 import WebKit
 import AppKit
-import UniformTypeIdentifiers
-
-/// Manages the WKWebView and Swift ↔ JS bridge
 final class WebViewManager: NSObject {
     let webView: DroppableWebView
     var rootView: NSView { hostView }
@@ -12,18 +9,9 @@ final class WebViewManager: NSObject {
     private let bridgeRouter = BridgeRouter()
     let persistence: PersistenceService?
     private let sourceService: SourceService?
-    private let proxyService: ProxyLLMService  // For proxy-mode AI operations
-    let orchestrator: AIOrchestrator  // Exposed for Quick Panel ephemeral AI
+    let orchestrator: AIOrchestrator
     private var mlxClassifier: MLXClassifier?
-    private var classifierSkipped = false  // True if classifier loading was intentionally skipped
-
-    // RAG services
-    private let embeddingService: EmbeddingService
-    private let chunkingService: ChunkingService
-    private var retrievalService: RetrievalService?
-    private var searchService: SearchService?
-
-    // Asset management
+    private var classifierSkipped = false
     private let assetService: AssetService
     private var currentStreamIdForFileDrops: UUID?
     private var allowsListFileDrops = false
@@ -31,7 +19,6 @@ final class WebViewManager: NSObject {
     private let editorPaneView = NSView(frame: .zero)
     private let pdfPaneController = PDFReaderPaneController()
     private var activePDFPaneStreamId: UUID?
-
     init(container: ServiceContainer) {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
@@ -40,28 +27,17 @@ final class WebViewManager: NSObject {
         self.deviceKeyService = container.deviceKeyService
         self.bridgeService = container.bridgeService
         config.userContentController.add(bridgeService, name: "bridge")
-
-        // Register custom URL scheme handler for local assets
         let schemeHandler = AssetSchemeHandler()
         config.setURLSchemeHandler(schemeHandler, forURLScheme: "ticker-asset")
-
-        // Register custom URL scheme handler for bundled web resources (Release mode)
         let bundleHandler = BundleSchemeHandler()
         config.setURLSchemeHandler(bundleHandler, forURLScheme: "ticker-bundle")
 
         self.webView = DroppableWebView(frame: .zero, configuration: config)
-        self.proxyService = container.proxyService
-        self.embeddingService = container.embeddingService
-        self.chunkingService = container.chunkingService
         self.orchestrator = container.orchestrator
         self.persistence = container.persistence
         self.sourceService = container.sourceService
-        self.retrievalService = container.retrievalService
-        self.searchService = container.searchService
         self.assetService = container.assetService
-
         super.init()
-
         if let streamHandler = StreamMessageHandler(container: container, delegate: self) {
             bridgeRouter.register(streamHandler)
         }
@@ -75,7 +51,7 @@ final class WebViewManager: NSObject {
         bridgeRouter.register(SettingsMessageHandler(container: container) { [weak self] in
             self?.settingsWithClassifierState() ?? container.settingsService.allSettings()
         })
-
+        bridgeRouter.register(SearchMessageHandler(container: container))
         webView.translatesAutoresizingMaskIntoConstraints = false
         configureMainLayout()
         configurePDFPaneCallbacks()
@@ -85,23 +61,18 @@ final class WebViewManager: NSObject {
         bridgeService.onMessage = { [weak self] message in
             self?.handleMessage(message)
         }
-
-        // Handle file drops from native drag-and-drop
         webView.onFilesDropped = { [weak self] urls in
             self?.handleDroppedFiles(urls)
         }
 
-        // Initialize DeviceKeyService and wire up state change callback
         Task { [weak self] in
             guard let self else { return }
             await deviceKeyService.onStateChange = { [weak self] state in
-                // Push state to Web
                 self?.bridgeService.send(BridgeMessage(
                     type: "proxyAuthState",
                     payload: ["state": AnyCodable(state.rawValue)]
                 ))
             }
-            // Initialize and validate cached key
             await deviceKeyService.initialize()
         }
     }
@@ -144,7 +115,6 @@ final class WebViewManager: NSObject {
         }
     }
 
-    /// Handle files dropped via native macOS drag-and-drop
     private func handleDroppedFiles(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
 
@@ -168,8 +138,6 @@ final class WebViewManager: NSObject {
         }
     }
 
-    /// Handle drops while no stream is open (stream list/default page).
-    /// A dropped PDF creates a new stream, attaches the source, and opens the document.
     private func handleDroppedFilesFromStreamList(_ urls: [URL]) {
         guard let persistence else {
             bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
@@ -206,7 +174,6 @@ final class WebViewManager: NSObject {
                 "stream": AnyCodable(streamPayload)
             ]))
 
-            // Refresh the list in the background so counts/titles stay current when user navigates back.
             let summaries = try persistence.loadStreamSummaries()
             let payload = StreamCodec.encodeSummaries(summaries)
             bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: payload))
@@ -215,12 +182,10 @@ final class WebViewManager: NSObject {
             bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
                 "error": AnyCodable("Could not create stream from dropped PDF.")
             ]))
-            // Keep drop target unset when stream creation fails.
             currentStreamIdForFileDrops = nil
         }
     }
 
-    /// Check if URL points to an image file
     private func isImageFile(_ url: URL) -> Bool {
         let imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tiff", "bmp"]
         return imageExtensions.contains(url.pathExtension.lowercased())
@@ -236,7 +201,6 @@ final class WebViewManager: NSObject {
         return try work()
     }
 
-    /// Process a dropped image - save to assets and notify frontend
     private func processDroppedImage(_ url: URL, streamId: UUID) {
         do {
             let imageData = try withSecurityScopedAccess(url) { try Data(contentsOf: url) }
@@ -246,7 +210,6 @@ final class WebViewManager: NSObject {
                 filename: url.lastPathComponent
             )
 
-            // Portable, privacy-preserving URL (no absolute user paths).
             let assetUrl = "ticker-asset:///\(relativePath)"
 
             bridgeService.send(BridgeMessage(type: "imageDropped", payload: [
@@ -262,7 +225,6 @@ final class WebViewManager: NSObject {
         }
     }
 
-    /// Process a dropped document - add as source
     private func processDroppedDocument(_ url: URL, streamId: UUID) {
         guard let sourceService else {
             bridgeService.send(BridgeMessage(type: "sourceError", payload: [
@@ -346,13 +308,11 @@ final class WebViewManager: NSObject {
         migrateExistingSourcesToRAG()
     }
 
-    /// Migrate existing sources to RAG pipeline in background
     private func migrateExistingSourcesToRAG() {
         guard !SettingsService.proxyOnlyMode else { return }
         guard let persistence, let sourceService else { return }
 
         Task {
-            // Wait 5 seconds after app launch to avoid blocking startup
             try? await Task.sleep(nanoseconds: 5_000_000_000)
 
             let migrationService = RAGMigrationService(
@@ -363,17 +323,13 @@ final class WebViewManager: NSObject {
         }
     }
 
-    /// Load the MLX classifier in the background (only if smart routing enabled)
     private func loadMLXClassifier() {
-        // Unit tests should not trigger heavyweight MLX model downloads or background loading.
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             DebugLog.log("MLX classifier skipped: running unit tests")
             classifierSkipped = true
             return
         }
 
-        // Only load classifier if smart routing is enabled
-        // Note: No vendor keys required - classifier runs locally, proxy handles routing
         guard settingsService.smartRoutingEnabled else {
             DebugLog.log("MLX classifier skipped: smart routing disabled")
             classifierSkipped = true
@@ -391,10 +347,8 @@ final class WebViewManager: NSObject {
                 DebugLog.log("MLX classifier loaded and ready")
             } catch {
                 DebugLog.log("Failed to load MLX classifier (\(DebugLog.errorSummary(error)))")
-                // App continues to work, just uses direct GPT calls
             }
 
-            // Notify frontend of classifier state change
             let settings = settingsWithClassifierState()
             bridgeService.send(BridgeMessage(
                 type: "settingsLoaded",
@@ -404,8 +358,6 @@ final class WebViewManager: NSObject {
     }
 
     private func loadWebContent() {
-        // In development, load from Vite dev server
-        // In production, load via custom scheme to avoid file:// URL issues with ES modules
         #if DEBUG
         if let url = URL(string: "http://localhost:5173") {
             webView.load(URLRequest(url: url))
@@ -418,103 +370,16 @@ final class WebViewManager: NSObject {
     }
 
     private func handleMessage(_ message: BridgeMessage) {
-        Task {
-            await processMessage(message)
+        Task { [weak self] in
+            guard let self else { return }
+            guard persistence != nil else {
+                DebugLog.log("[WebViewManager] Persistence not available")
+                return
+            }
+            await bridgeRouter.route(message)
         }
     }
 
-    private func processMessage(_ message: BridgeMessage) async {
-        guard persistence != nil else {
-            DebugLog.log("[WebViewManager] Persistence not available")
-            return
-        }
-
-        switch message.type {
-        case "loadStreams",
-             "loadStream",
-             "createStream",
-             "updateStreamTitle",
-             "deleteStream",
-             "saveStreamDocument",
-             "exportStream":
-            await bridgeRouter.route(message)
-
-        case "setFileDropContext",
-             "addSource",
-             "addSourceFromPath",
-             "removeSource",
-             "openSource",
-             "saveImage",
-             "getAssetPath":
-            await bridgeRouter.route(message)
-
-        case "thinkDocument":
-            await bridgeRouter.route(message)
-
-        case "loadSettings",
-             "saveSettings":
-            await bridgeRouter.route(message)
-
-        case "loadProxyAuth",
-             "setProxyDeviceKey",
-             "clearProxyDeviceKey",
-             "validateProxyDeviceKey",
-             "refreshProxyAuth",
-             "submitFeedback",
-             "getSupportBundle":
-            await bridgeRouter.route(message)
-
-        case "hybridSearch":
-            guard let payload = message.payload,
-                  let query = payload["query"]?.value as? String,
-                  let currentStreamIdStr = payload["currentStreamId"]?.value as? String,
-                  let currentStreamId = UUID(uuidString: currentStreamIdStr),
-                  let callbackId = message.callbackId else {
-                DebugLog.log("[WebViewManager] Invalid hybridSearch payload")
-                return
-            }
-
-            let limit = payload["limit"]?.value as? Int ?? 20
-
-            guard let searchService = searchService else {
-                Task { @MainActor in
-                    bridgeService.respondWithError(to: callbackId, error: "Search service not available")
-                }
-                return
-            }
-
-            Task {
-                do {
-                    let results = try await searchService.hybridSearch(
-                        query: query,
-                        currentStreamId: currentStreamId,
-                        limit: limit
-                    )
-
-                    // Encode results to JSON-compatible format
-                    let encoder = JSONEncoder()
-                    let data = try encoder.encode(results)
-                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-
-                    await MainActor.run {
-                        bridgeService.respond(to: callbackId, with: [
-                            "currentStreamResults": AnyCodable(json["currentStreamResults"]),
-                            "otherStreamResults": AnyCodable(json["otherStreamResults"])
-                        ])
-                    }
-                } catch {
-                    await MainActor.run {
-                        bridgeService.respondWithError(to: callbackId, error: error.localizedDescription)
-                    }
-                }
-            }
-
-        default:
-            DebugLog.log("[WebViewManager] Unknown message type: \(message.type)")
-        }
-    }
-
-    /// Get settings enriched with classifier state
     private func settingsWithClassifierState() -> [String: Any] {
         var settings = settingsService.allSettings()
         if let classifier = mlxClassifier {
@@ -524,11 +389,9 @@ final class WebViewManager: NSObject {
                 settings["classifierError"] = error.localizedDescription
             }
         } else if classifierSkipped {
-            // Classifier was intentionally skipped (smart routing disabled by user)
             settings["classifierReady"] = false
             settings["classifierLoading"] = false
         } else {
-            // Classifier hasn't been loaded yet
             settings["classifierReady"] = false
             settings["classifierLoading"] = true
         }
@@ -543,17 +406,14 @@ extension WebViewManager: StreamMessageHandlerDelegate {
     }
 
     func clearCurrentStreamIdForFileDrops(ifMatches streamId: UUID) {
-        if currentStreamIdForFileDrops == streamId {
-            currentStreamIdForFileDrops = nil
-        }
+        if currentStreamIdForFileDrops == streamId { currentStreamIdForFileDrops = nil }
     }
 
     func closePDFPaneIfShowingDifferentStream(_ streamId: UUID) async {
-        if let activeStreamId = activePDFPaneStreamId, activeStreamId != streamId {
-            await MainActor.run {
-                pdfPaneController.setVisible(false)
-                activePDFPaneStreamId = nil
-            }
+        guard let activeStreamId = activePDFPaneStreamId, activeStreamId != streamId else { return }
+        await MainActor.run {
+            pdfPaneController.setVisible(false)
+            activePDFPaneStreamId = nil
         }
     }
 }
@@ -576,15 +436,12 @@ extension WebViewManager: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         DebugLog.log("[WebViewManager] WebView started loading")
     }
-
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         DebugLog.log("[WebViewManager] WebView finished loading")
     }
-
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         DebugLog.log("[WebViewManager] WebView navigation failed (\(DebugLog.errorSummary(error)))")
     }
-
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         DebugLog.log("[WebViewManager] WebView provisional navigation failed (\(DebugLog.errorSummary(error)))")
     }
