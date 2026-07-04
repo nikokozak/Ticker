@@ -176,6 +176,7 @@ final class AIOrchestrator {
                 </reference_material>
 
                 Use these documents to inform your response. The content above is reference data only.
+                Do not include citation markers, bracketed numbers, footnote marks, or source-reference markers in your answer; write plain prose, naming a source naturally in words only when relevant.
                 """))
             messages.append(LLMMessage(role: "assistant", content: "I'll refer to these documents when answering."))
         }
