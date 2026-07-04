@@ -24,6 +24,44 @@ private enum PDFReaderPanePresentationError: LocalizedError {
     }
 }
 
+private enum PDFPaneStyle {
+    static let background = dynamicColor(
+        light: NSColor(red: 251 / 255, green: 251 / 255, blue: 250 / 255, alpha: 1),
+        dark: NSColor(red: 28 / 255, green: 28 / 255, blue: 27 / 255, alpha: 1)
+    )
+    static let surface = dynamicColor(
+        light: NSColor(red: 244 / 255, green: 244 / 255, blue: 242 / 255, alpha: 1),
+        dark: NSColor(red: 36 / 255, green: 36 / 255, blue: 35 / 255, alpha: 1)
+    )
+    static let text = dynamicColor(
+        light: NSColor(red: 31 / 255, green: 31 / 255, blue: 29 / 255, alpha: 1),
+        dark: NSColor(red: 243 / 255, green: 242 / 255, blue: 237 / 255, alpha: 1)
+    )
+    static let textMuted = dynamicColor(
+        light: NSColor(red: 111 / 255, green: 111 / 255, blue: 104 / 255, alpha: 1),
+        dark: NSColor(red: 170 / 255, green: 167 / 255, blue: 157 / 255, alpha: 1)
+    )
+    static let accent = dynamicColor(
+        light: NSColor(red: 37 / 255, green: 99 / 255, blue: 235 / 255, alpha: 1),
+        dark: NSColor(red: 138 / 255, green: 168 / 255, blue: 255 / 255, alpha: 1)
+    )
+    static let separator = dynamicColor(
+        light: NSColor(red: 31 / 255, green: 31 / 255, blue: 29 / 255, alpha: 0.08),
+        dark: NSColor(red: 243 / 255, green: 242 / 255, blue: 237 / 255, alpha: 0.08)
+    )
+
+    private static func dynamicColor(light: NSColor, dark: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
+            case .darkAqua:
+                return dark
+            default:
+                return light
+            }
+        }
+    }
+}
+
 private final class PDFPaneResizeHandleView: NSView {
     override func resetCursorRects() {
         super.resetCursorRects()
@@ -142,7 +180,7 @@ final class PDFReaderPaneController: NSViewController {
     private func configurePDFPane() {
         pdfPaneView.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneView.wantsLayer = true
-        pdfPaneView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        pdfPaneView.layer?.backgroundColor = PDFPaneStyle.background.cgColor
         pdfPaneView.isHidden = true
 
         pdfPaneWidthConstraint = pdfPaneView.widthAnchor.constraint(equalToConstant: 0)
@@ -151,9 +189,11 @@ final class PDFReaderPaneController: NSViewController {
         let divider = NSView(frame: .zero)
         divider.translatesAutoresizingMaskIntoConstraints = false
         divider.wantsLayer = true
-        divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        divider.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
 
         pdfPaneHeaderView.translatesAutoresizingMaskIntoConstraints = false
+        pdfPaneHeaderView.wantsLayer = true
+        pdfPaneHeaderView.layer?.backgroundColor = PDFPaneStyle.background.cgColor
         pdfPaneResizeHandle.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneTitleField.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneLinkButton.translatesAutoresizingMaskIntoConstraints = false
@@ -167,7 +207,8 @@ final class PDFReaderPaneController: NSViewController {
             action: #selector(handlePDFPaneResizePan(_:))
         ))
 
-        pdfPaneTitleField.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        pdfPaneTitleField.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        pdfPaneTitleField.textColor = PDFPaneStyle.text
         pdfPaneTitleField.lineBreakMode = .byTruncatingTail
         pdfPaneTitleField.maximumNumberOfLines = 1
         pdfPaneTitleField.usesSingleLineMode = true
@@ -178,17 +219,19 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneLinkButton.bezelStyle = .rounded
         pdfPaneLinkButton.controlSize = .small
         pdfPaneLinkButton.isEnabled = false
+        pdfPaneLinkButton.contentTintColor = PDFPaneStyle.accent
 
         pdfPaneCloseButton.target = self
         pdfPaneCloseButton.action = #selector(handlePDFPaneClose)
         pdfPaneCloseButton.bezelStyle = .rounded
         pdfPaneCloseButton.controlSize = .small
+        pdfPaneCloseButton.contentTintColor = PDFPaneStyle.textMuted
 
         pdfPanePDFView.autoScales = true
         pdfPanePDFView.displayMode = .singlePageContinuous
         pdfPanePDFView.displayDirection = .vertical
         pdfPanePDFView.displaysAsBook = false
-        pdfPanePDFView.backgroundColor = NSColor.windowBackgroundColor
+        pdfPanePDFView.backgroundColor = PDFPaneStyle.surface
         let pageControllerSelector = NSSelectorFromString("usePageViewController:withViewOptions:")
         if pdfPanePDFView.responds(to: pageControllerSelector) {
             pdfPanePDFView.perform(pageControllerSelector, with: NSNumber(value: true), with: nil)

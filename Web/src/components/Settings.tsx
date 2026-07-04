@@ -350,14 +350,14 @@ export function Settings({ onClose }: SettingsProps) {
               </div>
             ) : proxyAuth?.state === 'validating' ? (
               <div className="settings-device-key-entry">
-                <p className="settings-hint" style={{ marginTop: 0 }}>
+                <p className="settings-hint settings-hint--flush">
                   Validating device key...
                 </p>
                 <div className="loading-spinner" />
               </div>
             ) : (
               <div className="settings-device-key-entry">
-                <p className="settings-hint" style={{ marginTop: 0 }}>
+                <p className="settings-hint settings-hint--flush">
                   Enter your device key to enable AI features.
                 </p>
                 <div className="settings-key-input">
@@ -428,7 +428,7 @@ export function Settings({ onClose }: SettingsProps) {
           <section className="settings-section">
             <h2>Testing</h2>
             <div className="settings-field">
-              <p className="settings-hint" style={{ marginTop: 0 }}>
+              <p className="settings-hint settings-hint--flush">
                 Help improve Ticker by reporting bugs or suggesting features.
               </p>
 

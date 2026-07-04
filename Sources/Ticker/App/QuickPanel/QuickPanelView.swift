@@ -1,6 +1,73 @@
 import SwiftUI
 import AppKit
 
+private enum QuickPanelStyle {
+    static let radius: CGFloat = 8
+    static let badgeVerticalPadding: CGFloat = 2
+    static let optionVerticalPadding: CGFloat = 5
+    static let pickerMaxHeight: CGFloat = 180
+    static let responseMaxHeight: CGFloat = 250
+    static let progressSize: CGFloat = 16
+    static let typingDotSize: CGFloat = 4
+    static let markdownLineSpacing: CGFloat = 3
+    static let inputInsetY: CGFloat = 2
+    static let inputHeightPadding: CGFloat = 4
+    static let minInputHeight: CGFloat = 22
+    static let maxInputHeight: CGFloat = 120
+
+    static let microTextSize: CGFloat = 9
+    static let iconSize: CGFloat = 10
+    static let captionSize: CGFloat = 11
+    static let bodySize: CGFloat = 12
+    static let inputSize: CGFloat = 15
+    static let actionIconSize: CGFloat = 18
+
+    static let surface = Color(
+        light: Color(red: 251 / 255, green: 251 / 255, blue: 250 / 255),
+        dark: Color(red: 28 / 255, green: 28 / 255, blue: 27 / 255)
+    )
+    static let surfaceRaised = Color(
+        light: Color.white,
+        dark: Color(red: 43 / 255, green: 43 / 255, blue: 41 / 255)
+    )
+    static let surfaceMuted = Color(
+        light: Color(red: 244 / 255, green: 244 / 255, blue: 242 / 255),
+        dark: Color(red: 48 / 255, green: 48 / 255, blue: 46 / 255)
+    )
+    static let text = Color(
+        light: Color(red: 31 / 255, green: 31 / 255, blue: 29 / 255),
+        dark: Color(red: 243 / 255, green: 242 / 255, blue: 237 / 255)
+    )
+    static let textMuted = Color(
+        light: Color(red: 111 / 255, green: 111 / 255, blue: 104 / 255),
+        dark: Color(red: 170 / 255, green: 167 / 255, blue: 157 / 255)
+    )
+    static let textSubtle = Color(
+        light: Color(red: 155 / 255, green: 154 / 255, blue: 145 / 255),
+        dark: Color(red: 119 / 255, green: 116 / 255, blue: 108 / 255)
+    )
+    static let accent = Color(
+        light: Color(red: 37 / 255, green: 99 / 255, blue: 235 / 255),
+        dark: Color(red: 138 / 255, green: 168 / 255, blue: 255 / 255)
+    )
+    static let success = Color(
+        light: Color(red: 22 / 255, green: 129 / 255, blue: 61 / 255),
+        dark: Color(red: 104 / 255, green: 185 / 255, blue: 130 / 255)
+    )
+    static let danger = Color(
+        light: Color(red: 199 / 255, green: 58 / 255, blue: 50 / 255),
+        dark: Color(red: 238 / 255, green: 127 / 255, blue: 118 / 255)
+    )
+
+    static func font(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default
+    ) -> Font {
+        .system(size: size, weight: weight, design: design)
+    }
+}
+
 // MARK: - Content Height Preference Key
 
 /// PreferenceKey for bubbling up content height from SwiftUI to the panel
@@ -52,7 +119,7 @@ struct QuickPanelView: View {
         .padding(Spacing.lg)
         .frame(width: QuickPanelWindow.defaultWidth, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
-        .background(Colors.windowBackground)
+        .background(QuickPanelStyle.surfaceRaised)
         .background(
             GeometryReader { geometry in
                 Color.clear
@@ -64,9 +131,9 @@ struct QuickPanelView: View {
                 manager.contentHeightChanged(height)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: QuickPanelStyle.radius))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
                 .stroke(Color.clear, lineWidth: 1)
         )
         .onReceive(NotificationCenter.default.publisher(for: .quickPanelDidShow)) { _ in
@@ -79,16 +146,16 @@ struct QuickPanelView: View {
 
     private func contextBadge(context: QuickPanelContext) -> some View {
         let isScreenshot = context.isScreenshot
-        let accentColor = isScreenshot ? Colors.successAccent : Colors.secondaryText
-        let backgroundColor = isScreenshot ? Colors.successAccent.opacity(0.15) : Colors.userMessageBackground
+        let accentColor = isScreenshot ? QuickPanelStyle.success : QuickPanelStyle.textMuted
+        let backgroundColor = isScreenshot ? QuickPanelStyle.success.opacity(0.15) : QuickPanelStyle.accent.opacity(0.1)
 
         return HStack(spacing: Spacing.xs) {
             Image(systemName: context.hasImage ? "photo" : "text.quote")
-                .font(.system(size: 10))
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize))
                 .foregroundColor(accentColor)
 
             Text(contextPreview(context))
-                .font(.system(size: 11))
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
                 .foregroundColor(accentColor)
                 .lineLimit(1)
 
@@ -96,19 +163,19 @@ struct QuickPanelView: View {
 
             if let app = context.activeApp {
                 Text(app)
-                    .font(.system(size: 9))
-                    .foregroundColor(Colors.secondaryText.opacity(0.7))
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
+                    .foregroundColor(QuickPanelStyle.textMuted.opacity(0.7))
                     .padding(.horizontal, Spacing.xs)
-                    .padding(.vertical, 2)
-                    .background(Colors.hoverBackground)
-                    .cornerRadius(Spacing.radiusSm)
+                    .padding(.vertical, QuickPanelStyle.badgeVerticalPadding)
+                    .background(QuickPanelStyle.surfaceMuted)
+                    .cornerRadius(QuickPanelStyle.radius)
             }
 
             // Dismiss button
             Button(action: { manager.clearContext() }) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundColor(Colors.secondaryText.opacity(0.6))
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .semibold))
+                    .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
             }
             .buttonStyle(.plain)
             .help("Clear context")
@@ -117,10 +184,10 @@ struct QuickPanelView: View {
         .padding(.vertical, Spacing.xs)
         .background(backgroundColor)
         .overlay(
-            RoundedRectangle(cornerRadius: Spacing.radiusSm)
-                .stroke(isScreenshot ? Colors.successAccent.opacity(0.35) : Color.clear, lineWidth: 1)
+            RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
+                .stroke(isScreenshot ? QuickPanelStyle.success.opacity(0.35) : Color.clear, lineWidth: 1)
         )
-        .cornerRadius(Spacing.radiusSm)
+        .cornerRadius(QuickPanelStyle.radius)
     }
 
     private func contextPreview(_ context: QuickPanelContext) -> String {
@@ -151,20 +218,20 @@ struct QuickPanelView: View {
             }) {
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "tray.and.arrow.down")
-                        .font(.system(size: 11))
-                        .foregroundColor(Colors.secondaryText)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
+                        .foregroundColor(QuickPanelStyle.textMuted)
                     Text(selectedStreamTitle)
-                        .font(.system(size: 11))
-                        .foregroundColor(Colors.secondaryText)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
+                        .foregroundColor(QuickPanelStyle.textMuted)
                         .lineLimit(1)
                     Image(systemName: isPickerExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(Colors.tertiaryText)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .semibold))
+                        .foregroundColor(QuickPanelStyle.textSubtle)
                 }
                 .padding(.horizontal, Spacing.sm)
                 .padding(.vertical, Spacing.xs)
-                .background(Colors.hoverBackground)
-                .cornerRadius(Spacing.radiusSm)
+                .background(QuickPanelStyle.surfaceMuted)
+                .cornerRadius(QuickPanelStyle.radius)
             }
             .buttonStyle(.plain)
 
@@ -188,7 +255,7 @@ struct QuickPanelView: View {
 
                 if !manager.availableStreams.isEmpty {
                     Divider()
-                        .padding(.vertical, 2)
+                        .padding(.vertical, QuickPanelStyle.badgeVerticalPadding)
                 }
 
                 streamOptionButton(title: "New Stream...", systemImage: "plus", isSelected: false) {
@@ -196,15 +263,15 @@ struct QuickPanelView: View {
                     isPickerExpanded = false
                 }
             }
-            .padding(4)
+            .padding(Spacing.xs)
         }
-        .frame(maxHeight: 180)
-        .background(Colors.windowBackground)
+        .frame(maxHeight: QuickPanelStyle.pickerMaxHeight)
+        .background(QuickPanelStyle.surfaceRaised)
         .overlay(
-            RoundedRectangle(cornerRadius: Spacing.radiusSm)
-                .stroke(Colors.secondaryText.opacity(0.16), lineWidth: 1)
+            RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
+                .stroke(QuickPanelStyle.textMuted.opacity(0.16), lineWidth: 1)
         )
-        .cornerRadius(Spacing.radiusSm)
+        .cornerRadius(QuickPanelStyle.radius)
     }
 
     private func streamOptionButton(
@@ -217,25 +284,25 @@ struct QuickPanelView: View {
             HStack(spacing: Spacing.xs) {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(Colors.secondaryText)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize, weight: .semibold))
+                        .foregroundColor(QuickPanelStyle.textMuted)
                 }
 
                 Text(title)
-                    .font(.system(size: 11))
-                    .foregroundColor(Colors.secondaryText)
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
+                    .foregroundColor(QuickPanelStyle.textMuted)
                     .lineLimit(1)
 
                 Spacer(minLength: Spacing.sm)
 
                 if isSelected {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(Colors.primaryAccent)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize, weight: .semibold))
+                        .foregroundColor(QuickPanelStyle.accent)
                 }
             }
             .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, 5)
+            .padding(.vertical, QuickPanelStyle.optionVerticalPadding)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -267,9 +334,9 @@ struct QuickPanelView: View {
                 }
                 .padding(Spacing.sm)
             }
-            .frame(maxHeight: 250)
-            .background(Colors.hoverBackground.opacity(0.3))
-            .cornerRadius(Spacing.radiusMd)
+            .frame(maxHeight: QuickPanelStyle.responseMaxHeight)
+            .background(QuickPanelStyle.surfaceMuted.opacity(0.3))
+            .cornerRadius(QuickPanelStyle.radius)
             .onChange(of: manager.ephemeralConversation.currentResponse) { _, _ in
                 withAnimation(.easeOut(duration: 0.1)) {
                     proxy.scrollTo("streaming", anchor: .bottom)
@@ -289,16 +356,16 @@ struct QuickPanelView: View {
         VStack(alignment: .leading, spacing: 2) {
             // Role indicator
             Text(turn.role == .user ? "You" : "AI")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(Colors.tertiaryText)
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .medium))
+                .foregroundColor(QuickPanelStyle.textSubtle)
 
             // Content - render markdown for AI responses
             if turn.role == .assistant {
                 MarkdownContentView(content: turn.content)
             } else {
                 Text(turn.content)
-                    .font(.system(size: 12))
-                    .foregroundColor(Colors.secondaryText)
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
+                    .foregroundColor(QuickPanelStyle.textMuted)
                     .textSelection(.enabled)
             }
         }
@@ -309,26 +376,26 @@ struct QuickPanelView: View {
     private var streamingResponseView: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("AI")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(Colors.tertiaryText)
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .medium))
+                .foregroundColor(QuickPanelStyle.textSubtle)
 
             if manager.ephemeralConversation.currentResponse.isEmpty {
                 // Typing indicator when waiting for first chunk
-                HStack(spacing: 4) {
+                HStack(spacing: QuickPanelStyle.typingDotSize) {
                     ForEach(0..<3, id: \.self) { _ in
                         Circle()
-                            .fill(Colors.tertiaryText)
-                            .frame(width: 4, height: 4)
+                            .fill(QuickPanelStyle.textSubtle)
+                            .frame(width: QuickPanelStyle.typingDotSize, height: QuickPanelStyle.typingDotSize)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, Spacing.xs)
             } else {
                 // Render streaming content with markdown + cursor
                 HStack(alignment: .bottom, spacing: 0) {
                     MarkdownContentView(content: manager.ephemeralConversation.currentResponse)
                     Text(" ●")
-                        .font(.system(size: 10))
-                        .foregroundColor(Colors.primaryAccent)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize))
+                        .foregroundColor(QuickPanelStyle.accent)
                 }
             }
         }
@@ -352,12 +419,12 @@ struct QuickPanelView: View {
             if manager.isLoading {
                 ProgressView()
                     .scaleEffect(0.6)
-                    .frame(width: 16, height: 16)
+                    .frame(width: QuickPanelStyle.progressSize, height: QuickPanelStyle.progressSize)
             } else {
                 Button(action: handleSubmit) {
                     Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(canSubmit ? Colors.primaryAccent : Colors.tertiaryText.opacity(0.5))
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.actionIconSize))
+                        .foregroundColor(canSubmit ? QuickPanelStyle.accent : QuickPanelStyle.textSubtle.opacity(0.5))
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSubmit)
@@ -365,8 +432,8 @@ struct QuickPanelView: View {
         }
         .padding(.horizontal, Spacing.md)
         .padding(.vertical, Spacing.sm)
-        .background(Colors.hoverBackground)
-        .cornerRadius(Spacing.radiusMd)
+        .background(QuickPanelStyle.surfaceMuted)
+        .cornerRadius(QuickPanelStyle.radius)
     }
 
     private var placeholderText: String {
@@ -387,16 +454,16 @@ struct QuickPanelView: View {
     private var modeHintsBar: some View {
         HStack(spacing: Spacing.md) {
             Text("↵ save")
-                .font(.system(size: 9))
-                .foregroundColor(Colors.secondaryText.opacity(0.6))
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
 
             Text("⌘↵ AI+save")
-                .font(.system(size: 9))
-                .foregroundColor(Colors.secondaryText.opacity(0.6))
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
 
             Text("⌥↵ ask")
-                .font(.system(size: 9))
-                .foregroundColor(Colors.secondaryText.opacity(0.6))
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
 
             Spacer()
         }
@@ -408,17 +475,17 @@ struct QuickPanelView: View {
     private func errorView(_ error: String) -> some View {
         HStack(spacing: Spacing.xs) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 10))
-                .foregroundColor(Colors.errorAccent)
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize))
+                .foregroundColor(QuickPanelStyle.danger)
 
             Text(error)
-                .font(.system(size: 11))
-                .foregroundColor(Colors.errorText)
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
+                .foregroundColor(QuickPanelStyle.danger)
                 .lineLimit(2)
         }
         .padding(Spacing.sm)
-        .background(Colors.errorAccent.opacity(0.1))
-        .cornerRadius(Spacing.radiusMd)
+        .background(QuickPanelStyle.danger.opacity(0.1))
+        .cornerRadius(QuickPanelStyle.radius)
     }
 
     // MARK: - Status View
@@ -426,21 +493,21 @@ struct QuickPanelView: View {
     private func statusView(_ status: String) -> some View {
         let isWarning = status.contains("permission") || status.contains("Permission")
         let icon = isWarning ? "info.circle" : "checkmark.circle"
-        let color = isWarning ? Colors.secondaryText : Color.green
+        let color = isWarning ? QuickPanelStyle.textMuted : QuickPanelStyle.success
 
         return HStack(spacing: Spacing.xs) {
             Image(systemName: icon)
-                .font(.system(size: 10))
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize))
                 .foregroundColor(color)
 
             Text(status)
-                .font(.system(size: 11))
-                .foregroundColor(isWarning ? Colors.secondaryText : Colors.primaryText)
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
+                .foregroundColor(isWarning ? QuickPanelStyle.textMuted : QuickPanelStyle.text)
                 .lineLimit(2)
         }
         .padding(Spacing.sm)
         .background(color.opacity(0.1))
-        .cornerRadius(Spacing.radiusMd)
+        .cornerRadius(QuickPanelStyle.radius)
     }
 
     // MARK: - Actions
@@ -502,8 +569,8 @@ struct QuickPanelInputField: NSViewRepresentable {
         // Appearance
         textView.backgroundColor = .clear
         textView.drawsBackground = false
-        textView.font = NSFont.systemFont(ofSize: 15, weight: .regular)
-        textView.textColor = NSColor(Colors.primaryText)
+        textView.font = NSFont.systemFont(ofSize: QuickPanelStyle.inputSize, weight: .regular)
+        textView.textColor = NSColor(QuickPanelStyle.text)
 
         // Text container - enable word wrapping
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
@@ -518,7 +585,7 @@ struct QuickPanelInputField: NSViewRepresentable {
 
         // Remove focus ring and insets
         textView.focusRingType = .none
-        textView.textContainerInset = NSSize(width: 0, height: 2)
+        textView.textContainerInset = NSSize(width: 0, height: QuickPanelStyle.inputInsetY)
 
         textView.string = text
         textView.delegate = context.coordinator
@@ -583,14 +650,14 @@ struct QuickPanelInputField: NSViewRepresentable {
             guard let textView = textView, parent.text.isEmpty else { return }
             isShowingPlaceholder = true
             textView.string = placeholder
-            textView.textColor = NSColor(Colors.tertiaryText)
+            textView.textColor = NSColor(QuickPanelStyle.textSubtle)
         }
 
         func hidePlaceholder() {
             guard let textView = textView, isShowingPlaceholder else { return }
             isShowingPlaceholder = false
             textView.string = ""
-            textView.textColor = NSColor(Colors.primaryText)
+            textView.textColor = NSColor(QuickPanelStyle.text)
         }
 
         func updateScrollViewHeight() {
@@ -608,8 +675,11 @@ struct QuickPanelInputField: NSViewRepresentable {
                 height += layoutManager.extraLineFragmentRect.height
             }
 
-            // Clamp height: min 22pt, max 120pt
-            let finalHeight = min(max(height + 4, 22), 120)
+            let paddedHeight = height + QuickPanelStyle.inputHeightPadding
+            let finalHeight = min(
+                max(paddedHeight, QuickPanelStyle.minInputHeight),
+                QuickPanelStyle.maxInputHeight
+            )
 
             if let heightConstraint = scrollView.constraints.first(where: { $0.firstAttribute == .height }) {
                 heightConstraint.constant = finalHeight
@@ -691,7 +761,7 @@ private struct MarkdownContentView: View {
     let content: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
             ForEach(parseBlocks(content)) { block in
                 switch block {
                 case .text(let text):
@@ -740,16 +810,16 @@ private struct MarkdownTextView: View {
             )
         ) {
             Text(attributed)
-                .font(.system(size: 12))
-                .foregroundColor(Colors.primaryText)
-                .lineSpacing(3)
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
+                .foregroundColor(QuickPanelStyle.text)
+                .lineSpacing(QuickPanelStyle.markdownLineSpacing)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         } else {
             Text(text)
-                .font(.system(size: 12))
-                .foregroundColor(Colors.primaryText)
-                .lineSpacing(3)
+                .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
+                .foregroundColor(QuickPanelStyle.text)
+                .lineSpacing(QuickPanelStyle.markdownLineSpacing)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
@@ -766,25 +836,25 @@ private struct CodeBlockView: View {
             if let lang = language, !lang.isEmpty {
                 HStack {
                     Text(lang.uppercased())
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .foregroundColor(Colors.secondaryText)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .bold, design: .monospaced))
+                        .foregroundColor(QuickPanelStyle.textMuted)
                     Spacer()
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Colors.hoverBackground)
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xs)
+                .background(QuickPanelStyle.surfaceMuted)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(Colors.primaryText)
-                    .padding(8)
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, design: .monospaced))
+                    .foregroundColor(QuickPanelStyle.text)
+                    .padding(Spacing.sm)
                     .textSelection(.enabled)
             }
         }
-        .background(Colors.hoverBackground.opacity(0.5))
-        .cornerRadius(6)
+        .background(QuickPanelStyle.surfaceMuted.opacity(0.5))
+        .cornerRadius(QuickPanelStyle.radius)
     }
 }
 

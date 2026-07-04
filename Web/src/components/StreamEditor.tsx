@@ -47,23 +47,23 @@ const DEFAULT_SELECTION_MENU_HEIGHT = 44;
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.heading,
-    color: 'var(--color-text)',
+    color: 'var(--text)',
     textDecoration: 'none',
     fontWeight: '620',
   },
   {
     tag: t.heading1,
-    fontSize: '1.26em',
+    fontSize: 'var(--editor-heading-1)',
     fontWeight: '650',
   },
   {
     tag: t.heading2,
-    fontSize: '1.16em',
+    fontSize: 'var(--editor-heading-2)',
     fontWeight: '640',
   },
   {
     tag: t.heading3,
-    fontSize: '1.08em',
+    fontSize: 'var(--editor-heading-3)',
     fontWeight: '630',
   },
   {
@@ -77,12 +77,12 @@ const markdownHighlightStyle = HighlightStyle.define([
   },
   {
     tag: t.emphasis,
-    color: 'var(--color-text)',
+    color: 'var(--text)',
     fontStyle: 'italic',
   },
   {
     tag: t.strong,
-    color: 'var(--color-text)',
+    color: 'var(--text)',
     fontWeight: '640',
   },
   {
