@@ -380,18 +380,10 @@ final class PersistenceService {
         }
 
         migrator.registerMigration("v16_source_chunk_index") { db in
-            let hasLegacySourceChunks = try Row.fetchOne(
-                db,
-                sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'source_chunks'"
-            ) != nil
-
             try db.execute(sql: "DROP TRIGGER IF EXISTS source_chunks_delete_fts")
             try db.execute(sql: "DROP TABLE IF EXISTS source_chunks_fts")
             try db.execute(sql: "DROP TABLE IF EXISTS chunk_embeddings")
-
-            if hasLegacySourceChunks {
-                try db.execute(sql: "ALTER TABLE source_chunks RENAME TO source_chunks_v15")
-            }
+            try db.execute(sql: "DROP TABLE IF EXISTS source_chunks")
 
             try db.create(table: "source_chunks") { t in
                 t.column("id", .text).primaryKey()
@@ -405,24 +397,6 @@ final class PersistenceService {
             }
             try db.create(index: "idx_source_chunks_source", on: "source_chunks", columns: ["source_id"])
 
-            if hasLegacySourceChunks {
-                try db.execute(sql: """
-                    INSERT INTO source_chunks (id, source_id, seq, text, page_start, page_end, section_path)
-                    SELECT
-                        id,
-                        source_id,
-                        chunk_index,
-                        content,
-                        COALESCE(page_start, 1),
-                        COALESCE(page_end, page_start, 1),
-                        NULL
-                    FROM source_chunks_v15
-                    WHERE TRIM(content) <> ''
-                      AND EXISTS (SELECT 1 FROM sources WHERE sources.id = source_chunks_v15.source_id)
-                """)
-                try db.execute(sql: "DROP TABLE source_chunks_v15")
-            }
-
             // Standalone FTS duplicates chunk text and keeps unindexed ids so delete-by-source is a single local operation.
             try db.execute(sql: """
                 CREATE VIRTUAL TABLE source_chunks_fts USING fts5(
@@ -430,11 +404,6 @@ final class PersistenceService {
                     source_id UNINDEXED,
                     text
                 )
-            """)
-            try db.execute(sql: """
-                INSERT INTO source_chunks_fts (chunk_id, source_id, text)
-                SELECT id, source_id, text
-                FROM source_chunks
             """)
             try db.execute(sql: """
                 CREATE TRIGGER source_chunks_delete_fts

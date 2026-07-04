@@ -68,6 +68,35 @@ const SELECTION_MENU_DELAY_MS = 180;
 const AI_ERROR_FEEDBACK_MS = 2200;
 const AI_INDEXING_NOTICE_MS = 4000;
 
+export type SourceScope = 'auto' | 'all' | 'none';
+
+const sourceScopeByStreamId = new Map<string, SourceScope>();
+
+export function nextSourceScope(scope: SourceScope): SourceScope {
+  switch (scope) {
+    case 'auto':
+      return 'all';
+    case 'all':
+      return 'none';
+    case 'none':
+      return 'auto';
+    default:
+      return 'auto';
+  }
+}
+
+function formatSourceScope(scope: SourceScope): string {
+  switch (scope) {
+    case 'all':
+      return 'All';
+    case 'none':
+      return 'None';
+    case 'auto':
+    default:
+      return 'Auto';
+  }
+}
+
 function focusEditorAtDocumentEnd(view: EditorView) {
   const end = view.state.doc.length;
   view.dispatch({
@@ -181,6 +210,9 @@ export function StreamEditor({
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
+  const [sourceScope, setSourceScope] = useState<SourceScope>(
+    () => sourceScopeByStreamId.get(stream.id) ?? 'auto'
+  );
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
   const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState>({
     visible: false,
@@ -359,6 +391,14 @@ export function StreamEditor({
     }, AI_INDEXING_NOTICE_MS);
   }, [clearSourceIndexNoticeTimer]);
 
+  const cycleSourceScope = useCallback(() => {
+    setSourceScope((previous) => {
+      const next = nextSourceScope(previous);
+      sourceScopeByStreamId.set(stream.id, next);
+      return next;
+    });
+  }, [stream.id]);
+
   useEffect(() => {
     setMarkdownContent(stream.document?.markdown ?? '');
     lastSavedContentRef.current = stream.document?.markdown ?? '';
@@ -377,6 +417,7 @@ export function StreamEditor({
     setFloatingMenu({ visible: false, left: 0, top: 0 });
     setShowPrompt(false);
     setPromptValue('');
+    setSourceScope(sourceScopeByStreamId.get(stream.id) ?? 'auto');
     promptContextRef.current = null;
     aiRequestRef.current = null;
     const view = editorViewRef.current;
@@ -1131,10 +1172,11 @@ export function StreamEditor({
         streamId: stream.id,
         query: options.query,
         context: options.context,
+        sourceScope,
         imageURLs: options.imageUrls ?? [],
       },
     });
-  }, [addToast, isAiThinking, showAiWritingFeedback, showSourceIndexNotice, stream.id]);
+  }, [addToast, isAiThinking, showAiWritingFeedback, showSourceIndexNotice, sourceScope, stream.id]);
 
   const handleSend = useCallback(() => {
     const context = getSelectionContext(true);
@@ -1459,6 +1501,14 @@ export function StreamEditor({
               rows={5}
             />
             <div className="ai-prompt-actions">
+              <button
+                className="ai-prompt-source-scope"
+                type="button"
+                onClick={cycleSourceScope}
+                title="Cycle source scope"
+              >
+                Sources: {formatSourceScope(sourceScope)}
+              </button>
               <button
                 className="ai-prompt-cancel"
                 type="button"

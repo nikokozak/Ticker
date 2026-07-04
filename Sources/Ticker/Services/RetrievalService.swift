@@ -9,13 +9,23 @@ final class RetrievalService {
     // ponytail: Initial BM25 cutoff is empirical for SQLite FTS5's negative-is-better scale;
     // tune with a small golden query set before adding embeddings in R3.
     private static let bm25RelevanceCutoff = -1.0e-6
+    // ponytail: Inline English stopwords are a small guardrail for R1 BM25;
+    // tune/replace with the R3 eval set before adding query-language features.
+    private static let stopwords: Set<String> = [
+        "the", "a", "an", "is", "are", "was", "were", "be", "been",
+        "of", "in", "on", "at", "to", "for", "with", "from", "by", "as",
+        "and", "or", "not", "no", "it", "its", "this", "that", "these", "those",
+        "i", "you", "he", "she", "we", "they", "what", "which", "who", "how",
+        "when", "where", "why", "do", "does", "did", "can", "could", "would",
+        "should", "my", "your"
+    ]
 
     init(persistence: PersistenceService) {
         self.persistence = persistence
     }
 
     /// Retrieve relevant chunks for a query within a stream.
-    func retrieve(query: String, streamId: UUID) throws -> [RetrievedChunk] {
+    func retrieve(query: String, streamId: UUID, applyThreshold: Bool = true) throws -> [RetrievedChunk] {
         guard let ftsQuery = Self.sanitizedFTSQuery(query) else {
             return []
         }
@@ -26,6 +36,10 @@ final class RetrievalService {
             limit: Self.topK
         )
 
+        guard applyThreshold else {
+            return chunks
+        }
+
         guard let bestScore = chunks.first?.score,
               bestScore <= Self.bm25RelevanceCutoff else {
             return []
@@ -35,7 +49,11 @@ final class RetrievalService {
     }
 
     /// One source-context decision point: small-source passthrough, retrieved manifest, or no source context.
-    func assembleSourceContext(query: String, streamId: UUID) throws -> SourceContext? {
+    func assembleSourceContext(query: String, streamId: UUID, scope: SourceScope = .auto) throws -> SourceContext? {
+        guard scope != .none else {
+            return nil
+        }
+
         guard let stream = try persistence.loadStream(id: streamId) else {
             return nil
         }
@@ -51,7 +69,7 @@ final class RetrievalService {
             return SourceContext(text: combinedText, chunks: [], mode: .passthrough)
         }
 
-        let chunks = try retrieve(query: query, streamId: streamId)
+        let chunks = try retrieve(query: query, streamId: streamId, applyThreshold: scope == .auto)
         guard !chunks.isEmpty else {
             return nil
         }
@@ -66,11 +84,13 @@ final class RetrievalService {
     /// FTS5 MATCH treats quotes/operators/parens as syntax, so raw user text is unsafe.
     /// Tokenizing to alphanumerics, quoting each token, and joining with OR gives a broad
     /// recall-first candidate set while making user punctuation inert.
+    /// Short tokens and common stopwords are dropped so unrelated questions sharing only
+    /// glue words do not accidentally retrieve source chunks.
     static func sanitizedFTSQuery(_ query: String) -> String? {
         let tokens = query
             .lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
+            .filter { $0.count > 2 && !Self.stopwords.contains($0) }
 
         guard !tokens.isEmpty else {
             return nil
@@ -106,4 +126,10 @@ struct SourceContext {
 enum SourceContextMode: Equatable {
     case passthrough
     case retrieved
+}
+
+enum SourceScope: String {
+    case auto
+    case all
+    case none
 }

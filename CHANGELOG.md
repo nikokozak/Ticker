@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Document AI prompt popover now includes a session-only Sources scope chip for Auto, All, or None source context.
 - Source rows now show quiet indexing status with retry for failed source indexing.
 - Added local source chunk indexing foundations for Reading with Receipts.
 - Selection popover now includes bold, italic, and inline-code markdown formatting controls.

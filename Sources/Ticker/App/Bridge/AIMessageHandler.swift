@@ -33,6 +33,8 @@ final class AIMessageHandler: BridgeMessageHandler {
             if !imageDataURLs.isEmpty {
                 DebugLog.log("ThinkDocument: Converting \(imageURLs.count) images to data URLs")
             }
+            let sourceScopeRaw = payload["sourceScope"]?.value as? String
+            let sourceScope = SourceScope(rawValue: sourceScopeRaw ?? "") ?? .auto
 
             var streamIdForRAG: UUID? = nil
 
@@ -117,6 +119,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                     query: resolvedQuery,
                     queryImages: imageDataURLs,
                     streamId: streamIdForRAG,
+                    sourceScope: sourceScope,
                     priorCells: [],
                     includeHeading: false,
                     onChunk: onChunk,

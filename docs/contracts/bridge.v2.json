@@ -203,7 +203,7 @@
       },
       "thinkDocument": {
         "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
-        "optionalPayloadKeys": ["context"]
+        "optionalPayloadKeys": ["context", "sourceScope"]
       },
       "updateStreamTitle": {
         "requiredPayloadKeys": ["id", "title"]

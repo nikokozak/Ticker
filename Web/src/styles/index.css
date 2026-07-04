@@ -610,8 +610,28 @@ body {
 .ai-prompt-actions {
   margin-top: var(--spacing-md);
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--spacing-sm);
+}
+
+.ai-prompt-source-scope {
+  margin-right: auto;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-tight);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ai-prompt-source-scope:hover {
+  border-color: var(--color-border);
+  background: var(--surface-hover);
+  color: var(--color-text-secondary);
 }
 
 .ai-prompt-cancel {

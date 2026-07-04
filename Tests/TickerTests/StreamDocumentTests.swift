@@ -106,10 +106,9 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertTrue(columnExists)
     }
 
-    func test_v16MigrationRebuildsSourceChunksAndAddsIndexStatus() throws {
+    func test_v16MigrationDropsLegacyChunksAndAddsIndexStatus() throws {
         let streamId = UUID()
         let sourceId = UUID()
-        let chunkId = UUID()
 
         try withSeededV15Database { db in
             try insertStream(db, id: streamId, title: "Legacy Chunks", createdAt: 900)
@@ -129,7 +128,7 @@ final class StreamDocumentTests: XCTestCase {
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
-                    chunkId.uuidString,
+                    UUID().uuidString,
                     sourceId.uuidString,
                     4,
                     "Distinct legacy chunk text",
@@ -147,12 +146,7 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(statuses[sourceId], .pending)
 
             let chunks = try service.loadSourceChunks(sourceId: sourceId)
-            XCTAssertEqual(chunks.count, 1)
-            XCTAssertEqual(chunks.first?.id, chunkId)
-            XCTAssertEqual(chunks.first?.seq, 4)
-            XCTAssertEqual(chunks.first?.text, "Distinct legacy chunk text")
-            XCTAssertEqual(chunks.first?.pageStart, 2)
-            XCTAssertEqual(chunks.first?.pageEnd, 2)
+            XCTAssertTrue(chunks.isEmpty)
 
             let dbQueue = try DatabaseQueue(path: dbURL.path)
             let chunkColumns = try dbQueue.read { db in
@@ -172,6 +166,19 @@ final class StreamDocumentTests: XCTestCase {
                 ) != nil
             }
             XCTAssertTrue(ftsExists)
+
+            let legacyEmbeddingTableIsGone = try dbQueue.read { db in
+                try Row.fetchOne(
+                    db,
+                    sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunk_embeddings'"
+                ) == nil
+            }
+            XCTAssertTrue(legacyEmbeddingTableIsGone)
+
+            let ftsCount: Int = try dbQueue.read { db in
+                try Row.fetchOne(db, sql: "SELECT COUNT(*) AS count FROM source_chunks_fts")?["count"] ?? -1
+            }
+            XCTAssertEqual(ftsCount, 0)
         }
     }
 
@@ -260,8 +267,58 @@ final class StreamDocumentTests: XCTestCase {
 
             let retrieval = RetrievalService(persistence: service)
 
-            XCTAssertTrue(try retrieval.retrieve(query: "weather forecast", streamId: stream.id).isEmpty)
-            XCTAssertNil(try retrieval.assembleSourceContext(query: "weather forecast", streamId: stream.id))
+            let unrelatedQuery = "what is the best way to do this"
+            XCTAssertTrue(try retrieval.retrieve(query: unrelatedQuery, streamId: stream.id).isEmpty)
+            XCTAssertNil(try retrieval.assembleSourceContext(query: unrelatedQuery, streamId: stream.id))
+        }
+    }
+
+    func test_retrievalSourceScopeNoneReturnsNoContextEvenWithMatchingChunks() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Scope None")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "Storage manifolds and caliper fixtures are indexed here.", 4, 4, "Storage")
+                ]
+            )
+
+            let context = try RetrievalService(persistence: service)
+                .assembleSourceContext(query: "storage manifold", streamId: stream.id, scope: .none)
+
+            XCTAssertNil(context)
+        }
+    }
+
+    func test_retrievalSourceScopeAllReturnsWeakMatchesBelowAutoThreshold() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Scope All")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Weak.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "weakterm " + String(repeating: "filler ", count: 30), 5, 5, nil),
+                    (1, String(repeating: "other filler ", count: 10), 6, 6, nil)
+                ]
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+
+            XCTAssertTrue(try retrieval.retrieve(query: "weakterm", streamId: stream.id).isEmpty)
+
+            let context = try XCTUnwrap(
+                retrieval.assembleSourceContext(query: "weakterm", streamId: stream.id, scope: .all)
+            )
+            XCTAssertEqual(context.mode, .retrieved)
+            XCTAssertEqual(context.chunks.map(\.sourceName), ["Weak.pdf"])
+            XCTAssertTrue(context.text.contains("[1] Weak.pdf, p.5:"))
         }
     }
 
