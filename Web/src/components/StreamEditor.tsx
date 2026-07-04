@@ -7,7 +7,7 @@ import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, Stream, SourceReference } from '../types';
+import { bridge, type Stream, type SourceReference, type DocumentAICitation } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
@@ -17,6 +17,7 @@ import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { computeAppendInsertion } from '../utils/appendInsertion';
+import { swapCitationMarkers } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
 import {
   buildPDFAnchorLinkEdit,
@@ -95,6 +96,24 @@ function formatSourceScope(scope: SourceScope): string {
     default:
       return 'Auto';
   }
+}
+
+function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
+  if (!Array.isArray(value)) return null;
+
+  return value.flatMap((item): DocumentAICitation[] => {
+    if (!item || typeof item !== 'object') return [];
+    const candidate = item as Record<string, unknown>;
+    const n = Number(candidate.n);
+    const page = Number(candidate.page);
+    const chunkId = typeof candidate.chunkId === 'string' ? candidate.chunkId : '';
+    const sourceId = typeof candidate.sourceId === 'string' ? candidate.sourceId : '';
+    const label = typeof candidate.label === 'string' ? candidate.label : '';
+    if (!Number.isInteger(n) || n <= 0) return [];
+    if (!Number.isInteger(page) || page <= 0) return [];
+    if (!chunkId || !sourceId || !label) return [];
+    return [{ n, page, chunkId, sourceId, label }];
+  });
 }
 
 function focusEditorAtDocumentEnd(view: EditorView) {
@@ -685,8 +704,10 @@ export function StreamEditor({
           return;
         }
 
-        const suffix = active.mode === 'after' && !rawOutput.endsWith('\n') ? '\n' : '';
-        const insertText = `${active.prefix}${rawOutput}${suffix}`;
+        const citations = parseDocumentAICitations(message.payload?.citations);
+        const finalOutput = citations ? swapCitationMarkers(rawOutput, citations) : rawOutput;
+        const suffix = active.mode === 'after' && !finalOutput.endsWith('\n') ? '\n' : '';
+        const insertText = `${active.prefix}${finalOutput}${suffix}`;
         const finalFrom = range.from;
         const originalTo = finalFrom + active.originalText.length;
 

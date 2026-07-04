@@ -1,5 +1,73 @@
 import Foundation
 
+struct DocumentAICitationManifestEntry: Equatable {
+    let n: Int
+    let chunkId: UUID
+    let sourceId: UUID
+    let page: Int
+    let label: String
+
+    var bridgePayload: [String: Any] {
+        [
+            "n": n,
+            "chunkId": chunkId.uuidString,
+            "sourceId": sourceId.uuidString,
+            "page": page,
+            "label": label
+        ]
+    }
+}
+
+enum DocumentAICitationManifest {
+    private static let maxSourceLabelLength = 28
+
+    static func entries(from context: SourceContext?) -> [DocumentAICitationManifestEntry]? {
+        guard let context,
+              context.mode == .retrieved,
+              !context.chunks.isEmpty else {
+            return nil
+        }
+
+        return context.chunks.enumerated().map { index, chunk in
+            DocumentAICitationManifestEntry(
+                n: index + 1,
+                chunkId: chunk.id,
+                sourceId: chunk.sourceId,
+                page: chunk.pageStart,
+                label: label(sourceName: chunk.sourceName, pageStart: chunk.pageStart)
+            )
+        }
+    }
+
+    static func bridgePayload(from context: SourceContext?) -> [[String: Any]]? {
+        entries(from: context)?.map(\.bridgePayload)
+    }
+
+    static func label(sourceName: String, pageStart: Int) -> String {
+        let stripped = (sourceName as NSString).deletingPathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseName = stripped.isEmpty
+            ? sourceName.trimmingCharacters(in: .whitespacesAndNewlines)
+            : stripped
+        let shortName = shorten(baseName.isEmpty ? "Source" : baseName)
+        return "\(shortName) p.\(pageStart)"
+    }
+
+    private static func shorten(_ text: String) -> String {
+        guard text.count > maxSourceLabelLength else {
+            return text
+        }
+
+        let ellipsis = "..."
+        let available = maxSourceLabelLength - ellipsis.count
+        let prefixCount = Int(ceil(Double(available) / 2.0))
+        let suffixCount = available - prefixCount
+        let prefix = text.prefix(prefixCount)
+        let suffix = text.suffix(suffixCount)
+        return "\(prefix)\(ellipsis)\(suffix)"
+    }
+}
+
 final class AIMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
         "thinkDocument"
@@ -65,10 +133,14 @@ final class AIMessageHandler: BridgeMessageHandler {
                     payload: ["requestId": AnyCodable(requestId), "chunk": AnyCodable(chunk)]
                 ))
             }
-            let onComplete: () -> Void = { [weak self] in
+            let onComplete: (SourceContext?) -> Void = { [weak self] sourceContext in
+                var payload: [String: AnyCodable] = ["requestId": AnyCodable(requestId)]
+                if let citations = DocumentAICitationManifest.bridgePayload(from: sourceContext) {
+                    payload["citations"] = AnyCodable(citations)
+                }
                 self?.bridgeService.send(BridgeMessage(
                     type: "documentAIComplete",
-                    payload: ["requestId": AnyCodable(requestId)]
+                    payload: payload
                 ))
             }
             let onError: (Error) -> Void = { [weak self] error in

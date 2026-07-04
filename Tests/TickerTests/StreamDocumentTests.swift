@@ -793,6 +793,96 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(ids, Set([firstHighlightId.uuidString, secondHighlightId.uuidString]))
     }
 
+    func test_tickerPDFURLParserAcceptsExistingHighlightDestination() throws {
+        let sourceId = try XCTUnwrap(UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+        let highlightId = try XCTUnwrap(UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
+
+        let destination = try XCTUnwrap(
+            TickerPDFURLParser.parse("ticker-pdf://\(sourceId.uuidString)?highlight=\(highlightId.uuidString)&page=4")
+        )
+
+        XCTAssertEqual(destination.sourceId, sourceId)
+        XCTAssertEqual(destination.highlightId, highlightId.uuidString)
+        XCTAssertEqual(destination.page, 4)
+        XCTAssertNil(destination.chunkId)
+    }
+
+    func test_tickerPDFURLParserAcceptsLegacyBareHighlightDestination() throws {
+        let highlightId = try XCTUnwrap(UUID(uuidString: "33333333-3333-3333-3333-333333333333"))
+
+        let destination = try XCTUnwrap(
+            TickerPDFURLParser.parse("ticker-pdf://\(highlightId.uuidString)")
+        )
+
+        XCTAssertNil(destination.sourceId)
+        XCTAssertEqual(destination.highlightId, highlightId.uuidString)
+        XCTAssertNil(destination.page)
+        XCTAssertNil(destination.chunkId)
+    }
+
+    func test_tickerPDFURLParserAcceptsCitationChunkDestination() throws {
+        let sourceId = try XCTUnwrap(UUID(uuidString: "44444444-4444-4444-4444-444444444444"))
+        let chunkId = try XCTUnwrap(UUID(uuidString: "55555555-5555-5555-5555-555555555555"))
+
+        let destination = try XCTUnwrap(
+            TickerPDFURLParser.parse("ticker-pdf://\(sourceId.uuidString)?page=12&chunk=\(chunkId.uuidString)")
+        )
+
+        XCTAssertEqual(destination.sourceId, sourceId)
+        XCTAssertNil(destination.highlightId)
+        XCTAssertEqual(destination.page, 12)
+        XCTAssertEqual(destination.chunkId, chunkId)
+    }
+
+    func test_documentAICitationPayloadBuildsFromRetrievedSourceContext() throws {
+        let firstSourceId = try XCTUnwrap(UUID(uuidString: "66666666-6666-6666-6666-666666666666"))
+        let secondSourceId = try XCTUnwrap(UUID(uuidString: "77777777-7777-7777-7777-777777777777"))
+        let firstChunkId = try XCTUnwrap(UUID(uuidString: "88888888-8888-8888-8888-888888888888"))
+        let secondChunkId = try XCTUnwrap(UUID(uuidString: "99999999-9999-9999-9999-999999999999"))
+        let context = SourceContext(
+            text: "[1] abcdefghijklmnopqrstuvwxyzABCDE.pdf, p.12:\nAlpha\n\n[2] Guide.md, p.2:\nBeta",
+            chunks: [
+                RetrievedChunk(
+                    id: firstChunkId,
+                    sourceId: firstSourceId,
+                    sourceName: "abcdefghijklmnopqrstuvwxyzABCDE.pdf",
+                    seq: 0,
+                    text: "Alpha",
+                    pageStart: 12,
+                    pageEnd: 12,
+                    sectionPath: nil,
+                    score: -10
+                ),
+                RetrievedChunk(
+                    id: secondChunkId,
+                    sourceId: secondSourceId,
+                    sourceName: "Guide.md",
+                    seq: 1,
+                    text: "Beta",
+                    pageStart: 2,
+                    pageEnd: 3,
+                    sectionPath: nil,
+                    score: -8
+                )
+            ],
+            mode: .retrieved
+        )
+
+        let payload = try XCTUnwrap(DocumentAICitationManifest.bridgePayload(from: context))
+
+        XCTAssertEqual(payload.count, 2)
+        XCTAssertEqual(payload[0]["n"] as? Int, 1)
+        XCTAssertEqual(payload[0]["chunkId"] as? String, firstChunkId.uuidString)
+        XCTAssertEqual(payload[0]["sourceId"] as? String, firstSourceId.uuidString)
+        XCTAssertEqual(payload[0]["page"] as? Int, 12)
+        XCTAssertEqual(payload[0]["label"] as? String, "abcdefghijklm...tuvwxyzABCDE p.12")
+        XCTAssertEqual(payload[1]["n"] as? Int, 2)
+        XCTAssertEqual(payload[1]["chunkId"] as? String, secondChunkId.uuidString)
+        XCTAssertEqual(payload[1]["sourceId"] as? String, secondSourceId.uuidString)
+        XCTAssertEqual(payload[1]["page"] as? Int, 2)
+        XCTAssertEqual(payload[1]["label"] as? String, "Guide p.2")
+    }
+
     func test_appendToStreamDocument_createsDocumentWithExactlyFragmentWhenMissing() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "New Document")

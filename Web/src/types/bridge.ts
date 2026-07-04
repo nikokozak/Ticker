@@ -75,6 +75,14 @@ export interface BridgeMessage {
 export type SwiftToWebBridgeMessage = Omit<BridgeMessage, 'type'> & { type: SwiftToWebMessageType };
 export type WebToSwiftBridgeMessage = Omit<BridgeMessage, 'type'> & { type: WebToSwiftMessageType };
 
+export interface DocumentAICitation {
+  n: number;
+  chunkId: string;
+  sourceId: string;
+  page: number;
+  label: string;
+}
+
 /** Callback registry for async responses */
 type CallbackFn = (payload: Record<string, unknown>) => void;
 

@@ -190,19 +190,44 @@ final class SourceMessageHandler: BridgeMessageHandler {
             guard let payload = message.payload,
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue),
-                  let sourceIdValue = payload["sourceId"]?.value as? String,
-                  let sourceId = UUID(uuidString: sourceIdValue),
                   let sourceService else {
                 DebugLog.log("[WebViewManager] Invalid openPdfDestination payload")
                 await bridgeService.sendBridgeError(type: message.type, reason: "Invalid openPdfDestination payload")
                 return
             }
 
+            let parsedDestination = (payload["url"]?.value as? String).flatMap(TickerPDFURLParser.parse)
+            let payloadSourceId = (payload["sourceId"]?.value as? String).flatMap(UUID.init(uuidString:))
+            let sourceId = payloadSourceId ?? parsedDestination?.sourceId
+            let highlightId = (payload["highlightId"]?.value as? String)
+                .flatMap { $0.isEmpty ? nil : $0 }
+                ?? parsedDestination?.highlightId
+            let page = payload["page"]?.intValue ?? parsedDestination?.page
+
             do {
-                guard let source = try persistence.loadSource(id: sourceId) else {
-                    sendSourceError("Source not found.")
+                let source: SourceReference
+                let pageToOpen: Int?
+
+                if let sourceId {
+                    guard let loadedSource = try persistence.loadSource(id: sourceId) else {
+                        sendSourceError("Source not found.")
+                        return
+                    }
+                    source = loadedSource
+                    pageToOpen = page
+                } else if let highlightId,
+                          let legacyDestination = try legacyPDFHighlightDestination(
+                              streamId: streamId,
+                              highlightId: highlightId
+                          ) {
+                    source = legacyDestination.source
+                    pageToOpen = page ?? legacyDestination.page
+                } else {
+                    DebugLog.log("[WebViewManager] Invalid openPdfDestination payload")
+                    await bridgeService.sendBridgeError(type: message.type, reason: "Invalid openPdfDestination payload")
                     return
                 }
+
                 guard source.streamId == streamId else {
                     sendSourceError("Source does not belong to this stream.")
                     return
@@ -212,13 +237,11 @@ final class SourceMessageHandler: BridgeMessageHandler {
                     return
                 }
 
-                let highlightId = (payload["highlightId"]?.value as? String)
-                    .flatMap { $0.isEmpty ? nil : $0 }
                 await delegate?.openPDFDestination(
                     source,
                     sourceService: sourceService,
                     highlightId: highlightId,
-                    page: payload["page"]?.intValue
+                    page: pageToOpen
                 )
             } catch {
                 DebugLog.log("[WebViewManager] Failed to open PDF destination (\(DebugLog.errorSummary(error)))")
@@ -295,5 +318,24 @@ final class SourceMessageHandler: BridgeMessageHandler {
         bridgeService.send(BridgeMessage(type: "sourceError", payload: [
             "error": AnyCodable(message)
         ]))
+    }
+
+    private func legacyPDFHighlightDestination(
+        streamId: UUID,
+        highlightId: String
+    ) throws -> (source: SourceReference, page: Int?)? {
+        guard let highlightUUID = UUID(uuidString: highlightId),
+              let stream = try persistence.loadStream(id: streamId) else {
+            return nil
+        }
+
+        for source in stream.sources where source.fileType == .pdf {
+            let highlights = try persistence.loadPDFHighlights(sourceId: source.id)
+            if let highlight = highlights.first(where: { $0.id == highlightUUID }) {
+                return (source, highlight.page)
+            }
+        }
+
+        return nil
     }
 }

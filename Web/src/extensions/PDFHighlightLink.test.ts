@@ -7,6 +7,8 @@ describe('parseTickerPDFURL', () => {
       sourceId: 'source-1',
       highlightId: 'abc 123',
       page: 7,
+      chunkId: undefined,
+      rawURL: 'ticker-pdf://source-1?highlight=abc%20123&page=7',
     });
   });
 
@@ -15,6 +17,28 @@ describe('parseTickerPDFURL', () => {
       sourceId: 'source-2',
       highlightId: undefined,
       page: undefined,
+      chunkId: undefined,
+      rawURL: 'ticker-pdf://source-2',
+    });
+  });
+
+  it('extracts citation chunk destinations', () => {
+    expect(parseTickerPDFURL('ticker-pdf://source-3?page=12&chunk=chunk-123')).toEqual({
+      sourceId: 'source-3',
+      highlightId: undefined,
+      page: 12,
+      chunkId: 'chunk-123',
+      rawURL: 'ticker-pdf://source-3?page=12&chunk=chunk-123',
+    });
+  });
+
+  it('treats a bare UUID host as a legacy highlight id', () => {
+    const id = '11111111-2222-3333-4444-555555555555';
+    expect(parseTickerPDFURL(`ticker-pdf://${id}`)).toEqual({
+      highlightId: id,
+      page: undefined,
+      chunkId: undefined,
+      rawURL: `ticker-pdf://${id}`,
     });
   });
 
