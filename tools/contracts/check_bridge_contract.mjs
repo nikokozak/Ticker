@@ -459,19 +459,37 @@ function sorted(values) {
 
 function main() {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const contractPath = path.join(repoRoot, 'docs', 'contracts', 'bridge.v1.json');
+  const contractPaths = [
+    path.join(repoRoot, 'docs', 'contracts', 'bridge.v1.json'),
+    path.join(repoRoot, 'docs', 'contracts', 'bridge.v2.json'),
+  ].filter((p) => fs.existsSync(p));
   const webBridgePath = path.join(repoRoot, 'Web', 'src', 'types', 'bridge.ts');
   const sourcesDir = path.join(repoRoot, 'Sources');
 
-  const contract = readJson(contractPath);
-  const messages = contract?.swiftToWeb?.messages;
-  if (!messages || typeof messages !== 'object') {
-    throw new Error(`Contract missing swiftToWeb.messages: ${contractPath}`);
+  if (contractPaths.length === 0) {
+    throw new Error('No bridge contract files found.');
+  }
+
+  const messages = {};
+  for (const contractPath of contractPaths) {
+    const contract = readJson(contractPath);
+    const contractMessages = contract?.swiftToWeb?.messages;
+    if (!contractMessages || typeof contractMessages !== 'object') {
+      throw new Error(`Contract missing swiftToWeb.messages: ${contractPath}`);
+    }
+
+    for (const [type, spec] of Object.entries(contractMessages)) {
+      if (messages[type]) {
+        fail(`Duplicate bridge message "${type}" across contracts.`);
+        continue;
+      }
+      messages[type] = spec;
+    }
   }
 
   const contractTypes = new Set(Object.keys(messages));
   if (!contractTypes.has('callback')) {
-    fail(`Contract must include "callback" message type: ${contractPath}`);
+    fail('Contract must include "callback" message type.');
   }
 
   const webBridgeText = readText(webBridgePath);

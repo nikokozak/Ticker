@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
 import { bridge, Stream, StreamSummary } from './types';
 import { StreamEditor } from './components/StreamEditor';
-import { UnifiedStreamEditor } from './components/UnifiedStreamEditor';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
 import { useBlockStore } from './store/blockStore';
-import { isUnifiedEditorEnabled } from './utils/featureFlags';
 import { debugError, debugLog } from './utils/debug';
 
 type View = 'list' | 'stream' | 'settings';
@@ -19,6 +17,57 @@ type ProxyAuthState =
   | 'blockedRevoked'
   | 'blockedBoundElsewhere'
   | 'degradedOffline';
+
+type EditorFont = 'systemSans' | 'humanistSans' | 'monoSans';
+
+interface EditorTypographySettings {
+  editorFont: EditorFont;
+  editorFontSize: number;
+  editorLineSpacing: number;
+}
+
+const DEFAULT_EDITOR_TYPOGRAPHY: EditorTypographySettings = {
+  editorFont: 'systemSans',
+  editorFontSize: 16,
+  editorLineSpacing: 1.55,
+};
+
+function editorFontStack(font: EditorFont): string {
+  switch (font) {
+    case 'humanistSans':
+      return '"Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
+    case 'monoSans':
+      return '"SF Mono", "JetBrains Mono", "IBM Plex Sans", Menlo, "SF Pro Text", sans-serif';
+    case 'systemSans':
+    default:
+      return '"SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", sans-serif';
+  }
+}
+
+function normalizeEditorTypography(raw: Partial<EditorTypographySettings> | null | undefined): EditorTypographySettings {
+  const merged = { ...DEFAULT_EDITOR_TYPOGRAPHY, ...(raw ?? {}) };
+  const validFonts: EditorFont[] = ['systemSans', 'humanistSans', 'monoSans'];
+  const editorFont = validFonts.includes(merged.editorFont) ? merged.editorFont : DEFAULT_EDITOR_TYPOGRAPHY.editorFont;
+  const editorFontSize = Number.isFinite(Number(merged.editorFontSize))
+    ? Math.min(24, Math.max(13, Number(merged.editorFontSize)))
+    : DEFAULT_EDITOR_TYPOGRAPHY.editorFontSize;
+  const editorLineSpacing = Number.isFinite(Number(merged.editorLineSpacing))
+    ? Math.min(2.0, Math.max(1.3, Number(merged.editorLineSpacing)))
+    : DEFAULT_EDITOR_TYPOGRAPHY.editorLineSpacing;
+
+  return {
+    editorFont,
+    editorFontSize: Number(editorFontSize.toFixed(1)),
+    editorLineSpacing: Number(editorLineSpacing.toFixed(2)),
+  };
+}
+
+function applyEditorTypography(settings: EditorTypographySettings) {
+  const root = document.documentElement;
+  root.style.setProperty('--editor-font-family', editorFontStack(settings.editorFont));
+  root.style.setProperty('--editor-font-size', `${settings.editorFontSize}px`);
+  root.style.setProperty('--editor-line-height', String(settings.editorLineSpacing));
+}
 
 export function App() {
   const [view, setView] = useState<View>('list');
@@ -43,6 +92,35 @@ export function App() {
       });
   }, []);
 
+  // Load global editor typography settings on app startup.
+  useEffect(() => {
+    bridge.send({ type: 'loadSettings' });
+  }, []);
+
+  // Keep native file-drop routing in sync with the active page.
+  useEffect(() => {
+    if (view === 'stream' && currentStream) {
+      bridge.send({
+        type: 'setFileDropContext',
+        payload: { mode: 'stream', streamId: currentStream.id },
+      });
+      return;
+    }
+
+    if (view === 'list') {
+      bridge.send({
+        type: 'setFileDropContext',
+        payload: { mode: 'list' },
+      });
+      return;
+    }
+
+    bridge.send({
+      type: 'setFileDropContext',
+      payload: { mode: 'disabled' },
+    });
+  }, [view, currentStream]);
+
   useEffect(() => {
     // Subscribe to bridge messages
     const unsubscribe = bridge.onMessage((message) => {
@@ -60,6 +138,11 @@ export function App() {
           setIsLoadingStream(false);
           setView('stream');
           break;
+        case 'settingsLoaded': {
+          const raw = message.payload?.settings as Partial<EditorTypographySettings> | undefined;
+          applyEditorTypography(normalizeEditorTypography(raw));
+          break;
+        }
         case 'quickPanelCellsAdded':
           // Quick Panel added cells - if it's a new stream, load it and update list
           if (message.payload?.isNewStream && message.payload?.streamId) {
@@ -167,13 +250,10 @@ export function App() {
       />
     );
   } else if (view === 'stream' && currentStream) {
-    // Feature flag: use unified editor for cross-cell selection support
-    const EditorComponent = isUnifiedEditorEnabled() ? UnifiedStreamEditor : StreamEditor;
-
     // key={currentStream.id} forces React to remount the editor when switching streams.
-    // This ensures TipTap reinitializes with the correct content and avoids stale doc state.
+    // This ensures stream-local editor state does not leak across streams.
     viewContent = (
-      <EditorComponent
+      <StreamEditor
         key={currentStream.id}
         stream={currentStream}
         onBack={handleBackToList}
@@ -270,7 +350,7 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
             >
               <span className="stream-title">{stream.title}</span>
               <span className="stream-meta">
-                {formatRelativeTime(stream.updatedAt)} · {stream.sourceCount} {stream.sourceCount === 1 ? 'source' : 'sources'} · {stream.cellCount} {stream.cellCount === 1 ? 'cell' : 'cells'}
+                {formatRelativeTime(stream.updatedAt)} · {stream.sourceCount} {stream.sourceCount === 1 ? 'source' : 'sources'}
               </span>
             </button>
           ))

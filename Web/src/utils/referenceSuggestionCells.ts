@@ -3,7 +3,7 @@ import { extractFirstHeadingFromHtml } from './cellTitle';
 
 /**
  * Shared filter for @reference suggestion candidates.
- * Keeps legacy and unified editors in sync to avoid drift.
+ * Keeps reference suggestions consistent in the stream editor.
  */
 export function filterReferenceSuggestionCells(
   cells: Cell[],

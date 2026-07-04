@@ -1,16 +1,17 @@
-import { useRef, useCallback, useEffect, useState } from 'react';
-import { Stream, Cell as CellType, SourceReference, bridge } from '../types';
-import { Cell } from './Cell';
-import { BlockWrapper } from './BlockWrapper';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import CodeMirror from '@uiw/react-codemirror';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { languages } from '@codemirror/language-data';
+import { EditorView } from '@codemirror/view';
+import { Transaction } from '@codemirror/state';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
+import { bridge, Stream, SourceReference } from '../types';
 import { SidePanel } from './SidePanel';
 import { SearchModal } from './SearchModal';
-import { ReferencePreview } from './ReferencePreview';
-import { CellOverlay } from './CellOverlay';
-import { stripHtml, extractImages, extractImageURLs, buildImageBlock, isEmptyCell } from '../utils/html';
-import { markdownToHtml } from '../utils/markdown';
-import { useBlockStore } from '../store/blockStore';
-import { useBlockFocus } from '../hooks/useBlockFocus';
-import { useBridgeMessages } from '../hooks/useBridgeMessages';
+import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
+import { useToastStore } from '../store/toastStore';
+import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 
 interface StreamEditorProps {
   stream: Stream;
@@ -23,454 +24,378 @@ interface StreamEditorProps {
   onClearPendingSource?: () => void;
 }
 
-export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pendingCellId, pendingSourceId, onClearPendingCell, onClearPendingSource }: StreamEditorProps) {
-  // Use Zustand store for block state
-  const store = useBlockStore();
+interface SelectionContext {
+  text: string;
+  from: number;
+  to: number;
+  imageUrls: string[];
+}
 
-  // Bridge message handling (AI streaming, modifiers, sources, etc.)
-  const { sources, setSources } = useBridgeMessages({
-    streamId: stream.id,
-    initialSources: stream.sources,
-  });
+interface FloatingMenuState {
+  visible: boolean;
+  left: number;
+  top: number;
+}
 
-  // Local state for stream-level concerns
+const markdownHighlightStyle = HighlightStyle.define([
+  {
+    tag: t.heading,
+    color: 'var(--color-text)',
+    textDecoration: 'none',
+    fontWeight: '620',
+  },
+  {
+    tag: t.heading1,
+    fontSize: '1.26em',
+    fontWeight: '650',
+  },
+  {
+    tag: t.heading2,
+    fontSize: '1.16em',
+    fontWeight: '640',
+  },
+  {
+    tag: t.heading3,
+    fontSize: '1.08em',
+    fontWeight: '630',
+  },
+  {
+    tag: [t.link, t.url],
+    color: 'var(--color-accent)',
+    textDecoration: 'none',
+  },
+  {
+    tag: t.processingInstruction,
+    color: 'var(--color-text-tertiary)',
+  },
+  {
+    tag: t.emphasis,
+    color: 'var(--color-text)',
+    fontStyle: 'italic',
+  },
+  {
+    tag: t.strong,
+    color: 'var(--color-text)',
+    fontWeight: '640',
+  },
+  {
+    tag: t.monospace,
+    color: 'var(--color-text-secondary)',
+    fontFamily: 'var(--font-mono)',
+  },
+  {
+    tag: [t.quote, t.contentSeparator, t.list],
+    color: 'var(--color-text-secondary)',
+  },
+  {
+    tag: [t.labelName, t.string],
+    color: 'var(--color-text-secondary)',
+  },
+]);
+
+export function StreamEditor({
+  stream,
+  onBack,
+  onDelete,
+  onNavigateToStream,
+  pendingCellId,
+  pendingSourceId,
+  onClearPendingCell,
+  onClearPendingSource,
+}: StreamEditorProps) {
+  const addToast = useToastStore((state) => state.addToast);
+
   const [title, setTitle] = useState(stream.title);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [overlayBlockId, setOverlayBlockId] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
-
-  const cellFocusRefs = useRef<Map<string, () => void>>(new Map());
-  const titleInputRef = useRef<HTMLInputElement>(null);
-
-  // Initialize store with stream data
-  useEffect(() => {
-    store.loadStream(stream.id, stream.cells);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream.id]);
-
-  // Cmd+K to open search
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setShowSearch(true);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  // Handle pending cell navigation (from cross-stream search)
-  // Note: handleScrollToCell is defined with useCallback below, so this effect
-  // runs after the function is available
-  const pendingCellIdRef = useRef(pendingCellId);
-  pendingCellIdRef.current = pendingCellId;
-
-  useEffect(() => {
-    if (pendingCellIdRef.current && store.streamId === stream.id) {
-      // Wait for DOM to be ready
-      const cellId = pendingCellIdRef.current;
-      setTimeout(() => {
-        const cellElement = document.querySelector(`[data-block-id="${cellId}"]`);
-        if (cellElement) {
-          cellElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          cellElement.classList.add('block-wrapper--highlighted');
-          setTimeout(() => cellElement.classList.remove('block-wrapper--highlighted'), 2000);
-        }
-        onClearPendingCell?.();
-      }, 200);
-    }
-  }, [store.streamId, stream.id, onClearPendingCell]);
-
-  // Create initial cell if stream is empty
-  useEffect(() => {
-    const blocks = store.getBlocksArray();
-    if (store.streamId === stream.id && blocks.length === 0) {
-      const initialCell: CellType = {
-        id: crypto.randomUUID(),
-        streamId: stream.id,
-        content: '',
-        type: 'text',
-        sourceBinding: null,
-        order: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      store.addBlock(initialCell);
-      store.setNewBlockId(initialCell.id);
-      bridge.send({
-        type: 'saveCell',
-        payload: {
-          id: initialCell.id,
-          streamId: stream.id,
-          content: '',
-          type: 'text',
-          order: 0,
-        },
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store.streamId, stream.id]);
-
-  // Track if we've done initial load (for pruning trailing empties only on load)
-  const hasInitializedRef = useRef(false);
-
-  // Ensure at least one trailing empty cell exists
-  // - On initial load: prune extra trailing empty cells to just one
-  // - During editing: only add if there's no trailing empty (user can create many by pressing Enter)
-  useEffect(() => {
-    if (store.streamId !== stream.id) return;
-
-    const blocks = store.getBlocksArray();
-    if (blocks.length === 0) return;
-
-    // Count trailing empty cells
-    let trailingEmptyCount = 0;
-    for (let i = blocks.length - 1; i >= 0; i--) {
-      if (isEmptyCell(blocks[i].content) && blocks[i].type === 'text') {
-        trailingEmptyCount++;
-      } else {
-        break;
-      }
-    }
-
-    // If no trailing empty cell, add one (always, during editing or initial load)
-    if (trailingEmptyCount === 0) {
-      const lastBlock = blocks[blocks.length - 1];
-      const newCell: CellType = {
-        id: crypto.randomUUID(),
-        streamId: stream.id,
-        content: '',
-        type: 'text',
-        sourceBinding: null,
-        order: lastBlock.order + 1,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      store.addBlock(newCell, lastBlock.id);
-      bridge.send({
-        type: 'saveCell',
-        payload: {
-          id: newCell.id,
-          streamId: stream.id,
-          content: '',
-          type: 'text',
-          order: newCell.order,
-        },
-      });
-    }
-    // Only prune extra trailing empty cells on initial load, not during editing
-    // This allows users to create spacing by pressing Enter multiple times
-    else if (trailingEmptyCount > 1 && !hasInitializedRef.current) {
-      // Delete all but the last trailing empty cell
-      for (let i = blocks.length - trailingEmptyCount; i < blocks.length - 1; i++) {
-        const cellToDelete = blocks[i];
-        store.deleteBlock(cellToDelete.id);
-        bridge.send({ type: 'deleteCell', payload: { id: cellToDelete.id } });
-      }
-    }
-
-    // Mark as initialized after first run
-    if (!hasInitializedRef.current) {
-      hasInitializedRef.current = true;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store.blocks, store.streamId, stream.id]);
-
-  // Reset initialization flag when stream changes
-  useEffect(() => {
-    hasInitializedRef.current = false;
-  }, [stream.id]);
-
-  // Source callbacks for SourcePanel
-  const handleSourceAdded = useCallback((source: SourceReference) => {
-    setSources(prev => [...prev, source]);
-  }, [setSources]);
-
-  const handleSourceRemoved = useCallback((sourceId: string) => {
-    setSources(prev => prev.filter(s => s.id !== sourceId));
-  }, [setSources]);
-
-  const handleCellUpdate = useCallback((cellId: string, content: string) => {
-    const cell = store.getBlock(cellId);
-    if (cell) {
-      store.updateBlock(cellId, { content });
-
-      // Save to Swift with all fields preserved
-      bridge.send({
-        type: 'saveCell',
-        payload: {
-          id: cellId,
-          streamId: stream.id,
-          content,
-          type: cell.type,
-          order: cell.order,
-          originalPrompt: cell.originalPrompt,
-          modelId: cell.modelId,
-          processingConfig: cell.processingConfig,
-          modifiers: cell.modifiers,
-          sourceApp: cell.sourceApp,
-          references: cell.references,
-          blockName: cell.blockName,
-          sourceBinding: cell.sourceBinding,
-        },
-      });
-    }
-  }, [stream.id, store]);
-
-  // Shared helper for dispatching AI requests (used by handleThink and handleRegenerate)
-  const dispatchAIRequest = useCallback((
-    cellId: string,
-    prompt: string,
-    cellContent: string,
-    cellOrder: number,
-    isNewCell: boolean // true for handleThink (transforms cell), false for regenerate
-  ) => {
-    const cells = store.getBlocksArray();
-    const cellIndex = cells.findIndex(c => c.id === cellId);
-    const cell = store.getBlock(cellId);
-
-    // Extract images from the cell content - these will be preserved visually
-    const images = extractImages(cellContent);
-    const imageBlock = buildImageBlock(images);
-
-    // Extract image URLs for sending to the AI (will be converted to data URLs on Swift side)
-    const currentCellImageURLs = extractImageURLs(cellContent);
-
-    // Gather prior cells for context (exclude current cell and empty spacing cells)
-    // Include image URLs for vision model support
-    const priorCells = cells
-      .slice(0, cellIndex)
-      .filter(c => !isEmptyCell(c.content))
-      .map(c => ({
-        id: c.id,
-        content: c.content,
-        type: c.type,
-        imageURLs: extractImageURLs(c.content),
-      }));
-
-    // Update cell state
-    const updates = isNewCell
-      ? { type: 'aiResponse' as const, originalPrompt: prompt, content: imageBlock }
-      : { originalPrompt: prompt, content: imageBlock };
-    store.updateBlock(cellId, updates);
-
-    // Save cell (preserve sourceApp and references from Quick Panel)
-    bridge.send({
-      type: 'saveCell',
-      payload: {
-        id: cellId,
-        streamId: stream.id,
-        content: imageBlock,
-        type: 'aiResponse',
-        originalPrompt: prompt,
-        order: cellOrder,
-        sourceApp: cell?.sourceApp,
-        references: cell?.references,
-      },
-    });
-
-    // Start streaming with preserved images
-    store.startStreaming(cellId, imageBlock);
-    store.clearError(cellId);
-
-    // Send think request with full context (including image URLs for vision)
-    bridge.send({
-      type: 'think',
-      payload: {
-        cellId,
-        streamId: stream.id,
-        currentCell: prompt,
-        imageURLs: currentCellImageURLs,  // Images in current cell
-        priorCells: priorCells.map(c => ({
-          content: stripHtml(c.content),
-          type: c.type,
-          imageURLs: c.imageURLs,  // Images in prior cells
-        })),
-      },
-    });
-  }, [stream.id, store]);
-
-  // Cmd+Enter: Transform current cell into AI response
-  const handleThink = useCallback((cellId: string) => {
-    const currentCell = store.getBlock(cellId);
-    const originalPrompt = stripHtml(currentCell?.content || '').trim();
-    if (!currentCell || !originalPrompt) return;
-
-    dispatchAIRequest(cellId, originalPrompt, currentCell.content, currentCell.order, true);
-  }, [store, dispatchAIRequest]);
-
-  const handleCellDelete = useCallback((cellId: string) => {
-    const cells = store.getBlocksArray();
-    const index = cells.findIndex(c => c.id === cellId);
-    if (index === -1) return;
-
-    // Don't delete if it's the only cell
-    if (cells.length === 1) return;
-
-    store.deleteBlock(cellId);
-    bridge.send({ type: 'deleteCell', payload: { id: cellId } });
-
-    // Focus previous cell or next if deleting first
-    const focusIndex = index > 0 ? index - 1 : 0;
-    const focusId = cells[focusIndex]?.id;
-    if (focusId && focusId !== cellId) {
-      setTimeout(() => {
-        cellFocusRefs.current.get(focusId)?.();
-      }, 0);
-    }
-  }, [store]);
-
-  // Block focus management for keyboard navigation
-  const { focusedBlockId } = useBlockFocus({
-    onDeleteBlock: handleCellDelete,
+  const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
+  const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [promptValue, setPromptValue] = useState('');
+  const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
+  const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState>({
+    visible: false,
+    left: 0,
+    top: 0,
   });
 
-  // When focusedBlockId changes (from keyboard nav), actually focus the DOM element
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const editorShellRef = useRef<HTMLDivElement>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
+  const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
+  const promptContextRef = useRef<SelectionContext | null>(null);
+  const selectionMenuTimerRef = useRef<number | null>(null);
+  const aiRequestRef = useRef<{
+    id: string;
+    buffer: string;
+    from: number;
+    to: number;
+    mode: 'replace' | 'after';
+  } | null>(null);
+
+  const insertImageAtCursor = useCallback((imageUrl: string, altText = 'image') => {
+    const snippet = `\n${buildMarkdownImageToken({ alt: altText, url: imageUrl })}\n`;
+    const view = editorViewRef.current;
+
+    if (!view) {
+      setMarkdownContent((prev) => `${prev}${snippet}`);
+      return;
+    }
+
+    const selection = view.state.selection.main;
+    view.dispatch({
+      changes: {
+        from: selection.from,
+        to: selection.to,
+        insert: snippet,
+      },
+      selection: { anchor: selection.from + snippet.length },
+    });
+    view.focus();
+  }, []);
+
+  const insertTextAtCursor = useCallback((snippet: string) => {
+    const view = editorViewRef.current;
+
+    if (!view) {
+      setMarkdownContent((prev) => `${prev}${snippet}`);
+      return;
+    }
+
+    const selection = view.state.selection.main;
+    view.dispatch({
+      changes: {
+        from: selection.from,
+        to: selection.to,
+        insert: snippet,
+      },
+      selection: { anchor: selection.from + snippet.length },
+      annotations: Transaction.addToHistory.of(true),
+    });
+    view.focus();
+  }, []);
+
+  const editorAPI = useMemo<EditorAPI>(() => ({
+    replaceCellHtml: () => {
+      // Document editor mode: cell updates are ignored.
+    },
+    insertImage: (imageUrl: string) => insertImageAtCursor(imageUrl),
+  }), [insertImageAtCursor]);
+
+  const { sources, setSources } = useBridgeMessages({
+    streamId: stream.id,
+    initialSources: stream.sources,
+    editorAPI,
+  });
+  const pdfSources = useMemo(
+    () => sources.filter((source) => source.fileType === 'pdf'),
+    [sources],
+  );
+  const hasPdfSources = pdfSources.length > 0;
+
+  const isAiThinking = aiStatus === 'thinking';
+
+  const isEditorActive = useCallback(() => {
+    const shell = editorShellRef.current;
+    const active = document.activeElement;
+    if (!shell || !active) return false;
+    return shell.contains(active);
+  }, []);
+
   useEffect(() => {
-    if (focusedBlockId) {
-      const focusFn = cellFocusRefs.current.get(focusedBlockId);
-      if (focusFn) {
-        focusFn();
-      }
+    setMarkdownContent(stream.document?.markdown ?? '');
+    lastSavedContentRef.current = stream.document?.markdown ?? '';
+    setTitle(stream.title);
+    setSaveState('saved');
+    setAiStatus('idle');
+    setFloatingMenu({ visible: false, left: 0, top: 0 });
+    setShowPrompt(false);
+    setPromptValue('');
+    promptContextRef.current = null;
+    aiRequestRef.current = null;
+  }, [stream.id, stream.document?.markdown, stream.title]);
+
+  useEffect(() => {
+    if (!pendingSourceId) return;
+    if (pdfSources.some((source) => source.id === pendingSourceId)) {
+      setHighlightedSourceId(pendingSourceId);
     }
-  }, [focusedBlockId]);
+  }, [pdfSources, pendingSourceId]);
 
-  const handleCreateCell = useCallback((afterIndex: number) => {
-    const newCell: CellType = {
-      id: crypto.randomUUID(),
-      streamId: stream.id,
-      content: '',
-      type: 'text',
-      sourceBinding: null,
-      order: afterIndex + 1,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  useEffect(() => {
+    if (hasPdfSources) return;
+    setHighlightedSourceId(null);
+    onClearPendingSource?.();
+  }, [hasPdfSources, onClearPendingSource]);
 
-    const cells = store.getBlocksArray();
-    const afterId = cells[afterIndex]?.id;
-    store.addBlock(newCell, afterId);
-    store.setNewBlockId(newCell.id);
+  useEffect(() => {
+    if (pendingCellId) {
+      addToast('Cell anchors are not available in document editor mode yet.', 'info');
+      onClearPendingCell?.();
+    }
+  }, [pendingCellId, addToast, onClearPendingCell]);
 
-    bridge.send({
-      type: 'saveCell',
-      payload: {
-        id: newCell.id,
-        streamId: stream.id,
-        content: '',
-        type: 'text',
-        order: afterIndex + 1,
-      },
+  useEffect(() => {
+    if (markdownContent === lastSavedContentRef.current) return;
+    setSaveState('saving');
+
+    const timer = window.setTimeout(() => {
+      bridge.send({
+        type: 'saveStreamDocument',
+        payload: {
+          streamId: stream.id,
+          markdown: markdownContent,
+        },
+      });
+      lastSavedContentRef.current = markdownContent;
+      setSaveState('saved');
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [markdownContent, stream.id]);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      const active = aiRequestRef.current;
+      if (!active) return;
+
+      if (message.type === 'documentAIChunk') {
+        const requestId = message.payload?.requestId as string | undefined;
+        const chunk = message.payload?.chunk as string | undefined;
+        if (!requestId || requestId !== active.id || !chunk) return;
+        active.buffer += chunk;
+        return;
+      }
+
+      if (message.type === 'documentModelSelected') {
+        const requestId = message.payload?.requestId as string | undefined;
+        if (!requestId || requestId !== active.id) return;
+        return;
+      }
+
+      if (message.type === 'documentAIError') {
+        const requestId = message.payload?.requestId as string | undefined;
+        const error = message.payload?.error as string | undefined;
+        if (!requestId || requestId !== active.id) return;
+
+        const errorCode = message.payload?.errorCode as string | undefined;
+        const proxyRequestId = message.payload?.proxyRequestId as string | undefined;
+        let displayError = error || 'AI request failed.';
+
+        if (errorCode === 'quota_exceeded') {
+          const scope = message.payload?.quotaScope as string | undefined;
+          const resetAt = message.payload?.quotaResetAt as string | undefined;
+          if (resetAt) {
+            try {
+              const resetDate = new Date(resetAt);
+              const now = new Date();
+              const hoursUntil = Math.ceil((resetDate.getTime() - now.getTime()) / (1000 * 60 * 60));
+              displayError = `${scope === 'day' ? 'Daily' : 'Monthly'} quota exceeded. Resets in ~${hoursUntil}h.`;
+            } catch {
+              displayError = error || displayError;
+            }
+          }
+        } else if (errorCode === 'rate_limited') {
+          const retryAfter = message.payload?.retryAfter as number | undefined;
+          if (retryAfter) {
+            displayError = `Rate limit exceeded. Try again in ${retryAfter}s.`;
+          }
+        } else if (errorCode === 'invalid_key' || errorCode === 'key_bound_elsewhere') {
+          displayError = `${displayError} Check Settings to update your device key.`;
+        } else if (errorCode === 'server_error' || errorCode === 'upstream_error') {
+          if (proxyRequestId) {
+            displayError = `${displayError} (Request ID: ${proxyRequestId})`;
+          }
+        }
+
+        setAiStatus('idle');
+        aiRequestRef.current = null;
+        addToast(displayError, 'error');
+        return;
+      }
+
+      if (message.type === 'documentAIComplete') {
+        const requestId = message.payload?.requestId as string | undefined;
+        if (!requestId || requestId !== active.id) return;
+
+        const view = editorViewRef.current;
+        if (!view) {
+          setAiStatus('idle');
+          aiRequestRef.current = null;
+          return;
+        }
+
+        const rawOutput = active.buffer.trim();
+        if (!rawOutput) {
+          setAiStatus('idle');
+          aiRequestRef.current = null;
+          addToast('AI returned empty output.', 'warning');
+          return;
+        }
+
+        let insertText = rawOutput;
+        let from = active.from;
+        let to = active.to;
+
+        if (active.mode === 'after') {
+          const doc = view.state.doc;
+          const before = doc.sliceString(Math.max(0, active.to - 2), active.to);
+          const needsBlankLine = !before.endsWith('\n\n');
+          const needsSingleBreak = before.endsWith('\n') && !before.endsWith('\n\n');
+          const prefix = needsBlankLine ? '\n\n' : needsSingleBreak ? '\n' : '';
+          const suffix = insertText.endsWith('\n') ? '' : '\n';
+          insertText = `${prefix}${insertText}${suffix}`;
+          from = active.to;
+          to = active.to;
+        }
+
+        view.dispatch({
+          changes: { from, to, insert: insertText },
+          selection: { anchor: from + insertText.length },
+          annotations: Transaction.addToHistory.of(true),
+        });
+        view.focus();
+
+        setAiStatus('idle');
+        aiRequestRef.current = null;
+        return;
+      }
     });
-  }, [stream.id, store]);
 
-  const handleFocusPrevious = useCallback((currentIndex: number) => {
-    const cells = store.getBlocksArray();
-    if (currentIndex > 0) {
-      const prevId = cells[currentIndex - 1]?.id;
-      if (prevId) {
-        cellFocusRefs.current.get(prevId)?.();
-      }
-    }
-  }, [store]);
+    return () => unsubscribe();
+  }, [addToast]);
 
-  const handleFocusNext = useCallback((currentIndex: number) => {
-    const cells = store.getBlocksArray();
-    if (currentIndex < cells.length - 1) {
-      const nextId = cells[currentIndex + 1]?.id;
-      if (nextId) {
-        cellFocusRefs.current.get(nextId)?.();
-      }
-    }
-  }, [store]);
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type !== 'pdfHighlightLinked') return;
 
-  const registerCellFocus = useCallback((cellId: string, focus: () => void) => {
-    cellFocusRefs.current.set(cellId, focus);
-  }, []);
+      const payloadStreamId = message.payload?.streamId as string | undefined;
+      if (!payloadStreamId || payloadStreamId !== stream.id) return;
 
-  // Open overlay for a cell
-  const handleOpenOverlay = useCallback((cellId: string) => {
-    setOverlayBlockId(cellId);
-  }, []);
+      const sourceId = message.payload?.sourceId as string | undefined;
+      const sourceName = message.payload?.sourceName as string | undefined;
+      const highlightId = message.payload?.highlightId as string | undefined;
+      const page = message.payload?.page as number | undefined;
+      const quote = message.payload?.quote as string | undefined;
 
-  // Close overlay
-  const handleCloseOverlay = useCallback(() => {
-    setOverlayBlockId(null);
-  }, []);
+      if (!sourceId || !highlightId) return;
 
-  // Toggle live status for a cell
-  const handleToggleLive = useCallback((cellId: string, isLive: boolean) => {
-    const cell = store.getBlock(cellId);
-    if (!cell) return;
+      const pageNumber = Number.isFinite(page) ? Math.max(1, Math.round(page as number)) : 1;
+      const linkUrl = `ticker-pdf://${sourceId}?highlight=${encodeURIComponent(highlightId)}&page=${pageNumber}`;
+      const compactQuote = (quote || '').trim().replace(/\s+/g, ' ');
+      const quoteLine = compactQuote ? `> ${compactQuote}\n` : '';
+      const linkLabel = `${sourceName || 'PDF'} p.${pageNumber}`;
+      const snippet = `\n${quoteLine}[${linkLabel}](${linkUrl})\n`;
 
-    // Build the new processing config
-    const newConfig = isLive
-      ? { ...cell.processingConfig, refreshTrigger: 'onStreamOpen' as const }
-      : { ...cell.processingConfig, refreshTrigger: undefined };
-
-    // Update local state
-    store.updateBlock(cellId, { processingConfig: newConfig });
-
-    // Persist to backend (preserve all metadata)
-    bridge.send({
-      type: 'saveCell',
-      payload: {
-        id: cellId,
-        streamId: stream.id,
-        content: cell.content,
-        type: cell.type,
-        order: cell.order,
-        originalPrompt: cell.originalPrompt,
-        modelId: cell.modelId,
-        processingConfig: newConfig,
-        modifiers: cell.modifiers,
-        sourceApp: cell.sourceApp,
-        references: cell.references,
-        blockName: cell.blockName,
-        sourceBinding: cell.sourceBinding,
-      },
+      insertTextAtCursor(snippet);
+      addToast('Linked PDF selection inserted into stream.', 'success');
     });
-  }, [stream.id, store]);
 
-  // Regenerate an AI cell with a new/edited prompt
-  const handleRegenerate = useCallback((cellId: string, newPrompt: string) => {
-    const cell = store.getBlock(cellId);
-    if (!cell || cell.type !== 'aiResponse') return;
+    return () => unsubscribe();
+  }, [addToast, insertTextAtCursor, stream.id]);
 
-    dispatchAIRequest(cellId, newPrompt, cell.content, cell.order, false);
-  }, [store, dispatchAIRequest]);
-
-  // Scroll to a cell by ID (used for reference navigation)
-  const handleScrollToCell = useCallback((cellId: string) => {
-    // Find the cell element in the DOM
-    const cellElement = document.querySelector(`[data-block-id="${cellId}"]`);
-    if (cellElement) {
-      // Scroll the cell into view
-      cellElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-      // Add a brief highlight animation
-      cellElement.classList.add('block-wrapper--highlighted');
-      setTimeout(() => {
-        cellElement.classList.remove('block-wrapper--highlighted');
-      }, 2000);
-
-      // Focus the cell
-      const focusFn = cellFocusRefs.current.get(cellId);
-      if (focusFn) {
-        setTimeout(() => focusFn(), 300); // Wait for scroll to complete
-      }
-    }
-  }, []);
-
-  // Navigate to a source in the source panel (for chunk search results)
-  const handleNavigateToSource = useCallback((sourceId: string) => {
-    setHighlightedSourceId(sourceId);
-  }, []);
-
-  // Title editing handlers
   const startEditingTitle = useCallback(() => {
     setIsEditingTitle(true);
     setTimeout(() => titleInputRef.current?.select(), 0);
@@ -496,9 +421,457 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
     }
   }, [saveTitle, stream.title]);
 
-  // Get cells from store for rendering
-  const cells = store.getBlocksArray();
-  const newBlockId = store.newBlockId;
+  const readBlobAsBase64 = useCallback((blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const parts = dataUrl.split(',');
+        if (parts.length < 2) {
+          reject(new Error('Invalid image encoding.'));
+          return;
+        }
+        resolve(parts[1]);
+      };
+      reader.onerror = () => reject(new Error('Failed to read image data.'));
+      reader.readAsDataURL(blob);
+    });
+  }, []);
+
+  const saveImageToAssets = useCallback(async (blob: Blob): Promise<string> => {
+    const requestId = crypto.randomUUID();
+    const base64Data = await readBlobAsBase64(blob);
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timeout = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        unsubscribe();
+        reject(new Error('Timed out while saving image.'));
+      }, 15000);
+
+      const unsubscribe = bridge.onMessage((message) => {
+        const payloadRequestId = message.payload?.requestId as string | undefined;
+        if (payloadRequestId !== requestId) return;
+
+        if (message.type === 'imageSaved' && message.payload?.assetUrl) {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
+          unsubscribe();
+          resolve(message.payload.assetUrl as string);
+        }
+
+        if (message.type === 'imageSaveError') {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
+          unsubscribe();
+          const messageText = (message.payload?.error as string | undefined) || 'Failed to save image.';
+          reject(new Error(messageText));
+        }
+      });
+
+      bridge.send({
+        type: 'saveImage',
+        payload: {
+          streamId: stream.id,
+          data: base64Data,
+          requestId,
+        },
+      });
+    });
+  }, [readBlobAsBase64, stream.id]);
+
+  const insertImageFiles = useCallback(async (files: File[]) => {
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+
+      try {
+        const assetUrl = await saveImageToAssets(file);
+        insertImageAtCursor(assetUrl, file.name.replace(/\.[^.]+$/, ''));
+      } catch (error) {
+        const text = error instanceof Error ? error.message : 'Failed to insert image.';
+        addToast(text, 'error');
+      }
+    }
+  }, [saveImageToAssets, insertImageAtCursor, addToast]);
+
+  const getSelectionContext = useCallback((allowFallback: boolean): SelectionContext | null => {
+    const view = editorViewRef.current;
+    if (!view) return null;
+    const selection = view.state.selection.main;
+    const doc = view.state.doc;
+
+    if (selection.from !== selection.to) {
+      const text = doc.sliceString(selection.from, selection.to);
+      return {
+        text,
+        from: selection.from,
+        to: selection.to,
+        imageUrls: extractMarkdownImageUrls(text),
+      };
+    }
+
+    if (!allowFallback) return null;
+
+    const cursorLine = doc.lineAt(selection.from);
+    let startLine = cursorLine.number;
+    let endLine = cursorLine.number;
+
+    while (startLine > 1) {
+      const prevLine = doc.line(startLine - 1);
+      if (prevLine.text.trim().length === 0) break;
+      startLine -= 1;
+    }
+
+    while (endLine < doc.lines) {
+      const nextLine = doc.line(endLine + 1);
+      if (nextLine.text.trim().length === 0) break;
+      endLine += 1;
+    }
+
+    const from = doc.line(startLine).from;
+    const to = doc.line(endLine).to;
+    let text = doc.sliceString(from, to).trim();
+
+    if (!text) {
+      text = doc.toString().trim();
+      if (!text) return null;
+      return {
+        text,
+        from: 0,
+        to: doc.length,
+        imageUrls: extractMarkdownImageUrls(text),
+      };
+    }
+
+    return {
+      text,
+      from,
+      to,
+      imageUrls: extractMarkdownImageUrls(text),
+    };
+  }, []);
+
+  const clearSelectionMenuTimer = useCallback(() => {
+    if (selectionMenuTimerRef.current !== null) {
+      window.clearTimeout(selectionMenuTimerRef.current);
+      selectionMenuTimerRef.current = null;
+    }
+  }, []);
+
+  const hideSelectionMenu = useCallback(() => {
+    clearSelectionMenuTimer();
+    setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+  }, [clearSelectionMenuTimer]);
+
+  const getFloatingMenuPlacement = useCallback((): { left: number; top: number } | null => {
+    const shell = editorShellRef.current;
+    if (!shell) return null;
+
+    const domSelection = window.getSelection();
+    if (!domSelection || domSelection.rangeCount === 0) return null;
+    if (!domSelection.anchorNode || !domSelection.focusNode) return null;
+    if (!shell.contains(domSelection.anchorNode) || !shell.contains(domSelection.focusNode)) return null;
+    if (domSelection.isCollapsed) return null;
+
+    const range = domSelection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return null;
+
+    const horizontalPadding = 16;
+    const left = Math.min(
+      window.innerWidth - horizontalPadding,
+      Math.max(horizontalPadding, rect.left + rect.width / 2),
+    );
+    const top = rect.bottom + 10;
+
+    return { left, top };
+  }, []);
+
+  const scheduleSelectionMenu = useCallback(() => {
+    clearSelectionMenuTimer();
+    if (showPrompt || isAiThinking) {
+      setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+      return;
+    }
+
+    selectionMenuTimerRef.current = window.setTimeout(() => {
+      const selection = getSelectionContext(false);
+      const placement = getFloatingMenuPlacement();
+      if (!selection || !selection.text.trim() || !placement) {
+        setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+        return;
+      }
+      setFloatingMenu({
+        visible: true,
+        left: placement.left,
+        top: placement.top,
+      });
+    }, 180);
+  }, [clearSelectionMenuTimer, getFloatingMenuPlacement, getSelectionContext, isAiThinking, showPrompt]);
+
+  const startDocumentAI = useCallback((options: {
+    query: string;
+    context?: string;
+    imageUrls?: string[];
+    from: number;
+    to: number;
+    mode: 'replace' | 'after';
+  }) => {
+    if (isAiThinking) {
+      addToast('AI is already running for this stream.', 'info');
+      return;
+    }
+
+    const requestId = crypto.randomUUID();
+    aiRequestRef.current = {
+      id: requestId,
+      buffer: '',
+      from: options.from,
+      to: options.to,
+      mode: options.mode,
+    };
+    setAiStatus('thinking');
+
+    bridge.send({
+      type: 'thinkDocument',
+      payload: {
+        requestId,
+        streamId: stream.id,
+        query: options.query,
+        context: options.context,
+        imageURLs: options.imageUrls ?? [],
+      },
+    });
+  }, [addToast, isAiThinking, stream.id]);
+
+  const handleSend = useCallback(() => {
+    const context = getSelectionContext(true);
+    if (!context || !context.text.trim()) {
+      addToast('Select text or place the cursor in a paragraph to send.', 'info');
+      return;
+    }
+
+    startDocumentAI({
+      query: context.text.trim(),
+      imageUrls: context.imageUrls,
+      from: context.from,
+      to: context.to,
+      mode: 'replace',
+    });
+    hideSelectionMenu();
+  }, [addToast, getSelectionContext, hideSelectionMenu, startDocumentAI]);
+
+  const openPromptWithContext = useCallback((context: SelectionContext) => {
+    hideSelectionMenu();
+    promptContextRef.current = context;
+    setPromptValue('');
+    setShowPrompt(true);
+  }, [hideSelectionMenu]);
+
+  const handleOpenPrompt = useCallback(() => {
+    if (isAiThinking) {
+      addToast('AI is already running for this stream.', 'info');
+      return;
+    }
+    const context = getSelectionContext(true);
+    if (!context || !context.text.trim()) {
+      addToast('Select text or place the cursor in a paragraph to use as context.', 'info');
+      return;
+    }
+    openPromptWithContext(context);
+  }, [addToast, getSelectionContext, isAiThinking, openPromptWithContext]);
+
+  const handleSelectionSend = useCallback(() => {
+    const context = getSelectionContext(false);
+    if (!context || !context.text.trim()) {
+      hideSelectionMenu();
+      return;
+    }
+
+    startDocumentAI({
+      query: context.text.trim(),
+      imageUrls: context.imageUrls,
+      from: context.from,
+      to: context.to,
+      mode: 'replace',
+    });
+    hideSelectionMenu();
+  }, [getSelectionContext, hideSelectionMenu, startDocumentAI]);
+
+  const handleSelectionPrompt = useCallback(() => {
+    const context = getSelectionContext(false);
+    if (!context || !context.text.trim()) {
+      hideSelectionMenu();
+      return;
+    }
+    openPromptWithContext(context);
+  }, [getSelectionContext, hideSelectionMenu, openPromptWithContext]);
+
+  const closePrompt = useCallback(() => {
+    setShowPrompt(false);
+    setPromptValue('');
+    promptContextRef.current = null;
+    hideSelectionMenu();
+  }, [hideSelectionMenu]);
+
+  const handlePromptSend = useCallback(() => {
+    const prompt = promptValue.trim();
+    const context = promptContextRef.current;
+    if (!prompt || !context) return;
+
+    closePrompt();
+
+    startDocumentAI({
+      query: prompt,
+      context: context.text.trim(),
+      imageUrls: context.imageUrls,
+      from: context.from,
+      to: context.to,
+      mode: 'after',
+    });
+  }, [closePrompt, promptValue, startDocumentAI]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setShowSearch(true);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        if (!isEditorActive()) return;
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleOpenPrompt();
+        } else {
+          handleSend();
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        closePrompt();
+        hideSelectionMenu();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [closePrompt, handleOpenPrompt, handleSend, hideSelectionMenu, isEditorActive]);
+
+  useEffect(() => {
+    return () => clearSelectionMenuTimer();
+  }, [clearSelectionMenuTimer]);
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) {
+        hideSelectionMenu();
+        return;
+      }
+      scheduleSelectionMenu();
+    };
+
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, [hideSelectionMenu, scheduleSelectionMenu]);
+
+  useEffect(() => {
+    if (!floatingMenu.visible) return;
+
+    const updatePlacement = () => {
+      const selection = getSelectionContext(false);
+      const placement = getFloatingMenuPlacement();
+      if (!selection || !placement) {
+        hideSelectionMenu();
+        return;
+      }
+      setFloatingMenu((previous) => ({
+        ...previous,
+        visible: true,
+        left: placement.left,
+        top: placement.top,
+      }));
+    };
+
+    window.addEventListener('resize', updatePlacement);
+    window.addEventListener('scroll', updatePlacement, true);
+    return () => {
+      window.removeEventListener('resize', updatePlacement);
+      window.removeEventListener('scroll', updatePlacement, true);
+    };
+  }, [floatingMenu.visible, getFloatingMenuPlacement, getSelectionContext, hideSelectionMenu]);
+
+  useEffect(() => {
+    const handlePaste = (event: ClipboardEvent) => {
+      if (!isEditorActive()) return;
+      if (!event.clipboardData?.items?.length) return;
+
+      const imageFiles: File[] = [];
+      for (const item of Array.from(event.clipboardData.items)) {
+        if (!item.type.startsWith('image/')) continue;
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+
+      if (imageFiles.length === 0) return;
+
+      event.preventDefault();
+      void insertImageFiles(imageFiles);
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [insertImageFiles, isEditorActive]);
+
+  useEffect(() => {
+    if (!showPrompt) {
+      scheduleSelectionMenu();
+    } else {
+      hideSelectionMenu();
+    }
+  }, [hideSelectionMenu, scheduleSelectionMenu, showPrompt]);
+
+  const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    const files = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith('image/'));
+    if (files.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void insertImageFiles(files);
+  }, [insertImageFiles]);
+
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (Array.from(event.dataTransfer.items || []).some((item) => item.type.startsWith('image/'))) {
+      event.preventDefault();
+    }
+  }, []);
+
+  const handleSourceRemoved = useCallback((sourceId: string) => {
+    setSources((prev: SourceReference[]) => prev.filter((source) => source.id !== sourceId));
+  }, [setSources]);
+
+  const handleOpenSource = useCallback((source: SourceReference) => {
+    bridge.send({
+      type: 'openSource',
+      payload: { sourceId: source.id },
+    });
+  }, []);
+
+  const handleNavigateToCell = useCallback(() => {
+    addToast('Cell anchors are not available in document editor mode yet.', 'info');
+  }, [addToast]);
+
+  const handleNavigateToSource = useCallback((sourceId: string) => {
+    if (!pdfSources.some((source) => source.id === sourceId)) {
+      addToast('Source panel is available for PDF sources only.', 'info');
+      return;
+    }
+    setHighlightedSourceId(sourceId);
+  }, [addToast, pdfSources]);
 
   return (
     <div className="stream-editor">
@@ -522,16 +895,19 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
             {title}
           </h1>
         )}
+        <span className={`stream-save-status stream-save-status--${saveState}`}>
+          {saveState === 'saving' ? 'Saving…' : 'Saved'}
+        </span>
         <button
           onClick={() => setShowDeleteConfirm(true)}
           className="delete-stream-button"
           title="Delete stream"
+          type="button"
         >
           Delete
         </button>
       </header>
 
-      {/* Delete confirmation dialog */}
       {showDeleteConfirm && (
         <div className="delete-confirm-overlay" onClick={() => setShowDeleteConfirm(false)}>
           <div className="delete-confirm-dialog" onClick={(e) => e.stopPropagation()}>
@@ -558,101 +934,147 @@ export function StreamEditor({ stream, onBack, onDelete, onNavigateToStream, pen
         </div>
       )}
 
-      <div className="stream-body">
-        <div
-          className="stream-content"
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => e.preventDefault()}
-        >
-          {cells.map((cell, index) => {
-            const isStreaming = store.isStreaming(cell.id);
-            const isRefreshing = store.isRefreshing(cell.id);
-            const error = store.getError(cell.id);
-            const streamingContent = store.getStreamingContent(cell.id);
-            const refreshingContent = store.getRefreshingContent(cell.id);
-            const preservedImages = store.getPreservedImages(cell.id);
-
-            // Convert streaming/refreshing markdown to HTML for display
-            // Prepend preserved images so they stay visible during streaming
-            let displayContent = cell.content;
-            if (isStreaming && streamingContent) {
-              const imagesPrefix = preservedImages || '';
-              displayContent = imagesPrefix + markdownToHtml(streamingContent);
-            } else if (isRefreshing && refreshingContent) {
-              displayContent = markdownToHtml(refreshingContent);
-            }
-
-            const showOverlay = overlayBlockId === cell.id;
-
-            // Check if this is the first empty cell of an empty document (for showing placeholder)
-            const isFirstEmptyCell = index === 0 &&
-              cells.length === 1 &&
-              isEmptyCell(cell.content) &&
-              cell.type === 'text';
-
-            return (
-              <BlockWrapper
-                key={cell.id}
-                id={cell.id}
-                onInfoClick={() => handleOpenOverlay(cell.id)}
+      {showPrompt && (
+        <div className="ai-prompt-overlay" onClick={closePrompt}>
+          <div className="ai-prompt-dialog" onClick={(e) => e.stopPropagation()}>
+            <h2>Send &amp; Prompt</h2>
+            <p>Selection will be attached as context. Write a prompt for the AI.</p>
+            <textarea
+              className="ai-prompt-input"
+              value={promptValue}
+              onChange={(event) => setPromptValue(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                  event.preventDefault();
+                  handlePromptSend();
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  closePrompt();
+                }
+              }}
+              placeholder="Ask the AI to summarize, rewrite, or expand the selected text…"
+              autoFocus
+              rows={5}
+            />
+            <div className="ai-prompt-actions">
+              <button
+                className="ai-prompt-cancel"
+                type="button"
+                onClick={closePrompt}
               >
-                <Cell
-                  cell={(isStreaming || isRefreshing) ? { ...cell, content: displayContent } : cell}
-                  isNew={cell.id === newBlockId}
-                  isStreaming={isStreaming}
-                  isRefreshing={isRefreshing}
-                  isFirstEmptyCell={isFirstEmptyCell}
-                  error={error}
-                  onUpdate={(content) => handleCellUpdate(cell.id, content)}
-                  onDelete={() => handleCellDelete(cell.id)}
-                  onEnter={() => handleCreateCell(index)}
-                  onThink={() => handleThink(cell.id)}
-                  onFocusPrevious={() => handleFocusPrevious(index)}
-                  onFocusNext={() => handleFocusNext(index)}
-                  registerFocus={(focus) => registerCellFocus(cell.id, focus)}
-                  onScrollToCell={handleScrollToCell}
-                  onOpenOverlay={() => handleOpenOverlay(cell.id)}
-                  onToggleLive={(isLive) => handleToggleLive(cell.id, isLive)}
-                />
-                {showOverlay && (
-                  <CellOverlay
-                    cell={cell}
-                    onClose={handleCloseOverlay}
-                    onScrollToCell={handleScrollToCell}
-                    onToggleLive={(isLive) => handleToggleLive(cell.id, isLive)}
-                    onRegenerate={(newPrompt) => handleRegenerate(cell.id, newPrompt)}
-                  />
-                )}
-              </BlockWrapper>
-            );
-          })}
+                Cancel
+              </button>
+              <button
+                className="ai-prompt-send"
+                type="button"
+                onClick={handlePromptSend}
+                disabled={!promptValue.trim()}
+              >
+                Send
+              </button>
+            </div>
+          </div>
         </div>
+      )}
 
-        <SidePanel
-          cells={cells}
-          focusedCellId={focusedBlockId}
-          onCellClick={handleScrollToCell}
-          streamId={stream.id}
-          sources={sources}
-          onSourceAdded={handleSourceAdded}
-          onSourceRemoved={handleSourceRemoved}
-          highlightedSourceId={highlightedSourceId || pendingSourceId}
-          onClearHighlight={() => {
-            setHighlightedSourceId(null);
-            onClearPendingSource?.();
-          }}
-        />
+      {floatingMenu.visible && (
+        <div
+          className="selection-action-menu"
+          style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
+        >
+          <button
+            type="button"
+            className="selection-action-button"
+            title="Send"
+            aria-label="Send"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={handleSelectionSend}
+            disabled={isAiThinking}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M3.2 4.2l17.6 7.8-17.6 7.8 2.4-7-2.4-8.6zm2.8 2.7 1.3 4.7h7.8v1h-7.8L6 17.1l11.8-5.1L6 6.9z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="selection-action-button"
+            title="Send & Prompt"
+            aria-label="Send and prompt"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={handleSelectionPrompt}
+            disabled={isAiThinking}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M4 3h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-4 4v-4H4a1 1 0 01-1-1V4a1 1 0 011-1zm1 2v9h1v1.6L7.6 14H19V5H5zm3 2h8v1H8V7zm0 3h5v1H8v-1z" />
+            </svg>
+          </button>
+        </div>
+      )}
+
+      <div className="stream-body">
+        <div className="stream-content">
+          <div
+            ref={editorShellRef}
+            className="document-editor-shell"
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+          >
+            <CodeMirror
+              value={markdownContent}
+              basicSetup={{
+                lineNumbers: false,
+                foldGutter: false,
+                highlightActiveLine: false,
+                highlightActiveLineGutter: false,
+              }}
+              extensions={[
+                EditorView.lineWrapping,
+                EditorView.contentAttributes.of({
+                  spellcheck: 'true',
+                  autocapitalize: 'sentences',
+                  autocomplete: 'on',
+                  autocorrect: 'on',
+                }),
+                EditorView.editable.of(!isAiThinking),
+                markdown({ base: markdownLanguage, codeLanguages: languages }),
+                syntaxHighlighting(markdownHighlightStyle),
+                markdownImageWidgetExtension,
+              ]}
+              onCreateEditor={(view) => {
+                editorViewRef.current = view;
+              }}
+              onChange={(value) => {
+                setMarkdownContent(value);
+              }}
+              className="document-editor-codemirror"
+            />
+          </div>
+        </div>
+        {hasPdfSources && (
+          <div className="stream-sources-dock">
+            <SidePanel
+              cells={[]}
+              focusedCellId={null}
+              onCellClick={() => {}}
+              streamId={stream.id}
+              sources={pdfSources}
+              onSourceRemoved={handleSourceRemoved}
+              onSourceOpen={handleOpenSource}
+              highlightedSourceId={highlightedSourceId || pendingSourceId}
+              onClearHighlight={() => {
+                setHighlightedSourceId(null);
+                onClearPendingSource?.();
+              }}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Global reference preview tooltip */}
-      <ReferencePreview onScrollToCell={handleScrollToCell} />
-
-      {/* Search modal */}
       <SearchModal
         isOpen={showSearch}
         onClose={() => setShowSearch(false)}
         currentStreamId={stream.id}
-        onNavigateToCell={handleScrollToCell}
+        onNavigateToCell={handleNavigateToCell}
         onNavigateToStream={onNavigateToStream || (() => {})}
         onNavigateToSource={handleNavigateToSource}
       />

@@ -18,6 +18,7 @@
 		A1000001000000000003 /* BridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000003 /* BridgeService.swift */; };
 		A1000001000000000004 /* DroppableWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000004 /* DroppableWebView.swift */; };
 		A1000001000000000005 /* WebViewManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000005 /* WebViewManager.swift */; };
+		A1000001000000000030 /* PDFReaderPaneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000030 /* PDFReaderPaneController.swift */; };
 		A1000001000000000006 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000006 /* OnboardingView.swift */; };
 		A1000001000000000007 /* QuickPanelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000007 /* QuickPanelManager.swift */; };
 		A1000001000000000008 /* QuickPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000008 /* QuickPanelView.swift */; };
@@ -82,6 +83,7 @@
 		B1000001000000000003 /* BridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeService.swift; sourceTree = "<group>"; };
 		B1000001000000000004 /* DroppableWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroppableWebView.swift; sourceTree = "<group>"; };
 		B1000001000000000005 /* WebViewManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewManager.swift; sourceTree = "<group>"; };
+		B1000001000000000030 /* PDFReaderPaneController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFReaderPaneController.swift; sourceTree = "<group>"; };
 		B1000001000000000006 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		B1000001000000000007 /* QuickPanelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPanelManager.swift; sourceTree = "<group>"; };
 		B1000001000000000008 /* QuickPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPanelView.swift; sourceTree = "<group>"; };
@@ -122,7 +124,7 @@
 			B100000100000000002C /* DeviceKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyService.swift; sourceTree = "<group>"; };
 			B100000100000000002D /* ProxyLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyLLMService.swift; sourceTree = "<group>"; };
 			B100000100000000002E /* DebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLog.swift; sourceTree = "<group>"; };
-				B100000100000000002F /* DeviceKeyServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyServiceTests.swift; sourceTree = "<group>"; };
+			B100000100000000002F /* DeviceKeyServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyServiceTests.swift; sourceTree = "<group>"; };
 				F1000001000000000001 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
 				F1000001000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 			/* End PBXFileReference section */
@@ -198,10 +200,19 @@
 				B1000001000000000003 /* BridgeService.swift */,
 				B1000001000000000004 /* DroppableWebView.swift */,
 				B1000001000000000005 /* WebViewManager.swift */,
+				G100000100000000000B /* PDFReader */,
 				G1000001000000000005 /* Onboarding */,
 				G1000001000000000006 /* QuickPanel */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		G100000100000000000B /* PDFReader */ = {
+			isa = PBXGroup;
+			children = (
+				B1000001000000000030 /* PDFReaderPaneController.swift */,
+			);
+			path = PDFReader;
 			sourceTree = "<group>";
 		};
 		G1000001000000000002 /* Design */ = {
@@ -265,16 +276,16 @@
 			path = Onboarding;
 			sourceTree = "<group>";
 		};
-		G1000001000000000006 /* QuickPanel */ = {
-			isa = PBXGroup;
-			children = (
-				B1000001000000000007 /* QuickPanelManager.swift */,
-				B1000001000000000008 /* QuickPanelView.swift */,
-				B1000001000000000009 /* QuickPanelWindow.swift */,
-			);
-			path = QuickPanel;
-			sourceTree = "<group>";
-		};
+			G1000001000000000006 /* QuickPanel */ = {
+				isa = PBXGroup;
+				children = (
+					B1000001000000000007 /* QuickPanelManager.swift */,
+					B1000001000000000008 /* QuickPanelView.swift */,
+					B1000001000000000009 /* QuickPanelWindow.swift */,
+				);
+				path = QuickPanel;
+				sourceTree = "<group>";
+			};
 		G1000001000000000007 /* Providers */ = {
 			isa = PBXGroup;
 			children = (
@@ -444,6 +455,7 @@
 				A1000001000000000003 /* BridgeService.swift in Sources */,
 				A1000001000000000004 /* DroppableWebView.swift in Sources */,
 				A1000001000000000005 /* WebViewManager.swift in Sources */,
+				A1000001000000000030 /* PDFReaderPaneController.swift in Sources */,
 				A1000001000000000006 /* OnboardingView.swift in Sources */,
 				A1000001000000000007 /* QuickPanelManager.swift in Sources */,
 				A1000001000000000008 /* QuickPanelView.swift in Sources */,
@@ -643,8 +655,8 @@
 				);
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				MARKETING_VERSION = 2025.12.1;
-				PRODUCT_BUNDLE_IDENTIFIER = io.ticker.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.next;
+					PRODUCT_NAME = TickerNext;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -669,8 +681,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 2025.12.1;
-				PRODUCT_BUNDLE_IDENTIFIER = io.ticker.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.next;
+					PRODUCT_NAME = TickerNext;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				};
@@ -682,10 +694,10 @@
 					BUNDLE_LOADER = "$(TEST_HOST)";
 					CODE_SIGN_STYLE = Automatic;
 					GENERATE_INFOPLIST_FILE = YES;
-					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.appTests;
-					PRODUCT_NAME = "$(TARGET_NAME)";
-					SWIFT_VERSION = 5.0;
-					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ticker.app/Contents/MacOS/Ticker";
+						PRODUCT_BUNDLE_IDENTIFIER = io.ticker.nextTests;
+						PRODUCT_NAME = "$(TARGET_NAME)";
+						SWIFT_VERSION = 5.0;
+						TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TickerNext.app/Contents/MacOS/TickerNext";
 				};
 				name = Debug;
 			};
@@ -695,10 +707,10 @@
 					BUNDLE_LOADER = "$(TEST_HOST)";
 					CODE_SIGN_STYLE = Automatic;
 					GENERATE_INFOPLIST_FILE = YES;
-					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.appTests;
-					PRODUCT_NAME = "$(TARGET_NAME)";
-					SWIFT_VERSION = 5.0;
-					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ticker.app/Contents/MacOS/Ticker";
+						PRODUCT_BUNDLE_IDENTIFIER = io.ticker.nextTests;
+						PRODUCT_NAME = "$(TARGET_NAME)";
+						SWIFT_VERSION = 5.0;
+						TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TickerNext.app/Contents/MacOS/TickerNext";
 				};
 				name = Release;
 			};

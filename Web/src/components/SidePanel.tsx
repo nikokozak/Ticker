@@ -15,6 +15,7 @@ interface SidePanelProps {
   sources: SourceReference[];
   onSourceAdded?: (source: SourceReference) => void;
   onSourceRemoved: (sourceId: string) => void;
+  onSourceOpen?: (source: SourceReference) => void;
   highlightedSourceId?: string | null;
   onClearHighlight?: () => void;
 }
@@ -26,11 +27,12 @@ export function SidePanel({
   streamId,
   sources,
   onSourceRemoved,
+  onSourceOpen,
   highlightedSourceId,
   onClearHighlight,
 }: SidePanelProps) {
-  const [isCollapsed, setIsCollapsed] = useState(true);
-  const [activeTab, setActiveTab] = useState<Tab>('outline');
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>('sources');
   const [error, setError] = useState<string | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -199,6 +201,7 @@ export function SidePanel({
               pendingRemoval={pendingRemoval}
               onAddSource={handleAddSource}
               onRemoveSource={handleRemoveSource}
+              onOpenSource={onSourceOpen}
               sourceRefs={sourceRefs}
             />
           )}
@@ -315,6 +318,7 @@ interface SourcesContentProps {
   pendingRemoval: string | null;
   onAddSource: () => void;
   onRemoveSource: (id: string) => void;
+  onOpenSource?: (source: SourceReference) => void;
   sourceRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
 }
 
@@ -324,6 +328,7 @@ function SourcesContent({
   pendingRemoval,
   onAddSource,
   onRemoveSource,
+  onOpenSource,
   sourceRefs,
 }: SourcesContentProps) {
   return (
@@ -349,6 +354,7 @@ function SourcesContent({
               source={source}
               isRemoving={pendingRemoval === source.id}
               onRemove={() => onRemoveSource(source.id)}
+              onOpen={() => onOpenSource?.(source)}
               ref={(el) => {
                 if (el) sourceRefs.current.set(source.id, el);
                 else sourceRefs.current.delete(source.id);
@@ -365,10 +371,11 @@ interface SourceItemProps {
   source: SourceReference;
   isRemoving: boolean;
   onRemove: () => void;
+  onOpen: () => void;
 }
 
 const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
-  function SourceItem({ source, isRemoving, onRemove }, ref) {
+  function SourceItem({ source, isRemoving, onRemove, onOpen }, ref) {
     const icon = getFileIcon(source.fileType);
     const embeddingInfo = getEmbeddingInfo(source.embeddingStatus);
 
@@ -376,6 +383,16 @@ const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
       <div
         ref={ref}
         className={`side-panel-item side-panel-item--source ${isRemoving ? 'side-panel-item--removing' : ''}`}
+        onClick={onOpen}
+        title={`Open ${source.displayName}`}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onOpen();
+          }
+        }}
       >
         <span className="side-panel-item-icon">{icon}</span>
         <div className="side-panel-item-info">

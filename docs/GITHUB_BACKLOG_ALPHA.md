@@ -1,6 +1,7 @@
 # GitHub Backlog: Alpha (50 users / next month)
 
 Use this document to create a GitHub Milestone and a set of Issues in a consistent order.
+Editor architecture direction does not come from this file; use `docs/TICKER_NEXT_MVP_PLAN.md` and `docs/EDITOR_TECH_DECISION.md`.
 
 ## Milestone
 

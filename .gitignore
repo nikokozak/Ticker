@@ -11,6 +11,9 @@ Web/dist/
 # Build output
 Sources/Ticker/Resources/
 
+# Swift profiling
+default.profraw
+
 # macOS
 .DS_Store
 

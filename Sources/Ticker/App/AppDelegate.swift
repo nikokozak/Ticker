@@ -316,7 +316,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainWindow?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         webViewManager = WebViewManager()
-        mainWindow?.contentView = webViewManager?.webView
+        mainWindow?.contentView = webViewManager?.rootView
         webViewManager?.load()
 
         mainWindow?.makeKeyAndOrderFront(nil)

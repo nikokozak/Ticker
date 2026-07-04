@@ -41,6 +41,9 @@
       "modelSelected": {
         "requiredPayloadKeys": ["cellId", "modelId"]
       },
+      "pdfHighlightLinked": {
+        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "highlightId", "page", "quote"]
+      },
       "streamTitleUpdated": {
         "requiredPayloadKeys": ["id", "title"]
       },

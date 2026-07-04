@@ -16,11 +16,11 @@ Notes:
   - This script builds an unsigned app (`CODE_SIGNING_ALLOWED=NO`) but will optionally
     codesign the installed lane app if `SIGN_IDENTITY` is set (recommended so macOS
     permissions like Accessibility/Screen Recording stick across rebuilds).
-  - Stable lane installs to `~/Applications/Ticker.app` by default.
-  - QA lane installs to `~/Applications/Ticker QA.app` by default.
+  - Stable lane installs to `~/Applications/Ticker Next.app` by default.
+  - QA lane installs to `~/Applications/Ticker Next QA.app` by default.
   - Distribution builds should follow the signing/notarization runbook.
-  - Override build output location with DERIVED_DATA_PATH (or TICKER_DERIVED_DATA_PATH), e.g.:
-      DERIVED_DATA_PATH=/tmp/ticker-xcode-build ./run.sh --prod
+  - Override build output location with DERIVED_DATA_PATH (or TICKER_NEXT_DERIVED_DATA_PATH), e.g.:
+      DERIVED_DATA_PATH=/tmp/tickernext-xcode-build ./run.sh --prod
 EOF
 }
 
@@ -31,13 +31,17 @@ if [[ -f "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
 DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode"
-DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-${TICKER_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}}"
+DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-${TICKER_NEXT_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}}"
 APP="$DERIVED_DATA_PATH/Build/Products"
-APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.app}"
-QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.app.qa}"
-QA_APP_DISPLAY_NAME="${QA_APP_DISPLAY_NAME:-Ticker QA}"
-STABLE_APP_INSTALL_PATH="${STABLE_APP_INSTALL_PATH:-$HOME/Applications/Ticker.app}"
-QA_APP_INSTALL_PATH="${QA_APP_INSTALL_PATH:-$HOME/Applications/Ticker QA.app}"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.next}"
+QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.next.qa}"
+STABLE_APP_DISPLAY_NAME="${STABLE_APP_DISPLAY_NAME:-Ticker Next}"
+QA_APP_DISPLAY_NAME="${QA_APP_DISPLAY_NAME:-Ticker Next QA}"
+STABLE_APP_PRODUCT_NAME="${STABLE_APP_PRODUCT_NAME:-TickerNext}"
+STABLE_APP_INSTALL_PATH="${STABLE_APP_INSTALL_PATH:-$HOME/Applications/Ticker Next.app}"
+QA_APP_INSTALL_PATH="${QA_APP_INSTALL_PATH:-$HOME/Applications/Ticker Next QA.app}"
+XCODE_PROJECT="${XCODE_PROJECT:-Ticker.xcodeproj}"
+XCODE_SCHEME="${XCODE_SCHEME:-Ticker}"
 
 MODE="dev"
 LANE="stable"
@@ -83,8 +87,12 @@ lane_display_name() {
   if [[ "$LANE" == "qa" ]]; then
     echo "$QA_APP_DISPLAY_NAME"
   else
-    echo "Ticker"
+    echo "$STABLE_APP_DISPLAY_NAME"
   fi
+}
+
+lane_product_name() {
+  echo "$STABLE_APP_PRODUCT_NAME"
 }
 
 lane_install_path() {
@@ -98,7 +106,7 @@ lane_install_path() {
 codesign_app_if_configured() {
   local app_path="$1"
 
-  if [[ "${TICKER_DISABLE_CODESIGN:-}" == "1" ]]; then
+  if [[ "${APP_DISABLE_CODESIGN:-}" == "1" ]]; then
     return 0
   fi
 
@@ -118,7 +126,7 @@ codesign_app_if_configured() {
     return 0
   fi
 
-  echo "Code signing Ticker for stable macOS permissions..."
+  echo "Code signing $(lane_display_name) for stable macOS permissions..."
   set +e
   codesign --deep --force --sign "$identity" "$app_path" >/dev/null 2>&1
   local status=$?
@@ -181,8 +189,8 @@ resolve_package_dependencies_if_needed() {
 
   echo "Resolving Swift package dependencies (Sparkle)..."
   xcodebuild -resolvePackageDependencies \
-    -project Ticker.xcodeproj \
-    -scheme Ticker \
+    -project "$XCODE_PROJECT" \
+    -scheme "$XCODE_SCHEME" \
     -derivedDataPath "$DERIVED_DATA_PATH" \
     -quiet
 }
@@ -190,7 +198,7 @@ resolve_package_dependencies_if_needed() {
 build_app() {
   local configuration="$1"
 
-  echo "Building Ticker ($configuration)..."
+  echo "Building $(lane_display_name) ($configuration)..."
   cd "$ROOT_DIR"
 
   resolve_package_dependencies_if_needed
@@ -204,15 +212,18 @@ build_app() {
   if [[ "$LANE" == "qa" ]]; then
     extra_build_settings+=("PRODUCT_BUNDLE_IDENTIFIER=$QA_APP_BUNDLE_ID")
     extra_build_settings+=("INFOPLIST_KEY_CFBundleDisplayName=$QA_APP_DISPLAY_NAME")
+  else
+    extra_build_settings+=("PRODUCT_BUNDLE_IDENTIFIER=$APP_BUNDLE_ID")
+    extra_build_settings+=("INFOPLIST_KEY_CFBundleDisplayName=$STABLE_APP_DISPLAY_NAME")
   fi
 
   local log_path
-  log_path="$(mktemp -t ticker-xcodebuild.XXXXXX.log)"
+  log_path="$(mktemp -t tickernext-xcodebuild.XXXXXX.log)"
 
   local -a cmd=(
     xcodebuild build
-    -project Ticker.xcodeproj
-    -scheme Ticker
+    -project "$XCODE_PROJECT"
+    -scheme "$XCODE_SCHEME"
     -configuration "$configuration"
     -destination 'platform=macOS'
     -derivedDataPath "$DERIVED_DATA_PATH"
@@ -240,10 +251,12 @@ build_app() {
 }
 
 run_dev() {
-  local built_app_path="$APP/Debug/Ticker.app"
+  local product_name
+  product_name="$(lane_product_name)"
+  local built_app_path="$APP/Debug/$product_name.app"
   local launch_app_path
   launch_app_path="$(lane_install_path)"
-  local bin_path="$launch_app_path/Contents/MacOS/Ticker"
+  local bin_path="$launch_app_path/Contents/MacOS/$product_name"
 
   echo "Lane: $LANE (bundle id: $(lane_bundle_id), name: $(lane_display_name))"
   build_app "Debug"
@@ -272,7 +285,9 @@ run_dev() {
 }
 
 run_prod() {
-  local built_app_path="$APP/Release/Ticker.app"
+  local product_name
+  product_name="$(lane_product_name)"
+  local built_app_path="$APP/Release/$product_name.app"
   local launch_app_path
   launch_app_path="$(lane_install_path)"
 

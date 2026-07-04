@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// Manages the WKWebView and Swift ↔ JS bridge
 final class WebViewManager: NSObject {
     let webView: DroppableWebView
+    var rootView: NSView { hostView }
     let bridgeService: BridgeService
     let persistence: PersistenceService?
     private let sourceService: SourceService?
@@ -26,6 +27,11 @@ final class WebViewManager: NSObject {
     // Asset management
     private let assetService = AssetService()
     private var currentStreamIdForFileDrops: UUID?
+    private var allowsListFileDrops = false
+    private let hostView = NSView(frame: .zero)
+    private let editorPaneView = NSView(frame: .zero)
+    private let pdfPaneController = PDFReaderPaneController()
+    private var activePDFPaneStreamId: UUID?
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -98,7 +104,10 @@ final class WebViewManager: NSObject {
 
         super.init()
 
-        webView.autoresizingMask = [.width, .height]
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        configureMainLayout()
+        configurePDFPaneCallbacks()
+
         webView.navigationDelegate = self
         bridgeService.webView = webView
         bridgeService.onMessage = { [weak self] message in
@@ -124,12 +133,56 @@ final class WebViewManager: NSObject {
         }
     }
 
+    private func configureMainLayout() {
+        hostView.autoresizingMask = [.width, .height]
+
+        let pdfPaneView = pdfPaneController.view
+        pdfPaneView.translatesAutoresizingMaskIntoConstraints = false
+        editorPaneView.translatesAutoresizingMaskIntoConstraints = false
+        hostView.addSubview(pdfPaneView)
+        hostView.addSubview(editorPaneView)
+
+        NSLayoutConstraint.activate([
+            pdfPaneView.leadingAnchor.constraint(equalTo: hostView.leadingAnchor),
+            pdfPaneView.topAnchor.constraint(equalTo: hostView.topAnchor),
+            pdfPaneView.bottomAnchor.constraint(equalTo: hostView.bottomAnchor),
+
+            editorPaneView.leadingAnchor.constraint(equalTo: pdfPaneView.trailingAnchor),
+            editorPaneView.topAnchor.constraint(equalTo: hostView.topAnchor),
+            editorPaneView.trailingAnchor.constraint(equalTo: hostView.trailingAnchor),
+            editorPaneView.bottomAnchor.constraint(equalTo: hostView.bottomAnchor),
+        ])
+
+        editorPaneView.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: editorPaneView.leadingAnchor),
+            webView.topAnchor.constraint(equalTo: editorPaneView.topAnchor),
+            webView.trailingAnchor.constraint(equalTo: editorPaneView.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: editorPaneView.bottomAnchor),
+        ])
+    }
+
+    private func configurePDFPaneCallbacks() {
+        pdfPaneController.onLinkSelection = { [weak self] payload in
+            self?.sendPDFHighlightLinked(payload)
+        }
+        pdfPaneController.onClose = { [weak self] in
+            self?.activePDFPaneStreamId = nil
+        }
+    }
+
     /// Handle files dropped via native macOS drag-and-drop
     private func handleDroppedFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+
         guard let streamId = currentStreamIdForFileDrops else {
-            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
-                "error": AnyCodable("Open a stream before dropping files.")
-            ]))
+            guard allowsListFileDrops else {
+                bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                    "error": AnyCodable("Drop files in a stream, or return to Streams to create one from PDF.")
+                ]))
+                return
+            }
+            handleDroppedFilesFromStreamList(urls)
             return
         }
 
@@ -139,6 +192,73 @@ final class WebViewManager: NSObject {
             } else {
                 processDroppedDocument(url, streamId: streamId)
             }
+        }
+    }
+
+    /// Handle drops while no stream is open (stream list/default page).
+    /// A dropped PDF creates a new stream, attaches the source, and opens the document.
+    private func handleDroppedFilesFromStreamList(_ urls: [URL]) {
+        guard let persistence else {
+            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                "error": AnyCodable("Sources are unavailable right now.")
+            ]))
+            return
+        }
+
+        guard let pdfURL = urls.first(where: { SourceFileType(from: $0) == .pdf }) else {
+            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                "error": AnyCodable("Drop a PDF on Streams to create a new stream.")
+            ]))
+            return
+        }
+
+        do {
+            let suggestedTitle = pdfURL.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+            let streamTitle = suggestedTitle.isEmpty ? "Untitled" : suggestedTitle
+            let createdStream = try persistence.createStream(title: streamTitle)
+            currentStreamIdForFileDrops = createdStream.id
+
+            processDroppedDocument(pdfURL, streamId: createdStream.id)
+
+            guard let reloadedStream = try persistence.loadStream(id: createdStream.id) else {
+                bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                    "error": AnyCodable("Created stream but failed to open it.")
+                ]))
+                return
+            }
+
+            let document = try persistence.loadOrCreateStreamDocument(streamId: createdStream.id)
+            let streamPayload = encodeStream(reloadedStream, document: document)
+            bridgeService.send(BridgeMessage(type: "streamLoaded", payload: [
+                "stream": AnyCodable(streamPayload)
+            ]))
+
+            // Refresh the list in the background so counts/titles stay current when user navigates back.
+            let summaries = try persistence.loadStreamSummaries()
+            let formatter = ISO8601DateFormatter()
+            let payload: [String: AnyCodable] = [
+                "streams": AnyCodable(summaries.map { summary -> [String: Any] in
+                    var dict: [String: Any] = [
+                        "id": summary.id.uuidString,
+                        "title": summary.title,
+                        "sourceCount": summary.sourceCount,
+                        "cellCount": summary.cellCount,
+                        "updatedAt": formatter.string(from: summary.updatedAt)
+                    ]
+                    if let previewText = summary.previewText {
+                        dict["previewText"] = previewText
+                    }
+                    return dict
+                })
+            ]
+            bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: payload))
+        } catch {
+            DebugLog.log("[WebViewManager] Failed to create stream from dropped PDF (\(DebugLog.errorSummary(error)))")
+            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                "error": AnyCodable("Could not create stream from dropped PDF.")
+            ]))
+            // Keep drop target unset when stream creation fails.
+            currentStreamIdForFileDrops = nil
         }
     }
 
@@ -197,9 +317,68 @@ final class WebViewManager: NSObject {
             let source = try withSecurityScopedAccess(url) { try sourceService.addSource(from: url, to: streamId) }
             let sourcePayload = encodeSource(source)
             bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+            if source.fileType == .pdf {
+                openSourceReference(source, sourceService: sourceService)
+            }
         } catch {
             DebugLog.log("[WebViewManager] Failed to import dropped document (\(DebugLog.errorSummary(error)))")
             bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
+        }
+    }
+
+    private func sendSourceError(_ message: String) {
+        bridgeService.send(BridgeMessage(type: "sourceError", payload: [
+            "error": AnyCodable(message)
+        ]))
+    }
+
+    private func sendPDFHighlightLinked(_ payload: PDFHighlightLinkPayload) {
+        bridgeService.send(BridgeMessage(
+            type: "pdfHighlightLinked",
+            payload: [
+                "streamId": AnyCodable(payload.streamId.uuidString),
+                "sourceId": AnyCodable(payload.sourceId.uuidString),
+                "sourceName": AnyCodable(payload.sourceName),
+                "highlightId": AnyCodable(payload.highlightId),
+                "page": AnyCodable(payload.page),
+                "quote": AnyCodable(payload.quote)
+            ]
+        ))
+    }
+
+    private func openSourceReference(_ source: SourceReference, sourceService: SourceService) {
+        do {
+            let url = try sourceService.accessFile(source)
+
+            if source.fileType == .pdf {
+                Task { @MainActor [weak self] in
+                    guard let self else {
+                        url.stopAccessingSecurityScopedResource()
+                        return
+                    }
+                    do {
+                        try self.pdfPaneController.present(
+                            url: url,
+                            streamId: source.streamId,
+                            sourceId: source.id,
+                            displayName: source.displayName
+                        )
+                        self.activePDFPaneStreamId = source.streamId
+                    } catch {
+                        url.stopAccessingSecurityScopedResource()
+                        self.activePDFPaneStreamId = nil
+                        self.sendSourceError(error.localizedDescription)
+                    }
+                }
+            } else {
+                Task { @MainActor in
+                    NSWorkspace.shared.open(url)
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+        } catch {
+            DebugLog.log("[WebViewManager] Failed to open source (\(DebugLog.errorSummary(error)))")
+            sendSourceError(error.localizedDescription)
         }
     }
 
@@ -344,12 +523,19 @@ final class WebViewManager: NSObject {
                 return
             }
             currentStreamIdForFileDrops = id
+            if let activeStreamId = activePDFPaneStreamId, activeStreamId != id {
+                await MainActor.run {
+                    pdfPaneController.setVisible(false)
+                    activePDFPaneStreamId = nil
+                }
+            }
             do {
                 if let stream = try persistence.loadStream(id: id) {
                     // Build dependency graph for this stream
                     dependencyService.buildGraph(from: stream.cells)
+                    let document = try persistence.loadOrCreateStreamDocument(streamId: id)
 
-                    let streamPayload = encodeStream(stream)
+                    let streamPayload = encodeStream(stream, document: document)
                     bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
 
                     // Process live blocks (async, after stream is loaded and classifier is ready)
@@ -402,7 +588,8 @@ final class WebViewManager: NSObject {
             do {
                 let stream = try persistence.createStream(title: title)
                 currentStreamIdForFileDrops = stream.id
-                let streamPayload = encodeStream(stream)
+                let document = try persistence.loadOrCreateStreamDocument(streamId: stream.id)
+                let streamPayload = encodeStream(stream, document: document)
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to create stream (\(DebugLog.errorSummary(error)))")
@@ -461,6 +648,34 @@ final class WebViewManager: NSObject {
                 bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: summariesPayload))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to delete stream (\(DebugLog.errorSummary(error)))")
+            }
+
+        case "setFileDropContext":
+            let mode = message.payload?["mode"]?.value as? String
+            switch mode {
+            case "stream":
+                if let streamIdValue = message.payload?["streamId"]?.value as? String,
+                   let streamId = UUID(uuidString: streamIdValue) {
+                    currentStreamIdForFileDrops = streamId
+                    allowsListFileDrops = false
+                } else {
+                    currentStreamIdForFileDrops = nil
+                    allowsListFileDrops = false
+                }
+            case "list":
+                currentStreamIdForFileDrops = nil
+                allowsListFileDrops = true
+                await MainActor.run {
+                    pdfPaneController.setVisible(false)
+                    activePDFPaneStreamId = nil
+                }
+            default:
+                currentStreamIdForFileDrops = nil
+                allowsListFileDrops = false
+                await MainActor.run {
+                    pdfPaneController.setVisible(false)
+                    activePDFPaneStreamId = nil
+                }
             }
 
         case "saveCell":
@@ -540,6 +755,20 @@ final class WebViewManager: NSObject {
                 }
             } catch {
                 DebugLog.log("[WebViewManager] Failed to save cell (\(DebugLog.errorSummary(error)))")
+            }
+
+        case "saveStreamDocument":
+            guard let payload = message.payload,
+                  let streamIdValue = payload["streamId"]?.value as? String,
+                  let streamId = UUID(uuidString: streamIdValue),
+                  let markdown = payload["markdown"]?.value as? String else {
+                DebugLog.log("[WebViewManager] Invalid saveStreamDocument payload")
+                return
+            }
+            do {
+                try persistence.saveStreamDocument(streamId: streamId, markdown: markdown)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save stream document (\(DebugLog.errorSummary(error)))")
             }
 
         case "deleteCell":
@@ -674,6 +903,26 @@ final class WebViewManager: NSObject {
                     "id": AnyCodable(id.uuidString),
                     "error": AnyCodable(error.localizedDescription)
                 ]))
+            }
+
+        case "openSource":
+            guard let payload = message.payload,
+                  let sourceIdValue = payload["sourceId"]?.value as? String,
+                  let sourceId = UUID(uuidString: sourceIdValue),
+                  let sourceService else {
+                DebugLog.log("[WebViewManager] Invalid openSource payload")
+                return
+            }
+
+            do {
+                guard let source = try persistence.loadSource(id: sourceId) else {
+                    sendSourceError("Source not found.")
+                    return
+                }
+                openSourceReference(source, sourceService: sourceService)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to open source (\(DebugLog.errorSummary(error)))")
+                sendSourceError(error.localizedDescription)
             }
 
         case "think":
@@ -845,6 +1094,128 @@ final class WebViewManager: NSObject {
                         self?.bridgeService.send(BridgeMessage(
                             type: "modelSelected",
                             payload: ["cellId": AnyCodable(cellId), "modelId": AnyCodable(modelId)]
+                        ))
+                    }
+                )
+            }
+
+        case "thinkDocument":
+            guard let payload = message.payload,
+                  let requestId = payload["requestId"]?.value as? String,
+                  let query = payload["query"]?.value as? String else {
+                DebugLog.log("[WebViewManager] Invalid thinkDocument payload")
+                return
+            }
+
+            let imageURLs = payload["imageURLs"]?.value as? [String] ?? []
+            let imageDataURLs = assetService.assetsToDataURLs(imageURLs)
+            if !imageDataURLs.isEmpty {
+                DebugLog.log("ThinkDocument: Converting \(imageURLs.count) images to data URLs")
+            }
+
+            var streamIdForRAG: UUID? = nil
+            var sourceContext: String? = nil
+
+            if let streamIdValue = payload["streamId"]?.value as? String,
+               let streamId = UUID(uuidString: streamIdValue) {
+                streamIdForRAG = streamId
+
+                if let stream = try? persistence.loadStream(id: streamId) {
+                    let combinedText = stream.sources
+                        .compactMap { $0.extractedText }
+                        .joined(separator: "\n\n---\n\n")
+                    if !combinedText.isEmpty {
+                        sourceContext = combinedText
+                    }
+                }
+            }
+
+            var resolvedQuery = query
+            if let context = payload["context"]?.value as? String, !context.isEmpty {
+                let cleanContext = context
+                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    .replacingOccurrences(of: "&nbsp;", with: " ")
+                    .replacingOccurrences(of: "&amp;", with: "&")
+                    .replacingOccurrences(of: "&lt;", with: "<")
+                    .replacingOccurrences(of: "&gt;", with: ">")
+                    .replacingOccurrences(of: "&quot;", with: "\"")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if !cleanContext.isEmpty {
+                    resolvedQuery = "Regarding this context:\n\"\"\"\n\(cleanContext)\n\"\"\"\n\n\(resolvedQuery)"
+                }
+            }
+
+            let onChunk: (String) -> Void = { [weak self] chunk in
+                self?.bridgeService.send(BridgeMessage(
+                    type: "documentAIChunk",
+                    payload: ["requestId": AnyCodable(requestId), "chunk": AnyCodable(chunk)]
+                ))
+            }
+            let onComplete: () -> Void = { [weak self] in
+                self?.bridgeService.send(BridgeMessage(
+                    type: "documentAIComplete",
+                    payload: ["requestId": AnyCodable(requestId)]
+                ))
+            }
+            let onError: (Error) -> Void = { [weak self] error in
+                var payload: [String: AnyCodable] = [
+                    "requestId": AnyCodable(requestId),
+                    "error": AnyCodable(error.localizedDescription)
+                ]
+
+                if let proxyError = error as? ProxyLLMError {
+                    payload["errorCode"] = AnyCodable(proxyError.errorCode)
+                    if let proxyRequestId = proxyError.requestId {
+                        payload["proxyRequestId"] = AnyCodable(proxyRequestId)
+                    }
+
+                    if case .quotaExceeded(let details) = proxyError {
+                        payload["quotaScope"] = AnyCodable(details.scope)
+                        payload["quotaLimit"] = AnyCodable(details.limit)
+                        payload["quotaUsed"] = AnyCodable(details.used)
+                        payload["quotaResetAt"] = AnyCodable(details.resetAt)
+                    }
+
+                    if case .rateLimited(let retryAfter) = proxyError {
+                        if let seconds = retryAfter {
+                            payload["retryAfter"] = AnyCodable(seconds)
+                        }
+                    }
+                }
+
+                self?.bridgeService.send(BridgeMessage(
+                    type: "documentAIError",
+                    payload: payload
+                ))
+            }
+
+            Task { [weak self] in
+                guard let self else { return }
+
+                let proxyUsable = await DeviceKeyService.shared.currentState.isUsable
+
+                guard proxyUsable else {
+                    await MainActor.run {
+                        onError(OrchestratorError.noProviderAvailable)
+                    }
+                    return
+                }
+
+                await self.orchestrator.route(
+                    query: resolvedQuery,
+                    queryImages: imageDataURLs,
+                    streamId: streamIdForRAG,
+                    priorCells: [],
+                    sourceContext: sourceContext,
+                    includeHeading: false,
+                    onChunk: onChunk,
+                    onComplete: onComplete,
+                    onError: onError,
+                    onModelSelected: { [weak self] modelId in
+                        self?.bridgeService.send(BridgeMessage(
+                            type: "documentModelSelected",
+                            payload: ["requestId": AnyCodable(requestId), "modelId": AnyCodable(modelId)]
                         ))
                     }
                 )
@@ -1046,6 +1417,26 @@ final class WebViewManager: NSObject {
             // Save diagnostics setting if provided
             if let diagnosticsEnabled = payload["diagnosticsEnabled"]?.value as? Bool {
                 SettingsService.shared.diagnosticsEnabled = diagnosticsEnabled
+            }
+
+            // Save editor font setting if provided
+            if let editorFontValue = payload["editorFont"]?.value as? String,
+               let editorFont = SettingsService.EditorFont(rawValue: editorFontValue) {
+                SettingsService.shared.editorFont = editorFont
+            }
+
+            // Save editor font size setting if provided
+            if let editorFontSize = payload["editorFontSize"]?.value as? Double {
+                SettingsService.shared.editorFontSize = editorFontSize
+            } else if let editorFontSize = payload["editorFontSize"]?.value as? NSNumber {
+                SettingsService.shared.editorFontSize = editorFontSize.doubleValue
+            }
+
+            // Save editor line spacing setting if provided
+            if let editorLineSpacing = payload["editorLineSpacing"]?.value as? Double {
+                SettingsService.shared.editorLineSpacing = editorLineSpacing
+            } else if let editorLineSpacing = payload["editorLineSpacing"]?.value as? NSNumber {
+                SettingsService.shared.editorLineSpacing = editorLineSpacing.doubleValue
             }
 
             // Send back updated settings
@@ -1349,7 +1740,7 @@ final class WebViewManager: NSObject {
 
     // MARK: - Encoding/Decoding Helpers
 
-    private func encodeStream(_ stream: Stream) -> [String: Any] {
+    private func encodeStream(_ stream: Stream, document: StreamDocument) -> [String: Any] {
         let formatter = ISO8601DateFormatter()
         return [
             "id": stream.id.uuidString,
@@ -1456,7 +1847,13 @@ final class WebViewManager: NSObject {
                 return dict
             },
             "createdAt": formatter.string(from: stream.createdAt),
-            "updatedAt": formatter.string(from: stream.updatedAt)
+            "updatedAt": formatter.string(from: stream.updatedAt),
+            "document": [
+                "streamId": document.streamId.uuidString,
+                "markdown": document.markdown,
+                "createdAt": formatter.string(from: document.createdAt),
+                "updatedAt": formatter.string(from: document.updatedAt)
+            ]
         ]
     }
 

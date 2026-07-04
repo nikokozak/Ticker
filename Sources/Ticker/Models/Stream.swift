@@ -35,3 +35,23 @@ struct StreamSummary: Identifiable, Codable {
     let updatedAt: Date
     let previewText: String?
 }
+
+/// Canonical stream editor document (Markdown)
+struct StreamDocument: Codable {
+    let streamId: UUID
+    var markdown: String
+    let createdAt: Date
+    var updatedAt: Date
+
+    init(
+        streamId: UUID,
+        markdown: String = "",
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.streamId = streamId
+        self.markdown = markdown
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}

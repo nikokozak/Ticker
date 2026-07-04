@@ -1,11 +1,15 @@
 # Alpha Stability Plan (Ship in 2 Weeks)
 
-This document is the **single execution plan** for two urgent goals:
+Note (2026-02-13): This document is historical context from an earlier phase.
+It is **not** the current editor implementation plan.
+For all active editor/product decisions, use `docs/TICKER_NEXT_MVP_PLAN.md`.
+
+Historical contents below describe an older execution plan for two urgent goals:
 
 1) **Option A — One-call AI output** for stream cells: the model returns a **restatement heading + body** in the **same streamed response** (no separate “restatement” request, no special restatement field/UI).
 2) **Deep house-cleaning audit**: reduce architectural fragmentation so proxy-only alpha is stable and debuggable.
 
-This is written for an implementation LLM (Claude Code). Follow it as a checklist and keep changes slice-sized.
+This was written for a previous implementation pass and should be treated as archival reference only.
 
 ---
 
@@ -168,7 +172,7 @@ then it must:
 - clear AI-only metadata (`originalPrompt`, `modelId`, any AI flags)
 - stop being treated as an AI cell everywhere (UI + persistence + downstream behaviors)
 
-### Implementation guidance (unified editor)
+### Implementation guidance (current stream editor)
 
 You already have a robust emptiness check in `Ticker/Web/src/extensions/CellKeymap.ts` for backspace deletion.
 
@@ -177,7 +181,7 @@ You already have a robust emptiness check in `Ticker/Web/src/extensions/CellKeym
    - `isCellNodeEmpty(cellBlockNode: ProseMirrorNode): boolean`
 
 2) Run auto-reset in **one** place that sees document updates reliably:
-   - Preferred: in `UnifiedStreamEditor` `onUpdate` (`handleUpdate`) while iterating `cellBlock` nodes, so the decision is based on the authoritative editor doc.
+   - Preferred: in the active stream editor update path while iterating `cellBlock` nodes, so the decision is based on the authoritative editor doc.
    - If you do it in `CellBlockView` (NodeView), ensure it cannot double-run across node view lifecycles.
 
 3) Guardrails:
@@ -265,11 +269,11 @@ Do these in separate PRs if needed, but do them all before alpha:
 
 ### B3 — P1 cleanup tasks (only if time remains)
 
-1) Reduce the “two sources of truth” confusion in unified editor:
+1) Reduce the “two sources of truth” confusion in the active editor:
    - Explicitly document: doc is source of truth for **content**, store is source of truth for **metadata**.
    - Or move more metadata into node attrs and serialize exclusively from the editor.
    - Either is acceptable, but **pick one** and enforce it.
-2) Remove or fully freeze legacy editor paths (`StreamEditor`) if unified editor is the alpha default.
+2) Remove or fully freeze unused editor paths so there is one canonical stream editor implementation.
 
 ---
 

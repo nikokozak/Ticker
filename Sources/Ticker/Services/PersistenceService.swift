@@ -34,7 +34,7 @@ final class PersistenceService {
     private static func databaseURL(fileManager: FileManager) -> URL {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
-        let tickerDir = appSupport.appendingPathComponent("Ticker", isDirectory: true)
+        let tickerDir = appSupport.appendingPathComponent("Ticker-Next", isDirectory: true)
         return tickerDir.appendingPathComponent("ticker.db")
     }
 
@@ -207,6 +207,16 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v10_stream_documents") { db in
+            try db.create(table: "stream_documents") { t in
+                t.column("stream_id", .text).primaryKey()
+                    .references("streams", onDelete: .cascade)
+                t.column("markdown", .text).notNull().defaults(to: "")
+                t.column("created_at", .double).notNull()
+                t.column("updated_at", .double).notNull()
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -286,7 +296,10 @@ final class PersistenceService {
                     s.id, s.title, s.updated_at,
                     (SELECT COUNT(*) FROM sources WHERE stream_id = s.id) as source_count,
                     (SELECT COUNT(*) FROM cells WHERE stream_id = s.id) as cell_count,
-                    (SELECT content FROM cells WHERE stream_id = s.id ORDER BY position LIMIT 1) as preview_text
+                    COALESCE(
+                        (SELECT markdown FROM stream_documents WHERE stream_id = s.id),
+                        (SELECT content FROM cells WHERE stream_id = s.id ORDER BY position LIMIT 1)
+                    ) as preview_text
                 FROM streams s
                 ORDER BY s.updated_at DESC
             """
@@ -460,6 +473,85 @@ final class PersistenceService {
                 LIMIT 1
             """)
             return row.flatMap { UUID(uuidString: $0["id"]) }
+        }
+    }
+
+    // MARK: - Stream Document Operations
+
+    func loadStreamDocument(streamId: UUID) throws -> StreamDocument? {
+        try dbQueue.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT stream_id, markdown, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+                arguments: [streamId.uuidString]
+            ) else {
+                return nil
+            }
+
+            return StreamDocument(
+                streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
+                markdown: row["markdown"],
+                createdAt: Date(timeIntervalSince1970: row["created_at"]),
+                updatedAt: Date(timeIntervalSince1970: row["updated_at"])
+            )
+        }
+    }
+
+    @discardableResult
+    func loadOrCreateStreamDocument(streamId: UUID) throws -> StreamDocument {
+        try dbQueue.write { db in
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT stream_id, markdown, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+                arguments: [streamId.uuidString]
+            ) {
+                return StreamDocument(
+                    streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
+                    markdown: row["markdown"],
+                    createdAt: Date(timeIntervalSince1970: row["created_at"]),
+                    updatedAt: Date(timeIntervalSince1970: row["updated_at"])
+                )
+            }
+
+            let markdown = try initialMarkdownFromLegacyCells(streamId: streamId, db: db)
+            let now = Date()
+            let nowTs = now.timeIntervalSince1970
+
+            try db.execute(
+                sql: """
+                    INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                """,
+                arguments: [streamId.uuidString, markdown, nowTs, nowTs]
+            )
+
+            return StreamDocument(
+                streamId: streamId,
+                markdown: markdown,
+                createdAt: now,
+                updatedAt: now
+            )
+        }
+    }
+
+    func saveStreamDocument(streamId: UUID, markdown: String) throws {
+        let now = Date().timeIntervalSince1970
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(stream_id) DO UPDATE SET
+                        markdown = excluded.markdown,
+                        updated_at = excluded.updated_at
+                """,
+                arguments: [streamId.uuidString, markdown, now, now]
+            )
+
+            try db.execute(
+                sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
+                arguments: [now, streamId.uuidString]
+            )
         }
     }
 
@@ -709,6 +801,30 @@ final class PersistenceService {
 
     // MARK: - Source Operations
 
+    func loadSource(id: UUID) throws -> SourceReference? {
+        try dbQueue.read { db in
+            guard let row = try Row.fetchOne(db, sql: "SELECT * FROM sources WHERE id = ?", arguments: [id.uuidString]) else {
+                return nil
+            }
+
+            let embeddingStatusRaw: String? = row["embedding_status"]
+            let embeddingStatus = embeddingStatusRaw.flatMap(SourceEmbeddingStatus.init(rawValue:)) ?? .none
+
+            return SourceReference(
+                id: UUID(uuidString: row["id"])!,
+                streamId: UUID(uuidString: row["stream_id"])!,
+                displayName: row["display_name"],
+                fileType: SourceFileType(rawValue: row["file_type"]) ?? .text,
+                bookmarkData: row["bookmark_data"],
+                status: SourceStatus(rawValue: row["status"]) ?? .pending,
+                extractedText: row["extracted_text"],
+                pageCount: row["page_count"],
+                embeddingStatus: embeddingStatus,
+                addedAt: Date(timeIntervalSince1970: row["added_at"])
+            )
+        }
+    }
+
     func saveSource(_ source: SourceReference) throws {
         try dbQueue.write { db in
             try db.execute(
@@ -746,6 +862,50 @@ final class PersistenceService {
         try dbQueue.write { db in
             try db.execute(sql: "DELETE FROM sources WHERE id = ?", arguments: [id.uuidString])
         }
+    }
+
+    private func initialMarkdownFromLegacyCells(streamId: UUID, db: Database) throws -> String {
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT content
+                FROM cells
+                WHERE stream_id = ?
+                ORDER BY position
+            """,
+            arguments: [streamId.uuidString]
+        )
+
+        let chunks: [String] = rows.compactMap { row in
+            let content: String = row["content"]
+            let plain = Self.htmlToPlainText(content).trimmingCharacters(in: .whitespacesAndNewlines)
+            return plain.isEmpty ? nil : plain
+        }
+
+        return chunks.joined(separator: "\n\n")
+    }
+
+    private static func htmlToPlainText(_ html: String) -> String {
+        guard let data = html.data(using: .utf8),
+              let attributed = try? NSAttributedString(
+                  data: data,
+                  options: [
+                      .documentType: NSAttributedString.DocumentType.html,
+                      .characterEncoding: String.Encoding.utf8.rawValue
+                  ],
+                  documentAttributes: nil
+              ) else {
+            return html
+                .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "&nbsp;", with: " ")
+                .replacingOccurrences(of: "&amp;", with: "&")
+                .replacingOccurrences(of: "&lt;", with: "<")
+                .replacingOccurrences(of: "&gt;", with: ">")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return attributed.string.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Chunk Operations (RAG Pipeline)

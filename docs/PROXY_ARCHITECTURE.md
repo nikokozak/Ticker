@@ -84,7 +84,7 @@ Notes:
     - For alpha vision: send **base64** image parts (`media_type` + `data`) rather than URL images
   - streaming flag (`stream: true` uses SSE)
   - intent (optional; client-side classification result used by the proxy for routing, e.g. search → Perplexity)
-  - metadata (stream id, cell id) *only if non-sensitive*
+  - metadata (stream id, document id/anchor id) *only if non-sensitive*
 - Returns:
   - streaming or non-stream response
   - token counts (if available)
