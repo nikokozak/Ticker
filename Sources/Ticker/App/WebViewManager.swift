@@ -47,14 +47,15 @@ final class WebViewManager: NSObject {
         self.webView = DroppableWebView(frame: .zero, configuration: config)
 
         // Initialize proxy service (all AI operations go through proxy in alpha)
-        self.proxyService = ProxyLLMService()
+        let proxyService = ProxyLLMService()
+        self.proxyService = proxyService
 
         // Initialize RAG services
         self.embeddingService = EmbeddingService()
         self.chunkingService = ChunkingService()
 
         // Initialize orchestrator (proxy-only mode, no vendor provider registration)
-        self.orchestrator = AIOrchestrator()
+        self.orchestrator = AIOrchestrator(proxyService: proxyService)
 
         do {
             let p = try PersistenceService()
@@ -377,6 +378,7 @@ final class WebViewManager: NSObject {
 
     /// Migrate existing sources to RAG pipeline in background
     private func migrateExistingSourcesToRAG() {
+        guard !SettingsService.proxyOnlyMode else { return }
         guard let persistence, let sourceService else { return }
 
         Task {

@@ -39,7 +39,7 @@ final class SearchService {
         // already have embeddings. If the key is removed, semantic search stops working.
         // This is intentional - we can't perform similarity search without embedding the query.
         var semanticResults: [RetrievedChunk] = []
-        if embedding.isConfigured {
+        if !SettingsService.proxyOnlyMode && embedding.isConfigured {
             semanticResults = try await retrieval.retrieve(query: query, streamId: currentStreamId)
         }
 

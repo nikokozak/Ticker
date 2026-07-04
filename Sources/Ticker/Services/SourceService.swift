@@ -19,7 +19,7 @@ final class SourceService {
         self.embeddingService = embeddingService
     }
 
-    /// Check if embedding service is configured (has OpenAI API key)
+    /// Check if embedding service is configured and enabled
     var isEmbeddingConfigured: Bool {
         embeddingService.isConfigured
     }
@@ -193,6 +193,10 @@ final class SourceService {
 
         // Trigger RAG processing asynchronously if text was extracted
         if source.status == .ready, source.extractedText != nil {
+            guard !SettingsService.proxyOnlyMode else {
+                // ponytail: RAG indexing is parked until Ticker Proxy supports embeddings.
+                return source
+            }
             Task {
                 await processSourceForRAG(source: source)
             }
@@ -205,6 +209,11 @@ final class SourceService {
 
     /// Process a source for RAG: chunk, embed, and store
     func processSourceForRAG(source: SourceReference) async {
+        guard !SettingsService.proxyOnlyMode else {
+            DebugLog.log("RAG: Proxy-only mode, skipping sourceId=\(source.id)")
+            return
+        }
+
         guard let text = source.extractedText, !text.isEmpty else {
             DebugLog.log("RAG: No text to process for sourceId=\(source.id)")
             return

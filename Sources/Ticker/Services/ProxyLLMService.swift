@@ -2,10 +2,10 @@ import Foundation
 
 /// LLM provider that routes requests through the Ticker proxy
 /// Used when device key is active; handles proxy-specific error codes
-final class ProxyLLMService: LLMProvider {
+final class ProxyLLMService {
     private let deviceKeyService: DeviceKeyService
 
-    // MARK: - LLMProvider
+    // MARK: - Metadata
 
     let id = "proxy"
     let name = "Ticker Proxy"
@@ -44,9 +44,7 @@ final class ProxyLLMService: LLMProvider {
     }
 
     var isConfigured: Bool {
-        // Proxy service is always "configured" from a protocol perspective.
-        // The actual proxy mode check happens in AIOrchestrator.route() which
-        // verifies DeviceKeyService.currentState.isUsable before selecting this provider.
+        // Proxy service availability is enforced by DeviceKeyService at request time.
         true
     }
 

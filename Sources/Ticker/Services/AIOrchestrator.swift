@@ -11,10 +11,14 @@ final class AIOrchestrator {
     /// Proxy service - the sole LLM provider in proxy-only mode
     private let proxyService: ProxyLLMService
 
-    init(settings: SettingsService = .shared, retrievalService: RetrievalService? = nil) {
+    init(
+        proxyService: ProxyLLMService,
+        settings: SettingsService = .shared,
+        retrievalService: RetrievalService? = nil
+    ) {
         self.settings = settings
         self.retrievalService = retrievalService
-        self.proxyService = ProxyLLMService()
+        self.proxyService = proxyService
     }
 
     /// Set the retrieval service for RAG
@@ -74,7 +78,7 @@ final class AIOrchestrator {
 
         // Try RAG retrieval if available, otherwise use fallback source context
         var contextToUse = sourceContext
-        if let streamId, let retrievalService {
+        if !SettingsService.proxyOnlyMode, let streamId, let retrievalService {
             do {
                 let retrievedChunks = try await retrievalService.retrieve(query: query, streamId: streamId)
                 if !retrievedChunks.isEmpty {
