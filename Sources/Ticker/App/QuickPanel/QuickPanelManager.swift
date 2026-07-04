@@ -63,6 +63,7 @@ final class QuickPanelManager: ObservableObject {
     // MARK: - Streaming Task
 
     private var streamingTask: Task<Void, Never>?
+    private var documentAITasks: [UUID: Task<Void, Never>] = [:]
     private var isStreamingCancelled = false  // Explicit flag since nested Tasks don't inherit cancellation
 
     // MARK: - Height Management
@@ -89,6 +90,11 @@ final class QuickPanelManager: ObservableObject {
         self.selectionService = SelectionReaderService(cursorService: cursor)
         self.persistence = persistence
         self.bridgeService = bridgeService
+    }
+
+    deinit {
+        streamingTask?.cancel()
+        documentAITasks.values.forEach { $0.cancel() }
     }
 
     /// Configure services after initialization (for dependency injection)
@@ -264,8 +270,7 @@ final class QuickPanelManager: ObservableObject {
 
     /// Handle Cmd+Enter - add content and trigger AI
     func handleCmdEnter() async {
-        // TODO(task-1.4): Restore Quick Panel AI handling on the document model.
-        await addToStream()
+        await addToStream(triggerDocumentAI: true)
     }
 
     /// Handle Option+Enter - ephemeral AI conversation (not saved)
@@ -406,14 +411,15 @@ final class QuickPanelManager: ObservableObject {
     // MARK: - Markdown Capture
 
     /// Add captured content and/or input to the active stream
-    private func addToStream() async {
+    private func addToStream(triggerDocumentAI: Bool = false) async {
         guard let persistence = persistence else {
             error = "Persistence not configured"
             return
         }
 
         let hasContext = nonEmptyTrimmed(context?.selectedText) != nil || context?.clipboardImage != nil
-        let hasInput = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let prompt = nonEmptyTrimmed(inputText)
+        let hasInput = prompt != nil
 
         // Must have something to add
         guard hasContext || hasInput else {
@@ -432,8 +438,44 @@ final class QuickPanelManager: ObservableObject {
             let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
             notifyFrontend(streamId: streamId, fragment: result.fragment, isNewStream: isNewStream)
 
+            let aiPrompt = triggerDocumentAI ? prompt : nil
+            let orchestratorForAI = orchestrator
+            var documentMarkdownForAI: String?
+            var aiStartupError: String?
+
+            if aiPrompt != nil {
+                if orchestratorForAI == nil {
+                    aiStartupError = "AI is not configured"
+                } else {
+                    do {
+                        documentMarkdownForAI = try persistence.loadOrCreateStreamDocument(streamId: streamId).markdown
+                    } catch {
+                        aiStartupError = "Could not load document context"
+                        DebugLog.log("[QuickPanel] Failed to load document context for AI (\(DebugLog.errorSummary(error)))")
+                    }
+                }
+            }
+
             // Success - hide panel
             hide()
+
+            if let aiPrompt {
+                if let orchestratorForAI, let documentMarkdownForAI {
+                    startDocumentAI(
+                        streamId: streamId,
+                        prompt: aiPrompt,
+                        documentMarkdown: documentMarkdownForAI,
+                        persistence: persistence,
+                        orchestrator: orchestratorForAI
+                    )
+                } else {
+                    appendQuickPanelAIError(
+                        streamId: streamId,
+                        summary: aiStartupError ?? "AI request could not start",
+                        persistence: persistence
+                    )
+                }
+            }
 
         } catch {
             self.error = error.localizedDescription
@@ -553,15 +595,104 @@ final class QuickPanelManager: ObservableObject {
             .replacingOccurrences(of: "_", with: "\\_")
     }
 
+    private func startDocumentAI(
+        streamId: UUID,
+        prompt: String,
+        documentMarkdown: String,
+        persistence: PersistenceService,
+        orchestrator: AIOrchestrator
+    ) {
+        let taskId = UUID()
+        var responseMarkdown = ""
+
+        documentAITasks[taskId] = Task { [weak self] in
+            await orchestrator.route(
+                query: prompt,
+                streamId: nil,
+                priorCells: [],
+                sourceContext: documentMarkdown,
+                includeHeading: false,
+                onChunk: { chunk in
+                    responseMarkdown += chunk
+                },
+                onComplete: { [weak self] in
+                    Task { @MainActor in
+                        guard let self else { return }
+
+                        let fragment = responseMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if fragment.isEmpty {
+                            self.appendQuickPanelAIError(
+                                streamId: streamId,
+                                summary: "AI returned an empty response",
+                                persistence: persistence
+                            )
+                        } else {
+                            self.appendQuickPanelAIFragment(
+                                streamId: streamId,
+                                fragment: fragment,
+                                persistence: persistence
+                            )
+                        }
+
+                        self.documentAITasks[taskId] = nil
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor in
+                        guard let self else { return }
+
+                        self.appendQuickPanelAIError(
+                            streamId: streamId,
+                            summary: error.localizedDescription,
+                            persistence: persistence
+                        )
+                        self.documentAITasks[taskId] = nil
+                    }
+                }
+            )
+        }
+    }
+
+    private func appendQuickPanelAIFragment(streamId: UUID, fragment: String, persistence: PersistenceService) {
+        do {
+            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
+            notifyFrontend(streamId: streamId, fragment: result.fragment, source: "quickPanelAI")
+        } catch {
+            DebugLog.log("[QuickPanel] Failed to append AI response (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    private func appendQuickPanelAIError(streamId: UUID, summary: String, persistence: PersistenceService) {
+        appendQuickPanelAIFragment(
+            streamId: streamId,
+            fragment: quickPanelAIErrorFragment(summary: summary),
+            persistence: persistence
+        )
+    }
+
+    private func quickPanelAIErrorFragment(summary: String) -> String {
+        let compact = summary
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = compact.isEmpty ? "Unknown error" : compact
+        let shortened = fallback.count > 180 ? "\(fallback.prefix(177))..." : fallback
+        return "*AI request failed: \(escapeMarkdownEmphasis(shortened))*"
+    }
+
     /// Notify the React frontend about document appends.
-    private func notifyFrontend(streamId: UUID, fragment: String, isNewStream: Bool = false) {
+    private func notifyFrontend(
+        streamId: UUID,
+        fragment: String,
+        isNewStream: Bool = false,
+        source: String = "quickPanel"
+    ) {
         guard let bridgeService = bridgeService else { return }
 
         let payload: [String: AnyCodable] = [
             "streamId": AnyCodable(streamId.uuidString),
             "fragment": AnyCodable(fragment),
             "isNewStream": AnyCodable(isNewStream),
-            "source": AnyCodable("quickPanel")
+            "source": AnyCodable(source)
         ]
 
         bridgeService.send(BridgeMessage(type: "streamDocumentAppended", payload: payload))
