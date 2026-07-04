@@ -9,6 +9,7 @@ final class WebViewManager: NSObject {
     private let settingsService: SettingsService
     private let deviceKeyService: DeviceKeyService
     let bridgeService: BridgeService
+    private let bridgeRouter = BridgeRouter()
     let persistence: PersistenceService?
     private let sourceService: SourceService?
     private let proxyService: ProxyLLMService  // For proxy-mode AI operations
@@ -60,6 +61,10 @@ final class WebViewManager: NSObject {
         self.assetService = container.assetService
 
         super.init()
+
+        if let streamHandler = StreamMessageHandler(container: container, delegate: self) {
+            bridgeRouter.register(streamHandler)
+        }
 
         webView.translatesAutoresizingMaskIntoConstraints = false
         configureMainLayout()
@@ -415,91 +420,14 @@ final class WebViewManager: NSObject {
         }
 
         switch message.type {
-        case "loadStreams":
-            do {
-                let summaries = try persistence.loadStreamSummaries()
-                let payload = StreamCodec.encodeSummaries(summaries)
-                bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: payload))
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to load streams (\(DebugLog.errorSummary(error)))")
-            }
-
-        case "loadStream":
-            guard let payload = message.payload,
-                  let idValue = payload["id"]?.value as? String,
-                  let id = UUID(uuidString: idValue) else {
-                DebugLog.log("[WebViewManager] Invalid loadStream payload")
-                return
-            }
-            currentStreamIdForFileDrops = id
-            if let activeStreamId = activePDFPaneStreamId, activeStreamId != id {
-                await MainActor.run {
-                    pdfPaneController.setVisible(false)
-                    activePDFPaneStreamId = nil
-                }
-            }
-            do {
-                if let stream = try persistence.loadStream(id: id) {
-                    let document = try persistence.loadOrCreateStreamDocument(streamId: id)
-
-                    let streamPayload = StreamCodec.encodeStream(stream, document: document)
-                    bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
-                }
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to load stream (\(DebugLog.errorSummary(error)))")
-            }
-
-        case "createStream":
-            let title = (message.payload?["title"]?.value as? String) ?? "Untitled"
-            do {
-                let stream = try persistence.createStream(title: title)
-                currentStreamIdForFileDrops = stream.id
-                let document = try persistence.loadOrCreateStreamDocument(streamId: stream.id)
-                let streamPayload = StreamCodec.encodeStream(stream, document: document)
-                bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to create stream (\(DebugLog.errorSummary(error)))")
-            }
-
-        case "updateStreamTitle":
-            guard let payload = message.payload,
-                  let idValue = payload["id"]?.value as? String,
-                  let id = UUID(uuidString: idValue),
-                  let title = payload["title"]?.value as? String else {
-                DebugLog.log("[WebViewManager] Invalid updateStreamTitle payload")
-                return
-            }
-            do {
-                if var stream = try persistence.loadStream(id: id) {
-                    stream.title = title
-                    try persistence.updateStream(stream)
-                    bridgeService.send(BridgeMessage(type: "streamTitleUpdated", payload: ["id": AnyCodable(id.uuidString), "title": AnyCodable(title)]))
-                }
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to update stream title (\(DebugLog.errorSummary(error)))")
-            }
-
-        case "deleteStream":
-            guard let payload = message.payload,
-                  let idValue = payload["id"]?.value as? String,
-                  let id = UUID(uuidString: idValue) else {
-                DebugLog.log("[WebViewManager] Invalid deleteStream payload")
-                return
-            }
-            do {
-                try persistence.deleteStream(id: id)
-                if currentStreamIdForFileDrops == id {
-                    currentStreamIdForFileDrops = nil
-                }
-                // Also delete stream assets (images, etc.)
-                try? assetService.deleteAssets(for: id)
-                // Reload streams list
-                let summaries = try persistence.loadStreamSummaries()
-                let summariesPayload = StreamCodec.encodeSummaries(summaries)
-                bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: summariesPayload))
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to delete stream (\(DebugLog.errorSummary(error)))")
-            }
+        case "loadStreams",
+             "loadStream",
+             "createStream",
+             "updateStreamTitle",
+             "deleteStream",
+             "saveStreamDocument",
+             "exportStream":
+            await bridgeRouter.route(message)
 
         case "setFileDropContext":
             let mode = message.payload?["mode"]?.value as? String
@@ -527,20 +455,6 @@ final class WebViewManager: NSObject {
                     pdfPaneController.setVisible(false)
                     activePDFPaneStreamId = nil
                 }
-            }
-
-        case "saveStreamDocument":
-            guard let payload = message.payload,
-                  let streamIdValue = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdValue),
-                  let markdown = payload["markdown"]?.value as? String else {
-                DebugLog.log("[WebViewManager] Invalid saveStreamDocument payload")
-                return
-            }
-            do {
-                try persistence.saveStreamDocument(streamId: streamId, markdown: markdown)
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to save stream document (\(DebugLog.errorSummary(error)))")
             }
 
         case "addSource":
@@ -754,73 +668,6 @@ final class WebViewManager: NSObject {
                         ))
                     }
                 )
-            }
-
-        case "exportStream":
-            guard let payload = message.payload,
-                  let streamIdString = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdString),
-                  let format = payload["format"]?.value as? String else {
-                DebugLog.log("[WebViewManager] Invalid exportStream payload")
-                return
-            }
-
-            do {
-                guard let stream = try persistence.loadStream(id: streamId) else {
-                    DebugLog.log("[WebViewManager] Stream not found for export")
-                    bridgeService.send(BridgeMessage(type: "exportError", payload: [
-                        "streamId": AnyCodable(streamIdString),
-                        "error": AnyCodable("Stream not found")
-                    ]))
-                    return
-                }
-                let document = try persistence.loadOrCreateStreamDocument(streamId: streamId)
-
-                // Convert to export format
-                let content = StreamCodec.formatStreamForExport(stream: stream, document: document, format: format)
-                let fileExtension = format == "markdown" ? ".md" : ".txt"
-                let suggestedName = StreamCodec.sanitizeFilename(stream.title) + fileExtension
-
-                // Show save panel on main thread
-                await MainActor.run {
-                    let savePanel = NSSavePanel()
-                    savePanel.nameFieldStringValue = suggestedName
-                    // Use appropriate content type for the format
-                    if format == "markdown" {
-                        savePanel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
-                    } else {
-                        savePanel.allowedContentTypes = [.plainText]
-                    }
-                    savePanel.message = "Export stream as \(format == "markdown" ? "Markdown" : "Plain Text")"
-
-                    let result = savePanel.runModal()
-                    if result == .OK, let url = savePanel.url {
-                        do {
-                            try content.write(to: url, atomically: true, encoding: .utf8)
-                            bridgeService.send(BridgeMessage(type: "exportComplete", payload: [
-                                "streamId": AnyCodable(streamId.uuidString),
-                                "path": AnyCodable(url.path)
-                            ]))
-                        } catch {
-                            DebugLog.log("[WebViewManager] Failed to write export file (\(DebugLog.errorSummary(error)))")
-                            bridgeService.send(BridgeMessage(type: "exportError", payload: [
-                                "streamId": AnyCodable(streamId.uuidString),
-                                "error": AnyCodable(error.localizedDescription)
-                            ]))
-                        }
-                    } else {
-                        // User canceled - no error, just inform frontend
-                        bridgeService.send(BridgeMessage(type: "exportCanceled", payload: [
-                            "streamId": AnyCodable(streamId.uuidString)
-                        ]))
-                    }
-                }
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to load stream for export (\(DebugLog.errorSummary(error)))")
-                bridgeService.send(BridgeMessage(type: "exportError", payload: [
-                    "streamId": AnyCodable(streamIdString),
-                    "error": AnyCodable(error.localizedDescription)
-                ]))
             }
 
         case "loadSettings":
@@ -1215,6 +1062,27 @@ final class WebViewManager: NSObject {
         return settings
     }
 
+}
+
+extension WebViewManager: StreamMessageHandlerDelegate {
+    func setCurrentStreamIdForFileDrops(_ streamId: UUID?) {
+        currentStreamIdForFileDrops = streamId
+    }
+
+    func clearCurrentStreamIdForFileDrops(ifMatches streamId: UUID) {
+        if currentStreamIdForFileDrops == streamId {
+            currentStreamIdForFileDrops = nil
+        }
+    }
+
+    func closePDFPaneIfShowingDifferentStream(_ streamId: UUID) async {
+        if let activeStreamId = activePDFPaneStreamId, activeStreamId != streamId {
+            await MainActor.run {
+                pdfPaneController.setVisible(false)
+                activePDFPaneStreamId = nil
+            }
+        }
+    }
 }
 
 extension WebViewManager: WKNavigationDelegate {
