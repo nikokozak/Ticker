@@ -4,6 +4,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView } from '@codemirror/view';
 import { Transaction, type Extension } from '@codemirror/state';
+import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { bridge, Stream, SourceReference } from '../types';
@@ -11,6 +12,7 @@ import { SidePanel } from './SidePanel';
 import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
+import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
 import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { computeAppendInsertion } from '../utils/appendInsertion';
@@ -41,7 +43,49 @@ interface FloatingMenuState {
   top: number;
 }
 
+interface AiFeedbackState {
+  visible: boolean;
+  kind: 'writing' | 'error';
+  message: string;
+}
+
 const SELECTION_MENU_DELAY_MS = 180;
+const AI_ERROR_FEEDBACK_MS = 2200;
+
+function focusEditorAtDocumentEnd(view: EditorView) {
+  const end = view.state.doc.length;
+  view.dispatch({
+    selection: { anchor: end },
+    effects: EditorView.scrollIntoView(end, { y: 'nearest' }),
+    userEvent: 'select',
+  });
+  view.focus();
+}
+
+const clickToDocumentEndExtension: Extension = EditorView.domEventHandlers({
+  mousedown: (event, view) => {
+    if (event.button !== 0 || event.defaultPrevented) return false;
+    if (!(event.target instanceof Node) || !view.scrollDOM.contains(event.target)) return false;
+
+    const endCoords = view.coordsAtPos(view.state.doc.length, 1);
+    if (!endCoords) return false;
+
+    const scrollerRect = view.scrollDOM.getBoundingClientRect();
+    const isBelowLastLine = event.clientY > endCoords.bottom + 6 && event.clientY <= scrollerRect.bottom;
+    if (!isBelowLastLine) return false;
+
+    event.preventDefault();
+    focusEditorAtDocumentEnd(view);
+    return true;
+  },
+});
+
+function dispatchAiRangeClear(view: EditorView) {
+  view.dispatch({
+    effects: setAiWritingRangeEffect.of(null),
+    annotations: Transaction.addToHistory.of(false),
+  });
+}
 
 const markdownHighlightStyle = HighlightStyle.define([
   {
@@ -126,6 +170,11 @@ export function StreamEditor({
     left: 0,
     top: 0,
   });
+  const [aiFeedback, setAiFeedback] = useState<AiFeedbackState>({
+    visible: false,
+    kind: 'writing',
+    message: 'AI is writing',
+  });
 
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
@@ -136,14 +185,15 @@ export function StreamEditor({
   const revisionRef = useRef(stream.document?.revision ?? 0);
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
+  const aiFeedbackTimerRef = useRef<number | null>(null);
   const showPromptRef = useRef(showPrompt);
   const isAiThinkingRef = useRef(false);
   const aiRequestRef = useRef<{
     id: string;
     buffer: string;
-    from: number;
-    to: number;
     mode: 'replace' | 'after';
+    originalText: string;
+    prefix: string;
   } | null>(null);
 
   const insertImageAtCursor = useCallback((imageUrl: string, altText = 'image') => {
@@ -212,6 +262,40 @@ export function StreamEditor({
     return shell.contains(active);
   }, []);
 
+  const clearAiFeedbackTimer = useCallback(() => {
+    if (aiFeedbackTimerRef.current !== null) {
+      window.clearTimeout(aiFeedbackTimerRef.current);
+      aiFeedbackTimerRef.current = null;
+    }
+  }, []);
+
+  const showAiWritingFeedback = useCallback(() => {
+    clearAiFeedbackTimer();
+    setAiFeedback({
+      visible: true,
+      kind: 'writing',
+      message: 'AI is writing',
+    });
+  }, [clearAiFeedbackTimer]);
+
+  const hideAiFeedback = useCallback(() => {
+    clearAiFeedbackTimer();
+    setAiFeedback((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+  }, [clearAiFeedbackTimer]);
+
+  const showAiErrorFeedback = useCallback((message: string) => {
+    clearAiFeedbackTimer();
+    setAiFeedback({
+      visible: true,
+      kind: 'error',
+      message,
+    });
+    aiFeedbackTimerRef.current = window.setTimeout(() => {
+      aiFeedbackTimerRef.current = null;
+      setAiFeedback((previous) => (previous.kind === 'error' ? { ...previous, visible: false } : previous));
+    }, AI_ERROR_FEEDBACK_MS);
+  }, [clearAiFeedbackTimer]);
+
   useEffect(() => {
     setMarkdownContent(stream.document?.markdown ?? '');
     lastSavedContentRef.current = stream.document?.markdown ?? '';
@@ -220,12 +304,28 @@ export function StreamEditor({
     setTitle(stream.title);
     setSaveState('saved');
     setAiStatus('idle');
+    hideAiFeedback();
     setFloatingMenu({ visible: false, left: 0, top: 0 });
     setShowPrompt(false);
     setPromptValue('');
     promptContextRef.current = null;
     aiRequestRef.current = null;
-  }, [stream.id, stream.document?.markdown, stream.document?.revision, stream.title]);
+    const view = editorViewRef.current;
+    if (view) {
+      dispatchAiRangeClear(view);
+    }
+  }, [hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.title]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const view = editorViewRef.current;
+      if (view) {
+        focusEditorAtDocumentEnd(view);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [stream.id]);
 
   useEffect(() => {
     markdownContentRef.current = markdownContent;
@@ -358,6 +458,16 @@ export function StreamEditor({
         const chunk = message.payload?.chunk as string | undefined;
         if (!requestId || requestId !== active.id || !chunk) return;
         active.buffer += chunk;
+
+        const view = editorViewRef.current;
+        const range = view ? getAiWritingRange(view.state) : null;
+        if (view && range) {
+          view.dispatch({
+            changes: { from: range.to, insert: chunk },
+            effects: setAiWritingRangeEffect.of({ from: range.from, to: range.to + chunk.length }),
+            annotations: Transaction.addToHistory.of(false),
+          });
+        }
         return;
       }
 
@@ -402,8 +512,23 @@ export function StreamEditor({
           }
         }
 
+        const view = editorViewRef.current;
+        const range = view ? getAiWritingRange(view.state) : null;
+        if (view && range) {
+          view.dispatch({
+            changes: { from: range.from, to: range.to, insert: active.originalText },
+            selection: { anchor: range.from + active.originalText.length },
+            effects: setAiWritingRangeEffect.of(null),
+            annotations: Transaction.addToHistory.of(false),
+          });
+          view.focus();
+        } else if (view) {
+          dispatchAiRangeClear(view);
+        }
+
         setAiStatus('idle');
         aiRequestRef.current = null;
+        showAiErrorFeedback(displayError);
         addToast(displayError, 'error');
         return;
       }
@@ -416,48 +541,70 @@ export function StreamEditor({
         if (!view) {
           setAiStatus('idle');
           aiRequestRef.current = null;
+          hideAiFeedback();
           return;
         }
 
         const rawOutput = active.buffer.trim();
         if (!rawOutput) {
+          const range = getAiWritingRange(view.state);
+          if (range) {
+            view.dispatch({
+              changes: { from: range.from, to: range.to, insert: active.originalText },
+              selection: { anchor: range.from + active.originalText.length },
+              effects: setAiWritingRangeEffect.of(null),
+              annotations: Transaction.addToHistory.of(false),
+            });
+          } else {
+            dispatchAiRangeClear(view);
+          }
+          view.focus();
           setAiStatus('idle');
           aiRequestRef.current = null;
+          showAiErrorFeedback('AI returned empty output.');
           addToast('AI returned empty output.', 'warning');
           return;
         }
 
-        let insertText = rawOutput;
-        let from = active.from;
-        let to = active.to;
-
-        if (active.mode === 'after') {
-          const doc = view.state.doc;
-          const before = doc.sliceString(Math.max(0, active.to - 2), active.to);
-          const needsBlankLine = !before.endsWith('\n\n');
-          const needsSingleBreak = before.endsWith('\n') && !before.endsWith('\n\n');
-          const prefix = needsBlankLine ? '\n\n' : needsSingleBreak ? '\n' : '';
-          const suffix = insertText.endsWith('\n') ? '' : '\n';
-          insertText = `${prefix}${insertText}${suffix}`;
-          from = active.to;
-          to = active.to;
+        const range = getAiWritingRange(view.state);
+        if (!range) {
+          setAiStatus('idle');
+          aiRequestRef.current = null;
+          hideAiFeedback();
+          return;
         }
 
+        const suffix = active.mode === 'after' && !rawOutput.endsWith('\n') ? '\n' : '';
+        const insertText = `${active.prefix}${rawOutput}${suffix}`;
+        const finalFrom = range.from;
+        const originalTo = finalFrom + active.originalText.length;
+
         view.dispatch({
-          changes: { from, to, insert: insertText },
-          selection: { anchor: from + insertText.length },
-          annotations: Transaction.addToHistory.of(true),
+          changes: { from: range.from, to: range.to, insert: active.originalText },
+          annotations: Transaction.addToHistory.of(false),
+        });
+
+        view.dispatch({
+          changes: { from: finalFrom, to: originalTo, insert: insertText },
+          selection: { anchor: finalFrom + insertText.length },
+          effects: setAiWritingRangeEffect.of(null),
+          annotations: [
+            Transaction.addToHistory.of(true),
+            Transaction.userEvent.of(AI_HISTORY_USER_EVENT),
+            isolateHistory.of('full'),
+          ],
         });
         view.focus();
 
         setAiStatus('idle');
         aiRequestRef.current = null;
+        hideAiFeedback();
         return;
       }
     });
 
     return () => unsubscribe();
-  }, [addToast, stream.id]);
+  }, [addToast, hideAiFeedback, showAiErrorFeedback, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
@@ -763,15 +910,60 @@ export function StreamEditor({
       return;
     }
 
+    const view = editorViewRef.current;
+    if (!view) {
+      addToast('Editor is not ready yet.', 'warning');
+      return;
+    }
+
+    const docLength = view.state.doc.length;
+    const from = Math.max(0, Math.min(options.from, docLength));
+    const to = Math.max(from, Math.min(options.to, docLength));
+    const originalText = options.mode === 'replace' ? view.state.doc.sliceString(from, to) : '';
+    let rangeFrom = from;
+    let rangeTo = from;
+    let prefix = '';
+
+    if (options.mode === 'after') {
+      rangeFrom = to;
+      rangeTo = to;
+      const before = view.state.doc.sliceString(Math.max(0, to - 2), to);
+      const needsBlankLine = !before.endsWith('\n\n');
+      const needsSingleBreak = before.endsWith('\n') && !before.endsWith('\n\n');
+      prefix = needsBlankLine ? '\n\n' : needsSingleBreak ? '\n' : '';
+      rangeTo += prefix.length;
+    }
+
+    const initialChange = options.mode === 'replace'
+      ? { from, to, insert: '' }
+      : prefix
+        ? { from: to, insert: prefix }
+        : null;
+
+    view.dispatch({
+      changes: initialChange ?? undefined,
+      selection: { anchor: rangeTo },
+      effects: [
+        setAiWritingRangeEffect.of({ from: rangeFrom, to: rangeTo }),
+        EditorView.scrollIntoView(rangeTo, { y: 'nearest' }),
+      ],
+      annotations: [
+        Transaction.addToHistory.of(false),
+        isolateHistory.of('before'),
+      ],
+    });
+    view.focus();
+
     const requestId = crypto.randomUUID();
     aiRequestRef.current = {
       id: requestId,
       buffer: '',
-      from: options.from,
-      to: options.to,
       mode: options.mode,
+      originalText,
+      prefix,
     };
     setAiStatus('thinking');
+    showAiWritingFeedback();
 
     bridge.send({
       type: 'thinkDocument',
@@ -783,7 +975,7 @@ export function StreamEditor({
         imageURLs: options.imageUrls ?? [],
       },
     });
-  }, [addToast, isAiThinking, stream.id]);
+  }, [addToast, isAiThinking, showAiWritingFeedback, stream.id]);
 
   const handleSend = useCallback(() => {
     const context = getSelectionContext(true);
@@ -902,6 +1094,10 @@ export function StreamEditor({
   useEffect(() => {
     return () => clearSelectionMenuTimer();
   }, [clearSelectionMenuTimer]);
+
+  useEffect(() => {
+    return () => clearAiFeedbackTimer();
+  }, [clearAiFeedbackTimer]);
 
   useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
@@ -1125,8 +1321,9 @@ export function StreamEditor({
                   autocomplete: 'on',
                   autocorrect: 'on',
                 }),
-                EditorView.editable.of(!isAiThinking),
                 selectionMenuExtension,
+                clickToDocumentEndExtension,
+                aiWritingExtension,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
@@ -1134,12 +1331,27 @@ export function StreamEditor({
               ]}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
+                window.setTimeout(() => {
+                  if (editorViewRef.current === view) {
+                    focusEditorAtDocumentEnd(view);
+                  }
+                }, 0);
               }}
               onChange={(value) => {
                 setMarkdownContent(value);
               }}
               className="document-editor-codemirror"
             />
+            {aiFeedback.visible && (
+              <div
+                className={`document-ai-status-pill document-ai-status-pill--${aiFeedback.kind}`}
+                role="status"
+                aria-live="polite"
+              >
+                <span className="document-ai-status-dot" aria-hidden="true" />
+                <span>{aiFeedback.message}</span>
+              </div>
+            )}
           </div>
         </div>
         {hasPdfSources && (

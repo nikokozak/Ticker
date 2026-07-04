@@ -753,6 +753,7 @@ body {
 }
 
 .document-editor-shell {
+  position: relative;
   width: 100%;
   max-width: none;
   min-height: calc(100vh - 200px);
@@ -781,6 +782,7 @@ body {
 
 .document-editor-codemirror .cm-scroller {
   font-family: var(--editor-font-family);
+  min-height: inherit;
   padding: clamp(var(--space-5), 3.6vw, var(--space-7)) clamp(var(--space-5), 4.6vw, var(--space-8)) clamp(220px, 30vh, 360px);
   overflow-x: hidden;
   overflow-y: visible;
@@ -788,8 +790,15 @@ body {
 
 .document-editor-codemirror .cm-content {
   max-width: 68ch;
+  min-height: inherit;
   margin: 0 auto;
-  caret-color: var(--color-text);
+  caret-color: var(--text);
+}
+
+.document-editor-codemirror .cm-cursor,
+.document-editor-codemirror .cm-dropCursor {
+  border-left-color: var(--text) !important;
+  border-left-width: 2px;
 }
 
 .document-editor-codemirror .cm-focused {
@@ -806,6 +815,96 @@ body {
   padding-left: var(--space-3);
   border-left: 2px solid var(--border);
   color: var(--color-text-secondary);
+}
+
+.document-editor-codemirror .cm-ai-writing-range {
+  color: var(--color-text-secondary);
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    var(--accent-soft) 42%,
+    var(--border-subtle) 58%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  border-radius: 2px;
+  animation: ai-writing-shimmer 1.15s ease-in-out infinite;
+}
+
+@keyframes ai-writing-shimmer {
+  0% {
+    background-position: 130% 0;
+  }
+
+  100% {
+    background-position: -80% 0;
+  }
+}
+
+.document-ai-status-pill {
+  position: fixed;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  z-index: 930;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--overlay-shadow);
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui-small);
+  line-height: 1;
+  pointer-events: none;
+  backdrop-filter: var(--overlay-backdrop);
+  animation: ai-status-enter 0.12s ease-out;
+}
+
+.document-ai-status-pill--error {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--surface-raised);
+}
+
+.document-ai-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.68;
+  animation: ai-status-pulse 0.9s ease-in-out infinite;
+}
+
+.document-ai-status-pill--error .document-ai-status-dot {
+  animation: none;
+}
+
+@keyframes ai-status-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ai-status-pulse {
+  0%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.45;
+  }
+
+  50% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
 }
 
 .document-editor-codemirror .cm-md-image-widget {
