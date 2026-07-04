@@ -194,6 +194,39 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_loadStreamSummariesUsesDocumentMarkdownAndUpdatedAtOrdering() throws {
+        try withTempPersistenceService { service in
+            let olderStream = Stream(title: "Older Stream")
+            let newerStream = Stream(title: "Newer Stream")
+            try service.saveStream(olderStream)
+            try service.saveStream(newerStream)
+
+            _ = try service.saveStreamDocument(
+                streamId: olderStream.id,
+                markdown: "# Older Notes\n\nThe older document preview comes from markdown."
+            )
+            Thread.sleep(forTimeInterval: 0.01)
+            _ = try service.saveStreamDocument(
+                streamId: newerStream.id,
+                markdown: "Newer document preview\n\nSecond paragraph."
+            )
+
+            let summaries = try service.loadStreamSummaries()
+
+            XCTAssertEqual(summaries.map(\.id), [newerStream.id, olderStream.id])
+            XCTAssertGreaterThan(
+                try XCTUnwrap(summaries.first?.updatedAt.timeIntervalSince1970),
+                try XCTUnwrap(summaries.dropFirst().first?.updatedAt.timeIntervalSince1970)
+            )
+
+            let newerSummary = try XCTUnwrap(summaries.first { $0.id == newerStream.id })
+            XCTAssertEqual(newerSummary.previewText, "Newer document preview\n\nSecond paragraph.")
+
+            let olderSummary = try XCTUnwrap(summaries.first { $0.id == olderStream.id })
+            XCTAssertEqual(olderSummary.previewText, "# Older Notes\n\nThe older document preview comes from markdown.")
+        }
+    }
+
     func test_textSearchFindsStreamDocumentWithSnippet() async throws {
         try await withTempPersistenceService { service in
             let stream = Stream(title: "Searchable Stream")
@@ -235,6 +268,37 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertTrue(result.snippet.contains("retargeted search phrase"))
             XCTAssertTrue(results.otherStreamResults.isEmpty)
         }
+    }
+
+    func test_migrationBackupIsCreatedWhenExistingDatabaseHasPendingMigrations() throws {
+        try withSeededV10Database { _ in
+            // v10 is intentionally behind the service's registered migrations.
+        } body: { dbURL, fileManager in
+            _ = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+
+            XCTAssertEqual(
+                try preMigrationBackups(nextTo: dbURL, fileManager: fileManager).count,
+                1
+            )
+        }
+    }
+
+    func test_migrationBackupIsNotCreatedWhenExistingDatabaseHasNoPendingMigrations() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+
+        _ = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        _ = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        defer {
+            _ = try? fileManager.removeItem(at: tempDir)
+        }
+
+        XCTAssertEqual(
+            try preMigrationBackups(nextTo: dbURL, fileManager: fileManager).count,
+            0
+        )
     }
 
     func test_v11MigrationRecoversPostDocumentQuickPanelCellsInOrder() throws {
@@ -587,15 +651,21 @@ final class StreamDocumentTests: XCTestCase {
     }
 
     private func assertPreMigrationBackupExists(nextTo dbURL: URL, fileManager: FileManager) throws {
-        let backupsDirectory = dbURL.deletingLastPathComponent().appendingPathComponent("backups", isDirectory: true)
-        let backups = try fileManager.contentsOfDirectory(
-            at: backupsDirectory,
-            includingPropertiesForKeys: nil
-        )
-
         XCTAssertTrue(
-            backups.contains { $0.pathExtension.lowercased() == "db" },
+            try preMigrationBackups(nextTo: dbURL, fileManager: fileManager).isEmpty == false,
             "Expected pre-migration backup for existing DB with pending v11 migration"
         )
+    }
+
+    private func preMigrationBackups(nextTo dbURL: URL, fileManager: FileManager) throws -> [URL] {
+        let backupsDirectory = dbURL.deletingLastPathComponent().appendingPathComponent("backups", isDirectory: true)
+        guard fileManager.fileExists(atPath: backupsDirectory.path) else {
+            return []
+        }
+
+        return try fileManager.contentsOfDirectory(
+            at: backupsDirectory,
+            includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension.lowercased() == "db" }
     }
 }
