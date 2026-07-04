@@ -17,7 +17,10 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'imageSaveError',
   'imageSaved',
   'proxyAuthState',
+  'pdfAnchorPickCancelled',
+  'pdfAnchorPlaced',
   'pdfHighlightLinked',
+  'pdfPaneStateChanged',
   'settingsLoaded',
   'sourceAdded',
   'sourceError',
@@ -35,6 +38,7 @@ export type SwiftToWebMessageType = (typeof SWIFT_TO_WEB_MESSAGE_TYPES)[number];
 
 export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'addSource',
+  'beginPdfAnchorPick',
   'clearProxyDeviceKey',
   'createStream',
   'deleteStream',

@@ -127,8 +127,28 @@ final class WebViewManager: NSObject {
                 self.sendSourceError("Could not save PDF highlight.")
             }
         }
+        pdfPaneController.onAnchorPlaced = { [weak self] payload in
+            guard let self else { return }
+            guard let persistence = self.persistence else {
+                self.sendSourceError("Could not save PDF anchor.")
+                self.sendPDFAnchorPickCancelled(streamId: payload.streamId)
+                return
+            }
+            do {
+                try persistence.savePDFHighlight(payload.highlight)
+                self.sendPDFAnchorPlaced(payload)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save PDF anchor (\(DebugLog.errorSummary(error)))")
+                self.sendSourceError("Could not save PDF anchor.")
+                self.sendPDFAnchorPickCancelled(streamId: payload.streamId)
+            }
+        }
+        pdfPaneController.onAnchorPickCancelled = { [weak self] streamId in
+            self?.sendPDFAnchorPickCancelled(streamId: streamId)
+        }
         pdfPaneController.onClose = { [weak self] in
             self?.activePDFPaneStreamId = nil
+            self?.sendPDFPaneStateChanged(visible: false)
         }
     }
 
@@ -285,6 +305,45 @@ final class WebViewManager: NSObject {
         ))
     }
 
+    private func sendPDFPaneStateChanged(
+        visible: Bool,
+        streamId: UUID? = nil,
+        sourceId: UUID? = nil,
+        sourceName: String? = nil
+    ) {
+        var payload: [String: AnyCodable] = ["visible": AnyCodable(visible)]
+        if let streamId {
+            payload["streamId"] = AnyCodable(streamId.uuidString)
+        }
+        if let sourceId {
+            payload["sourceId"] = AnyCodable(sourceId.uuidString)
+        }
+        if let sourceName {
+            payload["sourceName"] = AnyCodable(sourceName)
+        }
+        bridgeService.send(BridgeMessage(type: "pdfPaneStateChanged", payload: payload))
+    }
+
+    private func sendPDFAnchorPlaced(_ payload: PDFHighlightLinkPayload) {
+        bridgeService.send(BridgeMessage(
+            type: "pdfAnchorPlaced",
+            payload: [
+                "streamId": AnyCodable(payload.streamId.uuidString),
+                "sourceId": AnyCodable(payload.highlight.sourceId.uuidString),
+                "sourceName": AnyCodable(payload.sourceName),
+                "highlightId": AnyCodable(payload.highlight.id.uuidString),
+                "page": AnyCodable(payload.highlight.page)
+            ]
+        ))
+    }
+
+    private func sendPDFAnchorPickCancelled(streamId: UUID) {
+        bridgeService.send(BridgeMessage(
+            type: "pdfAnchorPickCancelled",
+            payload: ["streamId": AnyCodable(streamId.uuidString)]
+        ))
+    }
+
     private func openPDFSource(
         _ source: SourceReference,
         sourceService: SourceService,
@@ -306,6 +365,12 @@ final class WebViewManager: NSObject {
                         displayName: source.displayName
                     )
                     self.activePDFPaneStreamId = source.streamId
+                    self.sendPDFPaneStateChanged(
+                        visible: true,
+                        streamId: source.streamId,
+                        sourceId: source.id,
+                        sourceName: source.displayName
+                    )
                     afterPresent?(self.pdfPaneController)
                 } catch {
                     url.stopAccessingSecurityScopedResource()
@@ -361,6 +426,21 @@ final class WebViewManager: NSObject {
 
         openPDFSource(source, sourceService: sourceService) { controller in
             controller.navigateToHighlight(id: highlightId, page: page)
+        }
+    }
+
+    func beginPDFAnchorPick(streamId: UUID) async {
+        let didStart = await MainActor.run {
+            guard activePDFPaneStreamId == streamId,
+                  pdfPaneController.isPresenting(streamId: streamId) else {
+                return false
+            }
+            return pdfPaneController.beginAnchorPickMode()
+        }
+
+        if !didStart {
+            sendSourceError("Open a PDF source before linking to PDF.")
+            sendPDFAnchorPickCancelled(streamId: streamId)
         }
     }
 
@@ -476,6 +556,7 @@ extension WebViewManager: StreamMessageHandlerDelegate {
         await MainActor.run {
             pdfPaneController.setVisible(false)
             activePDFPaneStreamId = nil
+            sendPDFPaneStateChanged(visible: false)
         }
     }
 }
@@ -490,6 +571,7 @@ extension WebViewManager: SourceMessageHandlerDelegate {
         await MainActor.run {
             pdfPaneController.setVisible(false)
             activePDFPaneStreamId = nil
+            sendPDFPaneStateChanged(visible: false)
         }
     }
 }

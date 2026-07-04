@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Selected stream text can now be linked to a picked PDF spot.
 - PDF stream links now reopen their source and navigate back to the saved highlight.
 - PDF pane with continuous scrolling and stream links back to selected highlights.
 - Quick Panel ephemeral chats can save individual messages and clear the in-memory conversation.

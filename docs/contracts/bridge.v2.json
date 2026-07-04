@@ -58,6 +58,16 @@
       "pdfHighlightLinked": {
         "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "highlightId", "page", "quote"]
       },
+      "pdfPaneStateChanged": {
+        "requiredPayloadKeys": ["visible"],
+        "optionalPayloadKeys": ["streamId", "sourceId", "sourceName"]
+      },
+      "pdfAnchorPlaced": {
+        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "highlightId", "page"]
+      },
+      "pdfAnchorPickCancelled": {
+        "requiredPayloadKeys": ["streamId"]
+      },
       "proxyAuthState": {
         "requiredPayloadKeys": ["state"]
       },
@@ -99,6 +109,9 @@
   "webToSwift": {
     "messages": {
       "addSource": {
+        "requiredPayloadKeys": ["streamId"]
+      },
+      "beginPdfAnchorPick": {
         "requiredPayloadKeys": ["streamId"]
       },
       "clearProxyDeviceKey": {

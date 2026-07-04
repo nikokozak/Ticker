@@ -63,6 +63,10 @@ private enum PDFHighlightAnnotationStyle {
     static let contentsPrefix = "ticker-pdf-highlight:"
     static let color = NSColor.systemYellow.withAlphaComponent(0.32)
     static let pulseColor = NSColor.systemYellow.withAlphaComponent(0.62)
+    static let markerColor = PDFPaneStyle.accent.withAlphaComponent(0.38)
+    static let markerPulseColor = PDFPaneStyle.accent.withAlphaComponent(0.74)
+    static let markerSize: CGFloat = 14
+    static let escapeKeyCode: UInt16 = 53
 }
 
 private final class PDFPaneResizeHandleView: NSView {
@@ -74,6 +78,8 @@ private final class PDFPaneResizeHandleView: NSView {
 
 final class PDFReaderPaneController: NSViewController {
     var onLinkSelection: ((PDFHighlightLinkPayload) -> Void)?
+    var onAnchorPlaced: ((PDFHighlightLinkPayload) -> Void)?
+    var onAnchorPickCancelled: ((UUID) -> Void)?
     var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
     var onClose: (() -> Void)?
 
@@ -91,9 +97,13 @@ final class PDFReaderPaneController: NSViewController {
     private let minimumEditorPaneWidth: CGFloat = 440
     private var pdfPaneResizeStartWidth: CGFloat = 0
     private var activePDFContext: (streamId: UUID, sourceId: UUID, sourceName: String, fileURL: URL)?
+    private var isAnchorPickMode = false
+    private var anchorPickMouseMonitor: Any?
+    private var anchorPickKeyMonitor: Any?
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        exitAnchorPickMode(notifyCancelled: false)
         releaseActivePDFContext()
     }
 
@@ -104,6 +114,7 @@ final class PDFReaderPaneController: NSViewController {
 
     func present(url: URL, streamId: UUID, sourceId: UUID, displayName: String) throws {
         if let existing = activePDFContext, existing.sourceId != sourceId {
+            exitAnchorPickMode(notifyCancelled: true)
             releaseActivePDFContext()
         }
 
@@ -139,6 +150,39 @@ final class PDFReaderPaneController: NSViewController {
 
     func isPresenting(sourceId: UUID) -> Bool {
         activePDFContext?.sourceId == sourceId && isPDFPaneVisible
+    }
+
+    func isPresenting(streamId: UUID) -> Bool {
+        activePDFContext?.streamId == streamId && isPDFPaneVisible
+    }
+
+    func beginAnchorPickMode() -> Bool {
+        guard activePDFContext != nil, isPDFPaneVisible else { return false }
+        exitAnchorPickMode(notifyCancelled: false)
+
+        isAnchorPickMode = true
+        pdfPaneTitleField.stringValue = "Click a spot to link · Esc to cancel"
+        pdfPaneTitleField.textColor = PDFPaneStyle.accent
+        pdfPaneLinkButton.isEnabled = false
+        pdfPanePDFView.enclosingScrollView?.documentCursor = .crosshair
+
+        anchorPickMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            self?.handleAnchorPickMouseDown(event) ?? event
+        }
+        anchorPickKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            if self.isAnchorPickMode, event.keyCode == PDFHighlightAnnotationStyle.escapeKeyCode {
+                self.cancelAnchorPickMode()
+                return nil
+            }
+            return event
+        }
+
+        return true
+    }
+
+    func cancelAnchorPickMode() {
+        exitAnchorPickMode(notifyCancelled: true)
     }
 
     func navigateToHighlight(id highlightId: String?, page pageNumber: Int?) {
@@ -188,10 +232,12 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         guard isPDFPaneVisible else {
+            exitAnchorPickMode(notifyCancelled: true)
             releaseActivePDFContext()
             return true
         }
 
+        exitAnchorPickMode(notifyCancelled: true)
         let paneWidth = max(0, widthConstraint.constant)
         widthConstraint.constant = 0
         view.superview?.layoutSubtreeIfNeeded()
@@ -370,6 +416,7 @@ final class PDFReaderPaneController: NSViewController {
     }
 
     private func releaseActivePDFContext() {
+        exitAnchorPickMode(notifyCancelled: false)
         if let current = activePDFContext {
             current.fileURL.stopAccessingSecurityScopedResource()
         }
@@ -385,6 +432,10 @@ final class PDFReaderPaneController: NSViewController {
     }
 
     @objc private func handlePDFPaneSelectionChanged() {
+        guard !isAnchorPickMode else {
+            pdfPaneLinkButton.isEnabled = false
+            return
+        }
         let selectedText = pdfPanePDFView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         pdfPaneLinkButton.isEnabled = !selectedText.isEmpty
     }
@@ -409,6 +460,8 @@ final class PDFReaderPaneController: NSViewController {
     }
 
     @objc private func handlePDFPaneLinkSelection() {
+        exitAnchorPickMode(notifyCancelled: true)
+
         guard let context = activePDFContext else {
             NSSound.beep()
             return
@@ -486,6 +539,7 @@ final class PDFReaderPaneController: NSViewController {
 
     private func applyHighlight(_ highlight: PDFHighlightRecord) {
         guard let document = pdfPanePDFView.document else { return }
+        let isPointAnchor = highlight.quote.isEmpty && highlight.rects.count == 1
 
         for rect in highlight.rects {
             guard rect.page > 0,
@@ -494,8 +548,17 @@ final class PDFReaderPaneController: NSViewController {
             }
 
             let bounds = CGRect(x: rect.x, y: rect.y, width: rect.w, height: rect.h)
-            let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
-            annotation.color = PDFHighlightAnnotationStyle.color
+            let annotation = PDFAnnotation(
+                bounds: bounds,
+                forType: isPointAnchor ? .circle : .highlight,
+                withProperties: nil
+            )
+            annotation.color = isPointAnchor
+                ? PDFHighlightAnnotationStyle.markerColor
+                : PDFHighlightAnnotationStyle.color
+            if isPointAnchor {
+                annotation.interiorColor = PDFHighlightAnnotationStyle.markerColor
+            }
             annotation.userName = "Ticker-Next"
             annotation.contents = "\(PDFHighlightAnnotationStyle.contentsPrefix)\(highlight.id.uuidString)"
             page.addAnnotation(annotation)
@@ -551,14 +614,111 @@ final class PDFReaderPaneController: NSViewController {
     private func pulseAnnotations(_ annotations: [PDFAnnotation]) {
         guard !annotations.isEmpty else { return }
         let originalColors = annotations.map(\.color)
-        annotations.forEach { $0.color = PDFHighlightAnnotationStyle.pulseColor }
+        let originalInteriorColors = annotations.map(\.interiorColor)
+        annotations.forEach {
+            if $0.interiorColor != nil {
+                $0.color = PDFHighlightAnnotationStyle.markerPulseColor
+                $0.interiorColor = PDFHighlightAnnotationStyle.markerPulseColor
+            } else {
+                $0.color = PDFHighlightAnnotationStyle.pulseColor
+            }
+        }
         pdfPanePDFView.needsDisplay = true
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            for (annotation, color) in zip(annotations, originalColors) {
+            for ((annotation, color), interiorColor) in zip(zip(annotations, originalColors), originalInteriorColors) {
                 annotation.color = color
+                annotation.interiorColor = interiorColor
             }
             self?.pdfPanePDFView.needsDisplay = true
+        }
+    }
+
+    private func handleAnchorPickMouseDown(_ event: NSEvent) -> NSEvent? {
+        guard isAnchorPickMode else { return event }
+
+        let pointInPDFView = pdfPanePDFView.convert(event.locationInWindow, from: nil)
+        guard pdfPanePDFView.bounds.contains(pointInPDFView) else {
+            return event
+        }
+
+        placeAnchor(at: pointInPDFView)
+        return nil
+    }
+
+    private func placeAnchor(at pointInPDFView: CGPoint) {
+        guard let context = activePDFContext,
+              let document = pdfPanePDFView.document,
+              let page = pdfPanePDFView.page(for: pointInPDFView, nearest: true) else {
+            NSSound.beep()
+            cancelAnchorPickMode()
+            return
+        }
+
+        let pagePoint = pdfPanePDFView.convert(pointInPDFView, to: page)
+        let pageNumber = document.index(for: page) + 1
+        let bounds = markerBounds(centeredAt: pagePoint, on: page)
+        let highlight = PDFHighlightRecord(
+            id: UUID(),
+            sourceId: context.sourceId,
+            page: pageNumber,
+            rects: [
+                PDFHighlightRect(
+                    page: pageNumber,
+                    x: Double(bounds.minX),
+                    y: Double(bounds.minY),
+                    w: Double(bounds.width),
+                    h: Double(bounds.height)
+                )
+            ],
+            quote: "",
+            createdAt: Date()
+        )
+
+        applyHighlight(highlight)
+        exitAnchorPickMode(notifyCancelled: false)
+        onAnchorPlaced?(PDFHighlightLinkPayload(
+            streamId: context.streamId,
+            sourceName: context.sourceName,
+            highlight: highlight
+        ))
+    }
+
+    private func markerBounds(centeredAt point: CGPoint, on page: PDFPage) -> CGRect {
+        let size = PDFHighlightAnnotationStyle.markerSize
+        let pageBounds = page.bounds(for: .mediaBox)
+        let maxX = max(pageBounds.minX, pageBounds.maxX - size)
+        let maxY = max(pageBounds.minY, pageBounds.maxY - size)
+        let x = min(max(point.x - size / 2, pageBounds.minX), maxX)
+        let y = min(max(point.y - size / 2, pageBounds.minY), maxY)
+        return CGRect(x: x, y: y, width: size, height: size)
+    }
+
+    private func exitAnchorPickMode(notifyCancelled: Bool) {
+        guard isAnchorPickMode || anchorPickMouseMonitor != nil || anchorPickKeyMonitor != nil else { return }
+        let streamId = activePDFContext?.streamId
+
+        if let anchorPickMouseMonitor {
+            NSEvent.removeMonitor(anchorPickMouseMonitor)
+            self.anchorPickMouseMonitor = nil
+        }
+        if let anchorPickKeyMonitor {
+            NSEvent.removeMonitor(anchorPickKeyMonitor)
+            self.anchorPickKeyMonitor = nil
+        }
+
+        isAnchorPickMode = false
+        pdfPanePDFView.enclosingScrollView?.documentCursor = nil
+        if let context = activePDFContext {
+            pdfPaneTitleField.stringValue = makePDFPaneHeader(context.sourceName)
+        } else {
+            pdfPaneTitleField.stringValue = "PDF Source"
+        }
+        pdfPaneTitleField.textColor = PDFPaneStyle.text
+        handlePDFPaneSelectionChanged()
+
+        if notifyCancelled, let streamId {
+            onAnchorPickCancelled?(streamId)
         }
     }
 }

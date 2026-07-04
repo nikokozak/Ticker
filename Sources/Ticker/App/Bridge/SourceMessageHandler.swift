@@ -7,6 +7,7 @@ protocol SourceMessageHandlerDelegate: AnyObject {
     func hidePDFPane() async
     func openSourceReference(_ source: SourceReference, sourceService: SourceService)
     func openPDFDestination(_ source: SourceReference, sourceService: SourceService, highlightId: String?, page: Int?) async
+    func beginPDFAnchorPick(streamId: UUID) async
 }
 
 final class SourceMessageHandler: BridgeMessageHandler {
@@ -17,6 +18,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
         "removeSource",
         "openSource",
         "openPdfDestination",
+        "beginPdfAnchorPick",
         "saveImage",
         "getAssetPath"
     ]
@@ -189,6 +191,17 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 DebugLog.log("[WebViewManager] Failed to open PDF destination (\(DebugLog.errorSummary(error)))")
                 sendSourceError(error.localizedDescription)
             }
+
+        case "beginPdfAnchorPick":
+            guard let payload = message.payload,
+                  let streamIdValue = payload["streamId"]?.value as? String,
+                  let streamId = UUID(uuidString: streamIdValue) else {
+                DebugLog.log("[WebViewManager] Invalid beginPdfAnchorPick payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid beginPdfAnchorPick payload")
+                return
+            }
+
+            await delegate?.beginPDFAnchorPick(streamId: streamId)
 
         case "saveImage":
             // Save base64-encoded image data to stream's assets folder

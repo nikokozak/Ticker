@@ -18,6 +18,12 @@ import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetE
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { debugWarn } from '../utils/debug';
+import {
+  buildPDFAnchorLinkEdit,
+  buildTickerPDFLinkURL,
+  mapPendingPDFAnchorSelection,
+  type PendingPDFAnchorSelection,
+} from '../utils/pdfAnchorSelection';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 
 interface StreamEditorProps {
@@ -48,6 +54,13 @@ interface AiFeedbackState {
   visible: boolean;
   kind: 'writing' | 'error';
   message: string;
+}
+
+interface PDFPaneState {
+  visible: boolean;
+  streamId?: string;
+  sourceId?: string;
+  sourceName?: string;
 }
 
 const SELECTION_MENU_DELAY_MS = 180;
@@ -176,6 +189,7 @@ export function StreamEditor({
     kind: 'writing',
     message: 'AI is writing',
   });
+  const [pdfPaneState, setPDFPaneState] = useState<PDFPaneState>({ visible: false });
 
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
@@ -187,6 +201,7 @@ export function StreamEditor({
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
   const aiFeedbackTimerRef = useRef<number | null>(null);
+  const pendingPDFAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
   const showPromptRef = useRef(showPrompt);
   const isAiThinkingRef = useRef(false);
   const aiRequestRef = useRef<{
@@ -636,6 +651,80 @@ export function StreamEditor({
     return () => unsubscribe();
   }, [addToast, insertTextAtCursor, stream.id]);
 
+  useEffect(() => {
+    pendingPDFAnchorSelectionRef.current = null;
+    setPDFPaneState((previous) => (
+      previous.streamId && previous.streamId !== stream.id ? { visible: false } : previous
+    ));
+  }, [stream.id]);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type === 'pdfPaneStateChanged') {
+        const visible = message.payload?.visible === true;
+        const nextState: PDFPaneState = {
+          visible,
+          streamId: message.payload?.streamId as string | undefined,
+          sourceId: message.payload?.sourceId as string | undefined,
+          sourceName: message.payload?.sourceName as string | undefined,
+        };
+        setPDFPaneState(nextState);
+        if (!visible || nextState.streamId !== stream.id) {
+          pendingPDFAnchorSelectionRef.current = null;
+        }
+        return;
+      }
+
+      if (message.type === 'pdfAnchorPickCancelled') {
+        const payloadStreamId = message.payload?.streamId as string | undefined;
+        if (payloadStreamId === stream.id) {
+          pendingPDFAnchorSelectionRef.current = null;
+        }
+        return;
+      }
+
+      if (message.type !== 'pdfAnchorPlaced') return;
+
+      const payloadStreamId = message.payload?.streamId as string | undefined;
+      if (payloadStreamId !== stream.id) return;
+
+      const pendingSelection = pendingPDFAnchorSelectionRef.current;
+      pendingPDFAnchorSelectionRef.current = null;
+
+      const sourceId = message.payload?.sourceId as string | undefined;
+      const highlightId = message.payload?.highlightId as string | undefined;
+      const page = message.payload?.page as number | undefined;
+      if (!sourceId || !highlightId) return;
+
+      const view = editorViewRef.current;
+      if (!view || !pendingSelection) {
+        addToast('The original selection is no longer available.', 'warning');
+        return;
+      }
+
+      const pageNumber = Number.isFinite(page) ? Math.max(1, Math.round(page as number)) : 1;
+      const linkURL = buildTickerPDFLinkURL({ sourceId, highlightId, page: pageNumber });
+      const edit = buildPDFAnchorLinkEdit(view.state.doc.toString(), pendingSelection, linkURL);
+      if (!edit) {
+        addToast('The original selection is no longer available.', 'warning');
+        return;
+      }
+
+      view.dispatch({
+        changes: { from: edit.from, to: edit.to, insert: edit.insert },
+        selection: { anchor: edit.from + edit.insert.length },
+        annotations: [
+          Transaction.userEvent.of('input'),
+          isolateHistory.of('full'),
+        ],
+      });
+      view.focus();
+      addToast('Linked selection to PDF.', 'success');
+    });
+
+    return () => unsubscribe();
+  }, [addToast, stream.id]);
+
   const startEditingTitle = useCallback(() => {
     setIsEditingTitle(true);
     setTimeout(() => titleInputRef.current?.select(), 0);
@@ -878,6 +967,13 @@ export function StreamEditor({
 
   const selectionMenuExtension = useMemo<Extension>(() => [
     EditorView.updateListener.of((update) => {
+      if (update.docChanged && pendingPDFAnchorSelectionRef.current) {
+        pendingPDFAnchorSelectionRef.current = mapPendingPDFAnchorSelection(
+          pendingPDFAnchorSelectionRef.current,
+          update.changes
+        );
+      }
+
       const selection = update.state.selection.main;
 
       if (selection.empty) {
@@ -1015,6 +1111,8 @@ export function StreamEditor({
     openPromptWithContext(context);
   }, [addToast, getSelectionContext, isAiThinking, openPromptWithContext]);
 
+  const canLinkSelectionToPDF = pdfPaneState.visible && pdfPaneState.streamId === stream.id;
+
   const handleSelectionSend = useCallback(() => {
     const context = getSelectionContext(false);
     if (!context || !context.text.trim()) {
@@ -1040,6 +1138,27 @@ export function StreamEditor({
     }
     openPromptWithContext(context);
   }, [getSelectionContext, hideSelectionMenu, openPromptWithContext]);
+
+  const handleSelectionLinkToPDF = useCallback(() => {
+    const context = getSelectionContext(false);
+    if (!context || !context.text.trim()) {
+      hideSelectionMenu();
+      return;
+    }
+    if (!canLinkSelectionToPDF) {
+      pendingPDFAnchorSelectionRef.current = null;
+      hideSelectionMenu();
+      addToast('Open a PDF source before linking to PDF.', 'info');
+      return;
+    }
+
+    pendingPDFAnchorSelectionRef.current = { from: context.from, to: context.to };
+    hideSelectionMenu();
+    bridge.send({
+      type: 'beginPdfAnchorPick',
+      payload: { streamId: stream.id },
+    });
+  }, [addToast, canLinkSelectionToPDF, getSelectionContext, hideSelectionMenu, stream.id]);
 
   const closePrompt = useCallback(() => {
     setShowPrompt(false);
@@ -1295,6 +1414,20 @@ export function StreamEditor({
               <path d="M4 3h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-4 4v-4H4a1 1 0 01-1-1V4a1 1 0 011-1zm1 2v9h1v1.6L7.6 14H19V5H5zm3 2h8v1H8V7zm0 3h5v1H8v-1z" />
             </svg>
           </button>
+          {canLinkSelectionToPDF && (
+            <button
+              type="button"
+              className="selection-action-button"
+              title="Link to PDF"
+              aria-label="Link to PDF"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleSelectionLinkToPDF}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M8.8 12.9a1 1 0 010-1.4l3.7-3.7a3.4 3.4 0 114.8 4.8l-1.5 1.5-.7-.7 1.5-1.5a2.4 2.4 0 10-3.4-3.4l-3.7 3.7a1 1 0 001.4 1.4l2.5-2.5.7.7-2.5 2.5a2 2 0 01-2.8 0zm-2.1 7a3.4 3.4 0 010-4.8l1.5-1.5.7.7-1.5 1.5a2.4 2.4 0 103.4 3.4l3.7-3.7a1 1 0 00-1.4-1.4l-2.5 2.5-.7-.7 2.5-2.5a2 2 0 112.8 2.8l-3.7 3.7a3.4 3.4 0 01-4.8 0z" />
+              </svg>
+            </button>
+          )}
         </div>
       )}
 

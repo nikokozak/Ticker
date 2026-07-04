@@ -88,6 +88,24 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_savePDFPointAnchorRoundTripsEmptyQuoteAndMarkerRect() throws {
+        try withTempPersistenceService { service in
+            let source = try savePDFSource(in: service)
+            let anchor = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 4,
+                rects: [PDFHighlightRect(page: 4, x: 42, y: 84, w: 14, h: 14)],
+                quote: "",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_100)
+            )
+
+            try service.savePDFHighlight(anchor)
+
+            XCTAssertEqual(try service.loadPDFHighlights(sourceId: source.id), [anchor])
+        }
+    }
+
     func test_deleteSourceDeletesPDFHighlights() throws {
         try withTempPersistenceService { service in
             let source = try savePDFSource(in: service)
