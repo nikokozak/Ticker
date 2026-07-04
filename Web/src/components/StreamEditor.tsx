@@ -8,7 +8,7 @@ import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { bridge, Stream, SourceReference } from '../types';
-import { SidePanel } from './SidePanel';
+import { SourcesModal } from './SourcesModal';
 import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
@@ -173,6 +173,7 @@ export function StreamEditor({
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
@@ -263,12 +264,6 @@ export function StreamEditor({
     initialSources: stream.sources,
     editorAPI,
   });
-  const pdfSources = useMemo(
-    () => sources.filter((source) => source.fileType === 'pdf'),
-    [sources],
-  );
-  const hasPdfSources = pdfSources.length > 0;
-
   const isAiThinking = aiStatus === 'thinking';
 
   const isEditorActive = useCallback(() => {
@@ -349,16 +344,17 @@ export function StreamEditor({
 
   useEffect(() => {
     if (!pendingSourceId) return;
-    if (pdfSources.some((source) => source.id === pendingSourceId)) {
+    if (sources.some((source) => source.id === pendingSourceId)) {
       setHighlightedSourceId(pendingSourceId);
+      setShowSourcesModal(true);
+      return;
     }
-  }, [pdfSources, pendingSourceId]);
 
-  useEffect(() => {
-    if (hasPdfSources) return;
-    setHighlightedSourceId(null);
-    onClearPendingSource?.();
-  }, [hasPdfSources, onClearPendingSource]);
+    if (sources.length === 0) {
+      setHighlightedSourceId(null);
+      onClearPendingSource?.();
+    }
+  }, [onClearPendingSource, pendingSourceId, sources]);
 
   useEffect(() => {
     if (pendingCellId) {
@@ -1271,12 +1267,13 @@ export function StreamEditor({
   }, [addToast]);
 
   const handleNavigateToSource = useCallback((sourceId: string) => {
-    if (!pdfSources.some((source) => source.id === sourceId)) {
-      addToast('Source panel is available for PDF sources only.', 'info');
+    if (!sources.some((source) => source.id === sourceId)) {
+      addToast('Source is not attached to this stream.', 'info');
       return;
     }
     setHighlightedSourceId(sourceId);
-  }, [addToast, pdfSources]);
+    setShowSourcesModal(true);
+  }, [addToast, sources]);
 
   return (
     <div className="stream-editor">
@@ -1303,6 +1300,15 @@ export function StreamEditor({
         <span className={`stream-save-status stream-save-status--${saveState}`}>
           {saveState === 'saving' ? 'Saving…' : 'Saved'}
         </span>
+        <button
+          onClick={() => setShowSourcesModal(true)}
+          className="stream-sources-button"
+          title="Sources"
+          type="button"
+          aria-label={`Sources, ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
+        >
+          Sources · {sources.length}
+        </button>
         <button
           onClick={() => setShowDeleteConfirm(true)}
           className="delete-stream-button"
@@ -1489,22 +1495,21 @@ export function StreamEditor({
             )}
           </div>
         </div>
-        {hasPdfSources && (
-          <div className="stream-sources-dock">
-            <SidePanel
-              streamId={stream.id}
-              sources={pdfSources}
-              onSourceRemoved={handleSourceRemoved}
-              onSourceOpen={handleOpenSource}
-              highlightedSourceId={highlightedSourceId || pendingSourceId}
-              onClearHighlight={() => {
-                setHighlightedSourceId(null);
-                onClearPendingSource?.();
-              }}
-            />
-          </div>
-        )}
       </div>
+
+      <SourcesModal
+        isOpen={showSourcesModal}
+        streamId={stream.id}
+        sources={sources}
+        onClose={() => setShowSourcesModal(false)}
+        onSourceRemoved={handleSourceRemoved}
+        onSourceOpen={handleOpenSource}
+        highlightedSourceId={highlightedSourceId || pendingSourceId}
+        onClearHighlight={() => {
+          setHighlightedSourceId(null);
+          onClearPendingSource?.();
+        }}
+      />
 
       <SearchModal
         isOpen={showSearch}

@@ -14,6 +14,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- Stream sources now open in a modal instead of a persistent sidebar, preserving editor width beside the PDF pane.
 - PDF pane header controls now use compact icon toolbar styling and keep their hit targets with long source names.
 - Stream editor, overlays, Quick Panel, and PDF pane now share a lower-chrome tokenized visual system.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
