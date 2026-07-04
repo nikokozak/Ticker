@@ -22,6 +22,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- PDF anchor picking now shows a crosshair cursor, and deleting PDF links removes their saved markers.
 - Restored window dragging from the transparent titlebar strip.
 - Source access now recovers refreshed bookmarks when possible, PDF stream links keep accent styling, and PDF anchor picking cancels on outside click.
 - Recovered quick-capture notes that previously didn't appear in streams.

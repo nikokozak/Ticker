@@ -5,6 +5,40 @@ protocol StreamMessageHandlerDelegate: AnyObject {
     func setCurrentStreamIdForFileDrops(_ streamId: UUID?)
     func clearCurrentStreamIdForFileDrops(ifMatches streamId: UUID)
     func closePDFPaneIfShowingDifferentStream(_ streamId: UUID) async
+    func removePDFHighlightAnnotations(ids: [String], sourceIds: [UUID]) async
+}
+
+enum PDFHighlightLinkReferenceExtractor {
+    private static let tickerPDFURLPattern = #"ticker-pdf://[^\s<>"'\)\]]+"#
+
+    static func highlightIds(in markdown: String) -> Set<String> {
+        guard let regex = try? NSRegularExpression(pattern: tickerPDFURLPattern, options: [.caseInsensitive]) else {
+            return []
+        }
+
+        let range = NSRange(markdown.startIndex..<markdown.endIndex, in: markdown)
+        var ids = Set<String>()
+
+        regex.enumerateMatches(in: markdown, range: range) { match, _, _ in
+            guard let match,
+                  let urlRange = Range(match.range, in: markdown) else {
+                return
+            }
+
+            let rawURL = String(markdown[urlRange])
+            guard let components = URLComponents(string: rawURL),
+                  let highlightValue = components.queryItems?.first(where: {
+                      $0.name.caseInsensitiveCompare("highlight") == .orderedSame
+                  })?.value,
+                  let id = UUID(uuidString: highlightValue) else {
+                return
+            }
+
+            ids.insert(id.uuidString)
+        }
+
+        return ids
+    }
 }
 
 final class StreamMessageHandler: BridgeMessageHandler {
@@ -136,6 +170,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     markdown: markdown,
                     baseRevision: baseRevision
                 )
+                await pruneUnreferencedPDFHighlights(streamId: streamId, markdown: markdown)
                 await bridgeService.respond(to: callbackId, with: [
                     "revision": AnyCodable(revision)
                 ])
@@ -221,6 +256,21 @@ final class StreamMessageHandler: BridgeMessageHandler {
 
         default:
             DebugLog.log("[StreamMessageHandler] Unknown message type: \(message.type)")
+        }
+    }
+
+    private func pruneUnreferencedPDFHighlights(streamId: UUID, markdown: String) async {
+        do {
+            let referencedHighlightIds = PDFHighlightLinkReferenceExtractor.highlightIds(in: markdown)
+            let sourceIds = try persistence.loadStream(id: streamId)?.sources.map(\.id) ?? []
+            let deletedHighlightIds = try persistence.deletePDFHighlights(
+                sourceIds: sourceIds,
+                excludingIds: Array(referencedHighlightIds)
+            )
+            // ponytail: undoing a deleted link after GC restores the markdown only; revive-on-undo would need soft-delete metadata.
+            await delegate?.removePDFHighlightAnnotations(ids: deletedHighlightIds, sourceIds: sourceIds)
+        } catch {
+            DebugLog.log("[StreamMessageHandler] Failed to prune PDF highlights (\(DebugLog.errorSummary(error)))")
         }
     }
 }

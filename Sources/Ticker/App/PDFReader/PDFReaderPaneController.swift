@@ -106,6 +106,8 @@ final class PDFReaderPaneController: NSViewController {
     private var isAnchorPickMode = false
     private var anchorPickMouseMonitor: Any?
     private var anchorPickKeyMonitor: Any?
+    private var anchorPickCursorMonitor: Any?
+    private var anchorPickPreviousAcceptsMouseMovedEvents: Bool?
 
     deinit {
         NotificationCenter.default.removeObserver(self)
@@ -172,6 +174,12 @@ final class PDFReaderPaneController: NSViewController {
         updatePDFPaneStatus()
         pdfPanePDFView.enclosingScrollView?.documentCursor = .crosshair
 
+        anchorPickPreviousAcceptsMouseMovedEvents = view.window?.acceptsMouseMovedEvents
+        view.window?.acceptsMouseMovedEvents = true
+        anchorPickCursorMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            self?.enforceAnchorPickCursor(for: event)
+            return event
+        }
         anchorPickMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             self?.handleAnchorPickMouseDown(event) ?? event
         }
@@ -207,6 +215,32 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         navigate(toPageNumber: pageNumber)
+    }
+
+    func removeHighlightAnnotations(ids: [String]) {
+        guard !ids.isEmpty,
+              let document = pdfPanePDFView.document else {
+            return
+        }
+
+        let tags = Set(ids.map { id in
+            let normalizedId = UUID(uuidString: id)?.uuidString ?? id
+            return "\(PDFHighlightAnnotationStyle.contentsPrefix)\(normalizedId)"
+        })
+        var didRemove = false
+
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index) else { continue }
+            let annotations = page.annotations
+            for annotation in annotations where annotation.contents.map(tags.contains) == true {
+                page.removeAnnotation(annotation)
+                didRemove = true
+            }
+        }
+
+        if didRemove {
+            pdfPanePDFView.needsDisplay = true
+        }
     }
 
     @discardableResult
@@ -772,6 +806,13 @@ final class PDFReaderPaneController: NSViewController {
         ))
     }
 
+    private func enforceAnchorPickCursor(for event: NSEvent) {
+        guard isAnchorPickMode else { return }
+        let pointInPDFView = pdfPanePDFView.convert(event.locationInWindow, from: nil)
+        guard pdfPanePDFView.bounds.contains(pointInPDFView) else { return }
+        NSCursor.crosshair.set()
+    }
+
     private func markerBounds(centeredAt point: CGPoint, on page: PDFPage) -> CGRect {
         let size = PDFHighlightAnnotationStyle.markerSize
         let pageBounds = page.bounds(for: .mediaBox)
@@ -783,9 +824,19 @@ final class PDFReaderPaneController: NSViewController {
     }
 
     private func exitAnchorPickMode(notifyCancelled: Bool) {
-        guard isAnchorPickMode || anchorPickMouseMonitor != nil || anchorPickKeyMonitor != nil else { return }
+        guard isAnchorPickMode ||
+            anchorPickMouseMonitor != nil ||
+            anchorPickKeyMonitor != nil ||
+            anchorPickCursorMonitor != nil ||
+            anchorPickPreviousAcceptsMouseMovedEvents != nil else {
+            return
+        }
         let streamId = activePDFContext?.streamId
 
+        if let anchorPickCursorMonitor {
+            NSEvent.removeMonitor(anchorPickCursorMonitor)
+            self.anchorPickCursorMonitor = nil
+        }
         if let anchorPickMouseMonitor {
             NSEvent.removeMonitor(anchorPickMouseMonitor)
             self.anchorPickMouseMonitor = nil
@@ -795,6 +846,10 @@ final class PDFReaderPaneController: NSViewController {
             self.anchorPickKeyMonitor = nil
         }
 
+        if let previousAcceptsMouseMovedEvents = anchorPickPreviousAcceptsMouseMovedEvents {
+            view.window?.acceptsMouseMovedEvents = previousAcceptsMouseMovedEvents
+            anchorPickPreviousAcceptsMouseMovedEvents = nil
+        }
         isAnchorPickMode = false
         pdfPanePDFView.enclosingScrollView?.documentCursor = nil
         if let context = activePDFContext {
