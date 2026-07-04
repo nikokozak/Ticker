@@ -887,6 +887,46 @@ final class PersistenceService {
         }
     }
 
+    @discardableResult
+    func deletePDFHighlights(sourceIds: [UUID], excludingIds: [String]) throws -> [String] {
+        var seenSourceIds = Set<UUID>()
+        let scopedSourceIds = sourceIds.filter { seenSourceIds.insert($0).inserted }
+        guard !scopedSourceIds.isEmpty else { return [] }
+
+        let normalizedExcludingIds = Set(excludingIds.compactMap { UUID(uuidString: $0)?.uuidString })
+
+        return try dbQueue.write { db in
+            var deletedIds: [String] = []
+
+            for sourceId in scopedSourceIds {
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT id
+                        FROM pdf_highlights
+                        WHERE source_id = ?
+                        ORDER BY created_at ASC
+                    """,
+                    arguments: [sourceId.uuidString]
+                )
+
+                for row in rows {
+                    let id: String = row["id"]
+                    let normalizedId = UUID(uuidString: id)?.uuidString ?? id
+                    guard !normalizedExcludingIds.contains(normalizedId) else { continue }
+
+                    try db.execute(
+                        sql: "DELETE FROM pdf_highlights WHERE source_id = ? AND id = ?",
+                        arguments: [sourceId.uuidString, id]
+                    )
+                    deletedIds.append(normalizedId)
+                }
+            }
+
+            return deletedIds
+        }
+    }
+
     private func decodePDFHighlight(_ row: Row) throws -> PDFHighlightRecord {
         let rectsJSON: String = row["rects_json"]
         guard let rectsData = rectsJSON.data(using: .utf8) else {

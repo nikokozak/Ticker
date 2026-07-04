@@ -559,6 +559,14 @@ extension WebViewManager: StreamMessageHandlerDelegate {
             sendPDFPaneStateChanged(visible: false)
         }
     }
+
+    func removePDFHighlightAnnotations(ids: [String], sourceIds: [UUID]) async {
+        guard !ids.isEmpty else { return }
+        await MainActor.run {
+            guard sourceIds.contains(where: { pdfPaneController.isPresenting(sourceId: $0) }) else { return }
+            pdfPaneController.removeHighlightAnnotations(ids: ids)
+        }
+    }
 }
 
 extension WebViewManager: SourceMessageHandlerDelegate {

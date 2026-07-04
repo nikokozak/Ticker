@@ -186,6 +186,90 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_deletePDFHighlightsKeepsReferencedRowsAndDeletesUnreferencedRows() throws {
+        try withTempPersistenceService { service in
+            let source = try savePDFSource(in: service)
+            let referenced = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 2,
+                rects: [PDFHighlightRect(page: 2, x: 10, y: 20, w: 30, h: 12)],
+                quote: "Keep this",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+            let unreferenced = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 4,
+                rects: [PDFHighlightRect(page: 4, x: 42, y: 84, w: 14, h: 14)],
+                quote: "",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_100)
+            )
+
+            try service.savePDFHighlight(referenced)
+            try service.savePDFHighlight(unreferenced)
+
+            let deletedIds = try service.deletePDFHighlights(
+                sourceIds: [source.id],
+                excludingIds: [referenced.id.uuidString.lowercased()]
+            )
+
+            XCTAssertEqual(deletedIds, [unreferenced.id.uuidString])
+            XCTAssertEqual(try service.loadPDFHighlights(sourceId: source.id), [referenced])
+        }
+    }
+
+    func test_deletePDFHighlightsIsScopedToSavedStreamSources() throws {
+        try withTempPersistenceService { service in
+            let source = try savePDFSource(in: service)
+            let otherStreamSource = try savePDFSource(in: service)
+            let sourceHighlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 1,
+                rects: [PDFHighlightRect(page: 1, x: 1, y: 2, w: 3, h: 4)],
+                quote: "Remove only this stream",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+            let otherStreamHighlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: otherStreamSource.id,
+                page: 1,
+                rects: [PDFHighlightRect(page: 1, x: 5, y: 6, w: 7, h: 8)],
+                quote: "Must survive",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_100)
+            )
+
+            try service.savePDFHighlight(sourceHighlight)
+            try service.savePDFHighlight(otherStreamHighlight)
+
+            let deletedIds = try service.deletePDFHighlights(sourceIds: [source.id], excludingIds: [])
+
+            XCTAssertEqual(deletedIds, [sourceHighlight.id.uuidString])
+            XCTAssertEqual(try service.loadPDFHighlights(sourceId: source.id), [])
+            XCTAssertEqual(try service.loadPDFHighlights(sourceId: otherStreamSource.id), [otherStreamHighlight])
+        }
+    }
+
+    func test_pdfHighlightLinkReferenceExtractorFindsValidTickerPDFHighlightIds() throws {
+        let sourceId = UUID()
+        let firstHighlightId = UUID()
+        let secondHighlightId = UUID()
+        let markdown = """
+        Intro [quoted text](ticker-pdf://\(sourceId.uuidString)?highlight=\(firstHighlightId.uuidString)&page=4)
+
+        Another saved link: <ticker-pdf://\(sourceId.uuidString)?page=7&HIGHLIGHT=\(secondHighlightId.uuidString.lowercased())>
+
+        Ignore malformed links:
+        [bad](ticker-pdf://\(sourceId.uuidString)?highlight=76C2D82A-not-a-uuid&page=3)
+        [external](https://example.com?highlight=\(UUID().uuidString))
+        """
+
+        let ids = PDFHighlightLinkReferenceExtractor.highlightIds(in: markdown)
+
+        XCTAssertEqual(ids, Set([firstHighlightId.uuidString, secondHighlightId.uuidString]))
+    }
+
     func test_appendToStreamDocument_createsDocumentWithExactlyFragmentWhenMissing() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "New Document")
