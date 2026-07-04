@@ -1,6 +1,11 @@
 import Foundation
 import GRDB
 
+struct AppendResult {
+    let fragment: String
+    let isNewDocument: Bool
+}
+
 /// Manages SQLite persistence for streams, cells, and sources
 final class PersistenceService {
     private let dbQueue: DatabaseQueue
@@ -552,6 +557,48 @@ final class PersistenceService {
                 sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
                 arguments: [now, streamId.uuidString]
             )
+        }
+    }
+
+    func appendToStreamDocument(streamId: UUID, fragment: String) throws -> AppendResult {
+        try dbQueue.write { db in
+            let now = Date().timeIntervalSince1970
+            let existingMarkdown: String
+            let isNewDocument: Bool
+
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT markdown FROM stream_documents WHERE stream_id = ?",
+                arguments: [streamId.uuidString]
+            ) {
+                existingMarkdown = row["markdown"]
+                isNewDocument = false
+            } else {
+                existingMarkdown = try initialMarkdownFromLegacyCells(streamId: streamId, db: db)
+                isNewDocument = true
+            }
+
+            let markdown = existingMarkdown.isEmpty
+                ? fragment
+                : "\(existingMarkdown)\n\n\(fragment)"
+
+            try db.execute(
+                sql: """
+                    INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(stream_id) DO UPDATE SET
+                        markdown = excluded.markdown,
+                        updated_at = excluded.updated_at
+                """,
+                arguments: [streamId.uuidString, markdown, now, now]
+            )
+
+            try db.execute(
+                sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
+                arguments: [now, streamId.uuidString]
+            )
+
+            return AppendResult(fragment: fragment, isNewDocument: isNewDocument)
         }
     }
 
