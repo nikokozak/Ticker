@@ -42,10 +42,7 @@ This folder defines the “professional mode” workflow for Ticker and the mini
   - Read `docs/contracts/README.md` before editing bridge payloads
   - Use `docs/GITHUB_BACKLOG_ALPHA.md` as a working alpha issue list for non-editor operational work
 
-6) **Historical stability context (optional)**
-   - `docs/ALPHA_STABILITY_PLAN.md` is historical context only; it is not the editor direction doc
-
-7) **Alpha ops**
+6) **Alpha ops**
   - Read `docs/ALPHA_READINESS_CHECKLIST.md`
   - Read `docs/ALPHA_SUPPORT.md` (in-app feedback → manual triage)
   - Read `docs/WEBSITE_REQUIREMENTS.md`
