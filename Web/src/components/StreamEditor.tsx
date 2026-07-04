@@ -24,6 +24,7 @@ import {
   mapPendingPDFAnchorSelection,
   type PendingPDFAnchorSelection,
 } from '../utils/pdfAnchorSelection';
+import { toggleInlineMark } from '../utils/inlineMarks';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 
 interface StreamEditorProps {
@@ -1109,6 +1110,27 @@ export function StreamEditor({
 
   const canLinkSelectionToPDF = pdfPaneState.visible && pdfPaneState.streamId === stream.id;
 
+  const handleSelectionFormat = useCallback((marker: string) => {
+    const view = editorViewRef.current;
+    if (!view) {
+      hideSelectionMenu();
+      return;
+    }
+
+    const edit = toggleInlineMark(view.state, view.state.selection.main, marker);
+    if (!edit) {
+      hideSelectionMenu();
+      return;
+    }
+
+    view.dispatch({
+      changes: edit.changes,
+      selection: edit.newSelection,
+      annotations: Transaction.userEvent.of('input.format'),
+    });
+    view.focus();
+  }, [hideSelectionMenu]);
+
   const handleSelectionSend = useCallback(() => {
     const context = getSelectionContext(false);
     if (!context || !context.text.trim()) {
@@ -1394,6 +1416,37 @@ export function StreamEditor({
           className="selection-action-menu"
           style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
         >
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--bold"
+            title="Bold"
+            aria-label="Bold"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat('**')}
+          >
+            B
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--italic"
+            title="Italic"
+            aria-label="Italic"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat('*')}
+          >
+            I
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--code"
+            title="Code"
+            aria-label="Code"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat('`')}
+          >
+            &lt;/&gt;
+          </button>
+          <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"
             className="selection-action-button"

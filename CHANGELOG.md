@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Selection popover now includes bold, italic, and inline-code markdown formatting controls.
 - Selected stream text can now be linked to a picked PDF spot.
 - PDF stream links now reopen their source and navigate back to the saved highlight.
 - PDF pane with continuous scrolling and stream links back to selected highlights.

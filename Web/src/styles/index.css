@@ -761,6 +761,27 @@ body {
   fill: currentColor;
 }
 
+.selection-action-button--format {
+  font-size: var(--font-size-sm);
+  font-weight: 650;
+}
+
+.selection-action-button--italic {
+  font-style: italic;
+}
+
+.selection-action-button--code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.selection-action-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border-subtle);
+  margin: 0 var(--space-1);
+}
+
 .selection-action-button:hover:not(:disabled) {
   color: var(--color-accent);
   background: var(--accent-soft);
