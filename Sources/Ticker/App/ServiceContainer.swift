@@ -1,0 +1,68 @@
+/// App composition root for long-lived services.
+struct ServiceContainer {
+    let settingsService: SettingsService
+    let deviceKeyService: DeviceKeyService
+    let bridgeService: BridgeService
+    let assetService: AssetService
+    let proxyService: ProxyLLMService
+    let embeddingService: EmbeddingService
+    let chunkingService: ChunkingService
+    let orchestrator: AIOrchestrator
+    let persistence: PersistenceService?
+    let sourceService: SourceService?
+    let retrievalService: RetrievalService?
+    let searchService: SearchService?
+
+    init(
+        settingsService: SettingsService = .shared,
+        deviceKeyService: DeviceKeyService = .shared
+    ) {
+        self.settingsService = settingsService
+        self.deviceKeyService = deviceKeyService
+        self.bridgeService = BridgeService()
+        self.assetService = AssetService()
+
+        let proxyService = ProxyLLMService(deviceKeyService: deviceKeyService)
+        self.proxyService = proxyService
+
+        self.embeddingService = EmbeddingService(settings: settingsService)
+        self.chunkingService = ChunkingService()
+
+        let orchestrator = AIOrchestrator(
+            proxyService: proxyService,
+            settings: settingsService
+        )
+        self.orchestrator = orchestrator
+
+        do {
+            let persistence = try PersistenceService()
+            self.persistence = persistence
+
+            let sourceService = SourceService(
+                persistence: persistence,
+                chunkingService: chunkingService,
+                embeddingService: embeddingService
+            )
+            self.sourceService = sourceService
+
+            let retrievalService = RetrievalService(
+                persistence: persistence,
+                embeddingService: embeddingService
+            )
+            self.retrievalService = retrievalService
+            orchestrator.setRetrievalService(retrievalService)
+
+            self.searchService = SearchService(
+                persistence: persistence,
+                retrieval: retrievalService,
+                embedding: embeddingService
+            )
+        } catch {
+            DebugLog.log("[WebViewManager] Failed to initialize persistence (\(DebugLog.errorSummary(error)))")
+            self.persistence = nil
+            self.sourceService = nil
+            self.retrievalService = nil
+            self.searchService = nil
+        }
+    }
+}

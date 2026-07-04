@@ -23,6 +23,7 @@ struct TickerApp {
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var mainWindow: NSWindow?
+    private var serviceContainer: ServiceContainer?
     private var webViewManager: WebViewManager?
     private var onboardingWindow: NSWindow?
     private var didCompleteStartup = false
@@ -59,8 +60,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func completeStartup() {
         guard !didCompleteStartup else { return }
         didCompleteStartup = true
-        setupMainWindow()
-        setupQuickPanel()
+        let container = ServiceContainer()
+        serviceContainer = container
+        setupMainWindow(container: container)
+        setupQuickPanel(container: container)
         requestAccessibilityPermissionIfNeeded()
         // Apply initial appearance after Quick Panel is set up
         Task { @MainActor in
@@ -290,7 +293,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func setupMainWindow() {
+    private func setupMainWindow(container: ServiceContainer) {
         // Position window to cover right 3/8 of screen
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let screenFrame = screen.visibleFrame
@@ -315,7 +318,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainWindow?.level = .floating  // Always on top
         mainWindow?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        webViewManager = WebViewManager()
+        webViewManager = WebViewManager(container: container)
         mainWindow?.contentView = webViewManager?.rootView
         webViewManager?.load()
 
@@ -324,21 +327,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Quick Panel Setup
 
-    private func setupQuickPanel() {
+    private func setupQuickPanel(container: ServiceContainer) {
         // Initialize Quick Panel manager on main actor
         Task { @MainActor in
             let manager = QuickPanelManager()
             self.quickPanelManager = manager
-
-            // Configure with services from WebViewManager
-            if let wvm = self.webViewManager,
-               let persistence = wvm.persistence {
-                manager.configure(
-                    persistence: persistence,
-                    bridgeService: wvm.bridgeService,
-                    orchestrator: wvm.orchestrator
-                )
-            }
+            manager.configure(container: container)
         }
 
         // Initialize hotkey service

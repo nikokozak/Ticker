@@ -114,6 +114,16 @@ final class QuickPanelManager: ObservableObject {
         self.orchestrator = orchestrator
     }
 
+    func configure(container: ServiceContainer) {
+        guard let persistence = container.persistence else { return }
+        configure(
+            persistence: persistence,
+            bridgeService: container.bridgeService,
+            assetService: container.assetService,
+            orchestrator: container.orchestrator
+        )
+    }
+
     // MARK: - Public API
 
     /// Toggle the quick panel

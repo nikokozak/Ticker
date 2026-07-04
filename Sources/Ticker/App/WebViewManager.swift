@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 final class WebViewManager: NSObject {
     let webView: DroppableWebView
     var rootView: NSView { hostView }
+    private let settingsService: SettingsService
+    private let deviceKeyService: DeviceKeyService
     let bridgeService: BridgeService
     let persistence: PersistenceService?
     private let sourceService: SourceService?
@@ -21,7 +23,7 @@ final class WebViewManager: NSObject {
     private var searchService: SearchService?
 
     // Asset management
-    private let assetService = AssetService()
+    private let assetService: AssetService
     private var currentStreamIdForFileDrops: UUID?
     private var allowsListFileDrops = false
     private let hostView = NSView(frame: .zero)
@@ -29,11 +31,13 @@ final class WebViewManager: NSObject {
     private let pdfPaneController = PDFReaderPaneController()
     private var activePDFPaneStreamId: UUID?
 
-    override init() {
+    init(container: ServiceContainer) {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
-        self.bridgeService = BridgeService()
+        self.settingsService = container.settingsService
+        self.deviceKeyService = container.deviceKeyService
+        self.bridgeService = container.bridgeService
         config.userContentController.add(bridgeService, name: "bridge")
 
         // Register custom URL scheme handler for local assets
@@ -45,50 +49,15 @@ final class WebViewManager: NSObject {
         config.setURLSchemeHandler(bundleHandler, forURLScheme: "ticker-bundle")
 
         self.webView = DroppableWebView(frame: .zero, configuration: config)
-
-        // Initialize proxy service (all AI operations go through proxy in alpha)
-        let proxyService = ProxyLLMService()
-        self.proxyService = proxyService
-
-        // Initialize RAG services
-        self.embeddingService = EmbeddingService()
-        self.chunkingService = ChunkingService()
-
-        // Initialize orchestrator (proxy-only mode, no vendor provider registration)
-        self.orchestrator = AIOrchestrator(proxyService: proxyService)
-
-        do {
-            let p = try PersistenceService()
-            self.persistence = p
-
-            // Create SourceService with RAG components
-            self.sourceService = SourceService(
-                persistence: p,
-                chunkingService: chunkingService,
-                embeddingService: embeddingService
-            )
-
-            // Create RetrievalService and wire to orchestrator
-            self.retrievalService = RetrievalService(
-                persistence: p,
-                embeddingService: embeddingService
-            )
-            orchestrator.setRetrievalService(retrievalService!)
-
-            // Create SearchService for hybrid search
-            self.searchService = SearchService(
-                persistence: p,
-                retrieval: retrievalService!,
-                embedding: embeddingService
-            )
-
-        } catch {
-            DebugLog.log("[WebViewManager] Failed to initialize persistence (\(DebugLog.errorSummary(error)))")
-            self.persistence = nil
-            self.sourceService = nil
-            self.retrievalService = nil
-            self.searchService = nil
-        }
+        self.proxyService = container.proxyService
+        self.embeddingService = container.embeddingService
+        self.chunkingService = container.chunkingService
+        self.orchestrator = container.orchestrator
+        self.persistence = container.persistence
+        self.sourceService = container.sourceService
+        self.retrievalService = container.retrievalService
+        self.searchService = container.searchService
+        self.assetService = container.assetService
 
         super.init()
 
@@ -108,8 +77,9 @@ final class WebViewManager: NSObject {
         }
 
         // Initialize DeviceKeyService and wire up state change callback
-        Task {
-            await DeviceKeyService.shared.onStateChange = { [weak self] state in
+        Task { [weak self] in
+            guard let self else { return }
+            await deviceKeyService.onStateChange = { [weak self] state in
                 // Push state to Web
                 self?.bridgeService.send(BridgeMessage(
                     type: "proxyAuthState",
@@ -117,7 +87,7 @@ final class WebViewManager: NSObject {
                 ))
             }
             // Initialize and validate cached key
-            await DeviceKeyService.shared.initialize()
+            await deviceKeyService.initialize()
         }
     }
 
@@ -404,7 +374,7 @@ final class WebViewManager: NSObject {
 
         // Only load classifier if smart routing is enabled
         // Note: No vendor keys required - classifier runs locally, proxy handles routing
-        guard SettingsService.shared.smartRoutingEnabled else {
+        guard settingsService.smartRoutingEnabled else {
             DebugLog.log("MLX classifier skipped: smart routing disabled")
             classifierSkipped = true
             return
@@ -803,7 +773,7 @@ final class WebViewManager: NSObject {
             Task { [weak self] in
                 guard let self else { return }
 
-                let proxyUsable = await DeviceKeyService.shared.currentState.isUsable
+                let proxyUsable = await self.deviceKeyService.currentState.isUsable
 
                 guard proxyUsable else {
                     await MainActor.run {
@@ -913,61 +883,61 @@ final class WebViewManager: NSObject {
 
             // Save OpenAI API key if provided
             if let openaiKey = payload["openaiAPIKey"]?.value as? String {
-                SettingsService.shared.openaiAPIKey = openaiKey.isEmpty ? nil : openaiKey
+                settingsService.openaiAPIKey = openaiKey.isEmpty ? nil : openaiKey
             }
 
             // Save Anthropic API key if provided
             if let anthropicKey = payload["anthropicAPIKey"]?.value as? String {
-                SettingsService.shared.anthropicAPIKey = anthropicKey.isEmpty ? nil : anthropicKey
+                settingsService.anthropicAPIKey = anthropicKey.isEmpty ? nil : anthropicKey
             }
 
             // Save Perplexity API key if provided
             if let perplexityKey = payload["perplexityAPIKey"]?.value as? String {
-                SettingsService.shared.perplexityAPIKey = perplexityKey.isEmpty ? nil : perplexityKey
+                settingsService.perplexityAPIKey = perplexityKey.isEmpty ? nil : perplexityKey
             }
 
             // Save smart routing setting if provided
             if let smartRouting = payload["smartRoutingEnabled"]?.value as? Bool {
-                SettingsService.shared.smartRoutingEnabled = smartRouting
+                settingsService.smartRoutingEnabled = smartRouting
             }
 
             // Save default model setting if provided
             if let modelValue = payload["defaultModel"]?.value as? String,
                let model = SettingsService.DefaultModel(rawValue: modelValue) {
-                SettingsService.shared.defaultModel = model
+                settingsService.defaultModel = model
             }
 
             // Save appearance setting if provided
             if let appearanceValue = payload["appearance"]?.value as? String,
                let appearance = SettingsService.Appearance(rawValue: appearanceValue) {
-                SettingsService.shared.appearance = appearance
+                settingsService.appearance = appearance
                 // Notify AppDelegate to update window appearances
                 NotificationCenter.default.post(name: .appearanceDidChange, object: nil)
             }
 
             // Save diagnostics setting if provided
             if let diagnosticsEnabled = payload["diagnosticsEnabled"]?.value as? Bool {
-                SettingsService.shared.diagnosticsEnabled = diagnosticsEnabled
+                settingsService.diagnosticsEnabled = diagnosticsEnabled
             }
 
             // Save editor font setting if provided
             if let editorFontValue = payload["editorFont"]?.value as? String,
                let editorFont = SettingsService.EditorFont(rawValue: editorFontValue) {
-                SettingsService.shared.editorFont = editorFont
+                settingsService.editorFont = editorFont
             }
 
             // Save editor font size setting if provided
             if let editorFontSize = payload["editorFontSize"]?.value as? Double {
-                SettingsService.shared.editorFontSize = editorFontSize
+                settingsService.editorFontSize = editorFontSize
             } else if let editorFontSize = payload["editorFontSize"]?.value as? NSNumber {
-                SettingsService.shared.editorFontSize = editorFontSize.doubleValue
+                settingsService.editorFontSize = editorFontSize.doubleValue
             }
 
             // Save editor line spacing setting if provided
             if let editorLineSpacing = payload["editorLineSpacing"]?.value as? Double {
-                SettingsService.shared.editorLineSpacing = editorLineSpacing
+                settingsService.editorLineSpacing = editorLineSpacing
             } else if let editorLineSpacing = payload["editorLineSpacing"]?.value as? NSNumber {
-                SettingsService.shared.editorLineSpacing = editorLineSpacing.doubleValue
+                settingsService.editorLineSpacing = editorLineSpacing.doubleValue
             }
 
             // Send back updated settings
@@ -986,8 +956,8 @@ final class WebViewManager: NSObject {
                 return
             }
             Task {
-                let auth = await DeviceKeyService.shared.loadProxyAuth()
-                let (limits, usage) = await DeviceKeyService.shared.getLimitsAndUsage()
+                let auth = await self.deviceKeyService.loadProxyAuth()
+                let (limits, usage) = await self.deviceKeyService.getLimitsAndUsage()
 
                 await MainActor.run {
                     var response: [String: AnyCodable] = [
@@ -1029,8 +999,8 @@ final class WebViewManager: NSObject {
             }
             Task {
                 do {
-                    let result = try await DeviceKeyService.shared.setProxyDeviceKey(key)
-                    let newAuth = await DeviceKeyService.shared.loadProxyAuth()
+                    let result = try await self.deviceKeyService.setProxyDeviceKey(key)
+                    let newAuth = await self.deviceKeyService.loadProxyAuth()
                     await MainActor.run {
                         bridgeService.respond(to: callbackId, with: [
                             "success": AnyCodable(true),
@@ -1051,7 +1021,7 @@ final class WebViewManager: NSObject {
                         ])
                     }
                 } catch {
-                    let newAuth = await DeviceKeyService.shared.loadProxyAuth()
+                    let newAuth = await self.deviceKeyService.loadProxyAuth()
                     await MainActor.run {
                         bridgeService.respondWithError(to: callbackId, error: error.localizedDescription)
                         // Also push state change
@@ -1069,8 +1039,8 @@ final class WebViewManager: NSObject {
                 return
             }
             Task {
-                await DeviceKeyService.shared.clearProxyDeviceKey()
-                let newAuth = await DeviceKeyService.shared.loadProxyAuth()
+                await self.deviceKeyService.clearProxyDeviceKey()
+                let newAuth = await self.deviceKeyService.loadProxyAuth()
                 await MainActor.run {
                     bridgeService.respond(to: callbackId, with: [
                         "success": AnyCodable(true),
@@ -1086,9 +1056,9 @@ final class WebViewManager: NSObject {
                 return
             }
             Task {
-                await DeviceKeyService.shared.revalidate()
-                let newAuth = await DeviceKeyService.shared.loadProxyAuth()
-                let (limits, usage) = await DeviceKeyService.shared.getLimitsAndUsage()
+                await self.deviceKeyService.revalidate()
+                let newAuth = await self.deviceKeyService.loadProxyAuth()
+                let (limits, usage) = await self.deviceKeyService.getLimitsAndUsage()
 
                 await MainActor.run {
                     var response: [String: AnyCodable] = [
@@ -1135,7 +1105,7 @@ final class WebViewManager: NSObject {
 
             Task {
                 do {
-                    let feedbackId = try await DeviceKeyService.shared.submitFeedback(
+                    let feedbackId = try await self.deviceKeyService.submitFeedback(
                         type: feedbackType,
                         title: title,
                         description: description,
@@ -1164,7 +1134,7 @@ final class WebViewManager: NSObject {
                 return
             }
             Task {
-                let bundle = await DeviceKeyService.shared.getSupportBundle()
+                let bundle = await self.deviceKeyService.getSupportBundle()
                 await MainActor.run {
                     bridgeService.respond(to: callbackId, with: [
                         "bundle": AnyCodable(bundle)
@@ -1323,7 +1293,7 @@ final class WebViewManager: NSObject {
 
     /// Get settings enriched with classifier state
     private func settingsWithClassifierState() -> [String: Any] {
-        var settings = SettingsService.shared.allSettings()
+        var settings = settingsService.allSettings()
         if let classifier = mlxClassifier {
             settings["classifierReady"] = classifier.isReady
             settings["classifierLoading"] = classifier.isLoading
