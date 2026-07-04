@@ -13,6 +13,7 @@ import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
+import { debugWarn } from '../utils/debug';
 
 interface StreamEditorProps {
   stream: Stream;
@@ -133,6 +134,8 @@ export function StreamEditor({
   const editorViewRef = useRef<EditorView | null>(null);
   const selectionActionMenuRef = useRef<HTMLDivElement>(null);
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
+  const markdownContentRef = useRef(stream.document?.markdown ?? '');
+  const revisionRef = useRef(stream.document?.revision ?? 0);
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
   const showPromptRef = useRef(showPrompt);
@@ -214,6 +217,8 @@ export function StreamEditor({
   useEffect(() => {
     setMarkdownContent(stream.document?.markdown ?? '');
     lastSavedContentRef.current = stream.document?.markdown ?? '';
+    markdownContentRef.current = stream.document?.markdown ?? '';
+    revisionRef.current = stream.document?.revision ?? 0;
     setTitle(stream.title);
     setSaveState('saved');
     setAiStatus('idle');
@@ -222,7 +227,11 @@ export function StreamEditor({
     setPromptValue('');
     promptContextRef.current = null;
     aiRequestRef.current = null;
-  }, [stream.id, stream.document?.markdown, stream.title]);
+  }, [stream.id, stream.document?.markdown, stream.document?.revision, stream.title]);
+
+  useEffect(() => {
+    markdownContentRef.current = markdownContent;
+  }, [markdownContent]);
 
   useEffect(() => {
     if (!pendingSourceId) return;
@@ -249,15 +258,28 @@ export function StreamEditor({
     setSaveState('saving');
 
     const timer = window.setTimeout(() => {
-      bridge.send({
-        type: 'saveStreamDocument',
-        payload: {
+      const contentToSave = markdownContent;
+      const baseRevision = revisionRef.current;
+
+      void bridge.sendAsync<{ revision: number }>('saveStreamDocument', {
+        streamId: stream.id,
+        markdown: contentToSave,
+        baseRevision,
+      }).then((response) => {
+        if (Number.isFinite(response.revision)) {
+          revisionRef.current = response.revision;
+        }
+        lastSavedContentRef.current = contentToSave;
+        if (markdownContentRef.current === contentToSave) {
+          setSaveState('saved');
+        }
+      }).catch((error) => {
+        debugWarn('[StreamEditor] Failed to save stream document', {
           streamId: stream.id,
-          markdown: markdownContent,
-        },
+          baseRevision,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
-      lastSavedContentRef.current = markdownContent;
-      setSaveState('saved');
     }, 350);
 
     return () => window.clearTimeout(timer);
@@ -265,27 +287,69 @@ export function StreamEditor({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
+      if (message.type === 'streamDocumentConflict') {
+        const payloadStreamId = message.payload?.streamId as string | undefined;
+        const markdown = message.payload?.markdown as string | undefined;
+        const revision = Number(message.payload?.revision);
+
+        if (!payloadStreamId || payloadStreamId !== stream.id || typeof markdown !== 'string' || !Number.isFinite(revision)) {
+          return;
+        }
+
+        const view = editorViewRef.current;
+        if (view) {
+          view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: markdown },
+          });
+        }
+
+        revisionRef.current = revision;
+        markdownContentRef.current = markdown;
+        lastSavedContentRef.current = markdown;
+        setMarkdownContent(markdown);
+        setSaveState('saved');
+
+        debugWarn('[StreamEditor] Reloaded document after revision conflict', {
+          streamId: stream.id,
+          revision,
+        });
+        return;
+      }
+
       if (message.type === 'streamDocumentAppended') {
         const payloadStreamId = message.payload?.streamId as string | undefined;
         const fragment = message.payload?.fragment as string | undefined;
+        const revision = Number(message.payload?.revision);
 
         if (!payloadStreamId || payloadStreamId !== stream.id || typeof fragment !== 'string' || fragment.length === 0) {
           return;
         }
 
         const view = editorViewRef.current;
-        if (!view) return;
+        const currentMarkdown = view?.state.doc.toString() ?? markdownContentRef.current;
+        const hadUnsavedChanges = currentMarkdown !== lastSavedContentRef.current;
 
-        const end = view.state.doc.length;
-        const sep = end > 0 ? '\n\n' : '';
+        const sep = currentMarkdown.length > 0 ? '\n\n' : '';
         const insert = `${sep}${fragment}`;
-        const insertedEnd = end + insert.length;
+        const nextMarkdown = `${currentMarkdown}${insert}`;
+        const insertedEnd = nextMarkdown.length;
 
-        view.dispatch({
-          changes: { from: end, insert },
-          effects: EditorView.scrollIntoView(insertedEnd, { y: 'nearest' }),
-        });
-        setMarkdownContent(view.state.doc.toString());
+        if (view) {
+          view.dispatch({
+            changes: { from: view.state.doc.length, insert },
+            effects: EditorView.scrollIntoView(insertedEnd, { y: 'nearest' }),
+          });
+        }
+
+        if (Number.isFinite(revision)) {
+          revisionRef.current = revision;
+        }
+        markdownContentRef.current = nextMarkdown;
+        if (!hadUnsavedChanges) {
+          lastSavedContentRef.current = nextMarkdown;
+          setSaveState('saved');
+        }
+        setMarkdownContent(nextMarkdown);
         return;
       }
 

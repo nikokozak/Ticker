@@ -123,15 +123,32 @@ final class StreamMessageHandler: BridgeMessageHandler {
             guard let payload = message.payload,
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue),
-                  let markdown = payload["markdown"]?.value as? String else {
+                  let markdown = payload["markdown"]?.value as? String,
+                  let baseRevision = payload["baseRevision"]?.intValue,
+                  let callbackId = message.callbackId else {
                 DebugLog.log("[WebViewManager] Invalid saveStreamDocument payload")
                 await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveStreamDocument payload")
                 return
             }
             do {
-                try persistence.saveStreamDocument(streamId: streamId, markdown: markdown)
+                let revision = try persistence.saveStreamDocument(
+                    streamId: streamId,
+                    markdown: markdown,
+                    baseRevision: baseRevision
+                )
+                await bridgeService.respond(to: callbackId, with: [
+                    "revision": AnyCodable(revision)
+                ])
+            } catch let conflict as StreamDocumentRevisionConflict {
+                await bridgeService.send(BridgeMessage(type: "streamDocumentConflict", payload: [
+                    "streamId": AnyCodable(conflict.streamId.uuidString),
+                    "markdown": AnyCodable(conflict.markdown),
+                    "revision": AnyCodable(conflict.revision)
+                ]))
+                await bridgeService.respondWithError(to: callbackId, error: "Stream document revision conflict")
             } catch {
                 DebugLog.log("[WebViewManager] Failed to save stream document (\(DebugLog.errorSummary(error)))")
+                await bridgeService.respondWithError(to: callbackId, error: error.localizedDescription)
             }
 
         case "exportStream":

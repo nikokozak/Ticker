@@ -4,6 +4,13 @@ import GRDB
 struct AppendResult {
     let fragment: String
     let isNewDocument: Bool
+    let revision: Int
+}
+
+struct StreamDocumentRevisionConflict: Error {
+    let streamId: UUID
+    let markdown: String
+    let revision: Int
 }
 
 /// Manages SQLite persistence for streams, stream documents, and sources
@@ -326,6 +333,12 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v13_stream_document_revision") { db in
+            try db.alter(table: "stream_documents") { t in
+                t.add(column: "revision", .integer).notNull().defaults(to: 0)
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -525,7 +538,7 @@ final class PersistenceService {
         try dbQueue.read { db in
             guard let row = try Row.fetchOne(
                 db,
-                sql: "SELECT stream_id, markdown, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+                sql: "SELECT stream_id, markdown, revision, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
                 arguments: [streamId.uuidString]
             ) else {
                 return nil
@@ -534,6 +547,7 @@ final class PersistenceService {
             return StreamDocument(
                 streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
                 markdown: row["markdown"],
+                revision: row["revision"],
                 createdAt: Date(timeIntervalSince1970: row["created_at"]),
                 updatedAt: Date(timeIntervalSince1970: row["updated_at"])
             )
@@ -545,12 +559,13 @@ final class PersistenceService {
         try dbQueue.write { db in
             if let row = try Row.fetchOne(
                 db,
-                sql: "SELECT stream_id, markdown, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+                sql: "SELECT stream_id, markdown, revision, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
                 arguments: [streamId.uuidString]
             ) {
                 return StreamDocument(
                     streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
                     markdown: row["markdown"],
+                    revision: row["revision"],
                     createdAt: Date(timeIntervalSince1970: row["created_at"]),
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"])
                 )
@@ -573,30 +588,80 @@ final class PersistenceService {
             return StreamDocument(
                 streamId: streamId,
                 markdown: markdown,
+                revision: 0,
                 createdAt: now,
                 updatedAt: now
             )
         }
     }
 
-    func saveStreamDocument(streamId: UUID, markdown: String) throws {
+    @discardableResult
+    func saveStreamDocument(streamId: UUID, markdown: String) throws -> Int {
+        let document = try loadOrCreateStreamDocument(streamId: streamId)
+        return try saveStreamDocument(streamId: streamId, markdown: markdown, baseRevision: document.revision)
+    }
+
+    @discardableResult
+    func saveStreamDocument(streamId: UUID, markdown: String, baseRevision: Int) throws -> Int {
         let now = Date().timeIntervalSince1970
-        try dbQueue.write { db in
+        return try dbQueue.write { db in
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT markdown, revision FROM stream_documents WHERE stream_id = ?",
+                arguments: [streamId.uuidString]
+            ) {
+                let currentMarkdown: String = row["markdown"]
+                let currentRevision: Int = row["revision"]
+
+                guard baseRevision == currentRevision else {
+                    throw StreamDocumentRevisionConflict(
+                        streamId: streamId,
+                        markdown: currentMarkdown,
+                        revision: currentRevision
+                    )
+                }
+
+                let newRevision = currentRevision + 1
+                try db.execute(
+                    sql: """
+                        UPDATE stream_documents
+                        SET markdown = ?, revision = ?, updated_at = ?
+                        WHERE stream_id = ?
+                    """,
+                    arguments: [markdown, newRevision, now, streamId.uuidString]
+                )
+
+                try db.execute(
+                    sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
+                    arguments: [now, streamId.uuidString]
+                )
+
+                return newRevision
+            }
+
+            guard baseRevision == 0 else {
+                throw StreamDocumentRevisionConflict(
+                    streamId: streamId,
+                    markdown: "",
+                    revision: 0
+                )
+            }
+
+            let newRevision = 1
             try db.execute(
                 sql: """
-                    INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(stream_id) DO UPDATE SET
-                        markdown = excluded.markdown,
-                        updated_at = excluded.updated_at
+                    INSERT INTO stream_documents (stream_id, markdown, revision, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
                 """,
-                arguments: [streamId.uuidString, markdown, now, now]
+                arguments: [streamId.uuidString, markdown, newRevision, now, now]
             )
 
             try db.execute(
                 sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
                 arguments: [now, streamId.uuidString]
             )
+
+            return newRevision
         }
     }
 
@@ -604,33 +669,38 @@ final class PersistenceService {
         try dbQueue.write { db in
             let now = Date().timeIntervalSince1970
             let existingMarkdown: String
+            let existingRevision: Int
             let isNewDocument: Bool
 
             if let row = try Row.fetchOne(
                 db,
-                sql: "SELECT markdown FROM stream_documents WHERE stream_id = ?",
+                sql: "SELECT markdown, revision FROM stream_documents WHERE stream_id = ?",
                 arguments: [streamId.uuidString]
             ) {
                 existingMarkdown = row["markdown"]
+                existingRevision = row["revision"]
                 isNewDocument = false
             } else {
                 existingMarkdown = ""
+                existingRevision = 0
                 isNewDocument = true
             }
 
             let markdown = existingMarkdown.isEmpty
                 ? fragment
                 : "\(existingMarkdown)\n\n\(fragment)"
+            let newRevision = existingRevision + 1
 
             try db.execute(
                 sql: """
-                    INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO stream_documents (stream_id, markdown, revision, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(stream_id) DO UPDATE SET
                         markdown = excluded.markdown,
+                        revision = excluded.revision,
                         updated_at = excluded.updated_at
                 """,
-                arguments: [streamId.uuidString, markdown, now, now]
+                arguments: [streamId.uuidString, markdown, newRevision, now, now]
             )
 
             try db.execute(
@@ -638,7 +708,7 @@ final class PersistenceService {
                 arguments: [now, streamId.uuidString]
             )
 
-            return AppendResult(fragment: fragment, isNewDocument: isNewDocument)
+            return AppendResult(fragment: fragment, isNewDocument: isNewDocument, revision: newRevision)
         }
     }
 

@@ -37,17 +37,20 @@ struct StreamSummary: Identifiable, Codable {
 struct StreamDocument: Codable {
     let streamId: UUID
     var markdown: String
+    var revision: Int
     let createdAt: Date
     var updatedAt: Date
 
     init(
         streamId: UUID,
         markdown: String = "",
+        revision: Int = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.streamId = streamId
         self.markdown = markdown
+        self.revision = revision
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

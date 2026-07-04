@@ -12,6 +12,7 @@ export interface Stream {
 export interface StreamDocument {
   streamId: string;
   markdown: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }

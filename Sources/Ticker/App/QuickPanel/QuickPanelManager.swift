@@ -483,7 +483,7 @@ final class QuickPanelManager: ObservableObject {
 
             let fragment = try buildMarkdownFragment(streamId: streamId)
             let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
-            notifyFrontend(streamId: streamId, fragment: result.fragment, isNewStream: isNewStream)
+            notifyFrontend(streamId: streamId, fragment: result.fragment, revision: result.revision, isNewStream: isNewStream)
 
             let aiPrompt = triggerDocumentAI ? prompt : nil
             let orchestratorForAI = orchestrator
@@ -723,7 +723,7 @@ final class QuickPanelManager: ObservableObject {
     private func appendQuickPanelAIFragment(streamId: UUID, fragment: String, persistence: PersistenceService) {
         do {
             let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
-            notifyFrontend(streamId: streamId, fragment: result.fragment, source: "quickPanelAI")
+            notifyFrontend(streamId: streamId, fragment: result.fragment, revision: result.revision, source: "quickPanelAI")
         } catch {
             DebugLog.log("[QuickPanel] Failed to append AI response (\(DebugLog.errorSummary(error)))")
         }
@@ -750,6 +750,7 @@ final class QuickPanelManager: ObservableObject {
     private func notifyFrontend(
         streamId: UUID,
         fragment: String,
+        revision: Int,
         isNewStream: Bool = false,
         source: String = "quickPanel"
     ) {
@@ -758,6 +759,7 @@ final class QuickPanelManager: ObservableObject {
         let payload: [String: AnyCodable] = [
             "streamId": AnyCodable(streamId.uuidString),
             "fragment": AnyCodable(fragment),
+            "revision": AnyCodable(revision),
             "isNewStream": AnyCodable(isNewStream),
             "source": AnyCodable(source)
         ]

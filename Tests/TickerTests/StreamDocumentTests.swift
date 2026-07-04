@@ -107,6 +107,93 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_saveStreamDocumentWithCurrentRevisionIncrementsRevision() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Revision Save")
+            try service.saveStream(stream)
+
+            let initialDocument = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            XCTAssertEqual(initialDocument.revision, 0)
+
+            let firstRevision = try service.saveStreamDocument(
+                streamId: stream.id,
+                markdown: "First save",
+                baseRevision: initialDocument.revision
+            )
+            XCTAssertEqual(firstRevision, 1)
+
+            let firstDocument = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(firstDocument.markdown, "First save")
+            XCTAssertEqual(firstDocument.revision, 1)
+
+            let secondRevision = try service.saveStreamDocument(
+                streamId: stream.id,
+                markdown: "Second save",
+                baseRevision: firstDocument.revision
+            )
+            XCTAssertEqual(secondRevision, 2)
+
+            let secondDocument = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(secondDocument.markdown, "Second save")
+            XCTAssertEqual(secondDocument.revision, 2)
+        }
+    }
+
+    func test_appendToStreamDocumentIncrementsRevision() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Append Revision")
+            try service.saveStream(stream)
+
+            let initialDocument = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            XCTAssertEqual(initialDocument.revision, 0)
+
+            let firstAppend = try service.appendToStreamDocument(streamId: stream.id, fragment: "First append")
+            XCTAssertEqual(firstAppend.revision, 1)
+
+            let secondAppend = try service.appendToStreamDocument(streamId: stream.id, fragment: "Second append")
+            XCTAssertEqual(secondAppend.revision, 2)
+
+            let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(document.markdown, "First append\n\nSecond append")
+            XCTAssertEqual(document.revision, 2)
+        }
+    }
+
+    func test_staleRevisionSaveDoesNotClobberInterleavedAppend() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Conflict Guard")
+            try service.saveStream(stream)
+
+            let initialDocument = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            let savedRevision = try service.saveStreamDocument(
+                streamId: stream.id,
+                markdown: "Editor draft",
+                baseRevision: initialDocument.revision
+            )
+            XCTAssertEqual(savedRevision, 1)
+
+            let append = try service.appendToStreamDocument(streamId: stream.id, fragment: "External append")
+            XCTAssertEqual(append.revision, 2)
+
+            do {
+                _ = try service.saveStreamDocument(
+                    streamId: stream.id,
+                    markdown: "Editor stale overwrite",
+                    baseRevision: savedRevision
+                )
+                XCTFail("Expected stale revision save to throw")
+            } catch let conflict as StreamDocumentRevisionConflict {
+                XCTAssertEqual(conflict.streamId, stream.id)
+                XCTAssertEqual(conflict.revision, append.revision)
+                XCTAssertEqual(conflict.markdown, "Editor draft\n\nExternal append")
+            }
+
+            let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(document.markdown, "Editor draft\n\nExternal append")
+            XCTAssertEqual(document.revision, append.revision)
+        }
+    }
+
     func test_textSearchFindsStreamDocumentWithSnippet() async throws {
         try await withTempPersistenceService { service in
             let stream = Stream(title: "Searchable Stream")

@@ -26,6 +26,7 @@ enum StreamCodec {
             "document": [
                 "streamId": document.streamId.uuidString,
                 "markdown": document.markdown,
+                "revision": document.revision,
                 "createdAt": formatter.string(from: document.createdAt),
                 "updatedAt": formatter.string(from: document.updatedAt)
             ]

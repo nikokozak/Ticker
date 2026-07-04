@@ -24,6 +24,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'sourceRemoveError',
   'sourceRemoved',
   'streamDocumentAppended',
+  'streamDocumentConflict',
   'streamLoaded',
   'streamTitleUpdated',
   'streamsChanged',
