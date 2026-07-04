@@ -2,7 +2,7 @@ import { type Extension, type Range } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 
-const MARK_NODE_NAMES = new Set(['EmphasisMark', 'StrongEmphasisMark', 'CodeMark']);
+const MARK_NODE_NAMES = new Set(['EmphasisMark', 'StrongEmphasisMark', 'CodeMark', 'CodeInfo']);
 const LINK_CONCEAL_NODE_NAMES = new Set(['LinkMark', 'URL', 'LinkTitle']);
 
 function isLineSelected(view: EditorView, lineFrom: number, lineTo: number): boolean {

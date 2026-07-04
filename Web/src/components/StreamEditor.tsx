@@ -3,7 +3,7 @@ import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView } from '@codemirror/view';
-import { Transaction } from '@codemirror/state';
+import { Transaction, type Extension } from '@codemirror/state';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { bridge, Stream, SourceReference } from '../types';
@@ -37,6 +37,12 @@ interface FloatingMenuState {
   left: number;
   top: number;
 }
+
+const SELECTION_MENU_DELAY_MS = 180;
+const SELECTION_MENU_GAP = 10;
+const SELECTION_MENU_HORIZONTAL_INSET = 8;
+const DEFAULT_SELECTION_MENU_WIDTH = 82;
+const DEFAULT_SELECTION_MENU_HEIGHT = 44;
 
 const markdownHighlightStyle = HighlightStyle.define([
   {
@@ -125,9 +131,12 @@ export function StreamEditor({
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  const selectionActionMenuRef = useRef<HTMLDivElement>(null);
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
+  const showPromptRef = useRef(showPrompt);
+  const isAiThinkingRef = useRef(false);
   const aiRequestRef = useRef<{
     id: string;
     buffer: string;
@@ -527,7 +536,7 @@ export function StreamEditor({
     const doc = view.state.doc;
 
     if (selection.from !== selection.to) {
-      const text = doc.sliceString(selection.from, selection.to);
+      const text = view.state.sliceDoc(selection.from, selection.to);
       return {
         text,
         from: selection.from,
@@ -556,10 +565,10 @@ export function StreamEditor({
 
     const from = doc.line(startLine).from;
     const to = doc.line(endLine).to;
-    let text = doc.sliceString(from, to).trim();
+    let text = view.state.sliceDoc(from, to).trim();
 
     if (!text) {
-      text = doc.toString().trim();
+      text = view.state.sliceDoc(0, doc.length).trim();
       if (!text) return null;
       return {
         text,
@@ -589,51 +598,108 @@ export function StreamEditor({
     setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearSelectionMenuTimer]);
 
-  const getFloatingMenuPlacement = useCallback((): { left: number; top: number } | null => {
+  const getSelectionMenuPlacement = useCallback((view: EditorView): { left: number; top: number } | null => {
     const shell = editorShellRef.current;
     if (!shell) return null;
 
-    const domSelection = window.getSelection();
-    if (!domSelection || domSelection.rangeCount === 0) return null;
-    if (!domSelection.anchorNode || !domSelection.focusNode) return null;
-    if (!shell.contains(domSelection.anchorNode) || !shell.contains(domSelection.focusNode)) return null;
-    if (domSelection.isCollapsed) return null;
+    const selection = view.state.selection.main;
+    const coords = view.coordsAtPos(selection.head) ?? view.coordsAtPos(selection.anchor);
+    if (!coords) return null;
 
-    const range = domSelection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return null;
+    const shellRect = shell.getBoundingClientRect();
+    const menu = selectionActionMenuRef.current;
+    const menuWidth = menu?.offsetWidth ?? DEFAULT_SELECTION_MENU_WIDTH;
+    const menuHeight = menu?.offsetHeight ?? DEFAULT_SELECTION_MENU_HEIGHT;
+    const rawLeft = (coords.left + coords.right) / 2;
+    const minEdge = shellRect.left + SELECTION_MENU_HORIZONTAL_INSET;
+    const maxEdge = shellRect.right - SELECTION_MENU_HORIZONTAL_INSET;
+    const availableWidth = maxEdge - minEdge;
 
-    const horizontalPadding = 16;
-    const left = Math.min(
-      window.innerWidth - horizontalPadding,
-      Math.max(horizontalPadding, rect.left + rect.width / 2),
-    );
-    const top = rect.bottom + 10;
+    const left = availableWidth > menuWidth
+      ? Math.min(maxEdge - menuWidth / 2, Math.max(minEdge + menuWidth / 2, rawLeft))
+      : minEdge + availableWidth / 2;
+
+    const topBoundary = Math.max(0, shellRect.top) + SELECTION_MENU_HORIZONTAL_INSET;
+    const bottomBoundary = Math.min(window.innerHeight, shellRect.bottom) - SELECTION_MENU_HORIZONTAL_INSET;
+    const aboveTop = coords.top - menuHeight - SELECTION_MENU_GAP;
+    const belowTop = coords.bottom + SELECTION_MENU_GAP;
+    const maxTop = Math.max(topBoundary, bottomBoundary - menuHeight);
+    const top = aboveTop >= topBoundary
+      ? aboveTop
+      : Math.min(Math.max(belowTop, topBoundary), maxTop);
 
     return { left, top };
   }, []);
 
-  const scheduleSelectionMenu = useCallback(() => {
+  const scheduleSelectionMenu = useCallback((view: EditorView) => {
     clearSelectionMenuTimer();
-    if (showPrompt || isAiThinking) {
-      setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+
+    if (showPromptRef.current || isAiThinkingRef.current) {
+      hideSelectionMenu();
+      return;
+    }
+
+    const selection = view.state.selection.main;
+    if (selection.empty || !view.state.sliceDoc(selection.from, selection.to).trim()) {
+      hideSelectionMenu();
       return;
     }
 
     selectionMenuTimerRef.current = window.setTimeout(() => {
-      const selection = getSelectionContext(false);
-      const placement = getFloatingMenuPlacement();
-      if (!selection || !selection.text.trim() || !placement) {
-        setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+      selectionMenuTimerRef.current = null;
+
+      const currentView = editorViewRef.current;
+      if (!currentView || currentView !== view || showPromptRef.current || isAiThinkingRef.current) {
+        hideSelectionMenu();
         return;
       }
+
+      const currentSelection = currentView.state.selection.main;
+      const selectedText = currentView.state.sliceDoc(currentSelection.from, currentSelection.to);
+      const placement = getSelectionMenuPlacement(currentView);
+      if (currentSelection.empty || !selectedText.trim() || !placement) {
+        hideSelectionMenu();
+        return;
+      }
+
       setFloatingMenu({
         visible: true,
         left: placement.left,
         top: placement.top,
       });
-    }, 180);
-  }, [clearSelectionMenuTimer, getFloatingMenuPlacement, getSelectionContext, isAiThinking, showPrompt]);
+    }, SELECTION_MENU_DELAY_MS);
+  }, [clearSelectionMenuTimer, getSelectionMenuPlacement, hideSelectionMenu]);
+
+  useEffect(() => {
+    showPromptRef.current = showPrompt;
+    isAiThinkingRef.current = isAiThinking;
+
+    if (showPrompt || isAiThinking) {
+      hideSelectionMenu();
+    }
+  }, [hideSelectionMenu, isAiThinking, showPrompt]);
+
+  const selectionMenuExtension = useMemo<Extension>(() => [
+    EditorView.updateListener.of((update) => {
+      const selection = update.state.selection.main;
+
+      if (selection.empty) {
+        if (update.selectionSet || update.docChanged) {
+          hideSelectionMenu();
+        }
+        return;
+      }
+
+      if (update.selectionSet || update.geometryChanged) {
+        scheduleSelectionMenu(update.view);
+      }
+    }),
+    EditorView.domEventHandlers({
+      blur: () => {
+        hideSelectionMenu();
+      },
+    }),
+  ], [hideSelectionMenu, scheduleSelectionMenu]);
 
   const startDocumentAI = useCallback((options: {
     query: string;
@@ -789,46 +855,6 @@ export function StreamEditor({
   }, [clearSelectionMenuTimer]);
 
   useEffect(() => {
-    const handleSelectionChange = () => {
-      const selection = window.getSelection();
-      if (!selection || selection.rangeCount === 0) {
-        hideSelectionMenu();
-        return;
-      }
-      scheduleSelectionMenu();
-    };
-
-    document.addEventListener('selectionchange', handleSelectionChange);
-    return () => document.removeEventListener('selectionchange', handleSelectionChange);
-  }, [hideSelectionMenu, scheduleSelectionMenu]);
-
-  useEffect(() => {
-    if (!floatingMenu.visible) return;
-
-    const updatePlacement = () => {
-      const selection = getSelectionContext(false);
-      const placement = getFloatingMenuPlacement();
-      if (!selection || !placement) {
-        hideSelectionMenu();
-        return;
-      }
-      setFloatingMenu((previous) => ({
-        ...previous,
-        visible: true,
-        left: placement.left,
-        top: placement.top,
-      }));
-    };
-
-    window.addEventListener('resize', updatePlacement);
-    window.addEventListener('scroll', updatePlacement, true);
-    return () => {
-      window.removeEventListener('resize', updatePlacement);
-      window.removeEventListener('scroll', updatePlacement, true);
-    };
-  }, [floatingMenu.visible, getFloatingMenuPlacement, getSelectionContext, hideSelectionMenu]);
-
-  useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
       if (!isEditorActive()) return;
       if (!event.clipboardData?.items?.length) return;
@@ -849,14 +875,6 @@ export function StreamEditor({
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [insertImageFiles, isEditorActive]);
-
-  useEffect(() => {
-    if (!showPrompt) {
-      scheduleSelectionMenu();
-    } else {
-      hideSelectionMenu();
-    }
-  }, [hideSelectionMenu, scheduleSelectionMenu, showPrompt]);
 
   const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     const files = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith('image/'));
@@ -1001,6 +1019,7 @@ export function StreamEditor({
 
       {floatingMenu.visible && (
         <div
+          ref={selectionActionMenuRef}
           className="selection-action-menu"
           style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
         >
@@ -1058,6 +1077,7 @@ export function StreamEditor({
                   autocorrect: 'on',
                 }),
                 EditorView.editable.of(!isAiThinking),
+                selectionMenuExtension,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
