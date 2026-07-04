@@ -5,15 +5,12 @@ final class AIMessageHandler: BridgeMessageHandler {
         "thinkDocument"
     ]
 
-    private let persistence: PersistenceService
     private let bridgeService: BridgeService
     private let assetService: AssetService
     private let orchestrator: AIOrchestrator
     private let deviceKeyService: DeviceKeyService
 
     init?(container: ServiceContainer) {
-        guard let persistence = container.persistence else { return nil }
-        self.persistence = persistence
         self.bridgeService = container.bridgeService
         self.assetService = container.assetService
         self.orchestrator = container.orchestrator
@@ -38,20 +35,10 @@ final class AIMessageHandler: BridgeMessageHandler {
             }
 
             var streamIdForRAG: UUID? = nil
-            var sourceContext: String? = nil
 
             if let streamIdValue = payload["streamId"]?.value as? String,
                let streamId = UUID(uuidString: streamIdValue) {
                 streamIdForRAG = streamId
-
-                if let stream = try? persistence.loadStream(id: streamId) {
-                    let combinedText = stream.sources
-                        .compactMap { $0.extractedText }
-                        .joined(separator: "\n\n---\n\n")
-                    if !combinedText.isEmpty {
-                        sourceContext = combinedText
-                    }
-                }
             }
 
             var resolvedQuery = query
@@ -131,7 +118,6 @@ final class AIMessageHandler: BridgeMessageHandler {
                     queryImages: imageDataURLs,
                     streamId: streamIdForRAG,
                     priorCells: [],
-                    sourceContext: sourceContext,
                     includeHeading: false,
                     onChunk: onChunk,
                     onComplete: onComplete,

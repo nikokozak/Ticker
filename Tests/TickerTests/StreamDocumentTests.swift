@@ -42,6 +42,14 @@ final class StreamDocumentTests: XCTestCase {
         case creationFailed
     }
 
+    private typealias RetrievalChunkFixture = (
+        seq: Int,
+        text: String,
+        pageStart: Int,
+        pageEnd: Int,
+        sectionPath: String?
+    )
+
     func test_v14MigrationCreatesPDFHighlightsTable() throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -233,6 +241,137 @@ final class StreamDocumentTests: XCTestCase {
 
             XCTAssertEqual(counts.0, 0)
             XCTAssertEqual(counts.1, 0)
+        }
+    }
+
+    func test_retrievalReturnsNoContextForIrrelevantQuery() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Large Source")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "Storage manifolds and caliper fixtures are indexed here.", 4, 4, "Storage")
+                ]
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+
+            XCTAssertTrue(try retrieval.retrieve(query: "weather forecast", streamId: stream.id).isEmpty)
+            XCTAssertNil(try retrieval.assembleSourceContext(query: "weather forecast", streamId: stream.id))
+        }
+    }
+
+    func test_retrievalPassthroughUsesLegacyWholeTextFormatForSmallSources() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Small Sources")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "One.txt",
+                extractedText: "First source text",
+                indexStatus: .pending,
+                addedAt: Date(timeIntervalSince1970: 1)
+            )
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Two.txt",
+                extractedText: "Second source text",
+                indexStatus: .ready,
+                addedAt: Date(timeIntervalSince1970: 2)
+            )
+
+            let context = try XCTUnwrap(
+                RetrievalService(persistence: service)
+                    .assembleSourceContext(query: "anything", streamId: stream.id)
+            )
+
+            XCTAssertEqual(context.mode, .passthrough)
+            XCTAssertEqual(context.text, "First source text\n\n---\n\nSecond source text")
+        }
+    }
+
+    func test_retrievalInterleavesMultipleSourcesByScore() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Multiple Sources")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Alpha.pdf",
+                extractedText: largeExtractedText("alpha"),
+                chunks: [
+                    (0, "caliper caliper caliper storage manifold", 2, 2, nil)
+                ]
+            )
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Beta.pdf",
+                extractedText: largeExtractedText("beta"),
+                chunks: [
+                    (0, "caliper storage appendix", 8, 8, nil)
+                ]
+            )
+
+            let results = try RetrievalService(persistence: service)
+                .retrieve(query: "caliper storage", streamId: stream.id)
+
+            XCTAssertEqual(results.map(\.sourceName), ["Alpha.pdf", "Beta.pdf"])
+            XCTAssertLessThanOrEqual(results[0].score, results[1].score)
+        }
+    }
+
+    func test_retrievalSanitizesQuerySyntaxWithoutThrowing() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Sanitize")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Syntax.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "Quotes and parens appear in this chunk.", 1, 1, nil)
+                ]
+            )
+
+            XCTAssertNoThrow(
+                try RetrievalService(persistence: service)
+                    .retrieve(query: #""quotes" AND (parens) don't-crash"#, streamId: stream.id)
+            )
+        }
+    }
+
+    func test_retrievalManifestIncludesNumbersSourcePagesAndSection() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Manifest")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "The storage manifold keeps receipts in order.", 12, 14, "3.2 Storage")
+                ]
+            )
+
+            let context = try XCTUnwrap(
+                RetrievalService(persistence: service)
+                    .assembleSourceContext(query: "storage manifold", streamId: stream.id)
+            )
+
+            XCTAssertEqual(context.mode, .retrieved)
+            XCTAssertEqual(context.text, """
+            [1] Manual.pdf, p.12–14 (§3.2 Storage):
+            The storage manifold keeps receipts in order.
+            """)
         }
     }
 
@@ -746,15 +885,10 @@ final class StreamDocumentTests: XCTestCase {
                 """
             )
 
-            let embeddingService = EmbeddingService()
-            let retrievalService = RetrievalService(
-                persistence: service,
-                embeddingService: embeddingService
-            )
+            let retrievalService = RetrievalService(persistence: service)
             let searchService = SearchService(
                 persistence: service,
-                retrieval: retrievalService,
-                embedding: embeddingService
+                retrieval: retrievalService
             )
 
             let results = try await searchService.hybridSearch(
@@ -1039,6 +1173,46 @@ final class StreamDocumentTests: XCTestCase {
         )
         try service.saveSource(source)
         return source
+    }
+
+    private func saveRetrievalSource(
+        in service: PersistenceService,
+        streamId: UUID,
+        displayName: String,
+        extractedText: String,
+        indexStatus: SourceIndexStatus = .ready,
+        addedAt: Date = Date(),
+        chunks chunkFixtures: [RetrievalChunkFixture] = []
+    ) throws -> SourceReference {
+        let source = SourceReference(
+            streamId: streamId,
+            displayName: displayName,
+            fileType: .pdf,
+            bookmarkData: Data("bookmark-\(displayName)".utf8),
+            status: .ready,
+            extractedText: extractedText,
+            pageCount: 20,
+            indexStatus: indexStatus,
+            addedAt: addedAt
+        )
+        try service.saveSource(source)
+
+        let chunks = chunkFixtures.map { fixture in
+            SourceChunk(
+                sourceId: source.id,
+                seq: fixture.seq,
+                text: fixture.text,
+                pageStart: fixture.pageStart,
+                pageEnd: fixture.pageEnd,
+                sectionPath: fixture.sectionPath
+            )
+        }
+        try service.saveSourceChunks(chunks, for: source.id)
+        return source
+    }
+
+    private func largeExtractedText(_ marker: String = "large") -> String {
+        String(repeating: "\(marker) source context. ", count: 2_500)
     }
 
     private func withSeededV10Database(

@@ -7,7 +7,6 @@ struct ServiceContainer {
     let bridgeService: BridgeService
     let assetService: AssetService
     let proxyService: ProxyLLMService
-    let embeddingService: EmbeddingService
     let chunkingService: ChunkingService
     let orchestrator: AIOrchestrator
     let persistence: PersistenceService?
@@ -28,7 +27,6 @@ struct ServiceContainer {
         let proxyService = ProxyLLMService(deviceKeyService: deviceKeyService)
         self.proxyService = proxyService
 
-        self.embeddingService = EmbeddingService(settings: settingsService)
         self.chunkingService = ChunkingService()
 
         let orchestrator = AIOrchestrator(
@@ -66,17 +64,13 @@ struct ServiceContainer {
             }
             self.ingestService = ingestService
 
-            let retrievalService = RetrievalService(
-                persistence: persistence,
-                embeddingService: embeddingService
-            )
+            let retrievalService = RetrievalService(persistence: persistence)
             self.retrievalService = retrievalService
             orchestrator.setRetrievalService(retrievalService)
 
             self.searchService = SearchService(
                 persistence: persistence,
-                retrieval: retrievalService,
-                embedding: embeddingService
+                retrieval: retrievalService
             )
         } catch {
             DebugLog.log("[WebViewManager] Failed to initialize persistence (\(DebugLog.errorSummary(error)))")

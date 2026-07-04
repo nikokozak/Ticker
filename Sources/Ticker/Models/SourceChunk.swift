@@ -14,17 +14,6 @@ struct SourceChunk: Identifiable, Codable {
         Int(ceil(Double(text.count) / 4.0))
     }
 
-    // ponytail: Compatibility ceiling for dormant pre-R1 retrieval code; remove when Task 1.3 rewrites retrieval over FTS.
-    var chunkIndex: Int {
-        get { seq }
-        set { seq = newValue }
-    }
-
-    var content: String {
-        get { text }
-        set { text = newValue }
-    }
-
     init(
         id: UUID = UUID(),
         sourceId: UUID,
@@ -44,9 +33,15 @@ struct SourceChunk: Identifiable, Codable {
     }
 }
 
-/// A retrieved chunk with relevance score for RAG queries
+/// A source chunk returned from local FTS retrieval.
 struct RetrievedChunk {
-    let chunk: SourceChunk
+    let id: UUID
+    let sourceId: UUID
     let sourceName: String
-    let similarity: Float
+    let seq: Int
+    let text: String
+    let pageStart: Int
+    let pageEnd: Int
+    let sectionPath: String?
+    let score: Double
 }

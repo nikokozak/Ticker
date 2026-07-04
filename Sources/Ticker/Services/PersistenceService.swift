@@ -1127,6 +1127,46 @@ final class PersistenceService {
         }
     }
 
+    func searchSourceChunks(matching ftsQuery: String, streamId: UUID, limit: Int) throws -> [RetrievedChunk] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT
+                        c.id,
+                        c.source_id,
+                        s.display_name AS source_name,
+                        c.seq,
+                        c.text,
+                        c.page_start,
+                        c.page_end,
+                        c.section_path,
+                        bm25(source_chunks_fts) AS score
+                    FROM source_chunks_fts
+                    JOIN source_chunks c ON c.id = source_chunks_fts.chunk_id
+                    JOIN sources s ON s.id = c.source_id
+                    WHERE source_chunks_fts MATCH ?
+                      AND s.stream_id = ?
+                    ORDER BY score ASC
+                    LIMIT ?
+                """,
+                arguments: [ftsQuery, streamId.uuidString, limit]
+            ).map { row in
+                RetrievedChunk(
+                    id: UUID(uuidString: row["id"])!,
+                    sourceId: UUID(uuidString: row["source_id"])!,
+                    sourceName: row["source_name"],
+                    seq: row["seq"],
+                    text: row["text"],
+                    pageStart: row["page_start"],
+                    pageEnd: row["page_end"],
+                    sectionPath: row["section_path"],
+                    score: row["score"]
+                )
+            }
+        }
+    }
+
     func deleteChunksForSource(_ sourceId: UUID) throws {
         try dbQueue.write { db in
             try deleteChunksForSource(sourceId, db: db)
@@ -1160,35 +1200,6 @@ final class PersistenceService {
                 return (id, SourceIndexStatus(rawValue: raw) ?? .pending)
             })
         }
-    }
-
-    // ponytail: Embedding helpers are inert until Roadmap 2 R3 replaces the disabled remote-embedding path.
-    func saveChunks(_ chunks: [SourceChunk]) throws {
-        guard let sourceId = chunks.first?.sourceId else { return }
-        try saveSourceChunks(chunks, for: sourceId)
-    }
-
-    func saveEmbedding(chunkId: UUID, embedding: [Float], model: String) throws {}
-
-    func loadChunksWithEmbeddings(streamId: UUID) throws -> [(SourceChunk, [Float], String)] {
-        []
-    }
-
-    func loadPendingChunks(limit: Int = 100) throws -> [SourceChunk] {
-        []
-    }
-
-    func updateSourceEmbeddingStatus(_ sourceId: UUID, status: String) throws {
-        try dbQueue.write { db in
-            try db.execute(
-                sql: "UPDATE sources SET embedding_status = ? WHERE id = ?",
-                arguments: [status, sourceId.uuidString]
-            )
-        }
-    }
-
-    func loadSourcesNeedingEmbedding() throws -> [SourceReference] {
-        []
     }
 
     private func deleteChunksForSource(_ sourceId: UUID, db: Database) throws {

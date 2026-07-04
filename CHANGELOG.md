@@ -17,6 +17,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- Document AI now uses local source retrieval for large source sets instead of concatenating every source.
 - Main window chrome is now transparent, with content inset around the floating traffic-light controls.
 - Stream sources now open in a modal instead of a persistent sidebar, preserving editor width beside the PDF pane.
 - PDF pane header controls now use compact icon toolbar styling and keep their hit targets with long source names.
