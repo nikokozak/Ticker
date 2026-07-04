@@ -716,7 +716,22 @@ final class PDFReaderPaneController: NSViewController {
     }
 
     private func navigate(to rect: CGRect, on page: PDFPage) {
-        let destination = PDFDestination(page: page, at: CGPoint(x: rect.minX, y: rect.maxY))
+        let visibleHeight = pdfPanePDFView.convert(pdfPanePDFView.bounds, to: page).height
+        let pageBounds = page.bounds(for: .mediaBox)
+        let destinationY: CGFloat
+
+        if visibleHeight.isFinite,
+           visibleHeight > 0,
+           pageBounds.minY.isFinite,
+           pageBounds.maxY.isFinite,
+           pageBounds.minY < pageBounds.maxY {
+            let centeredY = rect.midY + visibleHeight / 2
+            destinationY = min(max(centeredY, pageBounds.minY), pageBounds.maxY)
+        } else {
+            destinationY = rect.maxY
+        }
+
+        let destination = PDFDestination(page: page, at: CGPoint(x: rect.minX, y: destinationY))
         pdfPanePDFView.go(to: destination)
     }
 
@@ -729,7 +744,8 @@ final class PDFReaderPaneController: NSViewController {
         let clampedPage = max(1, min(pageNumber ?? 1, document.pageCount))
         guard let page = document.page(at: clampedPage - 1) else { return }
         let bounds = page.bounds(for: .mediaBox)
-        navigate(to: bounds, on: page)
+        let destination = PDFDestination(page: page, at: CGPoint(x: bounds.minX, y: bounds.maxY))
+        pdfPanePDFView.go(to: destination)
     }
 
     private func pulseAnnotations(_ annotations: [PDFAnnotation]) {
