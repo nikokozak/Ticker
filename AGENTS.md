@@ -96,6 +96,7 @@ For editor slices, validate at minimum:
 
 Suggested commands:
 - `./tickerctl.sh build-dev`
+- `cd Web && npm test`
 - targeted checks relevant to the modified area
 
 ## Repo Orientation

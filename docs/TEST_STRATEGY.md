@@ -10,6 +10,7 @@ Ticker is a note-taking app with persistence and an AI/proxy integration. For al
 - Preferred: `./tickerctl.sh preflight-alpha` (runs the 3 automated gates below)
 - Swift tests succeed (`./tickerctl.sh swift-test`)
 - Web typecheck succeeds (`./tickerctl.sh web-typecheck`)
+- Web unit tests succeed (`cd Web && npm test`)
 - Bridge contract tests succeed (`./tickerctl.sh contracts`)
 - Prod console sanity: `./tickerctl.sh run-prod` + Web Inspector Console is quiet (no prompt/content/key logging)
 

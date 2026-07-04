@@ -13,7 +13,9 @@ import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
+import { computeAppendInsertion } from '../utils/appendInsertion';
 import { debugWarn } from '../utils/debug';
+import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 
 interface StreamEditorProps {
   stream: Stream;
@@ -40,10 +42,6 @@ interface FloatingMenuState {
 }
 
 const SELECTION_MENU_DELAY_MS = 180;
-const SELECTION_MENU_GAP = 10;
-const SELECTION_MENU_HORIZONTAL_INSET = 8;
-const DEFAULT_SELECTION_MENU_WIDTH = 82;
-const DEFAULT_SELECTION_MENU_HEIGHT = 44;
 
 const markdownHighlightStyle = HighlightStyle.define([
   {
@@ -329,15 +327,14 @@ export function StreamEditor({
         const currentMarkdown = view?.state.doc.toString() ?? markdownContentRef.current;
         const hadUnsavedChanges = currentMarkdown !== lastSavedContentRef.current;
 
-        const sep = currentMarkdown.length > 0 ? '\n\n' : '';
-        const insert = `${sep}${fragment}`;
+        const insertion = computeAppendInsertion(currentMarkdown.length, fragment);
+        const insert = insertion.insert;
         const nextMarkdown = `${currentMarkdown}${insert}`;
-        const insertedEnd = nextMarkdown.length;
 
         if (view) {
           view.dispatch({
-            changes: { from: view.state.doc.length, insert },
-            effects: EditorView.scrollIntoView(insertedEnd, { y: 'nearest' }),
+            changes: { from: insertion.from, insert },
+            effects: EditorView.scrollIntoView(insertion.insertedEnd, { y: 'nearest' }),
           });
         }
 
@@ -672,27 +669,15 @@ export function StreamEditor({
 
     const shellRect = shell.getBoundingClientRect();
     const menu = selectionActionMenuRef.current;
-    const menuWidth = menu?.offsetWidth ?? DEFAULT_SELECTION_MENU_WIDTH;
-    const menuHeight = menu?.offsetHeight ?? DEFAULT_SELECTION_MENU_HEIGHT;
-    const rawLeft = (coords.left + coords.right) / 2;
-    const minEdge = shellRect.left + SELECTION_MENU_HORIZONTAL_INSET;
-    const maxEdge = shellRect.right - SELECTION_MENU_HORIZONTAL_INSET;
-    const availableWidth = maxEdge - minEdge;
-
-    const left = availableWidth > menuWidth
-      ? Math.min(maxEdge - menuWidth / 2, Math.max(minEdge + menuWidth / 2, rawLeft))
-      : minEdge + availableWidth / 2;
-
-    const topBoundary = Math.max(0, shellRect.top) + SELECTION_MENU_HORIZONTAL_INSET;
-    const bottomBoundary = Math.min(window.innerHeight, shellRect.bottom) - SELECTION_MENU_HORIZONTAL_INSET;
-    const aboveTop = coords.top - menuHeight - SELECTION_MENU_GAP;
-    const belowTop = coords.bottom + SELECTION_MENU_GAP;
-    const maxTop = Math.max(topBoundary, bottomBoundary - menuHeight);
-    const top = aboveTop >= topBoundary
-      ? aboveTop
-      : Math.min(Math.max(belowTop, topBoundary), maxTop);
-
-    return { left, top };
+    return computeSelectionMenuPlacement({
+      coords,
+      shellRect,
+      menuSize: {
+        width: menu?.offsetWidth,
+        height: menu?.offsetHeight,
+      },
+      viewportHeight: window.innerHeight,
+    });
   }, []);
 
   const scheduleSelectionMenu = useCallback((view: EditorView) => {
