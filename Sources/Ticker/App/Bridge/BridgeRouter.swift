@@ -5,6 +5,11 @@ protocol BridgeMessageHandler {
 
 final class BridgeRouter {
     private var handlersByType: [String: BridgeMessageHandler] = [:]
+    private let bridgeService: BridgeService
+
+    init(bridgeService: BridgeService) {
+        self.bridgeService = bridgeService
+    }
 
     func register(_ handler: BridgeMessageHandler) {
         for type in handler.handledTypes {
@@ -18,6 +23,7 @@ final class BridgeRouter {
     func route(_ message: BridgeMessage) async {
         guard let handler = handlersByType[message.type] else {
             DebugLog.log("[BridgeRouter] Unknown message type: \(message.type)")
+            await bridgeService.sendBridgeError(type: message.type, reason: "Unknown bridge message type")
             return
         }
 

@@ -7,6 +7,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'documentAIError',
   'documentModelSelected',
   'assetPath',
+  'bridgeError',
   'callback',
   'exportCanceled',
   'exportComplete',
@@ -31,6 +32,32 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
 
 export type SwiftToWebMessageType = (typeof SWIFT_TO_WEB_MESSAGE_TYPES)[number];
 
+export const WEB_TO_SWIFT_MESSAGE_TYPES = [
+  'addSource',
+  'clearProxyDeviceKey',
+  'createStream',
+  'deleteStream',
+  'getSupportBundle',
+  'hybridSearch',
+  'loadProxyAuth',
+  'loadSettings',
+  'loadStream',
+  'loadStreams',
+  'openSource',
+  'refreshProxyAuth',
+  'removeSource',
+  'saveImage',
+  'saveSettings',
+  'saveStreamDocument',
+  'setFileDropContext',
+  'setProxyDeviceKey',
+  'submitFeedback',
+  'thinkDocument',
+  'updateStreamTitle',
+] as const;
+
+export type WebToSwiftMessageType = (typeof WEB_TO_SWIFT_MESSAGE_TYPES)[number];
+
 export interface BridgeMessage {
   type: string;
   payload?: Record<string, unknown>;
@@ -38,14 +65,15 @@ export interface BridgeMessage {
 }
 
 export type SwiftToWebBridgeMessage = Omit<BridgeMessage, 'type'> & { type: SwiftToWebMessageType };
+export type WebToSwiftBridgeMessage = Omit<BridgeMessage, 'type'> & { type: WebToSwiftMessageType };
 
 /** Callback registry for async responses */
 type CallbackFn = (payload: Record<string, unknown>) => void;
 
 /** Bridge interface for communicating with Swift */
 export interface Bridge {
-  send: (message: BridgeMessage) => void;
-  sendAsync: <T>(type: string, payload?: Record<string, unknown>) => Promise<T>;
+  send: (message: WebToSwiftBridgeMessage) => void;
+  sendAsync: <T>(type: WebToSwiftMessageType, payload?: Record<string, unknown>) => Promise<T>;
   receive: (message: SwiftToWebBridgeMessage) => void;
   onMessage: (handler: (message: SwiftToWebBridgeMessage) => void) => () => void;
 }
@@ -61,12 +89,12 @@ function nextCallbackId(): string {
 /** Global bridge instance */
 export const bridge: Bridge = {
   /** Send a message to Swift (fire and forget) */
-  send(message: BridgeMessage): void {
+  send(message: WebToSwiftBridgeMessage): void {
     window.webkit?.messageHandlers?.bridge?.postMessage(message);
   },
 
   /** Send a message and wait for response */
-  sendAsync<T>(type: string, payload?: Record<string, unknown>): Promise<T> {
+  sendAsync<T>(type: WebToSwiftMessageType, payload?: Record<string, unknown>): Promise<T> {
     return new Promise((resolve, reject) => {
       const id = nextCallbackId();
       const timeout = setTimeout(() => {

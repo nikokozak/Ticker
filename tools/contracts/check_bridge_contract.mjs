@@ -445,6 +445,206 @@ function extractWebSwiftToWebTypes(webBridgeText) {
   return types;
 }
 
+function extractWebToSwiftTypes(webBridgeText) {
+  const match = webBridgeText.match(/WEB_TO_SWIFT_MESSAGE_TYPES\s*=\s*\[(?<body>[\s\S]*?)\]\s*as\s*const/);
+  if (!match || !match.groups?.body) {
+    return null;
+  }
+
+  const body = match.groups.body;
+  const types = new Set();
+  for (const entry of body.matchAll(/['"]([^'"]+)['"]/g)) {
+    types.add(entry[1]);
+  }
+  return types;
+}
+
+function parseWebStringLiteral(expr) {
+  const trimmed = expr.trim();
+  const quote = trimmed[0];
+  if (quote !== '"' && quote !== "'") return null;
+
+  let out = '';
+  let escaped = false;
+  for (let index = 1; index < trimmed.length; index += 1) {
+    const ch = trimmed[index];
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === quote) {
+      const rest = trimmed.slice(index + 1).trim();
+      if (rest.length > 0) return null;
+      return out;
+    }
+    out += ch;
+  }
+  return null;
+}
+
+function parseWebObjectKey(expr) {
+  const trimmed = expr.trim();
+  const literal = parseWebStringLiteral(trimmed);
+  if (literal) return literal;
+
+  const ident = trimmed.match(/^([A-Za-z_$][A-Za-z0-9_$]*)$/);
+  return ident ? ident[1] : null;
+}
+
+function extractWebObjectProperties(expr) {
+  const trimmed = expr.trim();
+  if (!trimmed.startsWith('{')) return null;
+
+  const endIndex = scanBalanced(trimmed, 0, '{', '}');
+  const inner = trimmed.slice(1, endIndex);
+  const properties = new Map();
+
+  for (const entry of splitTopLevel(inner, ',')) {
+    const trimmedEntry = entry.trim();
+    if (trimmedEntry.length === 0 || trimmedEntry.startsWith('...')) continue;
+
+    const colonIndex = findTopLevelColon(trimmedEntry);
+    if (colonIndex === -1) {
+      const shorthand = parseWebObjectKey(trimmedEntry);
+      if (shorthand) properties.set(shorthand, trimmedEntry);
+      continue;
+    }
+
+    const key = parseWebObjectKey(trimmedEntry.slice(0, colonIndex));
+    if (!key) continue;
+    properties.set(key, trimmedEntry.slice(colonIndex + 1).trim());
+  }
+
+  return properties;
+}
+
+function extractWebObjectLiteralKeys(expr) {
+  const properties = extractWebObjectProperties(expr);
+  return properties ? new Set(properties.keys()) : null;
+}
+
+function parseWebBridgeSendCalls(webText, filePath) {
+  const calls = [];
+  let index = 0;
+
+  while (true) {
+    const found = webText.indexOf('bridge.send(', index);
+    if (found === -1) break;
+
+    const openIndex = found + 'bridge.send'.length;
+    const closeIndex = scanBalanced(webText, openIndex, '(', ')');
+    const argsText = webText.slice(openIndex + 1, closeIndex);
+    const args = splitTopLevel(argsText, ',').map((part) => part.trim()).filter(Boolean);
+    const messageExpr = args[0];
+    const properties = messageExpr ? extractWebObjectProperties(messageExpr) : null;
+    const typeExpr = properties?.get('type');
+    const typeLiteral = typeExpr ? parseWebStringLiteral(typeExpr) : null;
+
+    if (typeLiteral) {
+      calls.push({
+        filePath,
+        startIndex: found,
+        endIndex: closeIndex + 1,
+        type: typeLiteral,
+        payloadExpr: properties.get('payload') ?? null,
+        callbackRequired: false,
+      });
+    }
+
+    index = closeIndex + 1;
+  }
+
+  index = 0;
+  while (true) {
+    const found = webText.indexOf('bridge.sendAsync', index);
+    if (found === -1) break;
+
+    let openIndex = found + 'bridge.sendAsync'.length;
+    while (/\s/.test(webText[openIndex] ?? '')) openIndex += 1;
+
+    if (webText[openIndex] === '<') {
+      let angleDepth = 0;
+      for (; openIndex < webText.length; openIndex += 1) {
+        const ch = webText[openIndex];
+        if (ch === '<') angleDepth += 1;
+        else if (ch === '>') {
+          angleDepth -= 1;
+          if (angleDepth === 0) {
+            openIndex += 1;
+            break;
+          }
+        }
+      }
+      while (/\s/.test(webText[openIndex] ?? '')) openIndex += 1;
+    }
+
+    if (webText[openIndex] !== '(') {
+      index = found + 1;
+      continue;
+    }
+
+    const closeIndex = scanBalanced(webText, openIndex, '(', ')');
+    const argsText = webText.slice(openIndex + 1, closeIndex);
+    const args = splitTopLevel(argsText, ',').map((part) => part.trim()).filter(Boolean);
+    const typeLiteral = args[0] ? parseWebStringLiteral(args[0]) : null;
+
+    if (typeLiteral) {
+      calls.push({
+        filePath,
+        startIndex: found,
+        endIndex: closeIndex + 1,
+        type: typeLiteral,
+        payloadExpr: args[1] ?? null,
+        callbackRequired: true,
+      });
+    }
+
+    index = closeIndex + 1;
+  }
+
+  return calls;
+}
+
+function resolveWebPayloadKeys(call) {
+  const payloadExpr = call.payloadExpr;
+  if (!payloadExpr) return { keys: new Set(), unresolved: false };
+
+  const trimmed = payloadExpr.trim();
+  if (trimmed === 'undefined' || trimmed === 'null') return { keys: new Set(), unresolved: false };
+
+  const literalKeys = extractWebObjectLiteralKeys(trimmed);
+  if (literalKeys) return { keys: literalKeys, unresolved: false };
+
+  return { keys: new Set(), unresolved: true };
+}
+
+function extractSwiftHandledTypes(swiftText) {
+  const types = new Set();
+  const handledTypesPattern = /handledTypes\s*:\s*Set<String>\s*=\s*\[/g;
+
+  for (const match of swiftText.matchAll(handledTypesPattern)) {
+    const startIndex = (match.index ?? 0) + match[0].length - 1;
+    const endIndex = scanBalanced(swiftText, startIndex, '[', ']');
+    const literalText = swiftText.slice(startIndex, endIndex + 1);
+    for (const entry of literalText.matchAll(/"([^"]+)"/g)) {
+      types.add(entry[1]);
+    }
+  }
+
+  if (swiftText.includes('switch message.type')) {
+    for (const entry of swiftText.matchAll(/case\s+"([^"]+)"/g)) {
+      types.add(entry[1]);
+    }
+  }
+
+  return types;
+}
+
 function setDiff(a, b) {
   const onlyA = [];
   for (const value of a) if (!b.has(value)) onlyA.push(value);
@@ -463,6 +663,7 @@ function main() {
     path.join(repoRoot, 'docs', 'contracts', 'bridge.v2.json'),
   ].filter((p) => fs.existsSync(p));
   const webBridgePath = path.join(repoRoot, 'Web', 'src', 'types', 'bridge.ts');
+  const webSrcDir = path.join(repoRoot, 'Web', 'src');
   const sourcesDir = path.join(repoRoot, 'Sources');
 
   if (contractPaths.length === 0) {
@@ -470,11 +671,16 @@ function main() {
   }
 
   const messages = {};
+  const webToSwiftMessages = {};
   for (const contractPath of contractPaths) {
     const contract = readJson(contractPath);
     const contractMessages = contract?.swiftToWeb?.messages;
     if (!contractMessages || typeof contractMessages !== 'object') {
       throw new Error(`Contract missing swiftToWeb.messages: ${contractPath}`);
+    }
+    const inboundMessages = contract?.webToSwift?.messages;
+    if (!inboundMessages || typeof inboundMessages !== 'object') {
+      throw new Error(`Contract missing webToSwift.messages: ${contractPath}`);
     }
 
     for (const [type, spec] of Object.entries(contractMessages)) {
@@ -484,9 +690,18 @@ function main() {
       }
       messages[type] = spec;
     }
+
+    for (const [type, spec] of Object.entries(inboundMessages)) {
+      if (webToSwiftMessages[type]) {
+        fail(`Duplicate webToSwift bridge message "${type}" across contracts.`);
+        continue;
+      }
+      webToSwiftMessages[type] = spec;
+    }
   }
 
   const contractTypes = new Set(Object.keys(messages));
+  const webToSwiftContractTypes = new Set(Object.keys(webToSwiftMessages));
   if (!contractTypes.has('callback')) {
     fail('Contract must include "callback" message type.');
   }
@@ -499,6 +714,18 @@ function main() {
     const diff = setDiff(contractTypes, webTypes);
     if (diff.onlyA.length > 0 || diff.onlyB.length > 0) {
       fail(`Web SWIFT_TO_WEB_MESSAGE_TYPES does not match contract:`);
+      if (diff.onlyA.length > 0) fail(`  Missing in Web: ${diff.onlyA.join(', ')}`);
+      if (diff.onlyB.length > 0) fail(`  Extra in Web: ${diff.onlyB.join(', ')}`);
+    }
+  }
+
+  const webToSwiftTypes = extractWebToSwiftTypes(webBridgeText);
+  if (!webToSwiftTypes) {
+    fail(`Web bridge is missing WEB_TO_SWIFT_MESSAGE_TYPES (required for contract tests): ${webBridgePath}`);
+  } else {
+    const diff = setDiff(webToSwiftContractTypes, webToSwiftTypes);
+    if (diff.onlyA.length > 0 || diff.onlyB.length > 0) {
+      fail(`Web WEB_TO_SWIFT_MESSAGE_TYPES does not match contract:`);
       if (diff.onlyA.length > 0) fail(`  Missing in Web: ${diff.onlyA.join(', ')}`);
       if (diff.onlyB.length > 0) fail(`  Extra in Web: ${diff.onlyB.join(', ')}`);
     }
@@ -583,6 +810,91 @@ function main() {
     if (missingOptional.length > 0) {
       fail(`Swift BridgeMessage("${type}") missing optional payload keys referenced by contract: ${missingOptional.join(', ')}`);
     }
+  }
+
+  const webFiles = walkFiles(webSrcDir, (p) => p.endsWith('.ts') || p.endsWith('.tsx'));
+  const webCalls = [];
+  for (const filePath of webFiles) {
+    const text = readText(filePath);
+    webCalls.push(...parseWebBridgeSendCalls(text, path.relative(repoRoot, filePath)));
+  }
+
+  const webSenderTypes = new Set(webCalls.map((c) => c.type));
+  const webSenderDiff = setDiff(webToSwiftContractTypes, webSenderTypes);
+  if (webSenderDiff.onlyA.length > 0 || webSenderDiff.onlyB.length > 0) {
+    fail(`Web bridge sender types do not match webToSwift contract:`);
+    if (webSenderDiff.onlyA.length > 0) fail(`  Missing in Web senders: ${webSenderDiff.onlyA.join(', ')}`);
+    if (webSenderDiff.onlyB.length > 0) fail(`  Missing in contract: ${webSenderDiff.onlyB.join(', ')}`);
+  }
+
+  const webCallsByType = new Map();
+  for (const call of webCalls) {
+    const list = webCallsByType.get(call.type) ?? [];
+    list.push(call);
+    webCallsByType.set(call.type, list);
+  }
+
+  for (const type of sorted(webToSwiftContractTypes)) {
+    const spec = webToSwiftMessages[type];
+    if (!spec || typeof spec !== 'object') {
+      fail(`webToSwift contract entry for "${type}" must be an object.`);
+      continue;
+    }
+
+    const requiredKeys = Array.isArray(spec.requiredPayloadKeys) ? spec.requiredPayloadKeys : null;
+    const requiresCallbackId = spec.requiredCallbackId === true;
+
+    if (!requiredKeys) {
+      fail(`webToSwift contract entry for "${type}" missing requiredPayloadKeys array.`);
+      continue;
+    }
+
+    const typeCalls = webCallsByType.get(type) ?? [];
+    if (typeCalls.length === 0) {
+      fail(`No Web bridge sender call sites found for webToSwift contract type "${type}".`);
+      continue;
+    }
+
+    for (const call of typeCalls) {
+      const resolved = resolveWebPayloadKeys(call);
+      const missingRequired = requiredKeys.filter((key) => !resolved.keys.has(key));
+      if (missingRequired.length > 0) {
+        fail(
+          `Web bridge sender "${type}" missing required payload keys: ${missingRequired.join(
+            ', '
+          )} (${call.filePath})`
+        );
+      }
+
+      if (resolved.unresolved && requiredKeys.length > 0) {
+        fail(
+          `Web bridge sender "${type}" payload could not be statically analyzed (expected object literal): (${call.filePath})`
+        );
+      }
+
+      if (requiresCallbackId && !call.callbackRequired) {
+        fail(`Web bridge sender "${type}" must use sendAsync for callback correlation (${call.filePath})`);
+      }
+
+      if (!requiresCallbackId && call.callbackRequired) {
+        fail(`Web bridge sender "${type}" uses sendAsync but contract does not require callbackId (${call.filePath})`);
+      }
+    }
+  }
+
+  const handlerFiles = [
+    ...walkFiles(path.join(repoRoot, 'Sources', 'Ticker', 'App', 'Bridge'), (p) => p.endsWith('.swift')),
+    path.join(repoRoot, 'Sources', 'Ticker', 'App', 'WebViewManager.swift'),
+  ].filter((p) => fs.existsSync(p));
+  const swiftHandlerTypes = new Set();
+  for (const filePath of handlerFiles) {
+    const handledTypes = extractSwiftHandledTypes(readText(filePath));
+    for (const type of handledTypes) swiftHandlerTypes.add(type);
+  }
+
+  const missingSwiftHandlers = sorted(webToSwiftContractTypes).filter((type) => !swiftHandlerTypes.has(type));
+  if (missingSwiftHandlers.length > 0) {
+    fail(`webToSwift contract types missing Swift handlers: ${missingSwiftHandlers.join(', ')}`);
   }
 }
 

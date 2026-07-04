@@ -49,6 +49,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                   let idValue = payload["id"]?.value as? String,
                   let id = UUID(uuidString: idValue) else {
                 DebugLog.log("[WebViewManager] Invalid loadStream payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid loadStream payload")
                 return
             }
             delegate?.setCurrentStreamIdForFileDrops(id)
@@ -82,6 +83,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                   let id = UUID(uuidString: idValue),
                   let title = payload["title"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid updateStreamTitle payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid updateStreamTitle payload")
                 return
             }
             do {
@@ -99,6 +101,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                   let idValue = payload["id"]?.value as? String,
                   let id = UUID(uuidString: idValue) else {
                 DebugLog.log("[WebViewManager] Invalid deleteStream payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid deleteStream payload")
                 return
             }
             do {
@@ -122,6 +125,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                   let streamId = UUID(uuidString: streamIdValue),
                   let markdown = payload["markdown"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid saveStreamDocument payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveStreamDocument payload")
                 return
             }
             do {
@@ -136,6 +140,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                   let streamId = UUID(uuidString: streamIdString),
                   let format = payload["format"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid exportStream payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid exportStream payload")
                 return
             }
 

@@ -6,6 +6,9 @@
       "assetPath": {
         "requiredPayloadKeys": ["relativePath", "fullPath"]
       },
+      "bridgeError": {
+        "requiredPayloadKeys": ["originalType", "reason"]
+      },
       "callback": {
         "requiredPayloadKeys": [],
         "requiredCallbackId": true
@@ -87,6 +90,95 @@
       },
       "streamsLoaded": {
         "requiredPayloadKeys": ["streams"]
+      }
+    }
+  },
+  "webToSwift": {
+    "messages": {
+      "addSource": {
+        "requiredPayloadKeys": ["streamId"]
+      },
+      "clearProxyDeviceKey": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
+      "createStream": {
+        "requiredPayloadKeys": []
+      },
+      "deleteStream": {
+        "requiredPayloadKeys": ["id"]
+      },
+      "getSupportBundle": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
+      "hybridSearch": {
+        "requiredPayloadKeys": ["query", "currentStreamId", "limit"],
+        "requiredCallbackId": true
+      },
+      "loadProxyAuth": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
+      "loadSettings": {
+        "requiredPayloadKeys": []
+      },
+      "loadStream": {
+        "requiredPayloadKeys": ["id"]
+      },
+      "loadStreams": {
+        "requiredPayloadKeys": []
+      },
+      "openSource": {
+        "requiredPayloadKeys": ["sourceId"]
+      },
+      "refreshProxyAuth": {
+        "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
+      "removeSource": {
+        "requiredPayloadKeys": ["id"]
+      },
+      "saveImage": {
+        "requiredPayloadKeys": ["streamId", "data", "requestId"]
+      },
+      "saveSettings": {
+        "requiredPayloadKeys": [],
+        "optionalPayloadKeys": [
+          "openaiAPIKey",
+          "anthropicAPIKey",
+          "perplexityAPIKey",
+          "smartRoutingEnabled",
+          "defaultModel",
+          "appearance",
+          "diagnosticsEnabled",
+          "editorFont",
+          "editorFontSize",
+          "editorLineSpacing"
+        ]
+      },
+      "saveStreamDocument": {
+        "requiredPayloadKeys": ["streamId", "markdown"]
+      },
+      "setFileDropContext": {
+        "requiredPayloadKeys": ["mode"],
+        "optionalPayloadKeys": ["streamId"]
+      },
+      "setProxyDeviceKey": {
+        "requiredPayloadKeys": ["key"],
+        "requiredCallbackId": true
+      },
+      "submitFeedback": {
+        "requiredPayloadKeys": ["type", "title"],
+        "optionalPayloadKeys": ["description", "screenshot", "screenshotContentType"],
+        "requiredCallbackId": true
+      },
+      "thinkDocument": {
+        "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
+        "optionalPayloadKeys": ["context"]
+      },
+      "updateStreamTitle": {
+        "requiredPayloadKeys": ["id", "title"]
       }
     }
   }

@@ -22,13 +22,15 @@ final class SearchMessageHandler: BridgeMessageHandler {
                   let currentStreamId = UUID(uuidString: currentStreamIdStr),
                   let callbackId = message.callbackId else {
                 DebugLog.log("[WebViewManager] Invalid hybridSearch payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid hybridSearch payload")
                 return
             }
 
-            let limit = payload["limit"]?.value as? Int ?? 20
+            let limit = payload["limit"]?.intValue ?? 20
 
             guard let searchService = searchService else {
                 Task { @MainActor in
+                    bridgeService.sendBridgeError(type: message.type, reason: "Search service not available")
                     bridgeService.respondWithError(to: callbackId, error: "Search service not available")
                 }
                 return

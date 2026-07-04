@@ -21,6 +21,29 @@ struct AnyCodable: Codable {
         self.value = value
     }
 
+    var doubleValue: Double? {
+        if let double = value as? Double {
+            return double
+        }
+        if let int = value as? Int {
+            return Double(int)
+        }
+        return nil
+    }
+
+    var intValue: Int? {
+        if let int = value as? Int {
+            return int
+        }
+        if let double = value as? Double,
+           double.rounded(.towardZero) == double,
+           double >= Double(Int.min),
+           double <= Double(Int.max) {
+            return Int(double)
+        }
+        return nil
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
 
@@ -97,6 +120,7 @@ final class BridgeService: NSObject, WKScriptMessageHandler {
             onMessage?(bridgeMessage)
         } catch {
             DebugLog.log("Failed to decode bridge message (\(DebugLog.errorSummary(error)))")
+            sendBridgeError(type: originalType(from: message.body), reason: "Failed to decode bridge message: \(DebugLog.errorSummary(error))")
         }
     }
 
@@ -140,5 +164,24 @@ final class BridgeService: NSObject, WKScriptMessageHandler {
         ]
         let message = BridgeMessage(type: "callback", payload: payload, callbackId: callbackId)
         send(message)
+    }
+
+    func sendBridgeError(type originalType: String, reason: String) {
+        send(BridgeMessage(type: "bridgeError", payload: [
+            "originalType": AnyCodable(originalType),
+            "reason": AnyCodable(reason)
+        ]))
+    }
+
+    private func originalType(from body: Any) -> String {
+        if let dict = body as? [String: Any],
+           let type = dict["type"] as? String {
+            return type
+        }
+        if let dict = body as? NSDictionary,
+           let type = dict["type"] as? String {
+            return type
+        }
+        return "undecodable"
     }
 }

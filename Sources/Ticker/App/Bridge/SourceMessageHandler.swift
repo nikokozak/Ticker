@@ -60,6 +60,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                   let streamId = UUID(uuidString: streamIdValue),
                   let sourceService else {
                 DebugLog.log("[WebViewManager] Invalid addSource payload or service unavailable")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid addSource payload or service unavailable")
                 return
             }
 
@@ -93,6 +94,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                   let filePath = payload["path"]?.value as? String,
                   let sourceService else {
                 DebugLog.log("[WebViewManager] Invalid addSourceFromPath payload or service unavailable")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid addSourceFromPath payload or service unavailable")
                 return
             }
 
@@ -112,6 +114,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                   let id = UUID(uuidString: idValue),
                   let sourceService else {
                 DebugLog.log("[WebViewManager] Invalid removeSource payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid removeSource payload")
                 return
             }
             do {
@@ -131,6 +134,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                   let sourceId = UUID(uuidString: sourceIdValue),
                   let sourceService else {
                 DebugLog.log("[WebViewManager] Invalid openSource payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid openSource payload")
                 return
             }
 
@@ -154,6 +158,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                   let imageData = Data(base64Encoded: base64Data) else {
                 DebugLog.log("[WebViewManager] Invalid saveImage payload")
                 let requestId = message.payload?["requestId"]?.value as? String
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveImage payload")
                 bridgeService.send(BridgeMessage(type: "imageSaveError", payload: [
                     "error": AnyCodable("Invalid image data"),
                     "requestId": AnyCodable(requestId as Any)
@@ -185,6 +190,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
             guard let payload = message.payload,
                   let relativePath = payload["relativePath"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid getAssetPath payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid getAssetPath payload")
                 return
             }
             let fullPath = assetService.assetURL(for: relativePath).path

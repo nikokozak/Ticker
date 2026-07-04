@@ -27,6 +27,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                   let requestId = payload["requestId"]?.value as? String,
                   let query = payload["query"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid thinkDocument payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid thinkDocument payload")
                 return
             }
 

@@ -28,6 +28,7 @@ final class SettingsMessageHandler: BridgeMessageHandler {
         case "saveSettings":
             guard let payload = message.payload else {
                 DebugLog.log("[WebViewManager] Invalid saveSettings payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveSettings payload")
                 return
             }
 
@@ -77,17 +78,13 @@ final class SettingsMessageHandler: BridgeMessageHandler {
             }
 
             // Save editor font size setting if provided
-            if let editorFontSize = payload["editorFontSize"]?.value as? Double {
+            if let editorFontSize = payload["editorFontSize"]?.doubleValue {
                 settingsService.editorFontSize = editorFontSize
-            } else if let editorFontSize = payload["editorFontSize"]?.value as? NSNumber {
-                settingsService.editorFontSize = editorFontSize.doubleValue
             }
 
             // Save editor line spacing setting if provided
-            if let editorLineSpacing = payload["editorLineSpacing"]?.value as? Double {
+            if let editorLineSpacing = payload["editorLineSpacing"]?.doubleValue {
                 settingsService.editorLineSpacing = editorLineSpacing
-            } else if let editorLineSpacing = payload["editorLineSpacing"]?.value as? NSNumber {
-                settingsService.editorLineSpacing = editorLineSpacing.doubleValue
             }
 
             // Send back updated settings

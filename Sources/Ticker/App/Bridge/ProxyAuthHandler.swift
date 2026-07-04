@@ -25,6 +25,7 @@ final class ProxyAuthHandler: BridgeMessageHandler {
             // Pure read of cached state - no network call
             guard let callbackId = message.callbackId else {
                 DebugLog.log("[WebViewManager] Invalid loadProxyAuth payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for loadProxyAuth")
                 return
             }
             Task {
@@ -67,6 +68,7 @@ final class ProxyAuthHandler: BridgeMessageHandler {
                   let key = payload["key"]?.value as? String,
                   let callbackId = message.callbackId else {
                 DebugLog.log("[WebViewManager] Invalid setProxyDeviceKey payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid setProxyDeviceKey payload")
                 return
             }
             Task {
@@ -108,6 +110,7 @@ final class ProxyAuthHandler: BridgeMessageHandler {
         case "clearProxyDeviceKey":
             guard let callbackId = message.callbackId else {
                 DebugLog.log("[WebViewManager] Invalid clearProxyDeviceKey payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for clearProxyDeviceKey")
                 return
             }
             Task {
@@ -125,6 +128,7 @@ final class ProxyAuthHandler: BridgeMessageHandler {
             // Re-validate cached key with server and return fresh limits/usage
             guard let callbackId = message.callbackId else {
                 DebugLog.log("[WebViewManager] Invalid validateProxyDeviceKey/refreshProxyAuth payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for validateProxyDeviceKey/refreshProxyAuth")
                 return
             }
             Task {
@@ -167,6 +171,7 @@ final class ProxyAuthHandler: BridgeMessageHandler {
                   let feedbackType = payload["type"]?.value as? String,
                   let title = payload["title"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid submitFeedback payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid submitFeedback payload")
                 return
             }
             let description = payload["description"]?.value as? String
@@ -201,6 +206,7 @@ final class ProxyAuthHandler: BridgeMessageHandler {
         case "getSupportBundle":
             guard let callbackId = message.callbackId else {
                 DebugLog.log("[WebViewManager] Invalid getSupportBundle payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for getSupportBundle")
                 return
             }
             Task {

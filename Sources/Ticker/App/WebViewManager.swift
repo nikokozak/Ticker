@@ -6,7 +6,7 @@ final class WebViewManager: NSObject {
     private let settingsService: SettingsService
     private let deviceKeyService: DeviceKeyService
     let bridgeService: BridgeService
-    private let bridgeRouter = BridgeRouter()
+    private let bridgeRouter: BridgeRouter
     let persistence: PersistenceService?
     private let sourceService: SourceService?
     let orchestrator: AIOrchestrator
@@ -26,6 +26,7 @@ final class WebViewManager: NSObject {
         self.settingsService = container.settingsService
         self.deviceKeyService = container.deviceKeyService
         self.bridgeService = container.bridgeService
+        self.bridgeRouter = BridgeRouter(bridgeService: container.bridgeService)
         config.userContentController.add(bridgeService, name: "bridge")
         let schemeHandler = AssetSchemeHandler()
         config.setURLSchemeHandler(schemeHandler, forURLScheme: "ticker-asset")

@@ -3,6 +3,7 @@ import { bridge, Stream, StreamSummary } from './types';
 import { StreamEditor } from './components/StreamEditor';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
+import { useToastStore } from './store/toastStore';
 import { debugError, debugLog } from './utils/debug';
 
 type View = 'list' | 'stream' | 'settings';
@@ -74,6 +75,7 @@ export function App() {
   const [currentStream, setCurrentStream] = useState<Stream | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingStream, setIsLoadingStream] = useState(false);
+  const addToast = useToastStore((state) => state.addToast);
   const viewRef = useRef(view);
   const currentStreamIdRef = useRef<string | null>(currentStream?.id ?? null);
 
@@ -130,6 +132,13 @@ export function App() {
     // Subscribe to bridge messages
     const unsubscribe = bridge.onMessage((message) => {
       switch (message.type) {
+        case 'bridgeError':
+          if (import.meta.env.DEV) {
+            const originalType = String(message.payload?.originalType ?? 'unknown');
+            const reason = String(message.payload?.reason ?? 'Unknown bridge error');
+            addToast(`Bridge error (${originalType}): ${reason}`, 'error', 10000);
+          }
+          break;
         case 'proxyAuthState':
           // State change pushed from Swift
           setProxyAuthState(message.payload?.state as ProxyAuthState);
@@ -180,7 +189,7 @@ export function App() {
     }, 100);
 
     return unsubscribe;
-  }, []);
+  }, [addToast]);
 
   const handleCreateStream = () => {
     bridge.send({ type: 'createStream' });
