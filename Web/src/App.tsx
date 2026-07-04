@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { bridge, Stream, StreamSummary } from './types';
 import { StreamEditor } from './components/StreamEditor';
 import { Settings } from './components/Settings';
@@ -75,6 +75,8 @@ export function App() {
   const [currentStream, setCurrentStream] = useState<Stream | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingStream, setIsLoadingStream] = useState(false);
+  const viewRef = useRef(view);
+  const currentStreamIdRef = useRef<string | null>(currentStream?.id ?? null);
   const clearStream = useBlockStore((state) => state.clearStream);
 
   // Proxy auth state - gates main UI until key is validated
@@ -96,6 +98,11 @@ export function App() {
   useEffect(() => {
     bridge.send({ type: 'loadSettings' });
   }, []);
+
+  useEffect(() => {
+    viewRef.current = view;
+    currentStreamIdRef.current = currentStream?.id ?? null;
+  }, [view, currentStream?.id]);
 
   // Keep native file-drop routing in sync with the active page.
   useEffect(() => {
@@ -133,11 +140,15 @@ export function App() {
           setStreams((message.payload?.streams as StreamSummary[]) || []);
           setIsLoading(false);
           break;
-        case 'streamLoaded':
-          setCurrentStream(message.payload?.stream as Stream);
+        case 'streamLoaded': {
+          const loadedStream = message.payload?.stream as Stream;
+          currentStreamIdRef.current = loadedStream?.id ?? null;
+          viewRef.current = 'stream';
+          setCurrentStream(loadedStream);
           setIsLoadingStream(false);
           setView('stream');
           break;
+        }
         case 'settingsLoaded': {
           const raw = message.payload?.settings as Partial<EditorTypographySettings> | undefined;
           applyEditorTypography(normalizeEditorTypography(raw));
@@ -147,6 +158,11 @@ export function App() {
           // Quick Panel appended to a document - if it's a new stream, load it.
           if (message.payload?.isNewStream && message.payload?.streamId) {
             const streamId = message.payload.streamId as string;
+            if (viewRef.current === 'stream' && currentStreamIdRef.current === streamId) {
+              debugLog('[App] Quick Panel appended to current stream document; editor handler owns it', { streamId });
+              break;
+            }
+
             debugLog('[App] Quick Panel created new stream document', { streamId });
 
             bridge.send({ type: 'loadStream', payload: { id: streamId } });

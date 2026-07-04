@@ -258,6 +258,30 @@ export function StreamEditor({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
+      if (message.type === 'streamDocumentAppended') {
+        const payloadStreamId = message.payload?.streamId as string | undefined;
+        const fragment = message.payload?.fragment as string | undefined;
+
+        if (!payloadStreamId || payloadStreamId !== stream.id || typeof fragment !== 'string' || fragment.length === 0) {
+          return;
+        }
+
+        const view = editorViewRef.current;
+        if (!view) return;
+
+        const end = view.state.doc.length;
+        const sep = end > 0 ? '\n\n' : '';
+        const insert = `${sep}${fragment}`;
+        const insertedEnd = end + insert.length;
+
+        view.dispatch({
+          changes: { from: end, insert },
+          effects: EditorView.scrollIntoView(insertedEnd, { y: 'nearest' }),
+        });
+        setMarkdownContent(view.state.doc.toString());
+        return;
+      }
+
       const active = aiRequestRef.current;
       if (!active) return;
 
@@ -365,7 +389,7 @@ export function StreamEditor({
     });
 
     return () => unsubscribe();
-  }, [addToast]);
+  }, [addToast, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
