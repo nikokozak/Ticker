@@ -6,9 +6,10 @@ final class RetrievalService {
 
     private static let topK = 8
     private static let passthroughTokenBudget = 8_000
-    // ponytail: Initial BM25 cutoff is empirical for SQLite FTS5's negative-is-better scale;
-    // tune with a small golden query set before adding embeddings in R3.
-    private static let bm25RelevanceCutoff = -1.0e-6
+    // ponytail: Per-token BM25 cutoff is calibrated from a 274-page book where relevant
+    // queries scored about -1.9/token and unrelated queries about -0.52/token; tune with
+    // the R3 golden-set eval before adding embeddings.
+    private static let perTokenCutoff = -1.0
     // ponytail: Inline English stopwords are a small guardrail for R1 BM25;
     // tune/replace with the R3 eval set before adding query-language features.
     private static let stopwords: Set<String> = [
@@ -29,9 +30,10 @@ final class RetrievalService {
         guard let ftsQuery = Self.sanitizedFTSQuery(query) else {
             return []
         }
+        let relevanceCutoff = Self.relevanceCutoff(tokenCount: ftsQuery.tokenCount)
 
         let chunks = try persistence.searchSourceChunks(
-            matching: ftsQuery,
+            matching: ftsQuery.matchExpression,
             streamId: streamId,
             limit: Self.topK
         )
@@ -41,11 +43,11 @@ final class RetrievalService {
         }
 
         guard let bestScore = chunks.first?.score,
-              bestScore <= Self.bm25RelevanceCutoff else {
+              bestScore <= relevanceCutoff else {
             return []
         }
 
-        return chunks.filter { $0.score <= Self.bm25RelevanceCutoff }
+        return chunks.filter { $0.score <= relevanceCutoff }
     }
 
     /// One source-context decision point: small-source passthrough, retrieved manifest, or no source context.
@@ -86,7 +88,7 @@ final class RetrievalService {
     /// recall-first candidate set while making user punctuation inert.
     /// Short tokens and common stopwords are dropped so unrelated questions sharing only
     /// glue words do not accidentally retrieve source chunks.
-    static func sanitizedFTSQuery(_ query: String) -> String? {
+    static func sanitizedFTSQuery(_ query: String) -> SanitizedFTSQuery? {
         let tokens = query
             .lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
@@ -96,10 +98,15 @@ final class RetrievalService {
             return nil
         }
 
-        return Array(Set(tokens))
-            .sorted()
+        let uniqueTokens = Array(Set(tokens)).sorted()
+        let matchExpression = uniqueTokens
             .map { "\"\($0)\"" }
             .joined(separator: " OR ")
+
+        return SanitizedFTSQuery(
+            matchExpression: matchExpression,
+            tokenCount: uniqueTokens.count
+        )
     }
 
     static func buildManifest(from chunks: [RetrievedChunk]) -> String {
@@ -115,6 +122,15 @@ final class RetrievalService {
     private func estimatedTokenCount(_ text: String) -> Int {
         Int(ceil(Double(text.count) / 4.0))
     }
+
+    private static func relevanceCutoff(tokenCount: Int) -> Double {
+        perTokenCutoff * Double(tokenCount)
+    }
+}
+
+struct SanitizedFTSQuery {
+    let matchExpression: String
+    let tokenCount: Int
 }
 
 struct SourceContext {

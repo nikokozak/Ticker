@@ -273,6 +273,67 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_retrievalReturnsNoContextWhenAllQueryTokensMatchOnlyWeakly() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Weak Matches")
+            try service.saveStream(stream)
+            let weakChunks = weakUnrelatedChunks()
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Technical.pdf",
+                extractedText: largeExtractedText(),
+                chunks: weakChunks
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+            let query = "good dish party friends"
+            let sanitized = try XCTUnwrap(RetrievalService.sanitizedFTSQuery(query))
+            let cutoff = -1.0 * Double(sanitized.tokenCount)
+            let rawResults = try retrieval.retrieve(query: query, streamId: stream.id, applyThreshold: false)
+            let bestScore = try XCTUnwrap(rawResults.first?.score)
+            let corpusText = weakChunks.map(\.text).joined(separator: " ")
+
+            XCTAssertEqual(sanitized.tokenCount, 4)
+            XCTAssertTrue(["good", "dish", "party", "friends"].allSatisfy { corpusText.contains($0) })
+            XCTAssertLessThan(bestScore, 0)
+            XCTAssertGreaterThan(bestScore, cutoff)
+            XCTAssertTrue(try retrieval.retrieve(query: query, streamId: stream.id).isEmpty)
+            XCTAssertNil(try retrieval.assembleSourceContext(query: query, streamId: stream.id))
+        }
+    }
+
+    func test_retrievalKeepsStrongMatchesAbovePerTokenCutoff() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Strong Match")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Interpreter.pdf",
+                extractedText: largeExtractedText(),
+                chunks: stronglyRelevantChunks(
+                    strongText: "interpreter interpreter interpreter numeric numeric numeric conversion conversion conversion input input input",
+                    pageStart: 9,
+                    pageEnd: 9
+                )
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+            let query = "interpreter numeric conversion input"
+            let sanitized = try XCTUnwrap(RetrievalService.sanitizedFTSQuery(query))
+            let cutoff = -1.0 * Double(sanitized.tokenCount)
+            let rawResults = try retrieval.retrieve(query: query, streamId: stream.id, applyThreshold: false)
+            let bestScore = try XCTUnwrap(rawResults.first?.score)
+            let results = try retrieval.retrieve(query: query, streamId: stream.id)
+
+            XCTAssertEqual(sanitized.tokenCount, 4)
+            XCTAssertLessThanOrEqual(bestScore, cutoff)
+            XCTAssertEqual(results.count, 1)
+            XCTAssertEqual(results.first?.sourceName, "Interpreter.pdf")
+        }
+    }
+
     func test_retrievalSourceScopeNoneReturnsNoContextEvenWithMatchingChunks() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Scope None")
@@ -362,22 +423,26 @@ final class StreamDocumentTests: XCTestCase {
                 streamId: stream.id,
                 displayName: "Alpha.pdf",
                 extractedText: largeExtractedText("alpha"),
-                chunks: [
-                    (0, "caliper caliper caliper storage manifold", 2, 2, nil)
-                ]
+                chunks: stronglyRelevantChunks(
+                    strongText: "caliper caliper caliper storage storage storage manifold manifold manifold",
+                    pageStart: 2,
+                    pageEnd: 2
+                )
             )
             _ = try saveRetrievalSource(
                 in: service,
                 streamId: stream.id,
                 displayName: "Beta.pdf",
                 extractedText: largeExtractedText("beta"),
-                chunks: [
-                    (0, "caliper storage appendix", 8, 8, nil)
-                ]
+                chunks: stronglyRelevantChunks(
+                    strongText: "caliper caliper storage storage manifold manifold",
+                    pageStart: 8,
+                    pageEnd: 8
+                )
             )
 
             let results = try RetrievalService(persistence: service)
-                .retrieve(query: "caliper storage", streamId: stream.id)
+                .retrieve(query: "caliper storage manifold", streamId: stream.id)
 
             XCTAssertEqual(results.map(\.sourceName), ["Alpha.pdf", "Beta.pdf"])
             XCTAssertLessThanOrEqual(results[0].score, results[1].score)
@@ -414,20 +479,23 @@ final class StreamDocumentTests: XCTestCase {
                 streamId: stream.id,
                 displayName: "Manual.pdf",
                 extractedText: largeExtractedText(),
-                chunks: [
-                    (0, "The storage manifold keeps receipts in order.", 12, 14, "3.2 Storage")
-                ]
+                chunks: stronglyRelevantChunks(
+                    strongText: "storage storage storage manifold manifold manifold receipts receipts receipts",
+                    pageStart: 12,
+                    pageEnd: 14,
+                    sectionPath: "3.2 Storage"
+                )
             )
 
             let context = try XCTUnwrap(
                 RetrievalService(persistence: service)
-                    .assembleSourceContext(query: "storage manifold", streamId: stream.id)
+                    .assembleSourceContext(query: "storage manifold receipts", streamId: stream.id)
             )
 
             XCTAssertEqual(context.mode, .retrieved)
             XCTAssertEqual(context.text, """
             [1] Manual.pdf, p.12–14 (§3.2 Storage):
-            The storage manifold keeps receipts in order.
+            storage storage storage manifold manifold manifold receipts receipts receipts
             """)
         }
     }
@@ -1270,6 +1338,47 @@ final class StreamDocumentTests: XCTestCase {
 
     private func largeExtractedText(_ marker: String = "large") -> String {
         String(repeating: "\(marker) source context. ", count: 2_500)
+    }
+
+    private func stronglyRelevantChunks(
+        strongText: String,
+        pageStart: Int,
+        pageEnd: Int,
+        sectionPath: String? = nil
+    ) -> [RetrievalChunkFixture] {
+        genericRetrievalFillerChunks(count: 40, startingSeq: 1)
+            + [(0, strongText, pageStart, pageEnd, sectionPath)]
+    }
+
+    private func weakUnrelatedChunks() -> [RetrievalChunkFixture] {
+        var chunks = genericRetrievalFillerChunks(count: 40, startingSeq: 0)
+        var seq = chunks.count
+        for token in ["good", "dish", "party", "friends"] {
+            for index in 0..<10 {
+                chunks.append((
+                    seq,
+                    "\(token) compiler pipeline register cache \(index)",
+                    seq + 1,
+                    seq + 1,
+                    nil
+                ))
+                seq += 1
+            }
+        }
+        return chunks
+    }
+
+    private func genericRetrievalFillerChunks(count: Int, startingSeq: Int) -> [RetrievalChunkFixture] {
+        (0..<count).map { offset in
+            let seq = startingSeq + offset
+            return (
+                seq,
+                "technical parser runtime buffer queue memory index compiler register module \(seq)",
+                seq + 1,
+                seq + 1,
+                nil
+            )
+        }
     }
 
     private func withSeededV10Database(
