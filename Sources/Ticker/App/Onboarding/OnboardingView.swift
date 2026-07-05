@@ -2,6 +2,20 @@ import SwiftUI
 import AppKit
 import ApplicationServices
 
+enum SystemSettingsPrivacyPane: String {
+    case accessibility = "Privacy_Accessibility"
+}
+
+enum SystemSettingsOpener {
+    /// Open System Settings directly to avoid cross-talk/ordering issues between permission prompts.
+    static func openPrivacyPane(_ pane: SystemSettingsPrivacyPane) -> Bool {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane.rawValue)") else {
+            return false
+        }
+        return NSWorkspace.shared.open(url)
+    }
+}
+
 /// Onboarding view shown on first launch
 struct OnboardingView: View {
     @State private var step: OnboardingStep = .welcome
@@ -216,21 +230,8 @@ struct OnboardingView: View {
         hasAccessibility = AXIsProcessTrusted()
     }
 
-    private enum SystemSettingsPrivacyPane: String {
-        case accessibility = "Privacy_Accessibility"
-    }
-
-    /// Open System Settings directly to avoid cross-talk/ordering issues between permission prompts.
-    /// Falls back to the OS prompt-based APIs if deep-linking fails for any reason.
-    private func openSystemSettingsPrivacyPane(_ pane: SystemSettingsPrivacyPane) -> Bool {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane.rawValue)") else {
-            return false
-        }
-        return NSWorkspace.shared.open(url)
-    }
-
     private func grantAccessibilityAccess() {
-        if !openSystemSettingsPrivacyPane(.accessibility) {
+        if !SystemSettingsOpener.openPrivacyPane(.accessibility) {
             requestAccessibility()
         } else {
             // Poll so the UI updates when the user toggles the permission.

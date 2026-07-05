@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -51,6 +51,11 @@ interface FloatingMenuState {
   visible: boolean;
   left: number;
   top: number;
+  selectionFrom: number;
+  selectionTo: number;
+  selectionHead: number;
+  menuWidth?: number;
+  menuHeight?: number;
 }
 
 interface AiFeedbackState {
@@ -245,6 +250,9 @@ export function StreamEditor({
     visible: false,
     left: 0,
     top: 0,
+    selectionFrom: 0,
+    selectionTo: 0,
+    selectionHead: 0,
   });
   const [aiFeedback, setAiFeedback] = useState<AiFeedbackState>({
     visible: false,
@@ -465,7 +473,14 @@ export function StreamEditor({
     hideAiFeedback();
     clearSourceIndexNoticeTimer();
     setSourceIndexNotice(null);
-    setFloatingMenu({ visible: false, left: 0, top: 0 });
+    setFloatingMenu({
+      visible: false,
+      left: 0,
+      top: 0,
+      selectionFrom: 0,
+      selectionTo: 0,
+      selectionHead: 0,
+    });
     setShowPrompt(false);
     setPromptValue('');
     setSourceScope(sourceScopeByStreamId.get(stream.id) ?? 'auto');
@@ -1059,7 +1074,10 @@ export function StreamEditor({
     setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearSelectionMenuTimer]);
 
-  const getSelectionMenuPlacement = useCallback((view: EditorView): { left: number; top: number } | null => {
+  const getSelectionMenuPlacement = useCallback((
+    view: EditorView,
+    measuredMenuSize?: { width: number; height: number }
+  ): { left: number; top: number } | null => {
     const shell = editorShellRef.current;
     if (!shell) return null;
 
@@ -1072,13 +1090,64 @@ export function StreamEditor({
     return computeSelectionMenuPlacement({
       coords,
       shellRect,
-      menuSize: {
+      menuSize: measuredMenuSize ?? {
         width: menu?.offsetWidth,
         height: menu?.offsetHeight,
       },
       viewportHeight: window.innerHeight,
     });
   }, []);
+
+  useLayoutEffect(() => {
+    if (!floatingMenu.visible) return;
+
+    const menu = selectionActionMenuRef.current;
+    const view = editorViewRef.current;
+    if (!menu || !view) return;
+
+    const measuredMenuSize = {
+      width: menu.offsetWidth,
+      height: menu.offsetHeight,
+    };
+    if (measuredMenuSize.width <= 0 || measuredMenuSize.height <= 0) return;
+
+    const placement = getSelectionMenuPlacement(view, measuredMenuSize);
+    if (!placement) return;
+
+    setFloatingMenu((previous) => {
+      if (!previous.visible) return previous;
+
+      const sameSize = previous.menuWidth === measuredMenuSize.width &&
+        previous.menuHeight === measuredMenuSize.height;
+      const samePlacement = Math.abs(previous.left - placement.left) < 0.5 &&
+        Math.abs(previous.top - placement.top) < 0.5;
+
+      if (sameSize && samePlacement) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        left: placement.left,
+        top: placement.top,
+        menuWidth: measuredMenuSize.width,
+        menuHeight: measuredMenuSize.height,
+      };
+    });
+  }, [
+    floatingMenu.left,
+    floatingMenu.menuHeight,
+    floatingMenu.menuWidth,
+    floatingMenu.selectionFrom,
+    floatingMenu.selectionHead,
+    floatingMenu.selectionTo,
+    floatingMenu.top,
+    floatingMenu.visible,
+    getSelectionMenuPlacement,
+    pdfPaneState.streamId,
+    pdfPaneState.visible,
+    stream.id,
+  ]);
 
   const scheduleSelectionMenu = useCallback((view: EditorView) => {
     clearSelectionMenuTimer();
@@ -1115,6 +1184,9 @@ export function StreamEditor({
         visible: true,
         left: placement.left,
         top: placement.top,
+        selectionFrom: currentSelection.from,
+        selectionTo: currentSelection.to,
+        selectionHead: currentSelection.head,
       });
     }, SELECTION_MENU_DELAY_MS);
   }, [clearSelectionMenuTimer, getSelectionMenuPlacement, hideSelectionMenu]);

@@ -291,12 +291,12 @@ final class ProxyLLMService {
                 }
                 await MainActor.run { onError(ProxyLLMError.timeout(seconds: timeoutSeconds)) }
             } else {
-                debugLog("Proxy stream failed: \(urlError.localizedDescription)")
+                debugLog("Proxy stream failed (\(DebugLog.errorSummary(urlError)))")
                 await MainActor.run { onError(ProxyLLMError.unreachable) }
             }
         } catch {
             headerWatchdog.cancel()
-            debugLog("Proxy stream failed: \(error.localizedDescription)")
+            debugLog("Proxy stream failed (\(DebugLog.errorSummary(error)))")
             await MainActor.run {
                 onError(ProxyLLMError.unreachable)
             }
@@ -391,7 +391,7 @@ final class ProxyLLMService {
             return trimmed
 
         } catch {
-            debugLog("Restatement failed: \(error.localizedDescription)")
+            debugLog("Restatement failed (\(DebugLog.errorSummary(error)))")
             return nil
         }
     }
@@ -527,7 +527,12 @@ final class ProxyLLMService {
                 let details = errorObj["details"] as? [String: Any]
                 let detailsKeys = details.map { $0.keys.sorted().joined(separator: ",") } ?? "nil"
                 let reason = (details?["reason"] as? String) ?? "nil"
-                debugLog("Error event received code=\(code) message=\(message) detailsKeys=\(detailsKeys) reason=\(reason)")
+                debugLog(
+                    "Error event received code=\(code) " +
+                    "messageLength=\(message.count) " +
+                    "detailsKeys=\(detailsKeys) " +
+                    "reasonLength=\(reason == "nil" ? 0 : reason.count)"
+                )
                 let error = mapProxyError(
                     statusCode: 0,
                     code: code,

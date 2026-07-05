@@ -162,6 +162,36 @@ struct PDFPaneOpeningLayout: Equatable {
     }
 }
 
+enum PDFPaneWidthPolicy {
+    static let minimumPDFPaneWidth: CGFloat = 320
+    static let minimumEditorPaneWidth: CGFloat = 400
+
+    static func maxAllowedPDFPaneWidth(
+        hostWidth: CGFloat,
+        minimumPDFPaneWidth: CGFloat = Self.minimumPDFPaneWidth,
+        minimumEditorPaneWidth: CGFloat = Self.minimumEditorPaneWidth
+    ) -> CGFloat {
+        let boundedHostWidth = max(0, hostWidth)
+        let editorPreservingCap = max(0, boundedHostWidth - minimumEditorPaneWidth)
+        return min(boundedHostWidth, max(minimumPDFPaneWidth, editorPreservingCap))
+    }
+
+    static func clampPDFPaneWidth(
+        _ proposed: CGFloat,
+        hostWidth: CGFloat,
+        minimumPDFPaneWidth: CGFloat = Self.minimumPDFPaneWidth,
+        minimumEditorPaneWidth: CGFloat = Self.minimumEditorPaneWidth
+    ) -> CGFloat {
+        let maxValue = maxAllowedPDFPaneWidth(
+            hostWidth: hostWidth,
+            minimumPDFPaneWidth: minimumPDFPaneWidth,
+            minimumEditorPaneWidth: minimumEditorPaneWidth
+        )
+        let minValue = min(minimumPDFPaneWidth, maxValue)
+        return min(max(proposed, minValue), maxValue)
+    }
+}
+
 enum PDFPaneWindowRestore {
     static func targetFrame(savedFrame: CGRect?, isNativeFullscreen: Bool) -> CGRect? {
         isNativeFullscreen ? nil : savedFrame
@@ -378,8 +408,8 @@ final class PDFReaderPaneController: NSViewController {
     private var pdfPaneStatusHintLeadingConstraint: NSLayoutConstraint?
     private var isPDFPaneVisible = false
     private let preferredPDFPaneWidth: CGFloat = 520
-    private let minimumPDFPaneWidth: CGFloat = 320
-    private let minimumEditorPaneWidth: CGFloat = 440
+    private let minimumPDFPaneWidth = PDFPaneWidthPolicy.minimumPDFPaneWidth
+    private let minimumEditorPaneWidth = PDFPaneWidthPolicy.minimumEditorPaneWidth
     private var pdfPaneResizeStartWidth: CGFloat = 0
     private var prePDFPaneWindowFrame: CGRect?
     private var activePDFContext: (streamId: UUID, sourceId: UUID, sourceName: String, fileURL: URL)?
@@ -1159,21 +1189,22 @@ final class PDFReaderPaneController: NSViewController {
     }
 
     private func maxAllowedPDFPaneWidth() -> CGFloat {
-        let screenWidth = view.window?.screen?.visibleFrame.width
-            ?? NSScreen.main?.visibleFrame.width
-            ?? preferredPDFPaneWidth
-        let screenCap = floor(screenWidth * 0.5)
         let hostWidth = view.superview?.bounds.width ?? view.bounds.width
-        let localCap = max(0, hostWidth - minimumEditorPaneWidth)
-        return max(minimumPDFPaneWidth, min(screenCap, localCap))
+        return PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(
+            hostWidth: hostWidth,
+            minimumPDFPaneWidth: minimumPDFPaneWidth,
+            minimumEditorPaneWidth: minimumEditorPaneWidth
+        )
     }
 
     private func clampPDFPaneWidth(_ proposed: CGFloat) -> CGFloat {
-        let hardMax = maxAllowedPDFPaneWidth()
         let hostWidth = view.superview?.bounds.width ?? view.bounds.width
-        let hostCap = max(0, hostWidth - minimumEditorPaneWidth)
-        let maxValue = max(minimumPDFPaneWidth, min(hardMax, hostCap))
-        return max(minimumPDFPaneWidth, min(proposed, maxValue))
+        return PDFPaneWidthPolicy.clampPDFPaneWidth(
+            proposed,
+            hostWidth: hostWidth,
+            minimumPDFPaneWidth: minimumPDFPaneWidth,
+            minimumEditorPaneWidth: minimumEditorPaneWidth
+        )
     }
 
     private func makePDFPaneHeader(_ raw: String) -> String {

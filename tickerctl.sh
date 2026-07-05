@@ -61,7 +61,8 @@ Config (optional):
 
 Notes:
   - Dev/prod commands build unsigned (CODE_SIGNING_ALLOWED=NO).
-  - `run-dev`/`run-prod` use stable lane (`io.ticker.next` by default).
+  - `build-dev`/`run-dev` use the Debug app identity from the Xcode project.
+  - `run-prod` uses stable lane (`io.ticker.next` by default).
   - `run-dev-qa`/`run-prod-qa` use QA lane (`io.ticker.next.qa` by default).
   - Sparkle update testing requires an older build installed in /Applications
     and a newer build published in the appcast.
@@ -350,9 +351,13 @@ build_app() {
   local -a extra=(
     "CODE_SIGNING_ALLOWED=NO"
     "CURRENT_PROJECT_VERSION=$build_num"
-    "PRODUCT_BUNDLE_IDENTIFIER=$APP_BUNDLE_ID"
-    "INFOPLIST_KEY_CFBundleDisplayName=$APP_NAME"
   )
+  if [[ "$configuration" == "Release" ]]; then
+    extra+=(
+      "PRODUCT_BUNDLE_IDENTIFIER=$APP_BUNDLE_ID"
+      "APP_DISPLAY_NAME=$APP_NAME"
+    )
+  fi
   if [[ -n "$marketing_version" ]]; then
     extra+=("MARKETING_VERSION=$marketing_version")
   fi

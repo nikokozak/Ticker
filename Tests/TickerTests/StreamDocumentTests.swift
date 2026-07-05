@@ -95,6 +95,155 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(externalSelection, "AX selection")
         XCTAssertFalse(localSelectionWasRequested)
     }
+
+    func test_selectionCaptureLadderRunsRungsInOrder() {
+        var calls: [String] = []
+
+        let result = SelectionReaderService.captureExternalSelectedText(
+            hasAccessibilityPermission: true,
+            axSelection: {
+                calls.append("ax")
+                return nil
+            },
+            hintAccessibilityTree: {
+                calls.append("hint")
+            },
+            hintedAXSelection: {
+                calls.append("hinted")
+                return nil
+            },
+            clipboardSelection: {
+                calls.append("clipboard")
+                return "Clipboard selection"
+            }
+        )
+
+        XCTAssertEqual(result, SelectionCaptureResult(text: "Clipboard selection", outcome: .clipboard))
+        XCTAssertEqual(calls, ["ax", "hint", "hinted", "clipboard"])
+    }
+
+    func test_selectionCaptureLadderShortCircuitsOnFirstSuccess() {
+        var calls: [String] = []
+
+        let result = SelectionReaderService.captureExternalSelectedText(
+            hasAccessibilityPermission: true,
+            axSelection: {
+                calls.append("ax")
+                return "AX selection"
+            },
+            hintAccessibilityTree: {
+                calls.append("hint")
+            },
+            hintedAXSelection: {
+                calls.append("hinted")
+                return "Hinted selection"
+            },
+            clipboardSelection: {
+                calls.append("clipboard")
+                return "Clipboard selection"
+            }
+        )
+
+        XCTAssertEqual(result, SelectionCaptureResult(text: "AX selection", outcome: .ax))
+        XCTAssertEqual(calls, ["ax"])
+    }
+
+    func test_selectionCaptureLadderSkipsRungsWithoutPermission() {
+        var calls: [String] = []
+
+        let result = SelectionReaderService.captureExternalSelectedText(
+            hasAccessibilityPermission: false,
+            axSelection: {
+                calls.append("ax")
+                return "AX selection"
+            },
+            hintAccessibilityTree: {
+                calls.append("hint")
+            },
+            hintedAXSelection: {
+                calls.append("hinted")
+                return "Hinted selection"
+            },
+            clipboardSelection: {
+                calls.append("clipboard")
+                return "Clipboard selection"
+            }
+        )
+
+        XCTAssertEqual(result, SelectionCaptureResult(text: nil, outcome: .noPermission))
+        XCTAssertTrue(calls.isEmpty)
+    }
+
+    func test_selectionCaptureStatusMapping() {
+        XCTAssertEqual(
+            QuickPanelStatus.selectionCaptureStatus(for: .noPermission, activeApp: "Chrome"),
+            QuickPanelStatus(
+                message: "Grant Accessibility permission to capture text selections",
+                tone: .warning,
+                action: .openAccessibilitySettings
+            )
+        )
+        XCTAssertEqual(
+            QuickPanelStatus.selectionCaptureStatus(for: .stalePermission, activeApp: "Chrome"),
+            QuickPanelStatus(
+                message: "Accessibility permission is stale — remove Ticker from the list and re-add it",
+                tone: .warning,
+                action: .openAccessibilitySettings
+            )
+        )
+        XCTAssertEqual(
+            QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal, activeApp: "Chrome"),
+            QuickPanelStatus(
+                message: "No text selected in Chrome",
+                tone: .info,
+                action: nil
+            )
+        )
+        XCTAssertEqual(
+            QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal, activeApp: " "),
+            QuickPanelStatus(
+                message: "No text selected",
+                tone: .info,
+                action: nil
+            )
+        )
+        XCTAssertNil(QuickPanelStatus.selectionCaptureStatus(for: .internalApp, activeApp: "Ticker"))
+        XCTAssertNil(QuickPanelStatus.selectionCaptureStatus(for: .axHinted, activeApp: "Chrome"))
+    }
+
+    func test_pasteboardSnapshotRestoresItemsAndTypes() throws {
+        let pasteboardName = NSPasteboard.Name("TickerPasteboardSnapshotTests.\(UUID().uuidString)")
+        let pasteboard = NSPasteboard(name: pasteboardName)
+        let binaryType = NSPasteboard.PasteboardType("com.ticker.test.binary")
+        let customTextType = NSPasteboard.PasteboardType("com.ticker.test.custom-text")
+        let binaryData = Data([0x01, 0x02, 0x03, 0xff])
+
+        pasteboard.clearContents()
+        defer {
+            pasteboard.clearContents()
+        }
+
+        let firstItem = NSPasteboardItem()
+        XCTAssertTrue(firstItem.setString("Original string", forType: .string))
+        XCTAssertTrue(firstItem.setData(binaryData, forType: binaryType))
+
+        let secondItem = NSPasteboardItem()
+        XCTAssertTrue(secondItem.setString("Custom payload", forType: customTextType))
+
+        XCTAssertTrue(pasteboard.writeObjects([firstItem, secondItem]))
+
+        let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("Mutated", forType: .string))
+
+        snapshot.restore(to: pasteboard)
+
+        let restoredItems = try XCTUnwrap(pasteboard.pasteboardItems)
+        XCTAssertEqual(restoredItems.count, 2)
+        XCTAssertEqual(restoredItems[0].string(forType: .string), "Original string")
+        XCTAssertEqual(restoredItems[0].data(forType: binaryType), binaryData)
+        XCTAssertEqual(restoredItems[1].string(forType: customTextType), "Custom payload")
+    }
 }
 
 final class StreamDocumentTests: XCTestCase {
@@ -1124,6 +1273,41 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(fullscreenLayout.targetWindowFrame, CGRect(x: 220, y: 120, width: 900, height: 700))
         XCTAssertEqual(fullscreenLayout.paneWidth, 450)
         XCTAssertFalse(fullscreenLayout.shouldResizeWindow)
+    }
+
+    func test_pdfPaneOpeningWidthIsInteriorAfterHostBasedMax() throws {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1440, height: 875)
+        let layout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: 220, y: 120, width: 900, height: 700),
+            visibleFrame: visibleFrame,
+            isNativeFullscreen: false
+        )
+        let maxWidth = PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: visibleFrame.width)
+
+        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertGreaterThan(layout.paneWidth, PDFPaneWidthPolicy.minimumPDFPaneWidth)
+        XCTAssertLessThan(layout.paneWidth, maxWidth)
+    }
+
+    func test_pdfPaneClampAllowsBothDirectionsForStandardHost() throws {
+        let hostWidth: CGFloat = 1440
+        let openingWidth = floor(hostWidth * 0.5)
+
+        let smaller = PDFPaneWidthPolicy.clampPDFPaneWidth(openingWidth - 100, hostWidth: hostWidth)
+        let larger = PDFPaneWidthPolicy.clampPDFPaneWidth(openingWidth + 100, hostWidth: hostWidth)
+
+        XCTAssertLessThan(smaller, openingWidth)
+        XCTAssertGreaterThan(larger, openingWidth)
+        XCTAssertEqual(PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: hostWidth), 1040)
+    }
+
+    func test_pdfPaneClampHandlesDegenerateSmallHosts() throws {
+        XCTAssertEqual(PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: 500), 320)
+        XCTAssertEqual(PDFPaneWidthPolicy.clampPDFPaneWidth(900, hostWidth: 500), 320)
+
+        XCTAssertEqual(PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: 260), 260)
+        XCTAssertEqual(PDFPaneWidthPolicy.clampPDFPaneWidth(900, hostWidth: 260), 260)
+        XCTAssertEqual(PDFPaneWidthPolicy.clampPDFPaneWidth(20, hostWidth: 260), 260)
     }
 
     func test_pdfPaneWindowRestoreUsesSavedFrameExceptInFullscreen() throws {
