@@ -54,6 +54,51 @@ struct QuickPanelLocalSelectionProvider {
     }
 }
 
+enum QuickPanelStatusAction: Equatable {
+    case openAccessibilitySettings
+}
+
+struct QuickPanelStatus: Equatable {
+    enum Tone: Equatable {
+        case info
+        case success
+        case warning
+    }
+
+    let message: String
+    let tone: Tone
+    let action: QuickPanelStatusAction?
+
+    static func selectionCaptureStatus(
+        for outcome: SelectionCaptureOutcome,
+        activeApp: String?
+    ) -> QuickPanelStatus? {
+        switch outcome {
+        case .noPermission:
+            return QuickPanelStatus(
+                message: "Grant Accessibility permission to capture text selections",
+                tone: .warning,
+                action: .openAccessibilitySettings
+            )
+        case .emptyExternal:
+            let appName = activeApp?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let message: String
+            if let appName, !appName.isEmpty {
+                message = "No text selected in \(appName)"
+            } else {
+                message = "No text selected"
+            }
+            return QuickPanelStatus(
+                message: message,
+                tone: .info,
+                action: nil
+            )
+        case .notAttempted, .internalApp, .ax, .axHinted, .clipboard:
+            return nil
+        }
+    }
+}
+
 /// Manages the Quick Panel lifecycle, positioning, and state
 /// Coordinates between services (cursor, selection) and the panel window
 @MainActor
@@ -66,7 +111,7 @@ final class QuickPanelManager: ObservableObject {
     @Published var inputText: String = ""
     @Published var isLoading: Bool = false
     @Published var error: String?
-    @Published var statusMessage: String?  // Temporary feedback (success/info messages)
+    @Published var status: QuickPanelStatus?  // Temporary feedback and capture status.
     @Published private(set) var isInputSaveFeedbackActive: Bool = false
     @Published private(set) var isStreamPickerSaveFeedbackActive: Bool = false
     @Published var ephemeralConversation = EphemeralConversation()
@@ -191,19 +236,20 @@ final class QuickPanelManager: ObservableObject {
     private func buildContextForQuickPanelToggle() async -> QuickPanelContext {
         let activeBundleId = selectionService.getActiveAppBundleId()
         let appBundleId = Bundle.main.bundleIdentifier
-        let selectedText = await SelectionReaderService.resolveSelectedText(
+        let selectionResult = await SelectionReaderService.resolveSelectedTextWithOutcome(
             activeBundleId: activeBundleId,
             currentBundleId: appBundleId,
             localSelection: { [localSelectionProvider] in
                 await localSelectionProvider.selectedText()
             },
-            axSelection: { [selectionService] in
-                selectionService.getSelectedText()
+            externalSelection: { [selectionService] in
+                selectionService.captureSelectedText()
             }
         )
 
         return selectionService.buildContext(
-            selectedText: selectedText,
+            selectedText: selectionResult.text,
+            selectionCaptureOutcome: selectionResult.outcome,
             readSelectionFromAX: false,
             panelSize: currentPanelSizeForPositioning()
         )
@@ -224,7 +270,8 @@ final class QuickPanelManager: ObservableObject {
                 windowTitle: capturedContext.windowTitle,
                 panelPosition: capturedContext.panelPosition,
                 clipboardImage: imageData,
-                isScreenshot: true
+                isScreenshot: true,
+                selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
             )
             // New explicit screenshot capture should always attach, even if a prior clipboard image
             // was manually dismissed from context.
@@ -249,7 +296,8 @@ final class QuickPanelManager: ObservableObject {
             windowTitle: capturedContext.windowTitle,
             panelPosition: capturedContext.panelPosition,
             clipboardImage: nil,
-            isScreenshot: false
+            isScreenshot: false,
+            selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
         )
 
         show(with: contextWithoutClipboard, showAccessibilityWarning: false)
@@ -266,10 +314,11 @@ final class QuickPanelManager: ObservableObject {
         // Load available streams for picker
         loadAvailableStreams()
 
-        // If Accessibility isn't granted, just show a soft warning (don't prompt).
-        // Onboarding is responsible for prompting; repeated system prompts here are jarring.
-        if showAccessibilityWarning && !cursorService.hasAccessibilityPermission && !capturedContext.hasSelection {
-            statusMessage = "Grant Accessibility permission to capture text selections"
+        if showAccessibilityWarning && !capturedContext.hasSelection {
+            status = QuickPanelStatus.selectionCaptureStatus(
+                for: capturedContext.selectionCaptureOutcome,
+                activeApp: capturedContext.activeApp
+            )
         }
 
         // Create panel if needed
@@ -316,7 +365,7 @@ final class QuickPanelManager: ObservableObject {
             guard let self, generation == self.presentationGeneration else { return }
             self.resetState()
             self.context = nil
-            self.statusMessage = nil
+            self.status = nil
         }
 
         guard let panel, panel.isVisible else {
@@ -341,7 +390,7 @@ final class QuickPanelManager: ObservableObject {
         inputText = ""
         isLoading = false
         error = nil
-        statusMessage = nil
+        status = nil
         isInputSaveFeedbackActive = false
         isStreamPickerSaveFeedbackActive = false
     }
@@ -357,14 +406,15 @@ final class QuickPanelManager: ObservableObject {
         statusClearTask?.cancel()
         isInputSaveFeedbackActive = false
         isStreamPickerSaveFeedbackActive = false
-        statusMessage = message
+        let timedStatus = QuickPanelStatus(message: message, tone: .info, action: nil)
+        status = timedStatus
 
         statusClearTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: durationNanoseconds)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self, self.statusMessage == message else { return }
-                self.statusMessage = nil
+                guard let self, self.status == timedStatus else { return }
+                self.status = nil
                 self.statusClearTask = nil
             }
         }
@@ -376,7 +426,7 @@ final class QuickPanelManager: ObservableObject {
         saveFeedbackTask?.cancel()
         isInputSaveFeedbackActive = true
         isStreamPickerSaveFeedbackActive = true
-        statusMessage = nil
+        status = nil
 
         saveFeedbackTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 600_000_000)
@@ -393,7 +443,7 @@ final class QuickPanelManager: ObservableObject {
         statusClearTask = nil
         isInputSaveFeedbackActive = false
         isStreamPickerSaveFeedbackActive = true
-        statusMessage = nil
+        status = nil
 
         statusClearTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: durationNanoseconds)
@@ -548,6 +598,15 @@ final class QuickPanelManager: ObservableObject {
         context = nil
     }
 
+    func performStatusAction(_ action: QuickPanelStatusAction) {
+        switch action {
+        case .openAccessibilitySettings:
+            if !SystemSettingsOpener.openPrivacyPane(.accessibility) {
+                cursorService.requestAccessibilityPermission()
+            }
+        }
+    }
+
     func clearEphemeralConversation() {
         cancelStreaming()
         ephemeralConversation.clear()
@@ -579,7 +638,8 @@ final class QuickPanelManager: ObservableObject {
             windowTitle: capturedContext.windowTitle,
             panelPosition: capturedContext.panelPosition,
             clipboardImage: nil,
-            isScreenshot: false
+            isScreenshot: false,
+            selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
         )
     }
 

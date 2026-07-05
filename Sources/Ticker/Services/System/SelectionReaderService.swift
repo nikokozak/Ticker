@@ -1,6 +1,81 @@
 import AppKit
 import ApplicationServices
 
+enum SelectionCaptureOutcome: Equatable {
+    case notAttempted
+    case internalApp
+    case noPermission
+    case ax
+    case axHinted
+    case clipboard
+    case emptyExternal
+
+    var telemetryRung: String {
+        switch self {
+        case .ax:
+            return "ax"
+        case .axHinted:
+            return "ax-hinted"
+        case .clipboard:
+            return "clipboard"
+        case .notAttempted, .internalApp, .noPermission, .emptyExternal:
+            return "none"
+        }
+    }
+}
+
+struct SelectionCaptureResult: Equatable {
+    let text: String?
+    let outcome: SelectionCaptureOutcome
+}
+
+struct PasteboardSnapshot: Equatable {
+    struct Item: Equatable {
+        struct Entry: Equatable {
+            let type: NSPasteboard.PasteboardType
+            let data: Data
+        }
+
+        let entries: [Entry]
+    }
+
+    let changeCount: Int
+    let items: [Item]
+
+    init(pasteboard: NSPasteboard = .general) {
+        self.changeCount = pasteboard.changeCount
+        self.items = (pasteboard.pasteboardItems ?? []).map { item in
+            Item(entries: item.types.compactMap { type in
+                guard let data = item.data(forType: type) else {
+                    return nil
+                }
+                return Item.Entry(type: type, data: data)
+            })
+        }
+    }
+
+    func restore(to pasteboard: NSPasteboard = .general) {
+        pasteboard.clearContents()
+
+        let restoredItems: [NSPasteboardItem] = items.compactMap { snapshotItem in
+            let pasteboardItem = NSPasteboardItem()
+            var restoredAnyType = false
+
+            for entry in snapshotItem.entries {
+                if pasteboardItem.setData(entry.data, forType: entry.type) {
+                    restoredAnyType = true
+                }
+            }
+
+            return restoredAnyType ? pasteboardItem : nil
+        }
+
+        if !restoredItems.isEmpty {
+            pasteboard.writeObjects(restoredItems)
+        }
+    }
+}
+
 /// Service for reading selected text and active application information
 /// Uses Accessibility APIs when available, with graceful fallbacks
 final class SelectionReaderService {
@@ -8,6 +83,15 @@ final class SelectionReaderService {
     private let cursorService: CursorPositionService
     private let maxSelectionReadAttempts = 2
     private let selectionReadRetryDelay: TimeInterval = 0.02
+    private let hintedSelectionReadAttempts = 6
+    private let hintedSelectionReadRetryDelay: TimeInterval = 0.05
+    private let clipboardPollAttempts = 15
+    private let clipboardPollDelay: TimeInterval = 0.02
+    private var hintedApplicationPIDs = Set<pid_t>()
+
+    private static let axEnhancedUserInterfaceAttribute = "AXEnhancedUserInterface" as CFString
+    private static let axManualAccessibilityAttribute = "AXManualAccessibility" as CFString
+    private static let copyKeyCode = CGKeyCode(8)
 
     init(cursorService: CursorPositionService? = nil) {
         self.cursorService = cursorService ?? CursorPositionService()
@@ -31,6 +115,50 @@ final class SelectionReaderService {
         }
 
         return axSelection()
+    }
+
+    static func resolveSelectedTextWithOutcome(
+        activeBundleId: String?,
+        currentBundleId: String?,
+        localSelection: @MainActor () async -> String?,
+        externalSelection: () -> SelectionCaptureResult
+    ) async -> SelectionCaptureResult {
+        if isCurrentAppBundle(activeBundleId: activeBundleId, currentBundleId: currentBundleId) {
+            return SelectionCaptureResult(
+                text: await localSelection(),
+                outcome: .internalApp
+            )
+        }
+
+        return externalSelection()
+    }
+
+    static func captureExternalSelectedText(
+        hasAccessibilityPermission: Bool,
+        axSelection: () -> String?,
+        hintAccessibilityTree: () -> Void,
+        hintedAXSelection: () -> String?,
+        clipboardSelection: () -> String?
+    ) -> SelectionCaptureResult {
+        guard hasAccessibilityPermission else {
+            return SelectionCaptureResult(text: nil, outcome: .noPermission)
+        }
+
+        if let text = nonEmptyText(axSelection()) {
+            return SelectionCaptureResult(text: text, outcome: .ax)
+        }
+
+        hintAccessibilityTree()
+
+        if let text = nonEmptyText(hintedAXSelection()) {
+            return SelectionCaptureResult(text: text, outcome: .axHinted)
+        }
+
+        if let text = nonEmptyText(clipboardSelection()) {
+            return SelectionCaptureResult(text: text, outcome: .clipboard)
+        }
+
+        return SelectionCaptureResult(text: nil, outcome: .emptyExternal)
     }
 
     // MARK: - Selection Reading
@@ -57,6 +185,75 @@ final class SelectionReaderService {
             }
 
             Thread.sleep(forTimeInterval: selectionReadRetryDelay)
+        }
+
+        return nil
+    }
+
+    func captureSelectedText() -> SelectionCaptureResult {
+        let frontmostApp = NSWorkspace.shared.frontmostApplication
+        let frontmostBundleId = frontmostApp?.bundleIdentifier
+        var useHintSettleBudget = false
+
+        let result = Self.captureExternalSelectedText(
+            hasAccessibilityPermission: cursorService.hasAccessibilityPermission,
+            axSelection: { [self] in
+                getSelectedText()
+            },
+            hintAccessibilityTree: { [self] in
+                useHintSettleBudget = hintAccessibilityTree(for: frontmostApp)
+            },
+            hintedAXSelection: { [self] in
+                readSelectedTextFromFocusedElement(
+                    attempts: useHintSettleBudget ? hintedSelectionReadAttempts : 1,
+                    retryDelay: useHintSettleBudget ? hintedSelectionReadRetryDelay : 0,
+                    retryMissingFocusedElement: useHintSettleBudget,
+                    retryEmptySelection: useHintSettleBudget
+                )
+            },
+            clipboardSelection: { [self] in
+                copySelectedTextThroughClipboard(from: frontmostApp)
+            }
+        )
+
+        DebugLog.log(
+            "[SelectionReader] external capture " +
+            "rung=\(result.outcome.telemetryRung) " +
+            "selectedLength=\(result.text?.count ?? 0) " +
+            "activeBundleId=\(frontmostBundleId ?? "unknown")"
+        )
+
+        return result
+    }
+
+    private func readSelectedTextFromFocusedElement(
+        attempts: Int,
+        retryDelay: TimeInterval,
+        retryMissingFocusedElement: Bool,
+        retryEmptySelection: Bool
+    ) -> String? {
+        let cappedAttempts = max(1, attempts)
+
+        for attempt in 1...cappedAttempts {
+            guard let focusedElement = getFocusedElement() else {
+                if retryMissingFocusedElement && attempt < cappedAttempts {
+                    Thread.sleep(forTimeInterval: retryDelay)
+                    continue
+                }
+                return nil
+            }
+
+            let selectionResult = extractSelectedText(from: focusedElement)
+            if let text = selectionResult.text {
+                return text
+            }
+
+            let shouldRetry = retryEmptySelection || shouldRetrySelectionRead(for: selectionResult.error)
+            if attempt == cappedAttempts || !shouldRetry {
+                break
+            }
+
+            Thread.sleep(forTimeInterval: retryDelay)
         }
 
         return nil
@@ -194,6 +391,94 @@ final class SelectionReaderService {
         }
     }
 
+    private func hintAccessibilityTree(for app: NSRunningApplication?) -> Bool {
+        guard let app else {
+            return false
+        }
+
+        let pid = app.processIdentifier
+        let wasAlreadyHinted = hintedApplicationPIDs.contains(pid)
+        guard !wasAlreadyHinted else {
+            return false
+        }
+
+        let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(
+            appElement,
+            Self.axEnhancedUserInterfaceAttribute,
+            kCFBooleanTrue
+        )
+        AXUIElementSetAttributeValue(
+            appElement,
+            Self.axManualAccessibilityAttribute,
+            kCFBooleanTrue
+        )
+        hintedApplicationPIDs.insert(pid)
+
+        return true
+    }
+
+    private func copySelectedTextThroughClipboard(from app: NSRunningApplication?) -> String? {
+        guard let app else {
+            return nil
+        }
+
+        let pasteboard = NSPasteboard.general
+        let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
+
+        postCopyShortcut(to: app.processIdentifier)
+
+        guard waitForPasteboardChange(pasteboard, after: snapshot.changeCount) else {
+            return nil
+        }
+
+        let copiedText = pasteboard.string(forType: .string)
+        snapshot.restore(to: pasteboard)
+
+        return copiedText
+    }
+
+    private func postCopyShortcut(to pid: pid_t) {
+        let source = CGEventSource(stateID: .combinedSessionState)
+
+        let keyDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: Self.copyKeyCode,
+            keyDown: true
+        )
+        keyDown?.flags = .maskCommand
+        keyDown?.postToPid(pid)
+
+        let keyUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: Self.copyKeyCode,
+            keyDown: false
+        )
+        keyUp?.flags = .maskCommand
+        keyUp?.postToPid(pid)
+    }
+
+    private func waitForPasteboardChange(_ pasteboard: NSPasteboard, after changeCount: Int) -> Bool {
+        for attempt in 1...clipboardPollAttempts {
+            if pasteboard.changeCount != changeCount {
+                return true
+            }
+
+            if attempt < clipboardPollAttempts {
+                Thread.sleep(forTimeInterval: clipboardPollDelay)
+            }
+        }
+
+        return pasteboard.changeCount != changeCount
+    }
+
+    private static func nonEmptyText(_ text: String?) -> String? {
+        guard let text, !text.isEmpty else {
+            return nil
+        }
+        return text
+    }
+
     // MARK: - Active App Information
 
     /// Get the name of the currently active/frontmost application
@@ -256,6 +541,7 @@ final class SelectionReaderService {
     /// Captures everything at once BEFORE focus changes
     func buildContext(
         selectedText providedSelectedText: String? = nil,
+        selectionCaptureOutcome: SelectionCaptureOutcome = .notAttempted,
         readSelectionFromAX: Bool = true,
         panelSize: CGSize = CGSize(width: QuickPanelWindow.defaultWidth, height: QuickPanelWindow.minHeight)
     ) -> QuickPanelContext {
@@ -279,7 +565,8 @@ final class SelectionReaderService {
             windowTitle: getActiveWindowTitle(),
             panelPosition: position,
             clipboardImage: clipboardImageData,
-            isScreenshot: false
+            isScreenshot: false,
+            selectionCaptureOutcome: selectionCaptureOutcome
         )
         DebugLog.log(
             "[SelectionReader] buildContext result " +
@@ -318,6 +605,26 @@ struct QuickPanelContext {
     /// True only for explicit app-initiated screenshot mode (currently deprecated).
     /// Clipboard-derived images should keep this false.
     let isScreenshot: Bool
+    /// Outcome of the external-app selection ladder when Quick Panel was invoked.
+    let selectionCaptureOutcome: SelectionCaptureOutcome
+
+    init(
+        selectedText: String?,
+        activeApp: String?,
+        windowTitle: String?,
+        panelPosition: CGPoint,
+        clipboardImage: Data?,
+        isScreenshot: Bool,
+        selectionCaptureOutcome: SelectionCaptureOutcome = .notAttempted
+    ) {
+        self.selectedText = selectedText
+        self.activeApp = activeApp
+        self.windowTitle = windowTitle
+        self.panelPosition = panelPosition
+        self.clipboardImage = clipboardImage
+        self.isScreenshot = isScreenshot
+        self.selectionCaptureOutcome = selectionCaptureOutcome
+    }
 
     var trimmedSelectedText: String? {
         guard let trimmed = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines),

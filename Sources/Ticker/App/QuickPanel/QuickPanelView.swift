@@ -98,7 +98,7 @@ struct QuickPanelView: View {
             }
 
             // Status message (info/success feedback)
-            if let status = manager.statusMessage {
+            if let status = manager.status {
                 statusView(status)
             }
 
@@ -626,20 +626,56 @@ struct QuickPanelView: View {
 
     // MARK: - Status View
 
-    private func statusView(_ status: String) -> some View {
-        let isWarning = status.contains("permission") || status.contains("Permission")
-        let icon = isWarning ? "info.circle" : "checkmark.circle"
-        let color = isWarning ? QuickPanelStyle.textMuted : QuickPanelStyle.success
+    private func statusView(_ status: QuickPanelStatus) -> some View {
+        let icon: String
+        let color: Color
+        let textColor: Color
+
+        switch status.tone {
+        case .warning:
+            icon = "info.circle"
+            color = QuickPanelStyle.textMuted
+            textColor = QuickPanelStyle.textMuted
+        case .info:
+            icon = "info.circle"
+            color = QuickPanelStyle.textMuted
+            textColor = QuickPanelStyle.text
+        case .success:
+            icon = "checkmark.circle"
+            color = QuickPanelStyle.success
+            textColor = QuickPanelStyle.text
+        }
 
         return HStack(spacing: Spacing.xs) {
             Image(systemName: icon)
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize))
                 .foregroundColor(color)
 
-            Text(status)
+            Text(status.message)
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
-                .foregroundColor(isWarning ? QuickPanelStyle.textMuted : QuickPanelStyle.text)
+                .foregroundColor(textColor)
                 .lineLimit(2)
+
+            Spacer(minLength: Spacing.xs)
+
+            if let action = status.action {
+                Button(action: { manager.performStatusAction(action) }) {
+                    HStack(spacing: QuickPanelStyle.badgeVerticalPadding) {
+                        Image(systemName: "gearshape")
+                            .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .semibold))
+                        Text("Open Settings")
+                            .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .medium))
+                    }
+                    .foregroundColor(QuickPanelStyle.accent)
+                    .padding(.horizontal, Spacing.xs)
+                    .padding(.vertical, QuickPanelStyle.badgeVerticalPadding)
+                    .background(QuickPanelStyle.surfaceRaised)
+                    .cornerRadius(QuickPanelStyle.radius)
+                }
+                .buttonStyle(.plain)
+                .help("Open Accessibility settings")
+                .accessibilityLabel("Open Accessibility settings")
+            }
         }
         .padding(Spacing.sm)
         .background(color.opacity(0.1))

@@ -95,6 +95,147 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(externalSelection, "AX selection")
         XCTAssertFalse(localSelectionWasRequested)
     }
+
+    func test_selectionCaptureLadderRunsRungsInOrder() {
+        var calls: [String] = []
+
+        let result = SelectionReaderService.captureExternalSelectedText(
+            hasAccessibilityPermission: true,
+            axSelection: {
+                calls.append("ax")
+                return nil
+            },
+            hintAccessibilityTree: {
+                calls.append("hint")
+            },
+            hintedAXSelection: {
+                calls.append("hinted")
+                return nil
+            },
+            clipboardSelection: {
+                calls.append("clipboard")
+                return "Clipboard selection"
+            }
+        )
+
+        XCTAssertEqual(result, SelectionCaptureResult(text: "Clipboard selection", outcome: .clipboard))
+        XCTAssertEqual(calls, ["ax", "hint", "hinted", "clipboard"])
+    }
+
+    func test_selectionCaptureLadderShortCircuitsOnFirstSuccess() {
+        var calls: [String] = []
+
+        let result = SelectionReaderService.captureExternalSelectedText(
+            hasAccessibilityPermission: true,
+            axSelection: {
+                calls.append("ax")
+                return "AX selection"
+            },
+            hintAccessibilityTree: {
+                calls.append("hint")
+            },
+            hintedAXSelection: {
+                calls.append("hinted")
+                return "Hinted selection"
+            },
+            clipboardSelection: {
+                calls.append("clipboard")
+                return "Clipboard selection"
+            }
+        )
+
+        XCTAssertEqual(result, SelectionCaptureResult(text: "AX selection", outcome: .ax))
+        XCTAssertEqual(calls, ["ax"])
+    }
+
+    func test_selectionCaptureLadderSkipsRungsWithoutPermission() {
+        var calls: [String] = []
+
+        let result = SelectionReaderService.captureExternalSelectedText(
+            hasAccessibilityPermission: false,
+            axSelection: {
+                calls.append("ax")
+                return "AX selection"
+            },
+            hintAccessibilityTree: {
+                calls.append("hint")
+            },
+            hintedAXSelection: {
+                calls.append("hinted")
+                return "Hinted selection"
+            },
+            clipboardSelection: {
+                calls.append("clipboard")
+                return "Clipboard selection"
+            }
+        )
+
+        XCTAssertEqual(result, SelectionCaptureResult(text: nil, outcome: .noPermission))
+        XCTAssertTrue(calls.isEmpty)
+    }
+
+    func test_selectionCaptureStatusMapping() {
+        XCTAssertEqual(
+            QuickPanelStatus.selectionCaptureStatus(for: .noPermission, activeApp: "Chrome"),
+            QuickPanelStatus(
+                message: "Grant Accessibility permission to capture text selections",
+                tone: .warning,
+                action: .openAccessibilitySettings
+            )
+        )
+        XCTAssertEqual(
+            QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal, activeApp: "Chrome"),
+            QuickPanelStatus(
+                message: "No text selected in Chrome",
+                tone: .info,
+                action: nil
+            )
+        )
+        XCTAssertEqual(
+            QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal, activeApp: " "),
+            QuickPanelStatus(
+                message: "No text selected",
+                tone: .info,
+                action: nil
+            )
+        )
+        XCTAssertNil(QuickPanelStatus.selectionCaptureStatus(for: .internalApp, activeApp: "Ticker"))
+        XCTAssertNil(QuickPanelStatus.selectionCaptureStatus(for: .axHinted, activeApp: "Chrome"))
+    }
+
+    func test_pasteboardSnapshotRestoresItemsAndTypes() throws {
+        let pasteboardName = NSPasteboard.Name("TickerPasteboardSnapshotTests.\(UUID().uuidString)")
+        let pasteboard = NSPasteboard(name: pasteboardName)
+        let binaryType = NSPasteboard.PasteboardType("com.ticker.test.binary")
+        let customTextType = NSPasteboard.PasteboardType("com.ticker.test.custom-text")
+        let binaryData = Data([0x01, 0x02, 0x03, 0xff])
+
+        pasteboard.clearContents()
+        defer {
+            pasteboard.clearContents()
+        }
+
+        let firstItem = NSPasteboardItem()
+        XCTAssertTrue(firstItem.setString("Original string", forType: .string))
+        XCTAssertTrue(firstItem.setData(binaryData, forType: binaryType))
+
+        let secondItem = NSPasteboardItem()
+        XCTAssertTrue(secondItem.setString("Custom payload", forType: customTextType))
+
+        XCTAssertTrue(pasteboard.writeObjects([firstItem, secondItem]))
+
+        let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("Mutated", forType: .string))
+
+        snapshot.restore(to: pasteboard)
+
+        let restoredItems = try XCTUnwrap(pasteboard.pasteboardItems)
+        XCTAssertEqual(restoredItems.count, 2)
+        XCTAssertEqual(restoredItems[0].string(forType: .string), "Original string")
+        XCTAssertEqual(restoredItems[0].data(forType: binaryType), binaryData)
+        XCTAssertEqual(restoredItems[1].string(forType: customTextType), "Custom payload")
+    }
 }
 
 final class StreamDocumentTests: XCTestCase {
