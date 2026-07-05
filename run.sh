@@ -17,6 +17,7 @@ Notes:
     codesign the installed lane app if `SIGN_IDENTITY` is set (recommended so macOS
     permissions like Accessibility/Screen Recording stick across rebuilds).
   - Stable lane installs to `~/Applications/Ticker Next.app` by default.
+  - Debug stable builds keep the Xcode project's Debug bundle id/display name.
   - QA lane installs to `~/Applications/Ticker Next QA.app` by default.
   - Distribution builds should follow the signing/notarization runbook.
   - Override build output location with DERIVED_DATA_PATH (or TICKER_NEXT_DERIVED_DATA_PATH), e.g.:
@@ -34,7 +35,9 @@ DERIVED_DATA_PATH_DEFAULT="$ROOT_DIR/.build/xcode"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-${TICKER_NEXT_DERIVED_DATA_PATH:-$DERIVED_DATA_PATH_DEFAULT}}"
 APP="$DERIVED_DATA_PATH/Build/Products"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.next}"
+DEBUG_APP_BUNDLE_ID="${DEBUG_APP_BUNDLE_ID:-io.ticker.next.debug}"
 QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.next.qa}"
+DEBUG_APP_DISPLAY_NAME="${DEBUG_APP_DISPLAY_NAME:-Ticker Debug}"
 STABLE_APP_DISPLAY_NAME="${STABLE_APP_DISPLAY_NAME:-Ticker Next}"
 QA_APP_DISPLAY_NAME="${QA_APP_DISPLAY_NAME:-Ticker Next QA}"
 STABLE_APP_PRODUCT_NAME="${STABLE_APP_PRODUCT_NAME:-TickerNext}"
@@ -76,7 +79,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 lane_bundle_id() {
-  if [[ "$LANE" == "qa" ]]; then
+  if [[ "$MODE" == "dev" && "$LANE" == "stable" ]]; then
+    echo "$DEBUG_APP_BUNDLE_ID"
+  elif [[ "$LANE" == "qa" ]]; then
     echo "$QA_APP_BUNDLE_ID"
   else
     echo "$APP_BUNDLE_ID"
@@ -84,7 +89,9 @@ lane_bundle_id() {
 }
 
 lane_display_name() {
-  if [[ "$LANE" == "qa" ]]; then
+  if [[ "$MODE" == "dev" && "$LANE" == "stable" ]]; then
+    echo "$DEBUG_APP_DISPLAY_NAME"
+  elif [[ "$LANE" == "qa" ]]; then
     echo "$QA_APP_DISPLAY_NAME"
   else
     echo "$STABLE_APP_DISPLAY_NAME"
@@ -209,12 +216,14 @@ build_app() {
     build_number="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
     extra_build_settings+=("CURRENT_PROJECT_VERSION=$build_number")
   fi
-  if [[ "$LANE" == "qa" ]]; then
+  if [[ "$configuration" == "Debug" && "$LANE" == "stable" ]]; then
+    :
+  elif [[ "$LANE" == "qa" ]]; then
     extra_build_settings+=("PRODUCT_BUNDLE_IDENTIFIER=$QA_APP_BUNDLE_ID")
-    extra_build_settings+=("INFOPLIST_KEY_CFBundleDisplayName=$QA_APP_DISPLAY_NAME")
+    extra_build_settings+=("APP_DISPLAY_NAME=$QA_APP_DISPLAY_NAME")
   else
     extra_build_settings+=("PRODUCT_BUNDLE_IDENTIFIER=$APP_BUNDLE_ID")
-    extra_build_settings+=("INFOPLIST_KEY_CFBundleDisplayName=$STABLE_APP_DISPLAY_NAME")
+    extra_build_settings+=("APP_DISPLAY_NAME=$STABLE_APP_DISPLAY_NAME")
   fi
 
   local log_path

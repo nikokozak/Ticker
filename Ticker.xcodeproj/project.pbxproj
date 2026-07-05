@@ -660,6 +660,7 @@
 				isa = XCBuildConfiguration;
 				buildSettings = {
 					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					APP_DISPLAY_NAME = "Ticker Debug";
 					CODE_SIGN_ENTITLEMENTS = Sources/Ticker/Ticker.entitlements;
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
@@ -675,7 +676,7 @@
 				);
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				MARKETING_VERSION = 2025.12.1;
-					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.next;
+					PRODUCT_BUNDLE_IDENTIFIER = io.ticker.next.debug;
 					PRODUCT_MODULE_NAME = Ticker;
 					PRODUCT_NAME = TickerNext;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -687,6 +688,7 @@
 					isa = XCBuildConfiguration;
 					buildSettings = {
 					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					APP_DISPLAY_NAME = "Ticker Next";
 					CODE_SIGN_ENTITLEMENTS = Sources/Ticker/Ticker.entitlements;
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
