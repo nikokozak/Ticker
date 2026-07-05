@@ -1469,30 +1469,32 @@ export function StreamEditor({
             autoFocus
           />
         ) : (
-          <h1 onClick={startEditingTitle} className="stream-title-editable">
+          <h1 onClick={startEditingTitle} className="stream-title-editable" title={title}>
             {title}
           </h1>
         )}
-        <span className={`stream-save-status stream-save-status--${saveState}`}>
-          {saveState === 'saving' ? 'Saving…' : 'Saved'}
-        </span>
-        <button
-          onClick={() => setShowSourcesModal(true)}
-          className="stream-sources-button"
-          title="Sources"
-          type="button"
-          aria-label={`Sources, ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
-        >
-          Sources · {sources.length}
-        </button>
-        <button
-          onClick={() => setShowDeleteConfirm(true)}
-          className="delete-stream-button"
-          title="Delete stream"
-          type="button"
-        >
-          Delete
-        </button>
+        <div className="stream-header-actions">
+          <span className={`stream-save-status stream-save-status--${saveState}`}>
+            {saveState === 'saving' ? 'Saving…' : 'Saved'}
+          </span>
+          <button
+            onClick={() => setShowSourcesModal(true)}
+            className="stream-sources-button"
+            title="Sources"
+            type="button"
+            aria-label={`Sources, ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
+          >
+            Sources · {sources.length}
+          </button>
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="delete-stream-button"
+            title="Delete stream"
+            type="button"
+          >
+            Delete
+          </button>
+        </div>
       </header>
 
       {showDeleteConfirm && (
