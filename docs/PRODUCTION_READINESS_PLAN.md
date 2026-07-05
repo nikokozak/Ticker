@@ -469,6 +469,51 @@ GraphRAG, ColBERT/late-interaction, external vector stores, agentic multi-hop re
 
 ---
 
+## Roadmap 3: Field Hardening (post-v2026.7.2, from first-round user testing)
+
+Written 2026-07-05 after the first two external testers + the field-fix phase (PR #36). Theme: the data core held; **every failure was at a seam** — OS permissions, other apps' AX servers, AI dispatch, ops. Ordering principle: user-trust bugs first, abuse surfaces before wider distribution, scale robustness after.
+
+### Design tenets (carried forward + new)
+
+- Wrong context is worse than no context (established in R2 for citations; now applies to *capture*: never silently attach text the user didn't select).
+- An attached source is a declaration of intent — dispatch must be strongly biased toward it. The cost asymmetry is extreme: false-include costs tokens; false-exclude costs trust and is invisible to the user.
+- Every capture/permission failure gets an honest, actionable message (no generic states).
+- Field telemetry over reproduction: the feedback bundle (FF4) is the debugging channel for machines we'll never see.
+
+### Phase H1 — Trust & correctness (P0)
+
+- **Task H1.1 — Source-biased dispatch.** Reported live: lease questions in plain English scored below the BM25 cutoff against lease legalese → silent fallback to model knowledge ("From model knowledge" strip) with the lease attached. Fix in `assembleSourceContext` (the one decision point): (a) when the stream has ≥1 non-private source and scope=Auto, drop the per-token cutoff substantially (measure; start ~half); (b) single-source streams: if retrieval passes nothing, fall back to passthrough when the source fits the token budget, else include top-k regardless of threshold with the manifest marking low-confidence; (c) provenance strip keeps over-inclusion auditable. **Golden set** (seeds the R3 eval gate): lease-style paraphrase questions (must retrieve), the pasta-vs-Forth case (must still gate), numeric-conversion case (must retrieve). Acceptance: all three pass live.
+- **Task H1.2 — Clipboard-rung wrong-capture guard.** VS Code-class apps copy the cursor line on ⌘C-with-no-selection → rung 3 can attach a line the user never selected. Fix: capture attribution — context captured via the clipboard rung is labeled in the panel (e.g. "captured via clipboard") and remains dismissible; additionally suppress rung 3 when the frontmost app is a known copy-line editor (small denylist: VS Code, Cursor, Zed) unless rung-1/2 errors indicated a real selection. Tenet: wrong-worse-than-none.
+- **Task H1.3 — Crash root-cause + sentinel audit.** Blocked on tester's `.ips` (requested). Independent: audit `applicationWillTerminate` coverage — Sparkle's update relaunch may skip it → `last_session_crashed` false positives after every update; fix by also clearing the marker on Sparkle's pre-relaunch hook (or tolerating: marker + recent-update flag = suppress).
+- **Task H1.4 — Single-instance DB lock.** Debug (`io.ticker.next.debug`) and release now run side-by-side more easily and share `ticker.db` — two GRDB instances corrupt observations. On launch, detect any running instance across both bundle ids (NSRunningApplication) and refuse-with-message (activate the running one). One alert, no negotiation UI.
+
+### Phase H2 — Abuse & ops (P1, before sharing install links wider; Ticker-Proxy repo)
+
+- **Task H2.1 — Proxy quota hardening.** Every install provisions a device key against the owner's spend, and the repo/releases are public. Per-device daily/monthly token caps (server-enforced, 402-style error the app surfaces honestly), device-key revocation list, admin console visibility of per-device spend, alerting threshold.
+- **Task H2.2 — Feedback endpoint limits.** FF4 attaches crash logs + log rings; cap request body size server-side, rate-limit per device, reject oversized attachments with a clear error (client already caps at 10MB — enforce lower server-side, ~1MB metadata + attachment cap).
+- **Task H2.3 — First-run capture self-test.** Onboarding gains a "try it now" step: select sample text in the onboarding window itself → ⌘L → confirm capture end-to-end (uses the internal provider — no permission needed), then an external-capture check with live status using the FF-phase outcomes (incl. stale-grant canary). Kills the "granted but nothing happens, silently" first-run experience.
+
+### Phase H3 — Capture UX (P2)
+
+- **Task H3.1 — Recent-clipboard-text context rung.** Like the existing recent-clipboard-*image* affordance: if capture rungs come up empty AND the clipboard changed in the last ~60s with text, offer it as attachable context — visibly attributed ("from clipboard"), dismissible, never silent. This is the universal terminal answer (kitty/Alacritty/tmux/SSH: user copies — or enables `copy_on_select` — and ⌘L just works), and it's AX-independent by design.
+- **Task H3.2 — Panel latency.** Worst-case honest-empty capture costs ~300–600ms of ladder polling before the panel shows. Show the panel immediately with a "capturing…" shimmer state; hydrate context when the ladder resolves. Capture-before-focus-steal must be preserved (read the AX snapshot synchronously first; only the slow rungs go async).
+- **Task H3.3 — AX hint hygiene (low).** `AXEnhancedUserInterface` is set on Chromium/Electron apps and never unset (persists for the target app's lifetime; can alter its behavior/perf). Unset on Ticker quit for hinted pids still running; document the tradeoff.
+
+### Phase H4 — Ingest & scale robustness (P2, power-user)
+
+- **Task H4.1 — Ingest failure taxonomy.** Scanned/no-text-layer PDFs, encrypted PDFs, extraction exceptions, zero-chunk outcomes → distinct, honest status lines in SourcesModal ("No text layer — this PDF can't be indexed (scanned?)"), not a generic failure; Retry only where retrying can help. Telemetry: outcome counts in the support bundle.
+- **Task H4.2 — Large-document perf pass.** Measure then fix: autosave payload on multi-MB markdown docs (full-doc save every 350ms debounce — consider content-hash skip), stream list with 200+ streams, FTS index size/vacuum on big libraries, editor open time on huge docs. Budget: no user-visible degradation at 10× current test corpus.
+
+### Phase H5 — Retrieval quality (R3 of Roadmap 2, unchanged)
+
+Local MLX embeddings + hybrid retrieval behind the same `assembleSourceContext` seam, gated by the eval harness seeded in H1.1. The real fix for the lexical-mismatch class that H1.1 mitigates heuristically.
+
+### kitty / terminal capture — position (not a task)
+
+Probes (2026-07-05) proved: kitty 0.26.2 (Sept 2022 binary, unchanged) answers `AXSelectedText` with an empty string on macOS 26.5 while a live selection exists; the system-wide AX focus query fails outright (kAXErrorCannotComplete); synthetic ⌘C never triggers its copy binding (plain keys deliver; modifier shortcuts don't). The same app+mechanism worked on earlier macOS — this is OS-evolution breakage on a 2022-era AX implementation, not a Ticker regression (legacy repo #121 documents the same class on Sequoia). Path: (1) user upgrades kitty — verify current kitty's AX on macOS 26 before promising; (2) H3.1 clipboard-text rung + kitty `copy_on_select yes` = capture restored regardless of AX; (3) optional later: kitty remote-control integration (`kitten @ get-text --extent selection`, requires `allow_remote_control`) as a documented power-user path. Do not sink more time into synthetic-event delivery for GLFW apps.
+
+---
+
 ## Codex Execution Protocol (governor rules)
 
 - One Codex session per phase, resumed each round with the explicit session id (never `resume --last`); cold-start a fresh session if the rollout shows >1 compaction. `-s workspace-write` before the `resume` subcommand.
