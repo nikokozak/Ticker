@@ -13,6 +13,7 @@ struct SourceReference: Identifiable, Codable {
     var pageCount: Int?
     var embeddingStatus: SourceEmbeddingStatus
     var indexStatus: SourceIndexStatus
+    var aiExcluded: Bool
     let addedAt: Date
 
     init(
@@ -27,6 +28,7 @@ struct SourceReference: Identifiable, Codable {
         pageCount: Int? = nil,
         embeddingStatus: SourceEmbeddingStatus = .none,
         indexStatus: SourceIndexStatus = .pending,
+        aiExcluded: Bool = false,
         addedAt: Date = Date()
     ) {
         self.id = id
@@ -40,6 +42,7 @@ struct SourceReference: Identifiable, Codable {
         self.pageCount = pageCount
         self.embeddingStatus = embeddingStatus
         self.indexStatus = indexStatus
+        self.aiExcluded = aiExcluded
         self.addedAt = addedAt
     }
 }

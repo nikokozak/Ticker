@@ -13,6 +13,7 @@ import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
+import { editorFindExtension } from '../extensions/EditorFindPanel';
 import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
@@ -355,6 +356,30 @@ export function StreamEditor({
       }
 
       sourceIndexStatusesRef.current.set(sourceId, status);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type !== 'getEditorSelection') return;
+
+      const requestId = message.payload?.requestId as string | undefined;
+      if (!requestId) return;
+
+      const view = editorViewRef.current;
+      const text = view
+        ? view.state.selection.ranges
+            .filter((range) => !range.empty)
+            .map((range) => view.state.sliceDoc(range.from, range.to))
+            .join('\n')
+        : '';
+
+      bridge.send({
+        type: 'editorSelection',
+        payload: { requestId, text },
+      });
     });
 
     return () => unsubscribe();
@@ -1431,6 +1456,12 @@ export function StreamEditor({
     setSources((prev: SourceReference[]) => prev.filter((source) => source.id !== sourceId));
   }, [setSources]);
 
+  const handleSourceAIExclusionChanged = useCallback((sourceId: string, aiExcluded: boolean) => {
+    setSources((prev: SourceReference[]) => prev.map((source) => (
+      source.id === sourceId ? { ...source, aiExcluded } : source
+    )));
+  }, [setSources]);
+
   const handleOpenSource = useCallback((source: SourceReference) => {
     bridge.send({
       type: 'openSource',
@@ -1681,6 +1712,7 @@ export function StreamEditor({
                 selectionMenuExtension,
                 clickToDocumentEndExtension,
                 aiWritingExtension,
+                editorFindExtension,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
@@ -1725,6 +1757,7 @@ export function StreamEditor({
         sources={sources}
         onClose={() => setShowSourcesModal(false)}
         onSourceRemoved={handleSourceRemoved}
+        onSourceAIExclusionChanged={handleSourceAIExclusionChanged}
         onSourceOpen={handleOpenSource}
         highlightedSourceId={highlightedSourceId || pendingSourceId}
         onClearHighlight={() => {

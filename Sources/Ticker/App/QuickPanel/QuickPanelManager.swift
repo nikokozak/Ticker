@@ -32,6 +32,28 @@ struct EphemeralConversation: Equatable {
     }
 }
 
+struct QuickPanelLocalSelectionProvider {
+    var pdfSelection: @MainActor () -> String? = { nil }
+    var editorSelection: @MainActor () async -> String? = { nil }
+
+    @MainActor
+    func selectedText() async -> String? {
+        if let pdfText = Self.nonEmptyTrimmed(pdfSelection()) {
+            return pdfText
+        }
+
+        return Self.nonEmptyTrimmed(await editorSelection())
+    }
+
+    private static func nonEmptyTrimmed(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+}
+
 /// Manages the Quick Panel lifecycle, positioning, and state
 /// Coordinates between services (cursor, selection) and the panel window
 @MainActor
@@ -45,8 +67,8 @@ final class QuickPanelManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var statusMessage: String?  // Temporary feedback (success/info messages)
-    @Published private(set) var isShowingSaveFeedback: Bool = false
     @Published private(set) var isInputSaveFeedbackActive: Bool = false
+    @Published private(set) var isStreamPickerSaveFeedbackActive: Bool = false
     @Published var ephemeralConversation = EphemeralConversation()
 
     // Stream selection
@@ -57,6 +79,7 @@ final class QuickPanelManager: ObservableObject {
 
     private let cursorService: CursorPositionService
     private let selectionService: SelectionReaderService
+    private var localSelectionProvider = QuickPanelLocalSelectionProvider()
     private weak var persistence: PersistenceService?
     private weak var bridgeService: BridgeService?
     private var assetService: AssetService?
@@ -127,12 +150,22 @@ final class QuickPanelManager: ObservableObject {
         )
     }
 
+    func configureLocalSelectionProvider(_ provider: QuickPanelLocalSelectionProvider) {
+        localSelectionProvider = provider
+    }
+
     // MARK: - Public API
 
     /// Toggle the quick panel
     func toggle() {
+        Task { @MainActor in
+            await toggleAfterCapturingContext()
+        }
+    }
+
+    private func toggleAfterCapturingContext() async {
         // Capture context BEFORE we steal focus
-        let capturedContext = contextRespectingDismissedClipboardImage(selectionService.buildContext())
+        let capturedContext = contextRespectingDismissedClipboardImage(await buildContextForQuickPanelToggle())
         logCapturedContext(capturedContext)
 
         if isVisible {
@@ -153,6 +186,27 @@ final class QuickPanelManager: ObservableObject {
 
         // Panel is hidden - show it
         show(with: capturedContext, showAccessibilityWarning: true)
+    }
+
+    private func buildContextForQuickPanelToggle() async -> QuickPanelContext {
+        let activeBundleId = selectionService.getActiveAppBundleId()
+        let appBundleId = Bundle.main.bundleIdentifier
+        let selectedText = await SelectionReaderService.resolveSelectedText(
+            activeBundleId: activeBundleId,
+            currentBundleId: appBundleId,
+            localSelection: { [localSelectionProvider] in
+                await localSelectionProvider.selectedText()
+            },
+            axSelection: { [selectionService] in
+                selectionService.getSelectedText()
+            }
+        )
+
+        return selectionService.buildContext(
+            selectedText: selectedText,
+            readSelectionFromAX: false,
+            panelSize: currentPanelSizeForPositioning()
+        )
     }
 
     /// Show after screenshot capture with status feedback
@@ -242,6 +296,10 @@ final class QuickPanelManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             NotificationCenter.default.post(name: .quickPanelDidShow, object: nil)
         }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.syncHeightToContent(animated: false)
+        }
     }
 
     /// Hide the quick panel
@@ -284,8 +342,8 @@ final class QuickPanelManager: ObservableObject {
         isLoading = false
         error = nil
         statusMessage = nil
-        isShowingSaveFeedback = false
         isInputSaveFeedbackActive = false
+        isStreamPickerSaveFeedbackActive = false
     }
 
     private func cancelFeedbackTasks() {
@@ -297,8 +355,8 @@ final class QuickPanelManager: ObservableObject {
 
     private func showTimedStatusMessage(_ message: String, durationNanoseconds: UInt64) {
         statusClearTask?.cancel()
-        isShowingSaveFeedback = false
         isInputSaveFeedbackActive = false
+        isStreamPickerSaveFeedbackActive = false
         statusMessage = message
 
         statusClearTask = Task { [weak self] in
@@ -312,40 +370,37 @@ final class QuickPanelManager: ObservableObject {
         }
     }
 
-    private func showSaveFeedbackThenHide(_ message: String) {
+    private func showStreamPickerSaveFeedbackThenHide() {
         statusClearTask?.cancel()
         statusClearTask = nil
         saveFeedbackTask?.cancel()
-        isShowingSaveFeedback = true
         isInputSaveFeedbackActive = true
-        statusMessage = message
+        isStreamPickerSaveFeedbackActive = true
+        statusMessage = nil
 
         saveFeedbackTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            try? await Task.sleep(nanoseconds: 600_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self, self.statusMessage == message else { return }
+                guard let self else { return }
                 self.hide()
             }
         }
     }
 
-    private func showSaveFeedbackPill(_ message: String, durationNanoseconds: UInt64 = 1_400_000_000) {
+    private func flashStreamPickerSaveFeedback(durationNanoseconds: UInt64 = 600_000_000) {
         statusClearTask?.cancel()
         statusClearTask = nil
-        isShowingSaveFeedback = true
         isInputSaveFeedbackActive = false
-        statusMessage = message
+        isStreamPickerSaveFeedbackActive = true
+        statusMessage = nil
 
         statusClearTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: durationNanoseconds)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self,
-                      self.statusMessage == message,
-                      !self.isInputSaveFeedbackActive else { return }
-                self.statusMessage = nil
-                self.isShowingSaveFeedback = false
+                guard let self, !self.isInputSaveFeedbackActive else { return }
+                self.isStreamPickerSaveFeedbackActive = false
                 self.statusClearTask = nil
             }
         }
@@ -553,8 +608,6 @@ final class QuickPanelManager: ObservableObject {
         do {
             // Get target stream (may create new one)
             let (streamId, isNewStream) = try getTargetStreamId()
-            let streamTitle = displayTitle(for: streamId, persistence: persistence)
-
             let fragment = try buildMarkdownFragment(streamId: streamId)
             let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
             notifyFrontend(streamId: streamId, fragment: result.fragment, revision: result.revision, isNewStream: isNewStream)
@@ -578,10 +631,7 @@ final class QuickPanelManager: ObservableObject {
             }
 
             isLoading = false
-            let feedbackMessage = triggerDocumentAI
-                ? "Saved to \(streamTitle) — asking AI…"
-                : "Saved to \(streamTitle)"
-            showSaveFeedbackThenHide(feedbackMessage)
+            showStreamPickerSaveFeedbackThenHide()
 
             if let aiPrompt {
                 if let orchestratorForAI, let documentMarkdownForAI {
@@ -620,7 +670,6 @@ final class QuickPanelManager: ObservableObject {
 
         do {
             let (streamId, isNewStream) = try getTargetStreamId()
-            let streamTitle = displayTitle(for: streamId, persistence: persistence)
             let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
             notifyFrontend(
                 streamId: streamId,
@@ -628,7 +677,7 @@ final class QuickPanelManager: ObservableObject {
                 revision: result.revision,
                 isNewStream: isNewStream
             )
-            showSaveFeedbackPill("Saved to \(streamTitle)")
+            flashStreamPickerSaveFeedback()
         } catch {
             self.error = error.localizedDescription
             DebugLog.log("[QuickPanel] Error saving conversation message (\(DebugLog.errorSummary(error)))")
@@ -709,20 +758,6 @@ final class QuickPanelManager: ObservableObject {
 
     private func nonEmptyTrimmed(_ text: String?) -> String? {
         QuickPanelMarkdownFormatter.nonEmptyTrimmed(text)
-    }
-
-    private func displayTitle(for streamId: UUID, persistence: PersistenceService) -> String {
-        if let summaryTitle = availableStreams.first(where: { $0.id == streamId })?.title,
-           let title = nonEmptyTrimmed(summaryTitle) {
-            return title
-        }
-
-        if let storedTitle = try? persistence.getStreamTitle(id: streamId),
-           let title = nonEmptyTrimmed(storedTitle) {
-            return title
-        }
-
-        return "Untitled"
     }
 
     private func startDocumentAI(
@@ -866,24 +901,55 @@ final class QuickPanelManager: ObservableObject {
 
     // MARK: - Height Management
 
+    private func currentPanelSizeForPositioning() -> CGSize {
+        CGSize(
+            width: QuickPanelWindow.defaultWidth,
+            height: max(panel?.frame.height ?? targetHeight, QuickPanelWindow.minHeight)
+        )
+    }
+
+    private func syncHeightToContent(animated: Bool) {
+        guard let hostingView else { return }
+        hostingView.layoutSubtreeIfNeeded()
+        let fittingHeight = hostingView.fittingSize.height
+        guard fittingHeight.isFinite, fittingHeight > 0 else { return }
+        contentHeightChanged(fittingHeight, animatedGrowth: animated)
+    }
+
+    private func maxAllowedPanelHeight() -> CGFloat {
+        let visibleHeight = (panel?.screen ?? NSScreen.main)?.visibleFrame.height ?? QuickPanelWindow.maxHeight
+        return max(QuickPanelWindow.minHeight, min(QuickPanelWindow.maxHeight, visibleHeight - 16))
+    }
+
     /// Called by SwiftUI when content height changes
     func contentHeightChanged(_ height: CGFloat) {
-        let clampedHeight = max(QuickPanelWindow.minHeight, min(height, QuickPanelWindow.maxHeight))
+        contentHeightChanged(height, animatedGrowth: false)
+    }
+
+    private func contentHeightChanged(_ height: CGFloat, animatedGrowth: Bool) {
+        let clampedHeight = max(QuickPanelWindow.minHeight, min(height, maxAllowedPanelHeight()))
 
         // Skip if height hasn't meaningfully changed (reduces timer churn during streaming)
         guard abs(targetHeight - clampedHeight) > 2 else { return }
         targetHeight = clampedHeight
 
+        let currentHeight = panel?.frame.height ?? QuickPanelWindow.minHeight
+        if clampedHeight > currentHeight + 2 {
+            heightDebounceTimer?.invalidate()
+            applyHeightUpdate(animated: animatedGrowth)
+            return
+        }
+
         heightDebounceTimer?.invalidate()
-        // Longer debounce (150ms) to batch rapid content changes during streaming
+        // Debounce shrink/steady-state changes to batch rapid content updates during streaming.
         heightDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                self?.applyHeightUpdate()
+                self?.applyHeightUpdate(animated: true)
             }
         }
     }
 
-    private func applyHeightUpdate() {
+    private func applyHeightUpdate(animated: Bool) {
         guard let panel = panel else { return }
 
         // Skip if already animating - the completion handler will check if another update is needed
@@ -894,14 +960,14 @@ final class QuickPanelManager: ObservableObject {
         guard abs(currentHeight - targetHeight) > 4 else { return }
 
         isAnimatingHeight = true
-        panel.resize(toHeight: targetHeight, animated: true) { [weak self] in
+        panel.resize(toHeight: targetHeight, animated: animated) { [weak self] in
             guard let self = self else { return }
             self.isAnimatingHeight = false
 
             // Check if height changed during animation - if so, schedule another update
             let finalHeight = self.panel?.frame.height ?? 0
             if abs(finalHeight - self.targetHeight) > 4 {
-                self.applyHeightUpdate()
+                self.applyHeightUpdate(animated: true)
             }
         }
     }

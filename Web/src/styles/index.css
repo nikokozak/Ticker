@@ -863,6 +863,7 @@ body {
 }
 
 .document-editor-codemirror .cm-editor {
+  position: relative;
   min-height: inherit;
   font-size: var(--editor-font-size);
   line-height: var(--editor-line-height);
@@ -896,6 +897,79 @@ body {
 
 .document-editor-codemirror .cm-focused {
   outline: none;
+}
+
+.document-editor-codemirror .cm-panels.cm-panels-top {
+  border-bottom: 0;
+  background: transparent;
+  color: var(--color-text);
+  pointer-events: none;
+}
+
+.document-editor-codemirror .editor-find-panel {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: var(--control-shadow);
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui-small);
+  line-height: var(--line-height-tight);
+  pointer-events: auto;
+}
+
+.document-editor-codemirror .editor-find-input {
+  width: 16ch;
+  min-width: 0;
+  height: var(--space-5);
+  border: 0;
+  border-radius: var(--radius);
+  outline: none;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+}
+
+.document-editor-codemirror .editor-find-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.document-editor-codemirror .editor-find-count {
+  min-width: 6ch;
+  color: var(--color-text-secondary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.document-editor-codemirror .editor-find-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-5);
+  height: var(--space-5);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  line-height: var(--line-height-tight);
+  cursor: default;
+}
+
+.document-editor-codemirror .editor-find-button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.document-editor-codemirror .editor-find-button:active {
+  background: var(--color-surface-active);
 }
 
 .document-editor-codemirror .cm-line {
@@ -1306,6 +1380,37 @@ body {
 .sources-modal-retry:hover,
 .sources-modal-retry:focus-visible {
   color: var(--color-accent);
+}
+
+.sources-modal-private-toggle {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: calc(var(--space-1) / 2) var(--space-1);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  line-height: inherit;
+  transition: all 0.15s ease;
+}
+
+.sources-modal-private-toggle:hover,
+.sources-modal-private-toggle:focus-visible {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.sources-modal-private-toggle--active {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--on-accent);
+}
+
+.sources-modal-private-toggle--active:hover,
+.sources-modal-private-toggle--active:focus-visible {
+  background: var(--color-accent-hover);
+  color: var(--on-accent);
 }
 
 .sources-modal-remove {

@@ -38,6 +38,7 @@ export interface SourceReference {
   status: SourceStatus;
   embeddingStatus: SourceEmbeddingStatus;
   indexStatus: SourceIndexStatus;
+  aiExcluded: boolean;
   extractedText: string | null;
   pageCount: number | null;
   addedAt: string;

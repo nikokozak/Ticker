@@ -83,6 +83,48 @@ enum PDFCitationFallbackAffordance {
     }
 }
 
+struct PDFFindResults {
+    let selections: [PDFSelection]
+    let isCapped: Bool
+}
+
+enum PDFDocumentFind {
+    static let maxMatches = 500
+
+    static func matches(
+        in document: PDFDocument,
+        query: String,
+        limit: Int = maxMatches
+    ) -> PDFFindResults {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty, limit > 0 else {
+            return PDFFindResults(selections: [], isCapped: false)
+        }
+
+        let selections = document.findString(trimmedQuery, withOptions: .caseInsensitive)
+        if selections.count > limit {
+            // ponytail: cap protects PDFKit/UI work on huge docs; upgrade path is incremental page-windowed search.
+            return PDFFindResults(selections: Array(selections.prefix(limit)), isCapped: true)
+        }
+
+        return PDFFindResults(selections: selections, isCapped: false)
+    }
+}
+
+enum PDFFindNavigation {
+    static func nextIndex(currentIndex: Int?, matchCount: Int) -> Int? {
+        guard matchCount > 0 else { return nil }
+        guard let currentIndex else { return 0 }
+        return (currentIndex + 1) % matchCount
+    }
+
+    static func previousIndex(currentIndex: Int?, matchCount: Int) -> Int? {
+        guard matchCount > 0 else { return nil }
+        guard let currentIndex else { return matchCount - 1 }
+        return (currentIndex + matchCount - 1) % matchCount
+    }
+}
+
 struct PDFPaneOpeningLayout: Equatable {
     let targetWindowFrame: CGRect
     let paneWidth: CGFloat
@@ -298,6 +340,17 @@ private final class PDFPaneResizeHandleView: NSView {
     }
 }
 
+private final class PDFPaneFindSearchField: NSSearchField {
+    var onKeyDown: ((NSEvent) -> Bool)?
+
+    override func keyDown(with event: NSEvent) {
+        if onKeyDown?(event) == true {
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
 final class PDFReaderPaneController: NSViewController {
     var onLinkSelection: ((PDFHighlightLinkPayload) -> Void)?
     var onAnchorPlaced: ((PDFHighlightLinkPayload) -> Void)?
@@ -313,8 +366,14 @@ final class PDFReaderPaneController: NSViewController {
     private let pdfPaneHintIconView = NSImageView(frame: .zero)
     private let pdfPaneLinkButton = NSButton(title: "", target: nil, action: nil)
     private let pdfPaneCloseButton = NSButton(title: "", target: nil, action: nil)
+    private let pdfFindBarView = NSView(frame: .zero)
+    private let pdfFindSearchField = PDFPaneFindSearchField(frame: .zero)
+    private let pdfFindCounterField = NSTextField(labelWithString: "")
+    private let pdfFindPreviousButton = NSButton(title: "", target: nil, action: nil)
+    private let pdfFindNextButton = NSButton(title: "", target: nil, action: nil)
     private let pdfPanePDFView = PDFView(frame: .zero)
     private var pdfPaneWidthConstraint: NSLayoutConstraint?
+    private var pdfFindBarHeightConstraint: NSLayoutConstraint?
     private var pdfPaneStatusLeadingConstraint: NSLayoutConstraint?
     private var pdfPaneStatusHintLeadingConstraint: NSLayoutConstraint?
     private var isPDFPaneVisible = false
@@ -329,8 +388,14 @@ final class PDFReaderPaneController: NSViewController {
     private var anchorPickKeyMonitor: Any?
     private var anchorPickCursorMonitor: Any?
     private var anchorPickPreviousAcceptsMouseMovedEvents: Bool?
+    private var pdfFindDebounceWorkItem: DispatchWorkItem?
+    private var pdfFindGeneration = 0
+    private var pdfFindMatches: [PDFSelection] = []
+    private var pdfFindCurrentIndex: Int?
+    private var pdfFindIsCapped = false
 
     deinit {
+        pdfFindDebounceWorkItem?.cancel()
         NotificationCenter.default.removeObserver(self)
         exitAnchorPickMode(notifyCancelled: false)
         releaseActivePDFContext()
@@ -384,6 +449,33 @@ final class PDFReaderPaneController: NSViewController {
 
     func isPresenting(streamId: UUID) -> Bool {
         activePDFContext?.streamId == streamId && isPDFPaneVisible
+    }
+
+    func currentSelectedText() -> String? {
+        guard isPDFPaneVisible else { return nil }
+        let selectedText = pdfPanePDFView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return selectedText.isEmpty ? nil : selectedText
+    }
+
+    func handleFindShortcutIfFocused() -> Bool {
+        guard isPDFPaneVisible,
+              view.window?.isKeyWindow == true,
+              firstResponderIsInPDFPane() else {
+            return false
+        }
+
+        showPDFFindBar()
+        return true
+    }
+
+    func handleFindBarKeyEvent(_ event: NSEvent) -> Bool {
+        guard isPDFPaneVisible,
+              !pdfFindBarView.isHidden,
+              firstResponderIsInPDFFindBar() else {
+            return false
+        }
+
+        return handlePDFFindKeyDown(event)
     }
 
     func beginAnchorPickMode() -> Bool {
@@ -530,6 +622,7 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         exitAnchorPickMode(notifyCancelled: true)
+        dismissPDFFindBar(clearQuery: true, restoreFocus: false)
         let restoreFrame = PDFPaneWindowRestore.targetFrame(
             savedFrame: prePDFPaneWindowFrame,
             isNativeFullscreen: view.window?.styleMask.contains(.fullScreen) == true
@@ -570,6 +663,11 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneHintIconView.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneLinkButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneCloseButton.translatesAutoresizingMaskIntoConstraints = false
+        pdfFindBarView.translatesAutoresizingMaskIntoConstraints = false
+        pdfFindSearchField.translatesAutoresizingMaskIntoConstraints = false
+        pdfFindCounterField.translatesAutoresizingMaskIntoConstraints = false
+        pdfFindPreviousButton.translatesAutoresizingMaskIntoConstraints = false
+        pdfFindNextButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPanePDFView.translatesAutoresizingMaskIntoConstraints = false
 
         pdfPaneResizeHandle.wantsLayer = true
@@ -633,6 +731,44 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneCloseButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         pdfPaneCloseButton.setContentHuggingPriority(.required, for: .horizontal)
 
+        pdfFindBarView.wantsLayer = true
+        pdfFindBarView.layer?.backgroundColor = PDFPaneStyle.background.cgColor
+        pdfFindBarView.isHidden = true
+        pdfFindBarView.alphaValue = 0
+
+        pdfFindSearchField.placeholderString = "Find in document"
+        pdfFindSearchField.font = NSFont.systemFont(ofSize: 13)
+        pdfFindSearchField.textColor = PDFPaneStyle.text
+        pdfFindSearchField.controlSize = .small
+        pdfFindSearchField.isBordered = false
+        pdfFindSearchField.drawsBackground = true
+        pdfFindSearchField.backgroundColor = PDFPaneStyle.surface
+        pdfFindSearchField.focusRingType = .none
+        pdfFindSearchField.delegate = self
+        pdfFindSearchField.sendsSearchStringImmediately = true
+        pdfFindSearchField.sendsWholeSearchString = false
+        pdfFindSearchField.onKeyDown = { [weak self] event in
+            self?.handlePDFFindKeyDown(event) ?? false
+        }
+
+        pdfFindCounterField.font = NSFont.systemFont(ofSize: 12)
+        pdfFindCounterField.textColor = PDFPaneStyle.textMuted
+        pdfFindCounterField.alignment = .right
+        pdfFindCounterField.stringValue = ""
+        pdfFindCounterField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        pdfFindCounterField.setContentHuggingPriority(.required, for: .horizontal)
+
+        configureFindButton(
+            pdfFindPreviousButton,
+            symbolName: "chevron.up",
+            action: #selector(handlePDFFindPrevious)
+        )
+        configureFindButton(
+            pdfFindNextButton,
+            symbolName: "chevron.down",
+            action: #selector(handlePDFFindNext)
+        )
+
         pdfPanePDFView.autoScales = true
         pdfPanePDFView.displayMode = .singlePageContinuous
         pdfPanePDFView.displayDirection = .vertical
@@ -648,9 +784,15 @@ final class PDFReaderPaneController: NSViewController {
         headerSeparator.wantsLayer = true
         headerSeparator.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
 
+        let findSeparator = NSView(frame: .zero)
+        findSeparator.translatesAutoresizingMaskIntoConstraints = false
+        findSeparator.wantsLayer = true
+        findSeparator.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
+
         pdfPaneView.addSubview(divider)
         pdfPaneView.addSubview(pdfPaneResizeHandle)
         pdfPaneView.addSubview(pdfPaneHeaderView)
+        pdfPaneView.addSubview(pdfFindBarView)
         pdfPaneView.addSubview(pdfPanePDFView)
         pdfPaneHeaderView.addSubview(pdfPaneTitleField)
         pdfPaneHeaderView.addSubview(pdfPaneHintIconView)
@@ -658,6 +800,11 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneHeaderView.addSubview(pdfPaneLinkButton)
         pdfPaneHeaderView.addSubview(pdfPaneCloseButton)
         pdfPaneHeaderView.addSubview(headerSeparator)
+        pdfFindBarView.addSubview(pdfFindSearchField)
+        pdfFindBarView.addSubview(pdfFindCounterField)
+        pdfFindBarView.addSubview(pdfFindPreviousButton)
+        pdfFindBarView.addSubview(pdfFindNextButton)
+        pdfFindBarView.addSubview(findSeparator)
 
         pdfPaneStatusLeadingConstraint = pdfPaneStatusField.leadingAnchor.constraint(
             equalTo: pdfPaneTitleField.leadingAnchor
@@ -715,11 +862,46 @@ final class PDFReaderPaneController: NSViewController {
             headerSeparator.bottomAnchor.constraint(equalTo: pdfPaneHeaderView.bottomAnchor),
             headerSeparator.heightAnchor.constraint(equalToConstant: 1),
 
+            pdfFindBarView.leadingAnchor.constraint(equalTo: pdfPaneView.leadingAnchor),
+            pdfFindBarView.trailingAnchor.constraint(equalTo: pdfPaneView.trailingAnchor, constant: -1),
+            pdfFindBarView.topAnchor.constraint(equalTo: pdfPaneHeaderView.bottomAnchor),
+
+            pdfFindSearchField.leadingAnchor.constraint(equalTo: pdfFindBarView.leadingAnchor, constant: 12),
+            pdfFindSearchField.centerYAnchor.constraint(equalTo: pdfFindBarView.centerYAnchor),
+            pdfFindSearchField.heightAnchor.constraint(equalToConstant: 24),
+
+            pdfFindCounterField.leadingAnchor.constraint(greaterThanOrEqualTo: pdfFindSearchField.trailingAnchor, constant: 8),
+            pdfFindCounterField.trailingAnchor.constraint(equalTo: pdfFindPreviousButton.leadingAnchor, constant: -8),
+            pdfFindCounterField.centerYAnchor.constraint(equalTo: pdfFindBarView.centerYAnchor),
+            pdfFindCounterField.widthAnchor.constraint(greaterThanOrEqualToConstant: 56),
+
+            pdfFindPreviousButton.trailingAnchor.constraint(equalTo: pdfFindNextButton.leadingAnchor, constant: -4),
+            pdfFindPreviousButton.centerYAnchor.constraint(equalTo: pdfFindBarView.centerYAnchor),
+            pdfFindPreviousButton.widthAnchor.constraint(equalToConstant: 24),
+            pdfFindPreviousButton.heightAnchor.constraint(equalToConstant: 24),
+
+            pdfFindNextButton.trailingAnchor.constraint(equalTo: pdfFindBarView.trailingAnchor, constant: -10),
+            pdfFindNextButton.centerYAnchor.constraint(equalTo: pdfFindBarView.centerYAnchor),
+            pdfFindNextButton.widthAnchor.constraint(equalToConstant: 24),
+            pdfFindNextButton.heightAnchor.constraint(equalToConstant: 24),
+
+            findSeparator.leadingAnchor.constraint(equalTo: pdfFindBarView.leadingAnchor),
+            findSeparator.trailingAnchor.constraint(equalTo: pdfFindBarView.trailingAnchor),
+            findSeparator.bottomAnchor.constraint(equalTo: pdfFindBarView.bottomAnchor),
+            findSeparator.heightAnchor.constraint(equalToConstant: 1),
+
             pdfPanePDFView.leadingAnchor.constraint(equalTo: pdfPaneView.leadingAnchor),
             pdfPanePDFView.trailingAnchor.constraint(equalTo: pdfPaneView.trailingAnchor, constant: -8),
-            pdfPanePDFView.topAnchor.constraint(equalTo: pdfPaneHeaderView.bottomAnchor),
+            pdfPanePDFView.topAnchor.constraint(equalTo: pdfFindBarView.bottomAnchor),
             pdfPanePDFView.bottomAnchor.constraint(equalTo: pdfPaneView.bottomAnchor),
         ])
+
+        pdfFindBarHeightConstraint = pdfFindBarView.heightAnchor.constraint(equalToConstant: 0)
+        pdfFindBarHeightConstraint?.isActive = true
+        pdfFindSearchField.trailingAnchor.constraint(
+            lessThanOrEqualTo: pdfFindCounterField.leadingAnchor,
+            constant: -8
+        ).isActive = true
 
         NotificationCenter.default.addObserver(
             self,
@@ -733,6 +915,247 @@ final class PDFReaderPaneController: NSViewController {
             name: Notification.Name.PDFViewPageChanged,
             object: pdfPanePDFView
         )
+    }
+
+    private func configureFindButton(_ button: NSButton, symbolName: String, action: Selector) {
+        button.target = self
+        button.action = action
+        button.bezelStyle = .texturedRounded
+        button.controlSize = .small
+        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.isBordered = false
+        button.contentTintColor = PDFPaneStyle.textMuted
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+    }
+
+    private func handlePDFFindKeyDown(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isShift = flags.contains(.shift)
+        let characters = event.charactersIgnoringModifiers?.lowercased()
+
+        if event.keyCode == PDFHighlightAnnotationStyle.escapeKeyCode {
+            dismissPDFFindBar(clearQuery: true, restoreFocus: true)
+            return true
+        }
+
+        if event.keyCode == 36 || event.keyCode == 76 {
+            isShift ? selectPreviousPDFFindMatch() : selectNextPDFFindMatch()
+            return true
+        }
+
+        if flags.contains(.command), characters == "g" {
+            isShift ? selectPreviousPDFFindMatch() : selectNextPDFFindMatch()
+            return true
+        }
+
+        return false
+    }
+
+    private func showPDFFindBar() {
+        guard isPDFPaneVisible else { return }
+
+        pdfFindBarHeightConstraint?.constant = 36
+        pdfFindBarView.isHidden = false
+        pdfFindBarView.alphaValue = 0
+        view.layoutSubtreeIfNeeded()
+        view.window?.makeFirstResponder(pdfFindSearchField)
+        pdfFindSearchField.currentEditor()?.selectAll(nil)
+        updatePDFFindControls()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.10
+            pdfFindBarView.animator().alphaValue = 1
+        }
+    }
+
+    private func dismissPDFFindBar(clearQuery: Bool, restoreFocus: Bool) {
+        pdfFindDebounceWorkItem?.cancel()
+
+        if clearQuery {
+            pdfFindSearchField.stringValue = ""
+            resetPDFFindState()
+        }
+
+        let finish = { [weak self] in
+            guard let self else { return }
+            self.pdfFindBarHeightConstraint?.constant = 0
+            self.pdfFindBarView.isHidden = true
+            self.pdfFindBarView.alphaValue = 0
+            self.view.layoutSubtreeIfNeeded()
+            if restoreFocus {
+                self.view.window?.makeFirstResponder(self.pdfPanePDFView)
+            }
+        }
+
+        guard !pdfFindBarView.isHidden else {
+            finish()
+            return
+        }
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.10
+            pdfFindBarView.animator().alphaValue = 0
+        } completionHandler: {
+            finish()
+        }
+    }
+
+    private func resetPDFFindState() {
+        pdfFindDebounceWorkItem?.cancel()
+        pdfFindGeneration += 1
+        pdfFindMatches = []
+        pdfFindCurrentIndex = nil
+        pdfFindIsCapped = false
+        pdfPanePDFView.highlightedSelections = []
+        pdfPanePDFView.clearSelection()
+        updatePDFFindControls()
+    }
+
+    private func schedulePDFFindSearch() {
+        pdfFindDebounceWorkItem?.cancel()
+
+        let query = pdfFindSearchField.stringValue
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            resetPDFFindState()
+            return
+        }
+
+        guard let document = pdfPanePDFView.document else {
+            resetPDFFindState()
+            return
+        }
+
+        pdfFindGeneration += 1
+        let generation = pdfFindGeneration
+        let workItem = DispatchWorkItem { [weak self, document, query, generation] in
+            guard self != nil else { return }
+            let results = PDFDocumentFind.matches(in: document, query: query)
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      self.pdfFindGeneration == generation,
+                      self.pdfFindSearchField.stringValue == query else {
+                    return
+                }
+                self.applyPDFFindResults(results)
+            }
+        }
+
+        pdfFindDebounceWorkItem = workItem
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+            deadline: .now() + 0.25,
+            execute: workItem
+        )
+    }
+
+    private func applyPDFFindResults(_ results: PDFFindResults) {
+        pdfFindMatches = results.selections
+        pdfFindIsCapped = results.isCapped
+        pdfFindCurrentIndex = results.selections.isEmpty ? nil : 0
+        pdfPanePDFView.highlightedSelections = results.selections
+
+        if let index = pdfFindCurrentIndex {
+            selectPDFFindMatch(at: index)
+        } else {
+            pdfPanePDFView.clearSelection()
+            updatePDFFindControls()
+        }
+    }
+
+    @objc private func handlePDFFindPrevious() {
+        selectPreviousPDFFindMatch()
+    }
+
+    @objc private func handlePDFFindNext() {
+        selectNextPDFFindMatch()
+    }
+
+    private func selectPreviousPDFFindMatch() {
+        guard let next = PDFFindNavigation.previousIndex(
+            currentIndex: pdfFindCurrentIndex,
+            matchCount: pdfFindMatches.count
+        ) else {
+            return
+        }
+        selectPDFFindMatch(at: next)
+    }
+
+    private func selectNextPDFFindMatch() {
+        guard let next = PDFFindNavigation.nextIndex(
+            currentIndex: pdfFindCurrentIndex,
+            matchCount: pdfFindMatches.count
+        ) else {
+            return
+        }
+        selectPDFFindMatch(at: next)
+    }
+
+    private func selectPDFFindMatch(at index: Int) {
+        guard pdfFindMatches.indices.contains(index) else { return }
+        let selection = pdfFindMatches[index]
+        pdfFindCurrentIndex = index
+        pdfPanePDFView.setCurrentSelection(selection, animate: false)
+
+        if let page = selection.pages.first {
+            let bounds = selection.bounds(for: page).standardized
+            if bounds.isFiniteAndNonEmpty {
+                navigate(to: bounds, on: page)
+            }
+        }
+
+        updatePDFFindControls()
+    }
+
+    private func updatePDFFindControls() {
+        if pdfFindSearchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pdfFindCounterField.stringValue = ""
+        } else if let index = pdfFindCurrentIndex, !pdfFindMatches.isEmpty {
+            let total = "\(pdfFindMatches.count)\(pdfFindIsCapped ? "+" : "")"
+            pdfFindCounterField.stringValue = "\(index + 1) of \(total)"
+        } else {
+            pdfFindCounterField.stringValue = "0 of 0"
+        }
+
+        let hasMatches = !pdfFindMatches.isEmpty
+        pdfFindPreviousButton.isEnabled = hasMatches
+        pdfFindNextButton.isEnabled = hasMatches
+        pdfFindPreviousButton.contentTintColor = hasMatches ? PDFPaneStyle.textMuted : PDFPaneStyle.textMuted.withAlphaComponent(0.45)
+        pdfFindNextButton.contentTintColor = hasMatches ? PDFPaneStyle.textMuted : PDFPaneStyle.textMuted.withAlphaComponent(0.45)
+    }
+
+    private func firstResponderIsInPDFPane() -> Bool {
+        guard let firstResponder = view.window?.firstResponder else {
+            return false
+        }
+
+        if firstResponder === pdfFindSearchField.currentEditor() {
+            return true
+        }
+
+        guard let responderView = firstResponder as? NSView else {
+            return false
+        }
+
+        return responderView === pdfPaneView || responderView.isDescendant(of: pdfPaneView)
+    }
+
+    private func firstResponderIsInPDFFindBar() -> Bool {
+        guard let firstResponder = view.window?.firstResponder else {
+            return false
+        }
+
+        if firstResponder === pdfFindSearchField.currentEditor() {
+            return true
+        }
+
+        guard let responderView = firstResponder as? NSView else {
+            return false
+        }
+
+        return responderView === pdfFindBarView || responderView.isDescendant(of: pdfFindBarView)
     }
 
     private func maxAllowedPDFPaneWidth() -> CGFloat {
@@ -760,6 +1183,7 @@ final class PDFReaderPaneController: NSViewController {
 
     private func releaseActivePDFContext() {
         exitAnchorPickMode(notifyCancelled: false)
+        resetPDFFindState()
         if let current = activePDFContext {
             current.fileURL.stopAccessingSecurityScopedResource()
         }
@@ -1228,5 +1652,13 @@ final class PDFReaderPaneController: NSViewController {
         let page = pdfPanePDFView.currentPage ?? document.page(at: 0)
         let current = page.map { max(1, document.index(for: $0) + 1) } ?? 1
         return "p. \(current) / \(document.pageCount)"
+    }
+}
+
+extension PDFReaderPaneController: NSSearchFieldDelegate {
+    func controlTextDidChange(_ notification: Notification) {
+        guard let searchField = notification.object as? NSSearchField,
+              searchField === pdfFindSearchField else { return }
+        schedulePDFFindSearch()
     }
 }

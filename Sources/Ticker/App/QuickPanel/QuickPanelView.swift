@@ -98,7 +98,7 @@ struct QuickPanelView: View {
             }
 
             // Status message (info/success feedback)
-            if let status = manager.statusMessage, !manager.isShowingSaveFeedback {
+            if let status = manager.statusMessage {
                 statusView(status)
             }
 
@@ -136,16 +136,6 @@ struct QuickPanelView: View {
             RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
                 .stroke(Color.clear, lineWidth: 1)
         )
-        .overlay(alignment: .bottomTrailing) {
-            if manager.isShowingSaveFeedback, let status = manager.statusMessage {
-                statusView(status, compact: true)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.trailing, Spacing.lg)
-                    .padding(.bottom, Spacing.lg)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeOut(duration: 0.12), value: manager.isShowingSaveFeedback)
         .onReceive(NotificationCenter.default.publisher(for: .quickPanelDidShow)) { _ in
             isInputFocused = true
             isPickerExpanded = false
@@ -319,7 +309,15 @@ struct QuickPanelView: View {
     }
 
     private var streamDestinationPicker: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
+        let isSaveFeedbackActive = manager.isStreamPickerSaveFeedbackActive
+        let pickerBackground = isSaveFeedbackActive
+            ? QuickPanelStyle.success.opacity(0.16)
+            : QuickPanelStyle.surfaceMuted
+        let pickerStroke = isSaveFeedbackActive
+            ? QuickPanelStyle.success.opacity(0.34)
+            : Color.clear
+
+        return VStack(alignment: .leading, spacing: Spacing.xs) {
             Button(action: {
                 withAnimation(.easeOut(duration: 0.12)) {
                     isPickerExpanded.toggle()
@@ -339,7 +337,11 @@ struct QuickPanelView: View {
                 }
                 .padding(.horizontal, Spacing.sm)
                 .padding(.vertical, Spacing.xs)
-                .background(QuickPanelStyle.surfaceMuted)
+                .background(pickerBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
+                        .stroke(pickerStroke, lineWidth: 1)
+                )
                 .cornerRadius(QuickPanelStyle.radius)
             }
             .buttonStyle(.plain)
@@ -350,6 +352,7 @@ struct QuickPanelView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+        .animation(.easeOut(duration: 0.6), value: manager.isStreamPickerSaveFeedbackActive)
     }
 
     private var streamDestinationOptions: some View {
@@ -623,7 +626,7 @@ struct QuickPanelView: View {
 
     // MARK: - Status View
 
-    private func statusView(_ status: String, compact: Bool = false) -> some View {
+    private func statusView(_ status: String) -> some View {
         let isWarning = status.contains("permission") || status.contains("Permission")
         let icon = isWarning ? "info.circle" : "checkmark.circle"
         let color = isWarning ? QuickPanelStyle.textMuted : QuickPanelStyle.success
@@ -636,7 +639,7 @@ struct QuickPanelView: View {
             Text(status)
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
                 .foregroundColor(isWarning ? QuickPanelStyle.textMuted : QuickPanelStyle.text)
-                .lineLimit(compact ? 1 : 2)
+                .lineLimit(2)
         }
         .padding(Spacing.sm)
         .background(color.opacity(0.1))

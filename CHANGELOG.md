@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Sources can now be marked Private so their contents stay out of AI context while remaining locally searchable and readable.
 - Stream editor headers now keep long titles to one calm ellipsized line without crowding actions or document content.
 - Document AI citation links can now carry exact evidence quotes so PDF flashes target the quoted support instead of a chunk lead sentence.
 - Document AI citations now use calmer source titles, page-only labels for single-source answers, and collapse adjacent duplicate markers.
@@ -32,6 +33,11 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Formatting toggles now keep selection-edge whitespace outside inline markdown markers, including multi-line selections.
+- Stream editor markdown decorations now settle on the initial viewport faster and image widgets report stable heights while scrolling.
+- Stream editor find now uses a compact input/count/arrows panel instead of the stock search UI.
+- PDF panes now support focused Cmd-F find with match highlights, wrapping navigation, and Escape dismissal.
+- Quick Panel now fits expanded content, captures in-app editor/PDF selections, and confirms saves by flashing the stream picker.
 - Citation page fallback now flashes the cited page, and the main window now uses normal app window stacking.
 - Opening the PDF source pane now expands the window to a balanced split and restores the prior window frame on close.
 - Citation clicks that fall back to page navigation now show a transient page-scoped affordance instead of landing silently.

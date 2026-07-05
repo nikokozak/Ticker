@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { findImageTokens } from './MarkdownImageWidget';
+import {
+  clearMarkdownImageHeightCacheForTests,
+  estimateMarkdownImageHeight,
+  findImageTokens,
+  rememberMarkdownImageRenderedSize,
+} from './MarkdownImageWidget';
 
 describe('findImageTokens', () => {
   it('reports token positions across adjacent text and multiple images', () => {
@@ -42,5 +47,24 @@ describe('findImageTokens', () => {
         width: 920,
       },
     ]);
+  });
+});
+
+describe('markdown image height estimates', () => {
+  it('scales cached rendered heights for stored widths', () => {
+    clearMarkdownImageHeightCacheForTests();
+    rememberMarkdownImageRenderedSize('ticker-asset://stream/a.png', 400, 200);
+
+    expect(estimateMarkdownImageHeight({ url: 'ticker-asset://stream/a.png', width: 200 })).toBe(100);
+    expect(estimateMarkdownImageHeight({ url: 'ticker-asset://stream/a.png', width: null })).toBe(200);
+  });
+
+  it('ignores invalid rendered sizes', () => {
+    clearMarkdownImageHeightCacheForTests();
+    const before = estimateMarkdownImageHeight({ url: 'ticker-asset://stream/b.png', width: 300 });
+
+    rememberMarkdownImageRenderedSize('ticker-asset://stream/b.png', 0, 0);
+
+    expect(estimateMarkdownImageHeight({ url: 'ticker-asset://stream/b.png', width: 300 })).toBe(before);
   });
 });

@@ -35,6 +35,66 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         Saved note
         """)
     }
+
+    @MainActor
+    func test_localSelectionProviderPrefersPDFSelectionOverEditorSelection() async {
+        var editorSelectionWasRequested = false
+        let provider = QuickPanelLocalSelectionProvider(
+            pdfSelection: { " PDF selection " },
+            editorSelection: {
+                editorSelectionWasRequested = true
+                return "Editor selection"
+            }
+        )
+
+        let selectedText = await provider.selectedText()
+
+        XCTAssertEqual(selectedText, "PDF selection")
+        XCTAssertFalse(editorSelectionWasRequested)
+    }
+
+    @MainActor
+    func test_localSelectionProviderFallsBackToEditorSelection() async {
+        let provider = QuickPanelLocalSelectionProvider(
+            pdfSelection: { nil },
+            editorSelection: { " Editor selection " }
+        )
+
+        let selectedText = await provider.selectedText()
+
+        XCTAssertEqual(selectedText, "Editor selection")
+    }
+
+    @MainActor
+    func test_selectionResolverUsesLocalSelectionForTickerAndAXForOtherApps() async {
+        var axSelectionWasRequested = false
+        let tickerSelection = await SelectionReaderService.resolveSelectedText(
+            activeBundleId: "com.example.Ticker",
+            currentBundleId: "com.example.Ticker",
+            localSelection: { "Local selection" },
+            axSelection: {
+                axSelectionWasRequested = true
+                return "AX selection"
+            }
+        )
+
+        XCTAssertEqual(tickerSelection, "Local selection")
+        XCTAssertFalse(axSelectionWasRequested)
+
+        var localSelectionWasRequested = false
+        let externalSelection = await SelectionReaderService.resolveSelectedText(
+            activeBundleId: "net.kovidgoyal.kitty",
+            currentBundleId: "com.example.Ticker",
+            localSelection: {
+                localSelectionWasRequested = true
+                return "Local selection"
+            },
+            axSelection: { "AX selection" }
+        )
+
+        XCTAssertEqual(externalSelection, "AX selection")
+        XCTAssertFalse(localSelectionWasRequested)
+    }
 }
 
 final class StreamDocumentTests: XCTestCase {
@@ -179,6 +239,38 @@ final class StreamDocumentTests: XCTestCase {
                 try Row.fetchOne(db, sql: "SELECT COUNT(*) AS count FROM source_chunks_fts")?["count"] ?? -1
             }
             XCTAssertEqual(ftsCount, 0)
+        }
+    }
+
+    func test_sourceAIExcludedDefaultsFalseAndRoundTripsThroughPersistence() throws {
+        let streamId = UUID()
+        let sourceId = UUID()
+
+        try withSeededV15Database { db in
+            try insertStream(db, id: streamId, title: "Private Flag", createdAt: 900)
+            try insertV15Source(
+                db,
+                id: sourceId,
+                streamId: streamId,
+                displayName: "Sensitive.pdf",
+                fileType: "pdf",
+                pageCount: 2
+            )
+        } body: { dbURL, fileManager in
+            let service = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+
+            var source = try XCTUnwrap(service.loadSource(id: sourceId))
+            XCTAssertFalse(source.aiExcluded)
+
+            try service.setSourceAIExcluded(sourceId, excluded: true)
+            source = try XCTUnwrap(service.loadSource(id: sourceId))
+            XCTAssertTrue(source.aiExcluded)
+            XCTAssertEqual(try service.loadStream(id: streamId)?.sources.first?.aiExcluded, true)
+
+            source.aiExcluded = false
+            try service.saveSource(source)
+            XCTAssertEqual(try service.loadSource(id: sourceId)?.aiExcluded, false)
+            XCTAssertEqual(try service.loadStream(id: streamId)?.sources.first?.aiExcluded, false)
         }
     }
 
@@ -479,6 +571,56 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_retrievalPassthroughOmitsAIExcludedSources() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Private Small Sources")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Private.txt",
+                extractedText: "Private source text",
+                aiExcluded: true,
+                addedAt: Date(timeIntervalSince1970: 1)
+            )
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Public.txt",
+                extractedText: "Public source text",
+                addedAt: Date(timeIntervalSince1970: 2)
+            )
+
+            let context = try XCTUnwrap(
+                RetrievalService(persistence: service)
+                    .assembleSourceContext(query: "anything", streamId: stream.id)
+            )
+
+            XCTAssertEqual(context.mode, .passthrough)
+            XCTAssertEqual(context.text, "Public source text")
+            XCTAssertFalse(context.text.contains("Private source text"))
+        }
+    }
+
+    func test_retrievalReturnsNilContextWhenAllSourcesAreAIExcluded() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "All Private")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Private.txt",
+                extractedText: "Private source text",
+                aiExcluded: true
+            )
+
+            let context = try RetrievalService(persistence: service)
+                .assembleSourceContext(query: "anything", streamId: stream.id)
+
+            XCTAssertNil(context)
+        }
+    }
+
     func test_retrievalInterleavesMultipleSourcesByScore() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Multiple Sources")
@@ -511,6 +653,46 @@ final class StreamDocumentTests: XCTestCase {
 
             XCTAssertEqual(results.map(\.sourceName), ["Alpha.pdf", "Beta.pdf"])
             XCTAssertLessThanOrEqual(results[0].score, results[1].score)
+        }
+    }
+
+    func test_retrievalChunksExcludeAIPrivateSourcesAndFillFromAllowedSources() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Private Retrieval")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Private.pdf",
+                extractedText: largeExtractedText("private"),
+                aiExcluded: true,
+                chunks: stronglyRelevantChunks(
+                    strongText: "storage storage storage manifold manifold manifold private private private",
+                    pageStart: 3,
+                    pageEnd: 3
+                )
+            )
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Allowed.pdf",
+                extractedText: largeExtractedText("allowed"),
+                chunks: stronglyRelevantChunks(
+                    strongText: "storage storage storage manifold manifold manifold allowed allowed allowed",
+                    pageStart: 9,
+                    pageEnd: 9
+                )
+            )
+
+            let context = try XCTUnwrap(
+                RetrievalService(persistence: service)
+                    .assembleSourceContext(query: "storage manifold", streamId: stream.id)
+            )
+
+            XCTAssertEqual(context.mode, .retrieved)
+            XCTAssertEqual(context.chunks.map(\.sourceName), ["Allowed.pdf"])
+            XCTAssertTrue(context.text.contains("allowed allowed allowed"))
+            XCTAssertFalse(context.text.contains("private private private"))
         }
     }
 
@@ -950,6 +1132,37 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: false), saved)
         XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: true))
         XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: nil, isNativeFullscreen: false))
+    }
+
+    func test_pdfFindNavigationWrapsNextAndPrevious() throws {
+        XCTAssertEqual(PDFFindNavigation.nextIndex(currentIndex: nil, matchCount: 3), 0)
+        XCTAssertEqual(PDFFindNavigation.nextIndex(currentIndex: 0, matchCount: 3), 1)
+        XCTAssertEqual(PDFFindNavigation.nextIndex(currentIndex: 2, matchCount: 3), 0)
+
+        XCTAssertEqual(PDFFindNavigation.previousIndex(currentIndex: nil, matchCount: 3), 2)
+        XCTAssertEqual(PDFFindNavigation.previousIndex(currentIndex: 2, matchCount: 3), 1)
+        XCTAssertEqual(PDFFindNavigation.previousIndex(currentIndex: 0, matchCount: 3), 2)
+
+        XCTAssertNil(PDFFindNavigation.nextIndex(currentIndex: nil, matchCount: 0))
+        XCTAssertNil(PDFFindNavigation.previousIndex(currentIndex: nil, matchCount: 0))
+    }
+
+    func test_pdfDocumentFindReturnsCaseInsensitiveOrderedSelections() throws {
+        let document = try makePDFDocument(pages: [
+            "First needle is on the opening page.",
+            "Second page carries NEEDLE again.",
+            "No match here."
+        ])
+
+        let results = PDFDocumentFind.matches(in: document, query: "needle")
+
+        XCTAssertFalse(results.isCapped)
+        XCTAssertEqual(results.selections.count, 2)
+        XCTAssertEqual(results.selections.compactMap { $0.pages.first.map { document.index(for: $0) } }, [0, 1])
+        XCTAssertEqual(
+            results.selections.compactMap { $0.string?.lowercased() },
+            ["needle", "needle"]
+        )
     }
 
     func test_pdfCitationNavigatorNormalizesQuoteText() throws {
@@ -1402,6 +1615,42 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_hybridSearchStillFindsAIExcludedSourceChunksLocally() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Local Private Search")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Private.pdf",
+                extractedText: largeExtractedText("private"),
+                aiExcluded: true,
+                chunks: stronglyRelevantChunks(
+                    strongText: "privatephrase privatephrase privatephrase local local local",
+                    pageStart: 7,
+                    pageEnd: 7
+                )
+            )
+
+            let searchService = SearchService(
+                persistence: service,
+                retrieval: RetrievalService(persistence: service)
+            )
+
+            let results = try await searchService.hybridSearch(
+                query: "privatephrase",
+                currentStreamId: stream.id,
+                limit: 5
+            )
+
+            let chunkResult = try XCTUnwrap(
+                results.currentStreamResults.first { $0.sourceType.rawValue == "chunk" }
+            )
+            XCTAssertEqual(chunkResult.sourceName, "Private.pdf")
+            XCTAssertTrue(chunkResult.snippet.contains("privatephrase"))
+        }
+    }
+
     func test_migrationBackupIsCreatedWhenExistingDatabaseHasPendingMigrations() throws {
         try withSeededV10Database { _ in
             // v10 is intentionally behind the service's registered migrations.
@@ -1675,6 +1924,7 @@ final class StreamDocumentTests: XCTestCase {
         displayName: String,
         extractedText: String,
         indexStatus: SourceIndexStatus = .ready,
+        aiExcluded: Bool = false,
         addedAt: Date = Date(),
         chunks chunkFixtures: [RetrievalChunkFixture] = []
     ) throws -> SourceReference {
@@ -1687,6 +1937,7 @@ final class StreamDocumentTests: XCTestCase {
             extractedText: extractedText,
             pageCount: 20,
             indexStatus: indexStatus,
+            aiExcluded: aiExcluded,
             addedAt: addedAt
         )
         try service.saveSource(source)

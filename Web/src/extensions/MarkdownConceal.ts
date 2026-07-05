@@ -1,9 +1,10 @@
 import { type Extension, type Range } from '@codemirror/state';
-import { syntaxTree } from '@codemirror/language';
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 
 const MARK_NODE_NAMES = new Set(['EmphasisMark', 'StrongEmphasisMark', 'CodeMark', 'CodeInfo']);
 const LINK_CONCEAL_NODE_NAMES = new Set(['LinkMark', 'URL', 'LinkTitle']);
+const INITIAL_MARKDOWN_PARSE_TIMEOUT_MS = 20;
 
 function isLineSelected(view: EditorView, lineFrom: number, lineTo: number): boolean {
   const doc = view.state.doc;
@@ -42,10 +43,19 @@ function concealRange(from: number, to: number): Range<Decoration> | null {
   return Decoration.replace({}).range(from, to);
 }
 
-function buildMarkdownConcealDecorations(view: EditorView): DecorationSet {
+function visibleRangeEnd(view: EditorView): number {
+  return view.visibleRanges.reduce((end, range) => Math.max(end, range.to), view.viewport.to);
+}
+
+function markdownTreeForDecorations(view: EditorView, ensureInitialParse: boolean) {
+  if (!ensureInitialParse) return syntaxTree(view.state);
+  return ensureSyntaxTree(view.state, visibleRangeEnd(view), INITIAL_MARKDOWN_PARSE_TIMEOUT_MS) ?? syntaxTree(view.state);
+}
+
+function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = false): DecorationSet {
   const decorations: Array<Range<Decoration>> = [];
   const blockquoteLineStarts = new Set<number>();
-  const tree = syntaxTree(view.state);
+  const tree = markdownTreeForDecorations(view, ensureInitialParse);
 
   for (const visibleRange of view.visibleRanges) {
     tree.iterate({
@@ -96,7 +106,7 @@ const markdownConcealPlugin = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
 
   constructor(view: EditorView) {
-    this.decorations = buildMarkdownConcealDecorations(view);
+    this.decorations = buildMarkdownConcealDecorations(view, true);
   }
 
   update(update: ViewUpdate): void {

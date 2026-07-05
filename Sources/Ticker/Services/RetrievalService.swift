@@ -27,7 +27,12 @@ final class RetrievalService {
     }
 
     /// Retrieve relevant chunks for a query within a stream.
-    func retrieve(query: String, streamId: UUID, applyThreshold: Bool = true) throws -> [RetrievedChunk] {
+    func retrieve(
+        query: String,
+        streamId: UUID,
+        applyThreshold: Bool = true,
+        excludeAIPrivateSources: Bool = true
+    ) throws -> [RetrievedChunk] {
         guard let ftsQuery = Self.sanitizedFTSQuery(query) else {
             return []
         }
@@ -36,7 +41,8 @@ final class RetrievalService {
         let chunks = try persistence.searchSourceChunks(
             matching: ftsQuery.matchExpression,
             streamId: streamId,
-            limit: Self.topK
+            limit: Self.topK,
+            excludeAIPrivateSources: excludeAIPrivateSources
         )
 
         guard applyThreshold else {
@@ -61,7 +67,9 @@ final class RetrievalService {
             return nil
         }
 
-        let extractedTexts = stream.sources.compactMap(\.extractedText)
+        let extractedTexts = stream.sources
+            .filter { !$0.aiExcluded }
+            .compactMap(\.extractedText)
         let combinedText = extractedTexts.joined(separator: "\n\n---\n\n")
         let totalTokens = extractedTexts.reduce(0) { $0 + estimatedTokenCount($1) }
 
