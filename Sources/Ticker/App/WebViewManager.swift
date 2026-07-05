@@ -528,6 +528,16 @@ final class WebViewManager: NSObject {
     }
 
     @MainActor
+    func handlePDFFindShortcutIfFocused() -> Bool {
+        pdfPaneController.handleFindShortcutIfFocused()
+    }
+
+    @MainActor
+    func handlePDFFindBarKeyEvent(_ event: NSEvent) -> Bool {
+        pdfPaneController.handleFindBarKeyEvent(event)
+    }
+
+    @MainActor
     func requestEditorSelection() async -> String? {
         await withCheckedContinuation { continuation in
             let requestId = UUID().uuidString

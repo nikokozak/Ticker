@@ -1134,6 +1134,37 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: nil, isNativeFullscreen: false))
     }
 
+    func test_pdfFindNavigationWrapsNextAndPrevious() throws {
+        XCTAssertEqual(PDFFindNavigation.nextIndex(currentIndex: nil, matchCount: 3), 0)
+        XCTAssertEqual(PDFFindNavigation.nextIndex(currentIndex: 0, matchCount: 3), 1)
+        XCTAssertEqual(PDFFindNavigation.nextIndex(currentIndex: 2, matchCount: 3), 0)
+
+        XCTAssertEqual(PDFFindNavigation.previousIndex(currentIndex: nil, matchCount: 3), 2)
+        XCTAssertEqual(PDFFindNavigation.previousIndex(currentIndex: 2, matchCount: 3), 1)
+        XCTAssertEqual(PDFFindNavigation.previousIndex(currentIndex: 0, matchCount: 3), 2)
+
+        XCTAssertNil(PDFFindNavigation.nextIndex(currentIndex: nil, matchCount: 0))
+        XCTAssertNil(PDFFindNavigation.previousIndex(currentIndex: nil, matchCount: 0))
+    }
+
+    func test_pdfDocumentFindReturnsCaseInsensitiveOrderedSelections() throws {
+        let document = try makePDFDocument(pages: [
+            "First needle is on the opening page.",
+            "Second page carries NEEDLE again.",
+            "No match here."
+        ])
+
+        let results = PDFDocumentFind.matches(in: document, query: "needle")
+
+        XCTAssertFalse(results.isCapped)
+        XCTAssertEqual(results.selections.count, 2)
+        XCTAssertEqual(results.selections.compactMap { $0.pages.first.map { document.index(for: $0) } }, [0, 1])
+        XCTAssertEqual(
+            results.selections.compactMap { $0.string?.lowercased() },
+            ["needle", "needle"]
+        )
+    }
+
     func test_pdfCitationNavigatorNormalizesQuoteText() throws {
         XCTAssertEqual(
             PDFCitationNavigator.normalizeQuote("Reader\u{2019}s \u{201C}quoted\u{201D}\ntext\u{00AD} across   lines"),

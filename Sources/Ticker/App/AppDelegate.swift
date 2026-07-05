@@ -34,6 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // Quick Panel services
     private var hotkeyService: HotkeyService?
     private var quickPanelManager: QuickPanelManager?
+    private var pdfFindKeyMonitor: Any?
 
     // Sparkle updater (lives for app lifetime)
     private let updaterController = SPUStandardUpdaterController(
@@ -63,6 +64,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let container = ServiceContainer()
         serviceContainer = container
         setupMainWindow(container: container)
+        setupPDFFindKeyRouting()
         setupQuickPanel(container: container)
         requestAccessibilityPermissionIfNeeded()
         // Apply initial appearance after Quick Panel is set up
@@ -168,7 +170,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Cleanup
+        if let pdfFindKeyMonitor {
+            NSEvent.removeMonitor(pdfFindKeyMonitor)
+            self.pdfFindKeyMonitor = nil
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -291,6 +296,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Task { @MainActor [weak self] in
             self?.quickPanelManager?.toggle()
         }
+    }
+
+    private func setupPDFFindKeyRouting() {
+        guard pdfFindKeyMonitor == nil else { return }
+        pdfFindKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            guard event.window == self.mainWindow else {
+                return event
+            }
+
+            if MainActor.assumeIsolated({ [weak self] in
+                self?.webViewManager?.handlePDFFindBarKeyEvent(event) == true
+            }) {
+                return nil
+            }
+
+            guard self.isCommandFindEvent(event) else {
+                return event
+            }
+
+            let handled = MainActor.assumeIsolated { [weak self] in
+                self?.webViewManager?.handlePDFFindShortcutIfFocused() == true
+            }
+            return handled ? nil : event
+        }
+    }
+
+    private func isCommandFindEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return flags.contains(.command)
+            && !flags.contains(.option)
+            && !flags.contains(.control)
+            && event.charactersIgnoringModifiers?.lowercased() == "f"
     }
 
     private func setupMainWindow(container: ServiceContainer) {
