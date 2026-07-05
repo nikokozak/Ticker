@@ -32,6 +32,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Opening the PDF source pane now expands the window to a balanced split and restores the prior window frame on close.
 - Citation clicks that fall back to page navigation now show a transient page-scoped affordance instead of landing silently.
 - PDF citation flashes now verify quoted evidence against the stored source chunk before highlighting page text.
 - PDF highlight navigation now centers the target marker or highlight in the pane.

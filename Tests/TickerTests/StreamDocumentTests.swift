@@ -899,6 +899,59 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
+    func test_pdfPaneOpeningLayoutExpandsToVisibleFrameWidthAndSplitsEvenly() throws {
+        let layout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: 220, y: 120, width: 900, height: 700),
+            visibleFrame: CGRect(x: 0, y: 25, width: 1440, height: 875),
+            isNativeFullscreen: false
+        )
+
+        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: 120, width: 1440, height: 700))
+        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertTrue(layout.shouldResizeWindow)
+    }
+
+    func test_pdfPaneOpeningLayoutClampsHeightAndVerticalPositionInsideVisibleFrame() throws {
+        let layout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: 220, y: -200, width: 900, height: 900),
+            visibleFrame: CGRect(x: 0, y: 25, width: 1440, height: 800),
+            isNativeFullscreen: false
+        )
+
+        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: 25, width: 1440, height: 800))
+        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertTrue(layout.shouldResizeWindow)
+    }
+
+    func test_pdfPaneOpeningLayoutSkipsResizeForFullWidthOrFullscreenWindow() throws {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1440, height: 875)
+        let fullWidthLayout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: -10, y: 120, width: 1500, height: 700),
+            visibleFrame: visibleFrame,
+            isNativeFullscreen: false
+        )
+        let fullscreenLayout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: 220, y: 120, width: 900, height: 700),
+            visibleFrame: visibleFrame,
+            isNativeFullscreen: true
+        )
+
+        XCTAssertEqual(fullWidthLayout.targetWindowFrame, CGRect(x: -10, y: 120, width: 1500, height: 700))
+        XCTAssertEqual(fullWidthLayout.paneWidth, 750)
+        XCTAssertFalse(fullWidthLayout.shouldResizeWindow)
+        XCTAssertEqual(fullscreenLayout.targetWindowFrame, CGRect(x: 220, y: 120, width: 900, height: 700))
+        XCTAssertEqual(fullscreenLayout.paneWidth, 450)
+        XCTAssertFalse(fullscreenLayout.shouldResizeWindow)
+    }
+
+    func test_pdfPaneWindowRestoreUsesSavedFrameExceptInFullscreen() throws {
+        let saved = CGRect(x: 120, y: 80, width: 900, height: 700)
+
+        XCTAssertEqual(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: false), saved)
+        XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: true))
+        XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: nil, isNativeFullscreen: false))
+    }
+
     func test_pdfCitationNavigatorNormalizesQuoteText() throws {
         XCTAssertEqual(
             PDFCitationNavigator.normalizeQuote("Reader\u{2019}s \u{201C}quoted\u{201D}\ntext\u{00AD} across   lines"),

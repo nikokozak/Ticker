@@ -83,6 +83,49 @@ enum PDFCitationFallbackAffordance {
     }
 }
 
+struct PDFPaneOpeningLayout: Equatable {
+    let targetWindowFrame: CGRect
+    let paneWidth: CGFloat
+    let shouldResizeWindow: Bool
+
+    static func calculate(
+        currentFrame: CGRect,
+        visibleFrame: CGRect,
+        isNativeFullscreen: Bool
+    ) -> PDFPaneOpeningLayout {
+        if isNativeFullscreen || currentFrame.width >= visibleFrame.width {
+            return PDFPaneOpeningLayout(
+                targetWindowFrame: currentFrame,
+                paneWidth: floor(currentFrame.width * 0.5),
+                shouldResizeWindow: false
+            )
+        }
+
+        let height = min(currentFrame.height, visibleFrame.height)
+        let minY = visibleFrame.minY
+        let maxY = visibleFrame.maxY - height
+        let y = min(max(currentFrame.origin.y, minY), maxY)
+        let targetFrame = CGRect(
+            x: visibleFrame.minX,
+            y: y,
+            width: visibleFrame.width,
+            height: height
+        )
+
+        return PDFPaneOpeningLayout(
+            targetWindowFrame: targetFrame,
+            paneWidth: floor(targetFrame.width * 0.5),
+            shouldResizeWindow: true
+        )
+    }
+}
+
+enum PDFPaneWindowRestore {
+    static func targetFrame(savedFrame: CGRect?, isNativeFullscreen: Bool) -> CGRect? {
+        isNativeFullscreen ? nil : savedFrame
+    }
+}
+
 enum PDFCitationNavigator {
     static func normalizeQuote(_ quote: String) -> String {
         NormalizedTextMap.build(from: quote).normalized
@@ -279,6 +322,7 @@ final class PDFReaderPaneController: NSViewController {
     private let minimumPDFPaneWidth: CGFloat = 320
     private let minimumEditorPaneWidth: CGFloat = 440
     private var pdfPaneResizeStartWidth: CGFloat = 0
+    private var prePDFPaneWindowFrame: CGRect?
     private var activePDFContext: (streamId: UUID, sourceId: UUID, sourceName: String, fileURL: URL)?
     private var isAnchorPickMode = false
     private var anchorPickMouseMonitor: Any?
@@ -439,21 +483,43 @@ final class PDFReaderPaneController: NSViewController {
                 return true
             }
 
-            let targetWidth = min(preferredPDFPaneWidth, max(minimumPDFPaneWidth, maxAllowedPDFPaneWidth()))
-            let grownWidth: CGFloat
+            let paneWidth: CGFloat
+            var targetWindowFrame: CGRect?
+            var shouldResizeWindow = false
+
             if let window = view.window {
-                grownWidth = growMainWindowForPDFPane(window, by: targetWidth)
+                let isFullscreen = window.styleMask.contains(.fullScreen)
+                if prePDFPaneWindowFrame == nil, !isFullscreen {
+                    prePDFPaneWindowFrame = window.frame
+                }
+                let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? window.frame
+                let layout = PDFPaneOpeningLayout.calculate(
+                    currentFrame: window.frame,
+                    visibleFrame: screenFrame,
+                    isNativeFullscreen: isFullscreen
+                )
+                paneWidth = layout.paneWidth
+                targetWindowFrame = layout.targetWindowFrame
+                shouldResizeWindow = layout.shouldResizeWindow
             } else {
-                grownWidth = targetWidth
+                paneWidth = preferredPDFPaneWidth
             }
-            guard grownWidth >= minimumPDFPaneWidth else {
+
+            guard paneWidth >= minimumPDFPaneWidth else {
+                prePDFPaneWindowFrame = nil
                 return false
             }
 
-            widthConstraint.constant = grownWidth
-            pdfPaneView.isHidden = false
+            widthConstraint.constant = paneWidth
             view.superview?.layoutSubtreeIfNeeded()
+            pdfPaneView.isHidden = false
             isPDFPaneVisible = true
+
+            if shouldResizeWindow,
+               let window = view.window,
+               let targetWindowFrame {
+                window.setFrame(targetWindowFrame, display: true, animate: true)
+            }
             return true
         }
 
@@ -464,13 +530,18 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         exitAnchorPickMode(notifyCancelled: true)
-        let paneWidth = max(0, widthConstraint.constant)
+        let restoreFrame = PDFPaneWindowRestore.targetFrame(
+            savedFrame: prePDFPaneWindowFrame,
+            isNativeFullscreen: view.window?.styleMask.contains(.fullScreen) == true
+        )
+        prePDFPaneWindowFrame = nil
         widthConstraint.constant = 0
         view.superview?.layoutSubtreeIfNeeded()
         pdfPaneView.isHidden = true
         isPDFPaneVisible = false
-        if let window = view.window {
-            shrinkMainWindowAfterClosingPDFPane(window, by: paneWidth)
+        if let window = view.window,
+           let restoreFrame {
+            window.setFrame(restoreFrame, display: true, animate: true)
         }
         releaseActivePDFContext()
         return true
@@ -672,36 +743,6 @@ final class PDFReaderPaneController: NSViewController {
         let hostWidth = view.superview?.bounds.width ?? view.bounds.width
         let localCap = max(0, hostWidth - minimumEditorPaneWidth)
         return max(minimumPDFPaneWidth, min(screenCap, localCap))
-    }
-
-    private func growMainWindowForPDFPane(_ window: NSWindow, by requestedWidth: CGFloat) -> CGFloat {
-        let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? window.frame
-        let rightEdge = min(window.frame.maxX, screenFrame.maxX - 8)
-        let maxWidthAtPosition = rightEdge - (screenFrame.minX + 8)
-        let maxGrow = max(0, maxWidthAtPosition - window.frame.width)
-        let actualGrow = min(requestedWidth, maxGrow)
-
-        guard actualGrow > 0 else { return 0 }
-
-        var frame = window.frame
-        frame.origin.x -= actualGrow
-        frame.size.width += actualGrow
-        window.setFrame(frame, display: true, animate: true)
-        return actualGrow
-    }
-
-    private func shrinkMainWindowAfterClosingPDFPane(_ window: NSWindow, by paneWidth: CGFloat) {
-        guard paneWidth > 0 else { return }
-        let minimumWidth = max(window.minSize.width, 300)
-        let maxShrink = max(0, window.frame.width - minimumWidth)
-        let actualShrink = min(paneWidth, maxShrink)
-
-        guard actualShrink > 0 else { return }
-
-        var frame = window.frame
-        frame.origin.x += actualShrink
-        frame.size.width -= actualShrink
-        window.setFrame(frame, display: true, animate: true)
     }
 
     private func clampPDFPaneWidth(_ proposed: CGFloat) -> CGFloat {
