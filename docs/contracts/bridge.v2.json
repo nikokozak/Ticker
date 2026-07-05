@@ -155,7 +155,7 @@
       },
       "openPdfDestination": {
         "requiredPayloadKeys": ["streamId"],
-        "optionalPayloadKeys": ["sourceId", "highlightId", "page", "chunkId", "url"]
+        "optionalPayloadKeys": ["sourceId", "highlightId", "page", "chunkId", "quote", "url"]
       },
       "refreshProxyAuth": {
         "requiredPayloadKeys": [],

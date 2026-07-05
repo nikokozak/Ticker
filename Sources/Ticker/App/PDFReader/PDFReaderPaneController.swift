@@ -78,49 +78,49 @@ struct PDFCitationMatch {
 }
 
 enum PDFCitationNavigator {
-    private static let primaryFallbackLength = 80
-    private static let retryFallbackLength = 40
-    private static let minimumSentenceLength = 20
-    private static let sentenceTerminators: Set<Character> = [".", "!", "?"]
+    static func normalizeQuote(_ quote: String) -> String {
+        var normalized = quote
+            .replacingOccurrences(of: "\u{00AD}", with: "")
+            .replacingOccurrences(of: "\u{201C}", with: "\"")
+            .replacingOccurrences(of: "\u{201D}", with: "\"")
+            .replacingOccurrences(of: "\u{2018}", with: "'")
+            .replacingOccurrences(of: "\u{2019}", with: "'")
 
-    static func needleCandidates(from text: String) -> [String] {
-        let normalized = normalizeWhitespace(text)
-        guard !normalized.isEmpty else { return [] }
+        normalized = normalized
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
 
-        let primary = firstSentence(in: normalized)
-            ?? prefix(normalized, maxLength: primaryFallbackLength)
-        let retry = prefix(normalized, maxLength: retryFallbackLength)
-        let rawCandidates = retry.count < primary.count ? [primary, retry] : [primary]
-
-        var seen = Set<String>()
-        return rawCandidates.filter { candidate in
-            guard !candidate.isEmpty, !seen.contains(candidate) else { return false }
-            seen.insert(candidate)
-            return true
-        }
+        return normalized
     }
 
-    static func match(in document: PDFDocument, chunk: SourceChunk) -> PDFCitationMatch? {
+    static func match(in document: PDFDocument, chunk: SourceChunk, quote: String?) -> PDFCitationMatch? {
         guard let pageRange = pageRange(for: chunk, pageCount: document.pageCount) else {
             return nil
         }
 
-        for needle in needleCandidates(from: chunk.text) {
-            let selections = document.findString(needle, withOptions: .caseInsensitive)
-            for selection in selections {
-                guard let page = firstPage(in: selection, document: document, pageRange: pageRange) else {
-                    continue
-                }
-
-                let bounds = selection.bounds(for: page)
-                guard bounds.isFiniteAndNonEmpty else {
-                    continue
-                }
-
-                return PDFCitationMatch(selection: selection, page: page, bounds: bounds)
-            }
+        guard let quote, !quote.isEmpty else {
+            return nil
         }
 
+        let needle = normalizeQuote(quote)
+        guard !needle.isEmpty else {
+            return nil
+        }
+
+        let selections = document.findString(needle, withOptions: .caseInsensitive)
+        for selection in selections {
+            guard let page = firstPage(in: selection, document: document, pageRange: pageRange) else {
+                continue
+            }
+
+            let bounds = selection.bounds(for: page)
+            guard bounds.isFiniteAndNonEmpty else {
+                continue
+            }
+
+            return PDFCitationMatch(selection: selection, page: page, bounds: bounds)
+        }
         return nil
     }
 
@@ -134,34 +134,6 @@ enum PDFCitationNavigator {
         let end = min(pageCount, max(chunk.pageStart, chunk.pageEnd))
         guard start <= end else { return nil }
         return start...end
-    }
-
-    private static func normalizeWhitespace(_ text: String) -> String {
-        text
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-    }
-
-    private static func firstSentence(in text: String) -> String? {
-        var sentence = ""
-        for character in text {
-            sentence.append(character)
-            guard sentenceTerminators.contains(character) else {
-                continue
-            }
-
-            let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.count >= minimumSentenceLength ? trimmed : nil
-        }
-        return nil
-    }
-
-    private static func prefix(_ text: String, maxLength: Int) -> String {
-        guard text.count > maxLength else {
-            return text
-        }
-        return String(text.prefix(maxLength)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func firstPage(
@@ -338,9 +310,9 @@ final class PDFReaderPaneController: NSViewController {
         navigate(toPageNumber: pageNumber)
     }
 
-    func navigateToDestination(highlightId: String?, page pageNumber: Int?, chunk: SourceChunk?) {
+    func navigateToDestination(highlightId: String?, page pageNumber: Int?, chunk: SourceChunk?, quote: String?) {
         if let chunk {
-            navigateToCitationChunk(chunk, fallbackPage: pageNumber)
+            navigateToCitationChunk(chunk, fallbackPage: pageNumber, quote: quote)
             return
         }
 
@@ -845,9 +817,9 @@ final class PDFReaderPaneController: NSViewController {
             .map { ($0.annotation, $0.page) }
     }
 
-    private func navigateToCitationChunk(_ chunk: SourceChunk, fallbackPage pageNumber: Int?) {
+    private func navigateToCitationChunk(_ chunk: SourceChunk, fallbackPage pageNumber: Int?, quote: String?) {
         guard let document = pdfPanePDFView.document,
-              let match = PDFCitationNavigator.match(in: document, chunk: chunk) else {
+              let match = PDFCitationNavigator.match(in: document, chunk: chunk, quote: quote) else {
             navigate(toPageNumber: PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: pageNumber))
             return
         }

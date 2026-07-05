@@ -102,6 +102,30 @@ describe('swapCitationMarkers', () => {
     );
     expect(result.swappedCitations).toHaveLength(1);
   });
+
+  it('adds a quote query parameter for quoted markers', () => {
+    expect(swapCitationMarkers('Evidence lands here.【1|"exact supporting words"】', citations)).toBe(
+      'Evidence lands here. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=exact%20supporting%20words)'
+    );
+  });
+
+  it('accepts typographic quote delimiters', () => {
+    expect(swapCitationMarkers('Curly quote marker.【1|“curly quoted span”】', citations)).toBe(
+      'Curly quote marker. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=curly%20quoted%20span)'
+    );
+  });
+
+  it('treats a malformed quoted marker as a plain marker', () => {
+    expect(swapCitationMarkers('Malformed quote.【1|"missing close】', citations)).toBe(
+      'Malformed quote. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1)'
+    );
+  });
+
+  it('URL-encodes quote query parameters', () => {
+    expect(swapCitationMarkers('Encoded quote.【1|"A & B / C"】', citations)).toBe(
+      'Encoded quote. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=A%20%26%20B%20%2F%20C)'
+    );
+  });
 });
 
 describe('buildProvenanceLine', () => {

@@ -9,6 +9,7 @@ export interface TickerPDFDestination {
   highlightId?: string;
   page?: number;
   chunkId?: string;
+  quote?: string;
   rawURL: string;
 }
 
@@ -22,6 +23,7 @@ export function parseTickerPDFURL(rawURL: string): TickerPDFDestination | null {
 
     const highlight = url.searchParams.get('highlight')?.trim() || undefined;
     const chunk = url.searchParams.get('chunk')?.trim() || undefined;
+    const quote = url.searchParams.get('q') || undefined;
     const pageValue = url.searchParams.get('page');
     const pageNumber = pageValue ? Number(pageValue) : NaN;
     const page = Number.isInteger(pageNumber) && pageNumber > 0 ? pageNumber : undefined;
@@ -31,6 +33,7 @@ export function parseTickerPDFURL(rawURL: string): TickerPDFDestination | null {
         highlightId: host,
         page: undefined,
         chunkId: undefined,
+        quote: undefined,
         rawURL,
       };
     }
@@ -40,6 +43,7 @@ export function parseTickerPDFURL(rawURL: string): TickerPDFDestination | null {
       highlightId: highlight,
       page,
       chunkId: chunk,
+      quote,
       rawURL,
     };
   } catch {
@@ -142,6 +146,7 @@ export function tickerPDFLinkExtension(streamId: string): Extension {
             highlightId: destination.highlightId,
             page: destination.page,
             chunkId: destination.chunkId,
+            quote: destination.quote,
           },
         });
         return true;

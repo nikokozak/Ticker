@@ -409,7 +409,8 @@ final class WebViewManager: NSObject {
         sourceService: SourceService,
         highlightId: String?,
         page: Int?,
-        chunkId: UUID?
+        chunkId: UUID?,
+        quote: String?
     ) async {
         guard source.fileType == .pdf else {
             sendSourceError("Source is not a PDF.")
@@ -425,13 +426,13 @@ final class WebViewManager: NSObject {
         if isAlreadyPresenting {
             await MainActor.run {
                 activePDFPaneStreamId = source.streamId
-                pdfPaneController.navigateToDestination(highlightId: highlightId, page: page, chunk: chunk)
+                pdfPaneController.navigateToDestination(highlightId: highlightId, page: page, chunk: chunk, quote: quote)
             }
             return
         }
 
         openPDFSource(source, sourceService: sourceService) { controller in
-            controller.navigateToDestination(highlightId: highlightId, page: page, chunk: chunk)
+            controller.navigateToDestination(highlightId: highlightId, page: page, chunk: chunk, quote: quote)
         }
     }
 

@@ -5,6 +5,7 @@ struct TickerPDFDestination: Equatable {
     let highlightId: String?
     let page: Int?
     let chunkId: UUID?
+    let quote: String?
 }
 
 enum TickerPDFURLParser {
@@ -24,8 +25,9 @@ enum TickerPDFURLParser {
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty }
         let page = queryValue("page", in: components).flatMap(Self.parsePage)
         let chunkId = queryValue("chunk", in: components).flatMap(UUID.init(uuidString:))
+        let quote = queryValue("q", in: components).flatMap(\.nilIfEmpty)
 
-        if highlightId != nil || page != nil || chunkId != nil {
+        if highlightId != nil || page != nil || chunkId != nil || quote != nil {
             guard let sourceId = UUID(uuidString: host) else {
                 return nil
             }
@@ -33,7 +35,8 @@ enum TickerPDFURLParser {
                 sourceId: sourceId,
                 highlightId: highlightId,
                 page: page,
-                chunkId: chunkId
+                chunkId: chunkId,
+                quote: quote
             )
         }
 
@@ -45,7 +48,8 @@ enum TickerPDFURLParser {
             sourceId: nil,
             highlightId: legacyHighlightId.uuidString,
             page: nil,
-            chunkId: nil
+            chunkId: nil,
+            quote: nil
         )
     }
 

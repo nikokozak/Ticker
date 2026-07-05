@@ -1,6 +1,8 @@
 import type { DocumentAICitation } from '../types';
 
-const CITATION_MARKER_PATTERN = /【(\d+)】/g;
+const CITATION_MARKER_PATTERN = /【(\d+)(?:\|([^】]*))?】/g;
+const QUOTE_DELIMITERS = new Set(['"', '“', '”']);
+const MAX_QUOTE_QUERY_LENGTH = 200;
 
 export interface SwappedCitation {
   n: number;
@@ -30,6 +32,22 @@ function escapeMarkdownLabel(label: string): string {
     .replace(/\]/g, '\\]');
 }
 
+function quoteFromMarker(rawQuote: string | undefined): string | null {
+  if (!rawQuote) return null;
+
+  const trimmed = rawQuote.trim();
+  if (trimmed.length < 2) return null;
+
+  const opening = trimmed[0];
+  const closing = trimmed[trimmed.length - 1];
+  if (!QUOTE_DELIMITERS.has(opening) || !QUOTE_DELIMITERS.has(closing)) {
+    return null;
+  }
+
+  const quote = trimmed.slice(1, -1);
+  return quote ? quote : null;
+}
+
 function appendLinkWithSpacing(output: string, link: string): string {
   if (output.length === 0) return link;
 
@@ -48,11 +66,13 @@ function appendLinkWithSpacing(output: string, link: string): string {
 
 export function buildCitationLink(
   citation: DocumentAICitation,
-  options: { pageOnlyLabel?: boolean } = {}
+  options: { pageOnlyLabel?: boolean; quote?: string | null } = {}
 ): string {
   const page = Number.isFinite(citation.page) ? Math.max(1, Math.round(citation.page)) : 1;
   const label = escapeMarkdownLabel(markdownLinkLabel(citation, options.pageOnlyLabel === true));
-  const url = `ticker-pdf://${citation.sourceId}?page=${page}&chunk=${encodeURIComponent(citation.chunkId)}`;
+  const quote = options.quote?.slice(0, MAX_QUOTE_QUERY_LENGTH);
+  const quoteQuery = quote ? `&q=${encodeURIComponent(quote)}` : '';
+  const url = `ticker-pdf://${citation.sourceId}?page=${page}&chunk=${encodeURIComponent(citation.chunkId)}${quoteQuery}`;
   return `[${label}](${url})`;
 }
 
@@ -80,6 +100,7 @@ export function swapCitationMarkersWithMetadata(
 
   while ((match = markerPattern.exec(text)) !== null) {
     const markerNumber = match[1] ?? '';
+    const quote = quoteFromMarker(match[2]);
     const markerStart = match.index;
     const markerEnd = markerStart + match[0].length;
     const between = text.slice(lastIndex, markerStart);
@@ -98,7 +119,7 @@ export function swapCitationMarkersWithMetadata(
       output += between;
       output = appendLinkWithSpacing(
         output,
-        buildCitationLink(citation, { pageOnlyLabel })
+        buildCitationLink(citation, { pageOnlyLabel, quote })
       );
 
       swappedCitations.push({

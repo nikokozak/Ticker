@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Document AI citation links can now carry exact evidence quotes so PDF flashes target the quoted support instead of a chunk lead sentence.
 - Document AI citations now use calmer source titles, page-only labels for single-source answers, and collapse adjacent duplicate markers.
 - Document AI answers now add quiet provenance notes, and stale PDF links explain why they cannot open.
 - PDF citation links now open to the cited chunk and flash the matched passage when PDF text matching succeeds.

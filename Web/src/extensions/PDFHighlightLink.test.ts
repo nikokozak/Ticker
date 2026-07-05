@@ -8,6 +8,7 @@ describe('parseTickerPDFURL', () => {
       highlightId: 'abc 123',
       page: 7,
       chunkId: undefined,
+      quote: undefined,
       rawURL: 'ticker-pdf://source-1?highlight=abc%20123&page=7',
     });
   });
@@ -18,17 +19,19 @@ describe('parseTickerPDFURL', () => {
       highlightId: undefined,
       page: undefined,
       chunkId: undefined,
+      quote: undefined,
       rawURL: 'ticker-pdf://source-2',
     });
   });
 
   it('extracts citation chunk destinations', () => {
-    expect(parseTickerPDFURL('ticker-pdf://source-3?page=12&chunk=chunk-123')).toEqual({
+    expect(parseTickerPDFURL('ticker-pdf://source-3?page=12&chunk=chunk-123&q=quoted%20span')).toEqual({
       sourceId: 'source-3',
       highlightId: undefined,
       page: 12,
       chunkId: 'chunk-123',
-      rawURL: 'ticker-pdf://source-3?page=12&chunk=chunk-123',
+      quote: 'quoted span',
+      rawURL: 'ticker-pdf://source-3?page=12&chunk=chunk-123&q=quoted%20span',
     });
   });
 
@@ -38,6 +41,7 @@ describe('parseTickerPDFURL', () => {
       highlightId: id,
       page: undefined,
       chunkId: undefined,
+      quote: undefined,
       rawURL: `ticker-pdf://${id}`,
     });
   });

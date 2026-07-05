@@ -837,6 +837,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(destination.highlightId, highlightId.uuidString)
         XCTAssertEqual(destination.page, 4)
         XCTAssertNil(destination.chunkId)
+        XCTAssertNil(destination.quote)
     }
 
     func test_tickerPDFURLParserAcceptsLegacyBareHighlightDestination() throws {
@@ -850,6 +851,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(destination.highlightId, highlightId.uuidString)
         XCTAssertNil(destination.page)
         XCTAssertNil(destination.chunkId)
+        XCTAssertNil(destination.quote)
     }
 
     func test_tickerPDFURLParserAcceptsCitationChunkDestination() throws {
@@ -864,6 +866,22 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertNil(destination.highlightId)
         XCTAssertEqual(destination.page, 12)
         XCTAssertEqual(destination.chunkId, chunkId)
+        XCTAssertNil(destination.quote)
+    }
+
+    func test_tickerPDFURLParserAcceptsCitationQuoteDestination() throws {
+        let sourceId = try XCTUnwrap(UUID(uuidString: "44444444-4444-4444-4444-444444444444"))
+        let chunkId = try XCTUnwrap(UUID(uuidString: "55555555-5555-5555-5555-555555555555"))
+
+        let destination = try XCTUnwrap(
+            TickerPDFURLParser.parse("ticker-pdf://\(sourceId.uuidString)?page=12&chunk=\(chunkId.uuidString)&q=quoted%20evidence%20%26%20support")
+        )
+
+        XCTAssertEqual(destination.sourceId, sourceId)
+        XCTAssertNil(destination.highlightId)
+        XCTAssertEqual(destination.page, 12)
+        XCTAssertEqual(destination.chunkId, chunkId)
+        XCTAssertEqual(destination.quote, "quoted evidence & support")
     }
 
     func test_openPDFDestinationFailureMessagesArePlainLanguage() throws {
@@ -881,43 +899,35 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
-    func test_pdfCitationNavigatorDerivesLeadingSentenceAndRetryNeedles() throws {
-        let candidates = PDFCitationNavigator.needleCandidates(
-            from: "  This sentence is definitely long enough to cite in the reader.  More context follows for retry matching. "
+    func test_pdfCitationNavigatorNormalizesQuoteText() throws {
+        XCTAssertEqual(
+            PDFCitationNavigator.normalizeQuote("Reader\u{2019}s \u{201C}quoted\u{201D}\ntext\u{00AD} across   lines"),
+            "Reader's \"quoted\" text across lines"
         )
-
-        XCTAssertEqual(candidates.first, "This sentence is definitely long enough to cite in the reader.")
-        XCTAssertEqual(candidates.last, "This sentence is definitely long enough")
     }
 
-    func test_pdfCitationNavigatorUsesShortTextFallbackWhenLeadingSentenceIsTooShort() throws {
-        let candidates = PDFCitationNavigator.needleCandidates(from: "Tiny. Short fallback text")
-
-        XCTAssertEqual(candidates, ["Tiny. Short fallback text"])
-    }
-
-    func test_pdfCitationNavigatorFindsMatchWithinChunkPageRange() throws {
-        let sentence = "Citations should flash this exact passage in the reader."
+    func test_pdfCitationNavigatorFindsQuotedMatchWithinChunkPageRange() throws {
+        let quote = "quoted evidence should flash in the reader"
         let document = try makePDFDocument(pages: [
-            "First page also says \(sentence)",
-            "Second page says \(sentence)",
+            "First page also says \(quote)",
+            "Second page says \(quote)",
             "Third page has unrelated text."
         ])
         let chunk = SourceChunk(
             sourceId: UUID(),
             seq: 0,
-            text: "\(sentence) Additional context belongs to this chunk.",
+            text: "Chunk text is no longer used as the flash needle.",
             pageStart: 2,
             pageEnd: 2
         )
 
-        let match = try XCTUnwrap(PDFCitationNavigator.match(in: document, chunk: chunk))
+        let match = try XCTUnwrap(PDFCitationNavigator.match(in: document, chunk: chunk, quote: quote))
 
         XCTAssertEqual(document.index(for: match.page), 1)
         XCTAssertFalse(match.bounds.isEmpty)
     }
 
-    func test_pdfCitationNavigatorFallsBackToChunkPageWhenNeedleIsAbsent() throws {
+    func test_pdfCitationNavigatorFallsBackToPageWhenQuoteIsAbsentOrMissed() throws {
         let document = try makePDFDocument(pages: [
             "First page text.",
             "Second page text."
@@ -930,7 +940,8 @@ final class StreamDocumentTests: XCTestCase {
             pageEnd: 2
         )
 
-        XCTAssertNil(PDFCitationNavigator.match(in: document, chunk: chunk))
+        XCTAssertNil(PDFCitationNavigator.match(in: document, chunk: chunk, quote: nil))
+        XCTAssertNil(PDFCitationNavigator.match(in: document, chunk: chunk, quote: "absent quoted evidence"))
         XCTAssertEqual(PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: nil), 2)
         XCTAssertEqual(PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: 1), 1)
     }

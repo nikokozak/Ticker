@@ -11,7 +11,8 @@ protocol SourceMessageHandlerDelegate: AnyObject {
         sourceService: SourceService,
         highlightId: String?,
         page: Int?,
-        chunkId: UUID?
+        chunkId: UUID?,
+        quote: String?
     ) async
     func beginPDFAnchorPick(streamId: UUID) async
 }
@@ -228,6 +229,9 @@ final class SourceMessageHandler: BridgeMessageHandler {
             let page = payload["page"]?.intValue ?? parsedDestination?.page
             let chunkId = (payload["chunkId"]?.value as? String).flatMap(UUID.init(uuidString:))
                 ?? parsedDestination?.chunkId
+            let quote = (payload["quote"]?.value as? String)
+                .flatMap { $0.isEmpty ? nil : $0 }
+                ?? parsedDestination?.quote
 
             do {
                 let source: SourceReference
@@ -279,7 +283,8 @@ final class SourceMessageHandler: BridgeMessageHandler {
                     sourceService: sourceService,
                     highlightId: highlightId,
                     page: pageToOpen,
-                    chunkId: chunkId
+                    chunkId: chunkId,
+                    quote: quote
                 )
             } catch {
                 DebugLog.log("[WebViewManager] Failed to open PDF destination (\(DebugLog.errorSummary(error)))")
