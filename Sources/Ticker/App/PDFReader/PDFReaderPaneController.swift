@@ -79,19 +79,22 @@ struct PDFCitationMatch {
 
 enum PDFCitationNavigator {
     static func normalizeQuote(_ quote: String) -> String {
-        var normalized = quote
-            .replacingOccurrences(of: "\u{00AD}", with: "")
-            .replacingOccurrences(of: "\u{201C}", with: "\"")
-            .replacingOccurrences(of: "\u{201D}", with: "\"")
-            .replacingOccurrences(of: "\u{2018}", with: "'")
-            .replacingOccurrences(of: "\u{2019}", with: "'")
+        NormalizedTextMap.build(from: quote).normalized
+    }
 
-        normalized = normalized
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
+    static func verifiedOriginalSpan(in chunkText: String, quote: String?) -> String? {
+        guard let quote else { return nil }
 
-        return normalized
+        let normalizedQuote = normalizeQuote(quote)
+        guard !normalizedQuote.isEmpty else { return nil }
+
+        let chunkMap = NormalizedTextMap.build(from: chunkText)
+        guard let normalizedRange = chunkMap.normalized.range(of: normalizedQuote),
+              let originalRange = chunkMap.originalRange(for: normalizedRange) else {
+            return nil
+        }
+
+        return String(chunkText[originalRange])
     }
 
     static func match(in document: PDFDocument, chunk: SourceChunk, quote: String?) -> PDFCitationMatch? {
@@ -99,28 +102,19 @@ enum PDFCitationNavigator {
             return nil
         }
 
-        guard let quote, !quote.isEmpty else {
+        guard let verifiedSpan = verifiedOriginalSpan(in: chunk.text, quote: quote) else {
             return nil
         }
 
-        let needle = normalizeQuote(quote)
-        guard !needle.isEmpty else {
-            return nil
-        }
-
-        let selections = document.findString(needle, withOptions: .caseInsensitive)
-        for selection in selections {
-            guard let page = firstPage(in: selection, document: document, pageRange: pageRange) else {
-                continue
-            }
-
+        for pageNumber in pageRange {
+            guard let page = document.page(at: pageNumber - 1),
+                  let selection = selection(on: page, matching: verifiedSpan) else { continue }
             let bounds = selection.bounds(for: page)
-            guard bounds.isFiniteAndNonEmpty else {
-                continue
-            }
+            guard bounds.isFiniteAndNonEmpty else { continue }
 
             return PDFCitationMatch(selection: selection, page: page, bounds: bounds)
         }
+
         return nil
     }
 
@@ -136,20 +130,104 @@ enum PDFCitationNavigator {
         return start...end
     }
 
-    private static func firstPage(
-        in selection: PDFSelection,
-        document: PDFDocument,
-        pageRange: ClosedRange<Int>
-    ) -> PDFPage? {
-        selection.pages
-            .filter { page in
-                let pageNumber = document.index(for: page) + 1
-                return pageRange.contains(pageNumber)
+    private static func selection(on page: PDFPage, matching verifiedSpan: String) -> PDFSelection? {
+        guard let pageText = page.string else { return nil }
+
+        let normalizedSpan = normalizeQuote(verifiedSpan)
+        guard !normalizedSpan.isEmpty else { return nil }
+
+        let pageMap = NormalizedTextMap.build(from: pageText)
+        guard let normalizedRange = pageMap.normalized.range(of: normalizedSpan),
+              let originalRange = pageMap.originalRange(for: normalizedRange) else {
+            return nil
+        }
+
+        let nsRange = NSRange(originalRange, in: pageText)
+        guard nsRange.location != NSNotFound, nsRange.length > 0 else { return nil }
+        return page.selection(for: nsRange)
+    }
+
+    private struct NormalizedTextMap {
+        struct OriginalSpan {
+            let start: String.Index
+            let end: String.Index
+        }
+
+        let normalized: String
+        let originalSpans: [OriginalSpan]
+
+        static func build(from text: String) -> NormalizedTextMap {
+            var normalized = ""
+            var originalSpans: [OriginalSpan] = []
+            var pendingWhitespaceStart: String.Index?
+            var pendingWhitespaceEnd: String.Index?
+            var index = text.startIndex
+
+            while index < text.endIndex {
+                let nextIndex = text.index(after: index)
+                let character = text[index]
+
+                if normalizedReplacement(for: character).isEmpty {
+                    index = nextIndex
+                    continue
+                }
+
+                if isWhitespace(character) {
+                    if !normalized.isEmpty {
+                        pendingWhitespaceStart = pendingWhitespaceStart ?? index
+                        pendingWhitespaceEnd = nextIndex
+                    }
+                    index = nextIndex
+                    continue
+                }
+
+                if let whitespaceStart = pendingWhitespaceStart,
+                   let whitespaceEnd = pendingWhitespaceEnd {
+                    normalized.append(" ")
+                    originalSpans.append(OriginalSpan(start: whitespaceStart, end: whitespaceEnd))
+                    pendingWhitespaceStart = nil
+                    pendingWhitespaceEnd = nil
+                }
+
+                for normalizedCharacter in normalizedReplacement(for: character) {
+                    normalized.append(normalizedCharacter)
+                    originalSpans.append(OriginalSpan(start: index, end: nextIndex))
+                }
+                index = nextIndex
             }
-            .sorted { lhs, rhs in
-                document.index(for: lhs) < document.index(for: rhs)
+
+            return NormalizedTextMap(normalized: normalized, originalSpans: originalSpans)
+        }
+
+        func originalRange(for normalizedRange: Range<String.Index>) -> Range<String.Index>? {
+            let lowerOffset = normalized.distance(from: normalized.startIndex, to: normalizedRange.lowerBound)
+            let upperOffset = normalized.distance(from: normalized.startIndex, to: normalizedRange.upperBound)
+            guard lowerOffset >= 0,
+                  upperOffset > lowerOffset,
+                  lowerOffset < originalSpans.count,
+                  upperOffset <= originalSpans.count else {
+                return nil
             }
-            .first
+
+            return originalSpans[lowerOffset].start..<originalSpans[upperOffset - 1].end
+        }
+
+        private static func normalizedReplacement(for character: Character) -> String {
+            String(character)
+                .replacingOccurrences(of: "\u{00AD}", with: "")
+                .replacingOccurrences(of: "\u{201C}", with: "\"")
+                .replacingOccurrences(of: "\u{201D}", with: "\"")
+                .replacingOccurrences(of: "\u{2018}", with: "'")
+                .replacingOccurrences(of: "\u{2019}", with: "'")
+                .lowercased()
+        }
+
+        private static func isWhitespace(_ character: Character) -> Bool {
+            !character.unicodeScalars.isEmpty
+                && character.unicodeScalars.allSatisfy {
+                    CharacterSet.whitespacesAndNewlines.contains($0)
+                }
+        }
     }
 }
 

@@ -902,29 +902,78 @@ final class StreamDocumentTests: XCTestCase {
     func test_pdfCitationNavigatorNormalizesQuoteText() throws {
         XCTAssertEqual(
             PDFCitationNavigator.normalizeQuote("Reader\u{2019}s \u{201C}quoted\u{201D}\ntext\u{00AD} across   lines"),
-            "Reader's \"quoted\" text across lines"
+            "reader's \"quoted\" text across lines"
         )
     }
 
-    func test_pdfCitationNavigatorFindsQuotedMatchWithinChunkPageRange() throws {
-        let quote = "quoted evidence should flash in the reader"
+    func test_pdfCitationNavigatorRecoversOriginalChunkSpanFromNormalizedQuote() throws {
+        let chunkText = "Before reader's \u{201C}quoted\u{201D}\ntext\u{00AD} across   lines after."
+        let span = PDFCitationNavigator.verifiedOriginalSpan(
+            in: chunkText,
+            quote: "reader\u{2019}s \"quoted\"   text across lines"
+        )
+
+        XCTAssertEqual(span, "reader's \u{201C}quoted\u{201D}\ntext\u{00AD} across   lines")
+    }
+
+    func test_pdfCitationNavigatorUsesFirstGenericPhraseInChunk() throws {
+        let chunkText = "First CHECK for stack underflow here. Later check for stack underflow there."
+        let span = PDFCitationNavigator.verifiedOriginalSpan(
+            in: chunkText,
+            quote: "check for stack underflow"
+        )
+
+        XCTAssertEqual(span, "CHECK for stack underflow")
+    }
+
+    func test_pdfCitationNavigatorReturnsNilWhenQuoteIsAbsentFromChunk() throws {
+        XCTAssertNil(
+            PDFCitationNavigator.verifiedOriginalSpan(
+                in: "Chunk text contains unrelated evidence.",
+                quote: "absent quoted evidence"
+            )
+        )
+    }
+
+    func test_pdfCitationNavigatorSelectsVerifiedQuoteOnExtractedPage() throws {
         let document = try makePDFDocument(pages: [
-            "First page also says \(quote)",
-            "Second page says \(quote)",
+            "First page has only setup text.",
+            "Second page says stack cells remain available for verified citation flashes.",
             "Third page has unrelated text."
         ])
+        let chunkText = (0..<document.pageCount)
+            .compactMap { document.page(at: $0)?.string }
+            .joined(separator: "\n")
         let chunk = SourceChunk(
             sourceId: UUID(),
             seq: 0,
-            text: "Chunk text is no longer used as the flash needle.",
-            pageStart: 2,
-            pageEnd: 2
+            text: chunkText,
+            pageStart: 1,
+            pageEnd: 3
         )
 
+        let quote = "stack cells remain available for verified citation flashes"
         let match = try XCTUnwrap(PDFCitationNavigator.match(in: document, chunk: chunk, quote: quote))
 
         XCTAssertEqual(document.index(for: match.page), 1)
         XCTAssertFalse(match.bounds.isEmpty)
+        XCTAssertTrue(PDFCitationNavigator.normalizeQuote(match.selection.string ?? "").contains(quote))
+    }
+
+    func test_pdfCitationNavigatorReturnsNilWhenVerifiedSpanIsAbsentFromPageText() throws {
+        let document = try makePDFDocument(pages: [
+            "First page text.",
+            "Second page text."
+        ])
+        let chunk = SourceChunk(
+            sourceId: UUID(),
+            seq: 0,
+            text: "The stored chunk has absent quoted evidence that the page text does not expose.",
+            pageStart: 2,
+            pageEnd: 2
+        )
+
+        XCTAssertNil(PDFCitationNavigator.match(in: document, chunk: chunk, quote: "absent quoted evidence"))
     }
 
     func test_pdfCitationNavigatorFallsBackToPageWhenQuoteIsAbsentOrMissed() throws {
