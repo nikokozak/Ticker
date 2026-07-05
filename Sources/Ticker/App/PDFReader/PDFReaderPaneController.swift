@@ -386,6 +386,12 @@ final class PDFReaderPaneController: NSViewController {
         activePDFContext?.streamId == streamId && isPDFPaneVisible
     }
 
+    func currentSelectedText() -> String? {
+        guard isPDFPaneVisible else { return nil }
+        let selectedText = pdfPanePDFView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return selectedText.isEmpty ? nil : selectedText
+    }
+
     func beginAnchorPickMode() -> Bool {
         guard activePDFContext != nil, isPDFPaneVisible else { return false }
         exitAnchorPickMode(notifyCancelled: false)

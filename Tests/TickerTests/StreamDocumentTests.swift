@@ -35,6 +35,66 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         Saved note
         """)
     }
+
+    @MainActor
+    func test_localSelectionProviderPrefersPDFSelectionOverEditorSelection() async {
+        var editorSelectionWasRequested = false
+        let provider = QuickPanelLocalSelectionProvider(
+            pdfSelection: { " PDF selection " },
+            editorSelection: {
+                editorSelectionWasRequested = true
+                return "Editor selection"
+            }
+        )
+
+        let selectedText = await provider.selectedText()
+
+        XCTAssertEqual(selectedText, "PDF selection")
+        XCTAssertFalse(editorSelectionWasRequested)
+    }
+
+    @MainActor
+    func test_localSelectionProviderFallsBackToEditorSelection() async {
+        let provider = QuickPanelLocalSelectionProvider(
+            pdfSelection: { nil },
+            editorSelection: { " Editor selection " }
+        )
+
+        let selectedText = await provider.selectedText()
+
+        XCTAssertEqual(selectedText, "Editor selection")
+    }
+
+    @MainActor
+    func test_selectionResolverUsesLocalSelectionForTickerAndAXForOtherApps() async {
+        var axSelectionWasRequested = false
+        let tickerSelection = await SelectionReaderService.resolveSelectedText(
+            activeBundleId: "com.example.Ticker",
+            currentBundleId: "com.example.Ticker",
+            localSelection: { "Local selection" },
+            axSelection: {
+                axSelectionWasRequested = true
+                return "AX selection"
+            }
+        )
+
+        XCTAssertEqual(tickerSelection, "Local selection")
+        XCTAssertFalse(axSelectionWasRequested)
+
+        var localSelectionWasRequested = false
+        let externalSelection = await SelectionReaderService.resolveSelectedText(
+            activeBundleId: "net.kovidgoyal.kitty",
+            currentBundleId: "com.example.Ticker",
+            localSelection: {
+                localSelectionWasRequested = true
+                return "Local selection"
+            },
+            axSelection: { "AX selection" }
+        )
+
+        XCTAssertEqual(externalSelection, "AX selection")
+        XCTAssertFalse(localSelectionWasRequested)
+    }
 }
 
 final class StreamDocumentTests: XCTestCase {

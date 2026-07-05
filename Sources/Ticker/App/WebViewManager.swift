@@ -20,6 +20,9 @@ final class WebViewManager: NSObject {
     private let editorPaneView = NSView(frame: .zero)
     private let pdfPaneController = PDFReaderPaneController()
     private var activePDFPaneStreamId: UUID?
+    private var pendingEditorSelectionRequests: [String: (String?) -> Void] = [:]
+    private let editorSelectionTimeoutNanoseconds: UInt64 = 50_000_000
+
     init(container: ServiceContainer) {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
@@ -519,7 +522,58 @@ final class WebViewManager: NSObject {
         #endif
     }
 
+    @MainActor
+    func currentPDFSelectionText() -> String? {
+        pdfPaneController.currentSelectedText()
+    }
+
+    @MainActor
+    func requestEditorSelection() async -> String? {
+        await withCheckedContinuation { continuation in
+            let requestId = UUID().uuidString
+
+            pendingEditorSelectionRequests[requestId] = { text in
+                continuation.resume(returning: Self.nonEmptyTrimmed(text))
+            }
+
+            bridgeService.send(BridgeMessage(
+                type: "getEditorSelection",
+                payload: ["requestId": AnyCodable(requestId)]
+            ))
+
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: self?.editorSelectionTimeoutNanoseconds ?? 50_000_000)
+                guard let resolver = self?.pendingEditorSelectionRequests.removeValue(forKey: requestId) else {
+                    return
+                }
+                resolver(nil)
+            }
+        }
+    }
+
+    @MainActor
+    private func resolveEditorSelectionResponse(_ message: BridgeMessage) {
+        guard let requestId = message.payload?["requestId"]?.value as? String else {
+            return
+        }
+        let text = message.payload?["text"]?.value as? String
+        guard let resolver = pendingEditorSelectionRequests.removeValue(forKey: requestId) else {
+            return
+        }
+        resolver(text)
+    }
+
     private func handleMessage(_ message: BridgeMessage) {
+        switch message.type {
+        case "editorSelection":
+            Task { @MainActor [weak self] in
+                self?.resolveEditorSelectionResponse(message)
+            }
+            return
+        default:
+            break
+        }
+
         Task { [weak self] in
             guard let self else { return }
             guard persistence != nil else {
@@ -528,6 +582,14 @@ final class WebViewManager: NSObject {
             }
             await bridgeRouter.route(message)
         }
+    }
+
+    private static func nonEmptyTrimmed(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     private func settingsWithClassifierState() -> [String: Any] {

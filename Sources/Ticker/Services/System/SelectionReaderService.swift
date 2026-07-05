@@ -13,6 +13,26 @@ final class SelectionReaderService {
         self.cursorService = cursorService ?? CursorPositionService()
     }
 
+    static func isCurrentAppBundle(activeBundleId: String?, currentBundleId: String?) -> Bool {
+        guard let activeBundleId, let currentBundleId else {
+            return false
+        }
+        return activeBundleId == currentBundleId
+    }
+
+    static func resolveSelectedText(
+        activeBundleId: String?,
+        currentBundleId: String?,
+        localSelection: @MainActor () async -> String?,
+        axSelection: () -> String?
+    ) async -> String? {
+        if isCurrentAppBundle(activeBundleId: activeBundleId, currentBundleId: currentBundleId) {
+            return await localSelection()
+        }
+
+        return axSelection()
+    }
+
     // MARK: - Selection Reading
 
     /// Get currently selected text from the focused application
@@ -234,15 +254,18 @@ final class SelectionReaderService {
 
     /// Build a context from available selection, app info, and position
     /// Captures everything at once BEFORE focus changes
-    func buildContext() -> QuickPanelContext {
+    func buildContext(
+        selectedText providedSelectedText: String? = nil,
+        readSelectionFromAX: Bool = true,
+        panelSize: CGSize = CGSize(width: QuickPanelWindow.defaultWidth, height: QuickPanelWindow.minHeight)
+    ) -> QuickPanelContext {
         let axTrusted = cursorService.hasAccessibilityPermission
         DebugLog.log("[SelectionReader] buildContext axTrusted=\(axTrusted)")
 
         // Capture position first (uses selection bounds if available, else mouse)
-        let panelSize = CGSize(width: 350, height: 80)  // Default panel size
         let position = cursorService.calculatePanelPosition(panelSize: panelSize)
 
-        let selectedText = getSelectedText()
+        let selectedText = providedSelectedText ?? (readSelectionFromAX ? getSelectedText() : nil)
 
         // Only grab clipboard image if no text selection
         var clipboardImageData: Data? = nil

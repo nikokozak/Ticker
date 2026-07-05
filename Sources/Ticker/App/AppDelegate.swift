@@ -342,6 +342,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let manager = QuickPanelManager()
             self.quickPanelManager = manager
             manager.configure(container: container)
+            manager.configureLocalSelectionProvider(QuickPanelLocalSelectionProvider(
+                pdfSelection: { [weak self] in
+                    self?.webViewManager?.currentPDFSelectionText()
+                },
+                editorSelection: { [weak self] in
+                    guard let webViewManager = self?.webViewManager else {
+                        return nil
+                    }
+                    return await webViewManager.requestEditorSelection()
+                }
+            ))
         }
 
         // Initialize hotkey service

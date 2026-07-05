@@ -9,7 +9,7 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
 
     static let defaultWidth: CGFloat = 350
     static let minHeight: CGFloat = 80
-    static let maxHeight: CGFloat = 600
+    static let maxHeight: CGFloat = 720
 
     /// Callback when panel should dismiss
     var onDismiss: (() -> Void)?
@@ -149,7 +149,9 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
     /// Resize panel height (animates)
     /// Keeps top edge fixed but ensures panel stays on screen
     func resize(toHeight height: CGFloat, animated: Bool = true, completion: (() -> Void)? = nil) {
-        let newHeight = max(Self.minHeight, min(height, Self.maxHeight))
+        let visibleHeight = (screen ?? NSScreen.main)?.visibleFrame.height ?? Self.maxHeight
+        let maxAllowedHeight = max(Self.minHeight, min(Self.maxHeight, visibleHeight - 16))
+        let newHeight = max(Self.minHeight, min(height, maxAllowedHeight))
 
         // Calculate the target frame
         var newFrame = frame

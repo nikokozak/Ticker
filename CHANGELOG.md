@@ -33,6 +33,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Quick Panel now fits expanded content, captures in-app editor/PDF selections, and confirms saves by flashing the stream picker.
 - Citation page fallback now flashes the cited page, and the main window now uses normal app window stacking.
 - Opening the PDF source pane now expands the window to a balanced split and restores the prior window frame on close.
 - Citation clicks that fall back to page navigation now show a transient page-scoped affordance instead of landing silently.

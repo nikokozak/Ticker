@@ -47,6 +47,9 @@
       "fileDropError": {
         "requiredPayloadKeys": ["error"]
       },
+      "getEditorSelection": {
+        "requiredPayloadKeys": ["requestId"]
+      },
       "imageDropped": {
         "requiredPayloadKeys": ["relativePath", "assetUrl", "streamId"]
       },
@@ -128,6 +131,9 @@
       },
       "deleteStream": {
         "requiredPayloadKeys": ["id"]
+      },
+      "editorSelection": {
+        "requiredPayloadKeys": ["requestId", "text"]
       },
       "getSupportBundle": {
         "requiredPayloadKeys": [],

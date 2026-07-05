@@ -360,6 +360,30 @@ export function StreamEditor({
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type !== 'getEditorSelection') return;
+
+      const requestId = message.payload?.requestId as string | undefined;
+      if (!requestId) return;
+
+      const view = editorViewRef.current;
+      const text = view
+        ? view.state.selection.ranges
+            .filter((range) => !range.empty)
+            .map((range) => view.state.sliceDoc(range.from, range.to))
+            .join('\n')
+        : '';
+
+      bridge.send({
+        type: 'editorSelection',
+        payload: { requestId, text },
+      });
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   const isEditorActive = useCallback(() => {
     const shell = editorShellRef.current;
     const active = document.activeElement;
