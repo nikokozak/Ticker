@@ -33,6 +33,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Stream editor find now uses a compact input/count/arrows panel instead of the stock search UI.
 - PDF panes now support focused Cmd-F find with match highlights, wrapping navigation, and Escape dismissal.
 - Quick Panel now fits expanded content, captures in-app editor/PDF selections, and confirms saves by flashing the stream picker.
 - Citation page fallback now flashes the cited page, and the main window now uses normal app window stacking.

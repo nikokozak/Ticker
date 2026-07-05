@@ -13,6 +13,7 @@ import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
+import { editorFindExtension } from '../extensions/EditorFindPanel';
 import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
@@ -1711,6 +1712,7 @@ export function StreamEditor({
                 selectionMenuExtension,
                 clickToDocumentEndExtension,
                 aiWritingExtension,
+                editorFindExtension,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
