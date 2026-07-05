@@ -80,6 +80,12 @@ struct QuickPanelStatus: Equatable {
                 tone: .warning,
                 action: .openAccessibilitySettings
             )
+        case .stalePermission:
+            return QuickPanelStatus(
+                message: "Accessibility permission is stale — remove Ticker from the list and re-add it",
+                tone: .warning,
+                action: .openAccessibilitySettings
+            )
         case .emptyExternal:
             let appName = activeApp?.trimmingCharacters(in: .whitespacesAndNewlines)
             let message: String

@@ -5,6 +5,9 @@ enum SelectionCaptureOutcome: Equatable {
     case notAttempted
     case internalApp
     case noPermission
+    /// AXIsProcessTrusted() says yes but the AX API answers kAXErrorAPIDisabled —
+    /// TCC revoked the grant behind a stale in-process cache (OS update / re-sign).
+    case stalePermission
     case ax
     case axHinted
     case clipboard
@@ -18,6 +21,8 @@ enum SelectionCaptureOutcome: Equatable {
             return "ax-hinted"
         case .clipboard:
             return "clipboard"
+        case .stalePermission:
+            return "stale-permission"
         case .notAttempted, .internalApp, .noPermission, .emptyExternal:
             return "none"
         }
@@ -216,14 +221,34 @@ final class SelectionReaderService {
             }
         )
 
+        var finalResult = result
+        if result.outcome == .emptyExternal && axPermissionIsStale() {
+            finalResult = SelectionCaptureResult(text: nil, outcome: .stalePermission)
+        }
+
         DebugLog.log(
             "[SelectionReader] external capture " +
-            "rung=\(result.outcome.telemetryRung) " +
-            "selectedLength=\(result.text?.count ?? 0) " +
+            "rung=\(finalResult.outcome.telemetryRung) " +
+            "selectedLength=\(finalResult.text?.count ?? 0) " +
             "activeBundleId=\(frontmostBundleId ?? "unknown")"
         )
 
-        return result
+        return finalResult
+    }
+
+    /// Canary for the trusted-but-revoked TCC state: AXIsProcessTrusted() reads a
+    /// per-process cache and can keep returning true after the grant was invalidated
+    /// (OS update, binary re-sign). A live AX call answering kAXErrorAPIDisabled is
+    /// the reliable tell.
+    private func axPermissionIsStale() -> Bool {
+        guard cursorService.hasAccessibilityPermission else { return false }
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            AXUIElementCreateSystemWide(),
+            kAXFocusedUIElementAttribute as CFString,
+            &value
+        )
+        return result == .apiDisabled
     }
 
     private func readSelectedTextFromFocusedElement(

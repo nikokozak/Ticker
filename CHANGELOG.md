@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Quick panel now detects a stale Accessibility grant (permission shown as on but revoked by macOS) and says exactly how to fix it.
 - Sources can now be marked Private so their contents stay out of AI context while remaining locally searchable and readable.
 - Stream editor headers now keep long titles to one calm ellipsized line without crowding actions or document content.
 - Document AI citation links can now carry exact evidence quotes so PDF flashes target the quoted support instead of a chunk lead sentence.

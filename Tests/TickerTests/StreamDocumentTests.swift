@@ -184,6 +184,14 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
             )
         )
         XCTAssertEqual(
+            QuickPanelStatus.selectionCaptureStatus(for: .stalePermission, activeApp: "Chrome"),
+            QuickPanelStatus(
+                message: "Accessibility permission is stale — remove Ticker from the list and re-add it",
+                tone: .warning,
+                action: .openAccessibilitySettings
+            )
+        )
+        XCTAssertEqual(
             QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal, activeApp: "Chrome"),
             QuickPanelStatus(
                 message: "No text selected in Chrome",
