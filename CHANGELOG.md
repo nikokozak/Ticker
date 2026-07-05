@@ -33,6 +33,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- PDF pane dividers can now resize both directions from the opening split.
 - Quick Panel external text capture now falls back through app AX hinting and clipboard-safe Copy for Chromium/Electron selections.
 - Formatting toggles now keep selection-edge whitespace outside inline markdown markers, including multi-line selections.
 - Stream editor markdown decorations now settle on the initial viewport faster and image widgets report stable heights while scrolling.

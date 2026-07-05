@@ -1267,6 +1267,41 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertFalse(fullscreenLayout.shouldResizeWindow)
     }
 
+    func test_pdfPaneOpeningWidthIsInteriorAfterHostBasedMax() throws {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1440, height: 875)
+        let layout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: 220, y: 120, width: 900, height: 700),
+            visibleFrame: visibleFrame,
+            isNativeFullscreen: false
+        )
+        let maxWidth = PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: visibleFrame.width)
+
+        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertGreaterThan(layout.paneWidth, PDFPaneWidthPolicy.minimumPDFPaneWidth)
+        XCTAssertLessThan(layout.paneWidth, maxWidth)
+    }
+
+    func test_pdfPaneClampAllowsBothDirectionsForStandardHost() throws {
+        let hostWidth: CGFloat = 1440
+        let openingWidth = floor(hostWidth * 0.5)
+
+        let smaller = PDFPaneWidthPolicy.clampPDFPaneWidth(openingWidth - 100, hostWidth: hostWidth)
+        let larger = PDFPaneWidthPolicy.clampPDFPaneWidth(openingWidth + 100, hostWidth: hostWidth)
+
+        XCTAssertLessThan(smaller, openingWidth)
+        XCTAssertGreaterThan(larger, openingWidth)
+        XCTAssertEqual(PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: hostWidth), 1040)
+    }
+
+    func test_pdfPaneClampHandlesDegenerateSmallHosts() throws {
+        XCTAssertEqual(PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: 500), 320)
+        XCTAssertEqual(PDFPaneWidthPolicy.clampPDFPaneWidth(900, hostWidth: 500), 320)
+
+        XCTAssertEqual(PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: 260), 260)
+        XCTAssertEqual(PDFPaneWidthPolicy.clampPDFPaneWidth(900, hostWidth: 260), 260)
+        XCTAssertEqual(PDFPaneWidthPolicy.clampPDFPaneWidth(20, hostWidth: 260), 260)
+    }
+
     func test_pdfPaneWindowRestoreUsesSavedFrameExceptInFullscreen() throws {
         let saved = CGRect(x: 120, y: 80, width: 900, height: 700)
 
