@@ -260,10 +260,23 @@ final class SelectionReaderService {
     }
 
     private func getFocusedElement() -> AXUIElement? {
-        let systemWide = AXUIElementCreateSystemWide()
+        if let element = focusedElement(of: AXUIElementCreateSystemWide()) {
+            return element
+        }
+
+        // Sequoia regression (old repo #121): the system-wide focus query fails
+        // outright for some apps (kitty: kAXErrorCannotComplete) while the app's
+        // own AX element still answers. Fall back to the frontmost app.
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
+            return nil
+        }
+        return focusedElement(of: AXUIElementCreateApplication(pid))
+    }
+
+    private func focusedElement(of container: AXUIElement) -> AXUIElement? {
         var focusedElementValue: CFTypeRef?
         let focusedElementResult = AXUIElementCopyAttributeValue(
-            systemWide,
+            container,
             kAXFocusedUIElementAttribute as CFString,
             &focusedElementValue
         )
@@ -426,7 +439,10 @@ final class SelectionReaderService {
         let pasteboard = NSPasteboard.general
         let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
 
-        postCopyShortcut(to: app.processIdentifier)
+        // Post ⌘C to the system HID stream, not the app's pid: GLFW/game-loop apps
+        // (kitty, Alacritty) never see pid-targeted events. Capture runs before the
+        // panel shows, so the target app is still the focused one.
+        postCopyShortcut()
 
         guard waitForPasteboardChange(pasteboard, after: snapshot.changeCount) else {
             return nil
@@ -438,24 +454,25 @@ final class SelectionReaderService {
         return copiedText
     }
 
-    private func postCopyShortcut(to pid: pid_t) {
-        let source = CGEventSource(stateID: .combinedSessionState)
+    private func postCopyShortcut() {
+        // GLFW apps (kitty, Alacritty) track modifiers from the modifier key's own
+        // events, not from flags on the letter key — synthesize the full ⌘C sequence.
+        let source = CGEventSource(stateID: .hidSystemState)
+        let commandKeyCode = CGKeyCode(55)  // kVK_Command
 
-        let keyDown = CGEvent(
-            keyboardEventSource: source,
-            virtualKey: Self.copyKeyCode,
-            keyDown: true
-        )
+        let commandDown = CGEvent(keyboardEventSource: source, virtualKey: commandKeyCode, keyDown: true)
+        commandDown?.flags = .maskCommand
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: Self.copyKeyCode, keyDown: true)
         keyDown?.flags = .maskCommand
-        keyDown?.postToPid(pid)
-
-        let keyUp = CGEvent(
-            keyboardEventSource: source,
-            virtualKey: Self.copyKeyCode,
-            keyDown: false
-        )
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: Self.copyKeyCode, keyDown: false)
         keyUp?.flags = .maskCommand
-        keyUp?.postToPid(pid)
+        let commandUp = CGEvent(keyboardEventSource: source, virtualKey: commandKeyCode, keyDown: false)
+        commandUp?.flags = []
+
+        for event in [commandDown, keyDown, keyUp, commandUp] {
+            event?.post(tap: .cghidEventTap)
+            usleep(5_000)
+        }
     }
 
     private func waitForPasteboardChange(_ pasteboard: NSPasteboard, after changeCount: Int) -> Bool {
