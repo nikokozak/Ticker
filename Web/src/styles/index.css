@@ -385,10 +385,10 @@ body {
 }
 
 .stream-title-editable {
-  display: flex;
-  align-items: center;
+  /* block (not flex): text-overflow only ellipsizes inline content in a block container */
   min-width: 0;
   height: var(--space-6);
+  line-height: calc(var(--space-6) - 2 * var(--spacing-xs));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
