@@ -77,6 +77,12 @@ struct PDFCitationMatch {
     let bounds: CGRect
 }
 
+enum PDFCitationFallbackAffordance {
+    static func shouldShow(chunkPresent: Bool, matchFound: Bool) -> Bool {
+        chunkPresent && !matchFound
+    }
+}
+
 enum PDFCitationNavigator {
     static func normalizeQuote(_ quote: String) -> String {
         NormalizedTextMap.build(from: quote).normalized
@@ -898,7 +904,11 @@ final class PDFReaderPaneController: NSViewController {
     private func navigateToCitationChunk(_ chunk: SourceChunk, fallbackPage pageNumber: Int?, quote: String?) {
         guard let document = pdfPanePDFView.document,
               let match = PDFCitationNavigator.match(in: document, chunk: chunk, quote: quote) else {
-            navigate(toPageNumber: PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: pageNumber))
+            let fallbackPage = PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: pageNumber)
+            if let page = navigate(toPageNumber: fallbackPage),
+               PDFCitationFallbackAffordance.shouldShow(chunkPresent: true, matchFound: false) {
+                showCitationPageFallbackAffordance(on: page)
+            }
             return
         }
 
@@ -928,17 +938,111 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.go(to: destination)
     }
 
-    private func navigate(toPageNumber pageNumber: Int?) {
+    @discardableResult
+    private func navigate(toPageNumber pageNumber: Int?) -> PDFPage? {
         guard let document = pdfPanePDFView.document,
               document.pageCount > 0 else {
-            return
+            return nil
         }
 
         let clampedPage = max(1, min(pageNumber ?? 1, document.pageCount))
-        guard let page = document.page(at: clampedPage - 1) else { return }
+        guard let page = document.page(at: clampedPage - 1) else { return nil }
         let bounds = page.bounds(for: .mediaBox)
         let destination = PDFDestination(page: page, at: CGPoint(x: bounds.minX, y: bounds.maxY))
         pdfPanePDFView.go(to: destination)
+        return page
+    }
+
+    private func showCitationPageFallbackAffordance(on page: PDFPage) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+
+            self.pdfPanePDFView.layoutSubtreeIfNeeded()
+            let pageRect = self.pdfPanePDFView.convert(page.bounds(for: .mediaBox), from: page)
+            let visiblePageRect = pageRect.intersection(self.pdfPanePDFView.bounds)
+            guard visiblePageRect.isFiniteAndNonEmpty else { return }
+
+            let bar = self.makeCitationPageFallbackBar(pageRect: pageRect, visiblePageRect: visiblePageRect)
+            let pill = self.makeCitationPageFallbackPill()
+            self.pdfPanePDFView.addSubview(bar)
+            self.pdfPanePDFView.addSubview(pill)
+            self.fadeTransientCitationFallbackViews([bar, pill])
+        }
+    }
+
+    private func makeCitationPageFallbackBar(pageRect: CGRect, visiblePageRect: CGRect) -> NSView {
+        let barWidth: CGFloat = 4
+        let horizontalInset: CGFloat = 8
+        let x = max(
+            pdfPanePDFView.bounds.minX + horizontalInset,
+            min(pageRect.minX + horizontalInset, pdfPanePDFView.bounds.maxX - barWidth - horizontalInset)
+        )
+        let bar = NSView(frame: CGRect(
+            x: x,
+            y: visiblePageRect.minY,
+            width: barWidth,
+            height: visiblePageRect.height
+        ))
+        bar.wantsLayer = true
+        bar.layer?.backgroundColor = PDFHighlightAnnotationStyle.pulseColor.cgColor
+        bar.layer?.cornerRadius = barWidth / 2
+        bar.layer?.masksToBounds = true
+        bar.alphaValue = 0
+        return bar
+    }
+
+    private func makeCitationPageFallbackPill() -> NSView {
+        let horizontalPadding: CGFloat = 20
+        let pillHeight: CGFloat = 28
+        let topInset: CGFloat = 14
+        let label = NSTextField(labelWithString: "Cited on this page")
+        label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        label.textColor = PDFPaneStyle.textMuted
+        label.alignment = .center
+        label.maximumNumberOfLines = 1
+        label.usesSingleLineMode = true
+        label.sizeToFit()
+
+        let labelSize = label.intrinsicContentSize
+        let pillWidth = ceil(labelSize.width + horizontalPadding)
+        let pill = NSView(frame: CGRect(
+            x: max(0, (pdfPanePDFView.bounds.width - pillWidth) / 2),
+            y: max(0, pdfPanePDFView.bounds.maxY - pillHeight - topInset),
+            width: pillWidth,
+            height: pillHeight
+        ))
+        pill.wantsLayer = true
+        pill.layer?.backgroundColor = PDFPaneStyle.background.withAlphaComponent(0.94).cgColor
+        pill.layer?.borderColor = PDFPaneStyle.separator.cgColor
+        pill.layer?.borderWidth = 1
+        pill.layer?.cornerRadius = pillHeight / 2
+        pill.layer?.masksToBounds = true
+        pill.alphaValue = 0
+
+        label.frame = CGRect(
+            x: horizontalPadding / 2,
+            y: max(0, (pillHeight - labelSize.height) / 2),
+            width: labelSize.width,
+            height: labelSize.height
+        )
+        pill.addSubview(label)
+        return pill
+    }
+
+    private func fadeTransientCitationFallbackViews(_ views: [NSView]) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            views.forEach { $0.animator().alphaValue = 1 }
+        } completionHandler: {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.8
+                    views.forEach { $0.animator().alphaValue = 0 }
+                } completionHandler: {
+                    views.forEach { $0.removeFromSuperview() }
+                }
+            }
+        }
     }
 
     private func pulseAnnotations(_ annotations: [PDFAnnotation], removeAfterPulse: Bool = false) {

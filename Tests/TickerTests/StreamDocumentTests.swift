@@ -935,6 +935,12 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
+    func test_pdfCitationFallbackAffordanceOnlyShowsForCitationChunkFallback() throws {
+        XCTAssertTrue(PDFCitationFallbackAffordance.shouldShow(chunkPresent: true, matchFound: false))
+        XCTAssertFalse(PDFCitationFallbackAffordance.shouldShow(chunkPresent: true, matchFound: true))
+        XCTAssertFalse(PDFCitationFallbackAffordance.shouldShow(chunkPresent: false, matchFound: false))
+    }
+
     func test_pdfCitationNavigatorSelectsVerifiedQuoteOnExtractedPage() throws {
         let document = try makePDFDocument(pages: [
             "First page has only setup text.",
