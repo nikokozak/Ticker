@@ -33,6 +33,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Formatting toggles now keep selection-edge whitespace outside inline markdown markers, including multi-line selections.
 - Stream editor markdown decorations now settle on the initial viewport faster and image widgets report stable heights while scrolling.
 - Stream editor find now uses a compact input/count/arrows panel instead of the stock search UI.
 - PDF panes now support focused Cmd-F find with match highlights, wrapping navigation, and Escape dismissal.
