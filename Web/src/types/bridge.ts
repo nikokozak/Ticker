@@ -80,7 +80,7 @@ export interface DocumentAICitation {
   chunkId: string;
   sourceId: string;
   page: number;
-  label: string;
+  shortTitle: string;
 }
 
 export type DocumentAISourceContextMode = 'passthrough' | 'retrieved' | 'none';

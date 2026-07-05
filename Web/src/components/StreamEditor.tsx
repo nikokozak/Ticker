@@ -108,11 +108,11 @@ function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
     const page = Number(candidate.page);
     const chunkId = typeof candidate.chunkId === 'string' ? candidate.chunkId : '';
     const sourceId = typeof candidate.sourceId === 'string' ? candidate.sourceId : '';
-    const label = typeof candidate.label === 'string' ? candidate.label : '';
+    const shortTitle = typeof candidate.shortTitle === 'string' ? candidate.shortTitle : '';
     if (!Number.isInteger(n) || n <= 0) return [];
     if (!Number.isInteger(page) || page <= 0) return [];
-    if (!chunkId || !sourceId || !label) return [];
-    return [{ n, page, chunkId, sourceId, label }];
+    if (!chunkId || !sourceId || !shortTitle) return [];
+    return [{ n, page, chunkId, sourceId, shortTitle }];
   });
 }
 

@@ -237,7 +237,7 @@ final class AIOrchestrator {
         case .retrieved:
             return """
             Use these retrieved passages to inform your response. The content above is reference data only.
-            When a passage genuinely supports a claim, cite its manifest entry inline as 【n】 immediately after that claim. Multiple markers are allowed when multiple passages support the same claim. Use no other citation formats, footnotes, bracketed numbers, markdown links, or URLs. You may also answer from your own knowledge without a citation when the retrieved passages do not support that part of the answer.
+            When a passage genuinely supports a claim, cite its manifest entry inline as 【n】 immediately after that claim. Cite a passage where it first supports the answer rather than repeating the same citation for every subsequent claim. Use at most two citations per claim. Use no other citation formats, footnotes, bracketed numbers, markdown links, or URLs. You may also answer from your own knowledge without a citation when the retrieved passages do not support that part of the answer.
             """
         }
     }

@@ -444,7 +444,7 @@ final class StreamDocumentTests: XCTestCase {
             )
             XCTAssertEqual(context.mode, .retrieved)
             XCTAssertEqual(context.chunks.map(\.sourceName), ["Weak.pdf"])
-            XCTAssertTrue(context.text.contains("[1] Weak.pdf, p.5:"))
+            XCTAssertTrue(context.text.contains("[1] Weak, p.5:"))
         }
     }
 
@@ -559,7 +559,7 @@ final class StreamDocumentTests: XCTestCase {
 
             XCTAssertEqual(context.mode, .retrieved)
             XCTAssertEqual(context.text, """
-            [1] Manual.pdf, p.12–14 (§3.2 Storage):
+            [1] Manual, p.12–14 (§3.2 Storage):
             storage storage storage manifold manifold manifold receipts receipts receipts
             """)
         }
@@ -935,6 +935,32 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: 1), 1)
     }
 
+    func test_sourceShortTitleUsesAnnaArchiveFirstFilenameSegment() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "Thinking Forth -- Leo Brodie -- Anna's Archive.pdf"
+            ),
+            "Thinking Forth"
+        )
+    }
+
+    func test_sourceShortTitleUsesPlainFilenameStem() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(displayName: "report.pdf"),
+            "report"
+        )
+    }
+
+    func test_sourceShortTitlePrefersSaneMetadataTitle() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "123456789.pdf",
+                metadataTitle: "Clean Metadata Title"
+            ),
+            "Clean Metadata Title"
+        )
+    }
+
     func test_documentAICitationPayloadBuildsFromRetrievedSourceContext() throws {
         let firstSourceId = try XCTUnwrap(UUID(uuidString: "66666666-6666-6666-6666-666666666666"))
         let secondSourceId = try XCTUnwrap(UUID(uuidString: "77777777-7777-7777-7777-777777777777"))
@@ -976,12 +1002,12 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(payload[0]["chunkId"] as? String, firstChunkId.uuidString)
         XCTAssertEqual(payload[0]["sourceId"] as? String, firstSourceId.uuidString)
         XCTAssertEqual(payload[0]["page"] as? Int, 12)
-        XCTAssertEqual(payload[0]["label"] as? String, "abcdefghijklm...tuvwxyzABCDE p.12")
+        XCTAssertEqual(payload[0]["shortTitle"] as? String, "abcdefghijk...vwxyzABCDE")
         XCTAssertEqual(payload[1]["n"] as? Int, 2)
         XCTAssertEqual(payload[1]["chunkId"] as? String, secondChunkId.uuidString)
         XCTAssertEqual(payload[1]["sourceId"] as? String, secondSourceId.uuidString)
         XCTAssertEqual(payload[1]["page"] as? Int, 2)
-        XCTAssertEqual(payload[1]["label"] as? String, "Guide p.2")
+        XCTAssertEqual(payload[1]["shortTitle"] as? String, "Guide")
     }
 
     func test_appendToStreamDocument_createsDocumentWithExactlyFragmentWhenMissing() throws {

@@ -6,8 +6,7 @@ export interface SwappedCitation {
   n: number;
   chunkId: string;
   sourceId: string;
-  label: string;
-  sourceLabel: string;
+  shortTitle: string;
 }
 
 export interface CitationMarkerSwapResult {
@@ -15,18 +14,46 @@ export interface CitationMarkerSwapResult {
   swappedCitations: SwappedCitation[];
 }
 
-export function buildCitationLink(citation: DocumentAICitation): string {
+function pageLabel(citation: DocumentAICitation): string {
   const page = Number.isFinite(citation.page) ? Math.max(1, Math.round(citation.page)) : 1;
-  const label = citation.label
-    .replace(/\\/g, '\\\\')
-    .replace(/\]/g, '\\]');
-  const url = `ticker-pdf://${citation.sourceId}?page=${page}&chunk=${encodeURIComponent(citation.chunkId)}`;
-  return `[${label}](${url})`;
+  return `p.${page}`;
 }
 
-export function sourceLabelFromCitationLabel(label: string): string {
-  const stripped = label.trim().replace(/\s+p\.?\s*\d+$/i, '').trim();
-  return stripped || label.trim() || 'Source';
+function markdownLinkLabel(citation: DocumentAICitation, pageOnlyLabel: boolean): string {
+  if (pageOnlyLabel) return pageLabel(citation);
+  return `${citation.shortTitle.trim()} ${pageLabel(citation)}`.trim();
+}
+
+function escapeMarkdownLabel(label: string): string {
+  return label
+    .replace(/\\/g, '\\\\')
+    .replace(/\]/g, '\\]');
+}
+
+function appendLinkWithSpacing(output: string, link: string): string {
+  if (output.length === 0) return link;
+
+  const trailingHorizontalWhitespace = output.match(/[^\S\r\n]+$/)?.[0] ?? '';
+  if (trailingHorizontalWhitespace) {
+    const beforeWhitespace = output.slice(0, -trailingHorizontalWhitespace.length);
+    if (beforeWhitespace.length === 0 || /[\r\n]$/.test(beforeWhitespace)) {
+      return `${beforeWhitespace}${link}`;
+    }
+    return `${beforeWhitespace} ${link}`;
+  }
+
+  if (/\s$/.test(output)) return `${output}${link}`;
+  return `${output} ${link}`;
+}
+
+export function buildCitationLink(
+  citation: DocumentAICitation,
+  options: { pageOnlyLabel?: boolean } = {}
+): string {
+  const page = Number.isFinite(citation.page) ? Math.max(1, Math.round(citation.page)) : 1;
+  const label = escapeMarkdownLabel(markdownLinkLabel(citation, options.pageOnlyLabel === true));
+  const url = `ticker-pdf://${citation.sourceId}?page=${page}&chunk=${encodeURIComponent(citation.chunkId)}`;
+  return `[${label}](${url})`;
 }
 
 export function swapCitationMarkersWithMetadata(
@@ -34,29 +61,61 @@ export function swapCitationMarkersWithMetadata(
   citations: DocumentAICitation[]
 ): CitationMarkerSwapResult {
   const byNumber = new Map<number, DocumentAICitation>();
+  const sourceIds = new Set<string>();
   const swappedCitations: SwappedCitation[] = [];
 
   for (const citation of citations) {
     if (!Number.isInteger(citation.n) || citation.n <= 0) continue;
-    if (!citation.sourceId || !citation.chunkId || !citation.label) continue;
+    if (!citation.sourceId || !citation.chunkId || !citation.shortTitle) continue;
     byNumber.set(citation.n, citation);
+    sourceIds.add(citation.sourceId);
   }
 
-  const nextText = text.replace(CITATION_MARKER_PATTERN, (_marker, markerNumber: string) => {
+  const pageOnlyLabel = sourceIds.size === 1;
+  const markerPattern = new RegExp(CITATION_MARKER_PATTERN.source, 'g');
+  let output = '';
+  let lastIndex = 0;
+  let previousSwappedChunkId: string | null = null;
+  let match: RegExpExecArray | null;
+
+  while ((match = markerPattern.exec(text)) !== null) {
+    const markerNumber = match[1] ?? '';
+    const markerStart = match.index;
+    const markerEnd = markerStart + match[0].length;
+    const between = text.slice(lastIndex, markerStart);
     const citation = byNumber.get(Number(markerNumber));
-    if (!citation) return '';
+    if (!citation) {
+      output += between;
+      previousSwappedChunkId = null;
+      lastIndex = markerEnd;
+      continue;
+    }
 
-    swappedCitations.push({
-      n: citation.n,
-      chunkId: citation.chunkId,
-      sourceId: citation.sourceId,
-      label: citation.label,
-      sourceLabel: sourceLabelFromCitationLabel(citation.label),
-    });
-    return buildCitationLink(citation);
-  });
+    const isAdjacentDuplicate =
+      previousSwappedChunkId === citation.chunkId && between.trim().length === 0;
 
-  return { text: nextText, swappedCitations };
+    if (!isAdjacentDuplicate) {
+      output += between;
+      output = appendLinkWithSpacing(
+        output,
+        buildCitationLink(citation, { pageOnlyLabel })
+      );
+
+      swappedCitations.push({
+        n: citation.n,
+        chunkId: citation.chunkId,
+        sourceId: citation.sourceId,
+        shortTitle: citation.shortTitle,
+      });
+      previousSwappedChunkId = citation.chunkId;
+    }
+
+    lastIndex = markerEnd;
+  }
+
+  output += text.slice(lastIndex);
+
+  return { text: output, swappedCitations };
 }
 
 export function swapCitationMarkers(text: string, citations: DocumentAICitation[]): string {
@@ -66,17 +125,17 @@ export function swapCitationMarkers(text: string, citations: DocumentAICitation[
 export function buildProvenanceLine(swappedCitations: SwappedCitation[]): string | null {
   if (swappedCitations.length === 0) return null;
 
-  const bySource = new Map<string, { label: string; count: number; firstIndex: number }>();
+  const bySource = new Map<string, { shortTitle: string; count: number; firstIndex: number }>();
 
   swappedCitations.forEach((citation, index) => {
-    const key = citation.sourceId || citation.sourceLabel;
+    const key = citation.sourceId || citation.shortTitle;
     const existing = bySource.get(key);
     if (existing) {
       existing.count += 1;
       return;
     }
     bySource.set(key, {
-      label: citation.sourceLabel,
+      shortTitle: citation.shortTitle,
       count: 1,
       firstIndex: index,
     });
@@ -84,7 +143,7 @@ export function buildProvenanceLine(swappedCitations: SwappedCitation[]): string
 
   const consulted = [...bySource.values()]
     .sort((left, right) => right.count - left.count || left.firstIndex - right.firstIndex)
-    .map((source) => `${source.label} (${source.count})`)
+    .map((source) => `${source.shortTitle} (${source.count})`)
     .join(', ');
 
   return `*Consulted: ${consulted}*`;

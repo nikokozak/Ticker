@@ -5,7 +5,7 @@ struct DocumentAICitationManifestEntry: Equatable {
     let chunkId: UUID
     let sourceId: UUID
     let page: Int
-    let label: String
+    let shortTitle: String
 
     var bridgePayload: [String: Any] {
         [
@@ -13,14 +13,12 @@ struct DocumentAICitationManifestEntry: Equatable {
             "chunkId": chunkId.uuidString,
             "sourceId": sourceId.uuidString,
             "page": page,
-            "label": label
+            "shortTitle": shortTitle
         ]
     }
 }
 
 enum DocumentAICitationManifest {
-    private static let maxSourceLabelLength = 28
-
     static func entries(from context: SourceContext?) -> [DocumentAICitationManifestEntry]? {
         guard let context,
               context.mode == .retrieved,
@@ -34,37 +32,13 @@ enum DocumentAICitationManifest {
                 chunkId: chunk.id,
                 sourceId: chunk.sourceId,
                 page: chunk.pageStart,
-                label: label(sourceName: chunk.sourceName, pageStart: chunk.pageStart)
+                shortTitle: SourceShortTitle.derive(displayName: chunk.sourceName)
             )
         }
     }
 
     static func bridgePayload(from context: SourceContext?) -> [[String: Any]]? {
         entries(from: context)?.map(\.bridgePayload)
-    }
-
-    static func label(sourceName: String, pageStart: Int) -> String {
-        let stripped = (sourceName as NSString).deletingPathExtension
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseName = stripped.isEmpty
-            ? sourceName.trimmingCharacters(in: .whitespacesAndNewlines)
-            : stripped
-        let shortName = shorten(baseName.isEmpty ? "Source" : baseName)
-        return "\(shortName) p.\(pageStart)"
-    }
-
-    private static func shorten(_ text: String) -> String {
-        guard text.count > maxSourceLabelLength else {
-            return text
-        }
-
-        let ellipsis = "..."
-        let available = maxSourceLabelLength - ellipsis.count
-        let prefixCount = Int(ceil(Double(available) / 2.0))
-        let suffixCount = available - prefixCount
-        let prefix = text.prefix(prefixCount)
-        let suffix = text.suffix(suffixCount)
-        return "\(prefix)\(ellipsis)\(suffix)"
     }
 }
 
