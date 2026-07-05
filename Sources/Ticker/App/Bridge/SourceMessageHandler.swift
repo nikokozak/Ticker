@@ -41,6 +41,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
         "addSourceFromPath",
         "removeSource",
         "retrySourceIndexing",
+        "setSourceAIExclusion",
         "openSource",
         "openPdfDestination",
         "beginPdfAnchorPick",
@@ -186,6 +187,29 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 ingestService.enqueue(source: source)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to retry source indexing (\(DebugLog.errorSummary(error)))")
+                sendSourceError(error.localizedDescription)
+            }
+
+        case "setSourceAIExclusion":
+            guard let payload = message.payload,
+                  let sourceIdValue = payload["sourceId"]?.value as? String,
+                  let sourceId = UUID(uuidString: sourceIdValue),
+                  let excluded = payload["excluded"]?.value as? Bool else {
+                DebugLog.log("[SourceMessageHandler] Invalid setSourceAIExclusion payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid setSourceAIExclusion payload")
+                return
+            }
+
+            do {
+                guard try persistence.loadSource(id: sourceId) != nil else {
+                    sendSourceError("Source not found.")
+                    return
+                }
+
+                try persistence.setSourceAIExcluded(sourceId, excluded: excluded)
+                DebugLog.log("[SourceMessageHandler] setSourceAIExclusion sourceId=\(sourceId.uuidString) excluded=\(excluded)")
+            } catch {
+                DebugLog.log("[SourceMessageHandler] Failed to set source AI exclusion (\(DebugLog.errorSummary(error)))")
                 sendSourceError(error.localizedDescription)
             }
 

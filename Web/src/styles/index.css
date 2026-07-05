@@ -1308,6 +1308,37 @@ body {
   color: var(--color-accent);
 }
 
+.sources-modal-private-toggle {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: calc(var(--space-1) / 2) var(--space-1);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  line-height: inherit;
+  transition: all 0.15s ease;
+}
+
+.sources-modal-private-toggle:hover,
+.sources-modal-private-toggle:focus-visible {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.sources-modal-private-toggle--active {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--on-accent);
+}
+
+.sources-modal-private-toggle--active:hover,
+.sources-modal-private-toggle--active:focus-visible {
+  background: var(--color-accent-hover);
+  color: var(--on-accent);
+}
+
 .sources-modal-remove {
   background: transparent;
   border: none;

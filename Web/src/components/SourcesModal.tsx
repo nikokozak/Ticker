@@ -6,34 +6,46 @@ interface SourceIndexStatusLineInput {
   status: SourceIndexStatus;
   progress?: number | null;
   pageCount?: number | null;
+  aiExcluded?: boolean;
 }
 
 export function formatSourceIndexStatusLine({
   status,
   progress,
   pageCount,
+  aiExcluded = false,
 }: SourceIndexStatusLineInput): string | null {
+  let line: string | null;
+
   switch (status) {
     case 'indexing':
       if (typeof progress === 'number' && Number.isFinite(progress)) {
         const percent = Math.round(Math.min(1, Math.max(0, progress)) * 100);
-        return `indexing · ${percent}%`;
+        line = `indexing · ${percent}%`;
+      } else {
+        line = 'indexing…';
       }
-      return 'indexing…';
+      break;
     case 'ready': {
       const pages = formatPageCount(pageCount ?? null);
-      if (!pages) return null;
-      return pageCount && pageCount > 0 ? `${pages} · indexed` : pages;
+      line = pages && pageCount && pageCount > 0 ? `${pages} · indexed` : pages;
+      break;
     }
     case 'failed_no_text':
-      return 'No readable text — this looks like a scanned document';
+      line = 'No readable text — this looks like a scanned document';
+      break;
     case 'failed':
-      return 'Indexing failed';
+      line = 'Indexing failed';
+      break;
     case 'pending':
-      return 'waiting to index…';
+      line = 'waiting to index…';
+      break;
     default:
-      return null;
+      line = null;
   }
+
+  if (!aiExcluded) return line;
+  return line ? `${line} · private` : 'private';
 }
 
 function canRetryIndexing(status: SourceIndexStatus): boolean {
@@ -51,6 +63,7 @@ interface SourcesModalProps {
   sources: SourceReference[];
   onClose: () => void;
   onSourceRemoved: (sourceId: string) => void;
+  onSourceAIExclusionChanged: (sourceId: string, excluded: boolean) => void;
   onSourceOpen?: (source: SourceReference) => void;
   highlightedSourceId?: string | null;
   onClearHighlight?: () => void;
@@ -62,6 +75,7 @@ export function SourcesModal({
   sources,
   onClose,
   onSourceRemoved,
+  onSourceAIExclusionChanged,
   onSourceOpen,
   highlightedSourceId,
   onClearHighlight,
@@ -96,6 +110,12 @@ export function SourcesModal({
       [sourceId]: { status: 'pending' },
     }));
     bridge.send({ type: 'retrySourceIndexing', payload: { sourceId } });
+  };
+
+  const handleToggleAIExclusion = (sourceId: string, excluded: boolean) => {
+    setError(null);
+    onSourceAIExclusionChanged(sourceId, excluded);
+    bridge.send({ type: 'setSourceAIExclusion', payload: { sourceId, excluded } });
   };
 
   const handleOpenSource = (source: SourceReference) => {
@@ -267,6 +287,7 @@ export function SourcesModal({
                 isRemoving={pendingRemoval === source.id}
                 onRemove={() => handleRemoveSource(source.id)}
                 onRetryIndexing={() => handleRetryIndexing(source.id)}
+                onToggleAIExclusion={() => handleToggleAIExclusion(source.id, !source.aiExcluded)}
                 onOpen={() => handleOpenSource(source)}
                 ref={(el) => {
                   if (el) sourceRefs.current.set(source.id, el);
@@ -287,17 +308,27 @@ interface SourceItemProps {
   isRemoving: boolean;
   onRemove: () => void;
   onRetryIndexing: () => void;
+  onToggleAIExclusion: () => void;
   onOpen: () => void;
 }
 
 const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
-  function SourceItem({ source, indexStatus, isRemoving, onRemove, onRetryIndexing, onOpen }, ref) {
+  function SourceItem({
+    source,
+    indexStatus,
+    isRemoving,
+    onRemove,
+    onRetryIndexing,
+    onToggleAIExclusion,
+    onOpen,
+  }, ref) {
     const icon = getFileIcon(source.fileType);
     const currentStatus = indexStatus?.status ?? source.indexStatus;
     const statusLine = formatSourceIndexStatusLine({
       status: currentStatus,
       progress: indexStatus?.progress,
       pageCount: source.pageCount,
+      aiExcluded: source.aiExcluded,
     });
     const showsRetry = canRetryIndexing(currentStatus);
 
@@ -333,6 +364,21 @@ const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
                 Retry
               </button>
             )}
+            <button
+              type="button"
+              className={[
+                'sources-modal-private-toggle',
+                source.aiExcluded ? 'sources-modal-private-toggle--active' : '',
+              ].join(' ')}
+              aria-pressed={source.aiExcluded}
+              title="Private: never sent to AI. Stays on this device."
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleAIExclusion();
+              }}
+            >
+              Private
+            </button>
           </div>
         </div>
         <button

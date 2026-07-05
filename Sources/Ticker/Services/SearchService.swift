@@ -32,7 +32,11 @@ final class SearchService {
         let currentStreamTitle = try persistence.getStreamTitle(id: currentStreamId) ?? "Untitled"
 
         // 3. Source chunk search in current stream.
-        let chunkResults = try retrieval.retrieve(query: query, streamId: currentStreamId)
+        let chunkResults = try retrieval.retrieve(
+            query: query,
+            streamId: currentStreamId,
+            excludeAIPrivateSources: false
+        )
 
         // 4. Convert to unified SearchResult format, keeping results separated by stream
         var currentStreamResults: [SearchResult] = []

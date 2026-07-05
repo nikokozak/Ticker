@@ -58,6 +58,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'saveSettings',
   'saveStreamDocument',
   'setFileDropContext',
+  'setSourceAIExclusion',
   'setProxyDeviceKey',
   'submitFeedback',
   'thinkDocument',

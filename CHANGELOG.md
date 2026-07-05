@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Sources can now be marked Private so their contents stay out of AI context while remaining locally searchable and readable.
 - Stream editor headers now keep long titles to one calm ellipsized line without crowding actions or document content.
 - Document AI citation links can now carry exact evidence quotes so PDF flashes target the quoted support instead of a chunk lead sentence.
 - Document AI citations now use calmer source titles, page-only labels for single-source answers, and collapse adjacent duplicate markers.

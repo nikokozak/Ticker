@@ -14,6 +14,12 @@ describe('formatSourceIndexStatusLine', () => {
     expect(formatSourceIndexStatusLine({ status: 'ready', pageCount: 3 })).toBe('3 pages · indexed');
   });
 
+  it('adds the private suffix when AI exclusion is enabled', () => {
+    expect(formatSourceIndexStatusLine({ status: 'ready', pageCount: 274, aiExcluded: true })).toBe(
+      '274 pages · indexed · private'
+    );
+  });
+
   it('keeps a zero-page ready source as the plain page line', () => {
     expect(formatSourceIndexStatusLine({ status: 'ready', pageCount: 0 })).toBe('0 pages');
   });

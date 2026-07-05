@@ -30,6 +30,7 @@ struct SourcePayload: Codable {
     let pageCount: Int?
     let embeddingStatus: String?
     let indexStatus: String
+    let aiExcluded: Bool
     let addedAt: String
 
     init(from source: SourceReference) {
@@ -42,6 +43,7 @@ struct SourcePayload: Codable {
         self.pageCount = source.pageCount
         self.embeddingStatus = source.embeddingStatus.rawValue
         self.indexStatus = source.indexStatus.rawValue
+        self.aiExcluded = source.aiExcluded
         self.addedAt = ISO8601DateFormatter().string(from: source.addedAt)
     }
 }

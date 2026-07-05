@@ -1431,6 +1431,12 @@ export function StreamEditor({
     setSources((prev: SourceReference[]) => prev.filter((source) => source.id !== sourceId));
   }, [setSources]);
 
+  const handleSourceAIExclusionChanged = useCallback((sourceId: string, aiExcluded: boolean) => {
+    setSources((prev: SourceReference[]) => prev.map((source) => (
+      source.id === sourceId ? { ...source, aiExcluded } : source
+    )));
+  }, [setSources]);
+
   const handleOpenSource = useCallback((source: SourceReference) => {
     bridge.send({
       type: 'openSource',
@@ -1725,6 +1731,7 @@ export function StreamEditor({
         sources={sources}
         onClose={() => setShowSourcesModal(false)}
         onSourceRemoved={handleSourceRemoved}
+        onSourceAIExclusionChanged={handleSourceAIExclusionChanged}
         onSourceOpen={handleOpenSource}
         highlightedSourceId={highlightedSourceId || pendingSourceId}
         onClearHighlight={() => {

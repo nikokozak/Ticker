@@ -418,6 +418,12 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v17_source_ai_exclusion") { db in
+            try db.alter(table: "sources") { t in
+                t.add(column: "ai_excluded", .integer).notNull().defaults(to: 0)
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -548,6 +554,7 @@ final class PersistenceService {
                 let embeddingStatus = embeddingStatusRaw.flatMap { SourceEmbeddingStatus(rawValue: $0) } ?? .none
                 let indexStatusRaw: String? = row["index_status"]
                 let indexStatus = indexStatusRaw.flatMap { SourceIndexStatus(rawValue: $0) } ?? .pending
+                let aiExcluded: Int = row["ai_excluded"]
 
                 return SourceReference(
                     id: UUID(uuidString: row["id"])!,
@@ -561,6 +568,7 @@ final class PersistenceService {
                     pageCount: row["page_count"],
                     embeddingStatus: embeddingStatus,
                     indexStatus: indexStatus,
+                    aiExcluded: aiExcluded != 0,
                     addedAt: Date(timeIntervalSince1970: row["added_at"])
                 )
             }
@@ -820,6 +828,7 @@ final class PersistenceService {
             let embeddingStatus = embeddingStatusRaw.flatMap(SourceEmbeddingStatus.init(rawValue:)) ?? .none
             let indexStatusRaw: String? = row["index_status"]
             let indexStatus = indexStatusRaw.flatMap(SourceIndexStatus.init(rawValue:)) ?? .pending
+            let aiExcluded: Int = row["ai_excluded"]
 
             return SourceReference(
                 id: UUID(uuidString: row["id"])!,
@@ -833,6 +842,7 @@ final class PersistenceService {
                 pageCount: row["page_count"],
                 embeddingStatus: embeddingStatus,
                 indexStatus: indexStatus,
+                aiExcluded: aiExcluded != 0,
                 addedAt: Date(timeIntervalSince1970: row["added_at"])
             )
         }
@@ -842,8 +852,8 @@ final class PersistenceService {
         try dbQueue.write { db in
             try db.execute(
                 sql: """
-                    INSERT INTO sources (id, stream_id, display_name, file_type, bookmark_data, original_path, status, extracted_text, page_count, index_status, added_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO sources (id, stream_id, display_name, file_type, bookmark_data, original_path, status, extracted_text, page_count, index_status, ai_excluded, added_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         display_name = excluded.display_name,
                         bookmark_data = excluded.bookmark_data,
@@ -851,7 +861,8 @@ final class PersistenceService {
                         status = excluded.status,
                         extracted_text = excluded.extracted_text,
                         page_count = excluded.page_count,
-                        index_status = excluded.index_status
+                        index_status = excluded.index_status,
+                        ai_excluded = excluded.ai_excluded
                 """,
                 arguments: [
                     source.id.uuidString,
@@ -864,6 +875,7 @@ final class PersistenceService {
                     source.extractedText,
                     source.pageCount,
                     source.indexStatus.rawValue,
+                    source.aiExcluded ? 1 : 0,
                     source.addedAt.timeIntervalSince1970
                 ]
             )
@@ -872,6 +884,15 @@ final class PersistenceService {
             try db.execute(
                 sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
                 arguments: [Date().timeIntervalSince1970, source.streamId.uuidString]
+            )
+        }
+    }
+
+    func setSourceAIExcluded(_ sourceId: UUID, excluded: Bool) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE sources SET ai_excluded = ? WHERE id = ?",
+                arguments: [excluded ? 1 : 0, sourceId.uuidString]
             )
         }
     }
@@ -1110,8 +1131,15 @@ final class PersistenceService {
         }
     }
 
-    func searchSourceChunks(matching ftsQuery: String, streamId: UUID, limit: Int) throws -> [RetrievedChunk] {
-        try dbQueue.read { db in
+    func searchSourceChunks(
+        matching ftsQuery: String,
+        streamId: UUID,
+        limit: Int,
+        excludeAIPrivateSources: Bool = true
+    ) throws -> [RetrievedChunk] {
+        let aiExclusionPredicate = excludeAIPrivateSources ? "AND s.ai_excluded = 0" : ""
+
+        return try dbQueue.read { db in
             try Row.fetchAll(
                 db,
                 sql: """
@@ -1130,6 +1158,7 @@ final class PersistenceService {
                     JOIN sources s ON s.id = c.source_id
                     WHERE source_chunks_fts MATCH ?
                       AND s.stream_id = ?
+                      \(aiExclusionPredicate)
                     ORDER BY score ASC
                     LIMIT ?
                 """,

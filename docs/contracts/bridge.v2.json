@@ -167,6 +167,9 @@
       "retrySourceIndexing": {
         "requiredPayloadKeys": ["sourceId"]
       },
+      "setSourceAIExclusion": {
+        "requiredPayloadKeys": ["sourceId", "excluded"]
+      },
       "saveImage": {
         "requiredPayloadKeys": ["streamId", "data", "requestId"]
       },
