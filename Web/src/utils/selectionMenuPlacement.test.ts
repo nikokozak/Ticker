@@ -62,4 +62,39 @@ describe('computeSelectionMenuPlacement', () => {
       viewportHeight: 600,
     }).left).toBe(35);
   });
+
+  it('keeps a wide menu inside the left shell edge', () => {
+    const wideMenu = { width: 250, height: 44 };
+    const placement = computeSelectionMenuPlacement({
+      coords: { left: 0, right: 8, top: 100, bottom: 120 },
+      shellRect: { left: 0, right: 500, top: 0, bottom: 500 },
+      menuSize: wideMenu,
+      viewportHeight: 600,
+    });
+
+    expect(placement.left - wideMenu.width / 2).toBeGreaterThanOrEqual(8);
+    expect(placement.left + wideMenu.width / 2).toBeLessThanOrEqual(492);
+  });
+
+  it('keeps a wide menu inside the right shell edge', () => {
+    const wideMenu = { width: 250, height: 44 };
+    const placement = computeSelectionMenuPlacement({
+      coords: { left: 492, right: 500, top: 100, bottom: 120 },
+      shellRect: { left: 0, right: 500, top: 0, bottom: 500 },
+      menuSize: wideMenu,
+      viewportHeight: 600,
+    });
+
+    expect(placement.left - wideMenu.width / 2).toBeGreaterThanOrEqual(8);
+    expect(placement.left + wideMenu.width / 2).toBeLessThanOrEqual(492);
+  });
+
+  it('centers a wide menu when the shell is narrower than the menu', () => {
+    expect(computeSelectionMenuPlacement({
+      coords: { left: 0, right: 8, top: 100, bottom: 120 },
+      shellRect: { left: 0, right: 180, top: 0, bottom: 500 },
+      menuSize: { width: 250, height: 44 },
+      viewportHeight: 600,
+    }).left).toBe(90);
+  });
 });

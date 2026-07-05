@@ -24,7 +24,7 @@ export interface SelectionMenuPlacement {
   top: number;
 }
 
-export const DEFAULT_SELECTION_MENU_WIDTH = 82;
+export const DEFAULT_SELECTION_MENU_WIDTH = 250;
 export const DEFAULT_SELECTION_MENU_HEIGHT = 44;
 export const DEFAULT_SELECTION_MENU_GAP = 10;
 export const DEFAULT_SELECTION_MENU_HORIZONTAL_INSET = 8;
