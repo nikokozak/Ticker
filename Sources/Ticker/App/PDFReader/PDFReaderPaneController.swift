@@ -1012,7 +1012,7 @@ final class PDFReaderPaneController: NSViewController {
     private func makeCitationPageFallbackFlash(visiblePageRect: CGRect) -> NSView {
         let flash = NSView(frame: visiblePageRect)
         flash.wantsLayer = true
-        flash.layer?.backgroundColor = PDFHighlightAnnotationStyle.pulseColor.withAlphaComponent(0.22).cgColor
+        flash.layer?.backgroundColor = PDFHighlightAnnotationStyle.pulseColor.withAlphaComponent(0.38).cgColor
         flash.alphaValue = 0
         return flash
     }
