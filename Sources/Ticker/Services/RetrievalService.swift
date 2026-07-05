@@ -116,7 +116,8 @@ final class RetrievalService {
                 ? "p.\(chunk.pageStart)"
                 : "p.\(chunk.pageStart)–\(chunk.pageEnd)"
             let sectionText = chunk.sectionPath.map { " (§\($0))" } ?? ""
-            return "[\(index + 1)] \(chunk.sourceName), \(pageText)\(sectionText):\n\(chunk.text)"
+            let sourceTitle = SourceShortTitle.derive(displayName: chunk.sourceName)
+            return "[\(index + 1)] \(sourceTitle), \(pageText)\(sectionText):\n\(chunk.text)"
         }.joined(separator: "\n\n")
     }
 

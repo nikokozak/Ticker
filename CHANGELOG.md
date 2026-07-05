@@ -5,6 +5,12 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Stream editor headers now keep long titles to one calm ellipsized line without crowding actions or document content.
+- Document AI citation links can now carry exact evidence quotes so PDF flashes target the quoted support instead of a chunk lead sentence.
+- Document AI citations now use calmer source titles, page-only labels for single-source answers, and collapse adjacent duplicate markers.
+- Document AI answers now add quiet provenance notes, and stale PDF links explain why they cannot open.
+- PDF citation links now open to the cited chunk and flash the matched passage when PDF text matching succeeds.
+- Document AI answers over retrieved sources now turn model citation markers into PDF links.
 - Document AI prompt popover now includes a session-only Sources scope chip for Auto, All, or None source context.
 - Source rows now show quiet indexing status with retry for failed source indexing.
 - Added local source chunk indexing foundations for Reading with Receipts.
@@ -26,6 +32,10 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Citation page fallback now flashes the cited page, and the main window now uses normal app window stacking.
+- Opening the PDF source pane now expands the window to a balanced split and restores the prior window frame on close.
+- Citation clicks that fall back to page navigation now show a transient page-scoped affordance instead of landing silently.
+- PDF citation flashes now verify quoted evidence against the stored source chunk before highlighting page text.
 - PDF highlight navigation now centers the target marker or highlight in the pane.
 - PDF anchor picking now shows a crosshair cursor, and deleting PDF links removes their saved markers.
 - Restored window dragging from the transparent titlebar strip.

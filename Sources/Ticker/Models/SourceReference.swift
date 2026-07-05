@@ -44,6 +44,63 @@ struct SourceReference: Identifiable, Codable {
     }
 }
 
+enum SourceShortTitle {
+    private static let maxLength = 24
+
+    static func derive(displayName: String, metadataTitle: String? = nil) -> String {
+        let metadataCandidate = metadataTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate: String
+
+        if let metadataCandidate, isSaneMetadataTitle(metadataCandidate) {
+            candidate = metadataCandidate
+        } else {
+            let stem = filenameStem(displayName)
+            let firstSegment = stem.components(separatedBy: " -- ").first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let firstSegment, !firstSegment.isEmpty {
+                candidate = firstSegment
+            } else {
+                candidate = stem
+            }
+        }
+
+        let title = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        return middleTruncate(title.isEmpty ? "Source" : title)
+    }
+
+    private static func isSaneMetadataTitle(_ title: String) -> Bool {
+        guard !title.isEmpty, title.count < 80 else {
+            return false
+        }
+
+        let nonWhitespace = title.filter { !$0.isWhitespace }
+        return !nonWhitespace.isEmpty && !nonWhitespace.allSatisfy(\.isNumber)
+    }
+
+    private static func filenameStem(_ displayName: String) -> String {
+        let lastPathComponent = (displayName as NSString).lastPathComponent
+        let stem = (lastPathComponent as NSString).deletingPathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !stem.isEmpty {
+            return stem
+        }
+
+        return displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func middleTruncate(_ title: String) -> String {
+        guard title.count > maxLength else {
+            return title
+        }
+
+        let ellipsis = "..."
+        let available = maxLength - ellipsis.count
+        let prefixCount = Int(ceil(Double(available) / 2.0))
+        let suffixCount = available - prefixCount
+        return "\(title.prefix(prefixCount))\(ellipsis)\(title.suffix(suffixCount))"
+    }
+}
+
 /// Status of RAG embedding for a source
 enum SourceEmbeddingStatus: String, Codable {
     case none        // Not yet processed for RAG

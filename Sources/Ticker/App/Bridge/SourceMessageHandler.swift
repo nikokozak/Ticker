@@ -6,8 +6,32 @@ protocol SourceMessageHandlerDelegate: AnyObject {
     func setFileDropContext(streamId: UUID?, allowsListFileDrops: Bool)
     func hidePDFPane() async
     func openSourceReference(_ source: SourceReference, sourceService: SourceService)
-    func openPDFDestination(_ source: SourceReference, sourceService: SourceService, highlightId: String?, page: Int?) async
+    func openPDFDestination(
+        _ source: SourceReference,
+        sourceService: SourceService,
+        highlightId: String?,
+        page: Int?,
+        chunkId: UUID?,
+        quote: String?
+    ) async
     func beginPDFAnchorPick(streamId: UUID) async
+}
+
+enum OpenPDFDestinationFailure: Equatable {
+    case damagedLink
+    case missingSource
+    case wrongStream
+
+    var userMessage: String {
+        switch self {
+        case .damagedLink:
+            return "This link is damaged and can't be opened."
+        case .missingSource:
+            return "This link points to a source that's no longer in this stream."
+        case .wrongStream:
+            return "This link points to a source in another stream."
+        }
+    }
 }
 
 final class SourceMessageHandler: BridgeMessageHandler {
@@ -190,39 +214,81 @@ final class SourceMessageHandler: BridgeMessageHandler {
             guard let payload = message.payload,
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue),
-                  let sourceIdValue = payload["sourceId"]?.value as? String,
-                  let sourceId = UUID(uuidString: sourceIdValue),
                   let sourceService else {
                 DebugLog.log("[WebViewManager] Invalid openPdfDestination payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid openPdfDestination payload")
+                sendPDFDestinationFailure(.damagedLink)
                 return
             }
 
+            let parsedDestination = (payload["url"]?.value as? String).flatMap(TickerPDFURLParser.parse)
+            let payloadSourceId = (payload["sourceId"]?.value as? String).flatMap(UUID.init(uuidString:))
+            let sourceId = payloadSourceId ?? parsedDestination?.sourceId
+            let highlightId = (payload["highlightId"]?.value as? String)
+                .flatMap { $0.isEmpty ? nil : $0 }
+                ?? parsedDestination?.highlightId
+            let page = payload["page"]?.intValue ?? parsedDestination?.page
+            let chunkId = (payload["chunkId"]?.value as? String).flatMap(UUID.init(uuidString:))
+                ?? parsedDestination?.chunkId
+            let quote = (payload["quote"]?.value as? String)
+                .flatMap { $0.isEmpty ? nil : $0 }
+                ?? parsedDestination?.quote
+
             do {
-                guard let source = try persistence.loadSource(id: sourceId) else {
-                    sendSourceError("Source not found.")
-                    return
-                }
-                guard source.streamId == streamId else {
-                    sendSourceError("Source does not belong to this stream.")
-                    return
-                }
-                guard source.fileType == .pdf else {
-                    sendSourceError("Source is not a PDF.")
+                let source: SourceReference
+                let pageToOpen: Int?
+
+                if let sourceId {
+                    guard let loadedSource = try persistence.loadSource(id: sourceId) else {
+                        DebugLog.log("[WebViewManager] PDF destination source is missing")
+                        sendPDFDestinationFailure(.missingSource)
+                        return
+                    }
+                    source = loadedSource
+                    pageToOpen = page
+                } else if let highlightId {
+                    guard UUID(uuidString: highlightId) != nil else {
+                        DebugLog.log("[WebViewManager] Invalid PDF highlight destination")
+                        sendPDFDestinationFailure(.damagedLink)
+                        return
+                    }
+                    guard let legacyDestination = try legacyPDFHighlightDestination(
+                        streamId: streamId,
+                        highlightId: highlightId
+                    ) else {
+                        DebugLog.log("[WebViewManager] PDF highlight destination is missing")
+                        sendPDFDestinationFailure(.missingSource)
+                        return
+                    }
+                    source = legacyDestination.source
+                    pageToOpen = page ?? legacyDestination.page
+                } else {
+                    DebugLog.log("[WebViewManager] Invalid openPdfDestination payload")
+                    sendPDFDestinationFailure(.damagedLink)
                     return
                 }
 
-                let highlightId = (payload["highlightId"]?.value as? String)
-                    .flatMap { $0.isEmpty ? nil : $0 }
+                guard source.streamId == streamId else {
+                    DebugLog.log("[WebViewManager] PDF destination source belongs to another stream")
+                    sendPDFDestinationFailure(.wrongStream)
+                    return
+                }
+                guard source.fileType == .pdf else {
+                    DebugLog.log("[WebViewManager] PDF destination source is not a PDF")
+                    sendPDFDestinationFailure(.damagedLink)
+                    return
+                }
+
                 await delegate?.openPDFDestination(
                     source,
                     sourceService: sourceService,
                     highlightId: highlightId,
-                    page: payload["page"]?.intValue
+                    page: pageToOpen,
+                    chunkId: chunkId,
+                    quote: quote
                 )
             } catch {
                 DebugLog.log("[WebViewManager] Failed to open PDF destination (\(DebugLog.errorSummary(error)))")
-                sendSourceError(error.localizedDescription)
+                sendPDFDestinationFailure(.damagedLink)
             }
 
         case "beginPdfAnchorPick":
@@ -295,5 +361,28 @@ final class SourceMessageHandler: BridgeMessageHandler {
         bridgeService.send(BridgeMessage(type: "sourceError", payload: [
             "error": AnyCodable(message)
         ]))
+    }
+
+    private func sendPDFDestinationFailure(_ failure: OpenPDFDestinationFailure) {
+        sendSourceError(failure.userMessage)
+    }
+
+    private func legacyPDFHighlightDestination(
+        streamId: UUID,
+        highlightId: String
+    ) throws -> (source: SourceReference, page: Int?)? {
+        guard let highlightUUID = UUID(uuidString: highlightId),
+              let stream = try persistence.loadStream(id: streamId) else {
+            return nil
+        }
+
+        for source in stream.sources where source.fileType == .pdf {
+            let highlights = try persistence.loadPDFHighlights(sourceId: source.id)
+            if let highlight = highlights.first(where: { $0.id == highlightUUID }) {
+                return (source, highlight.page)
+            }
+        }
+
+        return nil
     }
 }

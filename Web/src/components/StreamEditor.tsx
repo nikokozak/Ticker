@@ -7,7 +7,7 @@ import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, Stream, SourceReference } from '../types';
+import { bridge, type Stream, type SourceReference, type DocumentAICitation, type DocumentAISourceContextMode } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
@@ -17,6 +17,7 @@ import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { computeAppendInsertion } from '../utils/appendInsertion';
+import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
 import {
   buildPDFAnchorLinkEdit,
@@ -95,6 +96,31 @@ function formatSourceScope(scope: SourceScope): string {
     default:
       return 'Auto';
   }
+}
+
+function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
+  if (!Array.isArray(value)) return null;
+
+  return value.flatMap((item): DocumentAICitation[] => {
+    if (!item || typeof item !== 'object') return [];
+    const candidate = item as Record<string, unknown>;
+    const n = Number(candidate.n);
+    const page = Number(candidate.page);
+    const chunkId = typeof candidate.chunkId === 'string' ? candidate.chunkId : '';
+    const sourceId = typeof candidate.sourceId === 'string' ? candidate.sourceId : '';
+    const shortTitle = typeof candidate.shortTitle === 'string' ? candidate.shortTitle : '';
+    if (!Number.isInteger(n) || n <= 0) return [];
+    if (!Number.isInteger(page) || page <= 0) return [];
+    if (!chunkId || !sourceId || !shortTitle) return [];
+    return [{ n, page, chunkId, sourceId, shortTitle }];
+  });
+}
+
+function parseDocumentAISourceContextMode(value: unknown): DocumentAISourceContextMode | undefined {
+  if (value === 'passthrough' || value === 'retrieved' || value === 'none') {
+    return value;
+  }
+  return undefined;
 }
 
 function focusEditorAtDocumentEnd(view: EditorView) {
@@ -685,8 +711,25 @@ export function StreamEditor({
           return;
         }
 
-        const suffix = active.mode === 'after' && !rawOutput.endsWith('\n') ? '\n' : '';
-        const insertText = `${active.prefix}${rawOutput}${suffix}`;
+        const citations = parseDocumentAICitations(message.payload?.citations);
+        const sourceContextMode = parseDocumentAISourceContextMode(message.payload?.sourceContextMode);
+        let finalOutput = rawOutput;
+        let provenanceLine: string | null = null;
+
+        if (citations) {
+          const result = swapCitationMarkersWithMetadata(rawOutput, citations);
+          finalOutput = result.text;
+          provenanceLine = buildProvenanceLine(result.swappedCitations);
+        } else if (sourceContextMode === 'none') {
+          provenanceLine = '*From model knowledge.*';
+        }
+
+        if (provenanceLine) {
+          finalOutput = `${finalOutput}\n\n${provenanceLine}`;
+        }
+
+        const suffix = active.mode === 'after' && !finalOutput.endsWith('\n') ? '\n' : '';
+        const insertText = `${active.prefix}${finalOutput}${suffix}`;
         const finalFrom = range.from;
         const originalTo = finalFrom + active.originalText.length;
 
@@ -1426,30 +1469,32 @@ export function StreamEditor({
             autoFocus
           />
         ) : (
-          <h1 onClick={startEditingTitle} className="stream-title-editable">
+          <h1 onClick={startEditingTitle} className="stream-title-editable" title={title}>
             {title}
           </h1>
         )}
-        <span className={`stream-save-status stream-save-status--${saveState}`}>
-          {saveState === 'saving' ? 'Saving…' : 'Saved'}
-        </span>
-        <button
-          onClick={() => setShowSourcesModal(true)}
-          className="stream-sources-button"
-          title="Sources"
-          type="button"
-          aria-label={`Sources, ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
-        >
-          Sources · {sources.length}
-        </button>
-        <button
-          onClick={() => setShowDeleteConfirm(true)}
-          className="delete-stream-button"
-          title="Delete stream"
-          type="button"
-        >
-          Delete
-        </button>
+        <div className="stream-header-actions">
+          <span className={`stream-save-status stream-save-status--${saveState}`}>
+            {saveState === 'saving' ? 'Saving…' : 'Saved'}
+          </span>
+          <button
+            onClick={() => setShowSourcesModal(true)}
+            className="stream-sources-button"
+            title="Sources"
+            type="button"
+            aria-label={`Sources, ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
+          >
+            Sources · {sources.length}
+          </button>
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="delete-stream-button"
+            title="Delete stream"
+            type="button"
+          >
+            Delete
+          </button>
+        </div>
       </header>
 
       {showDeleteConfirm && (

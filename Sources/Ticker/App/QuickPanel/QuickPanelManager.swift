@@ -437,7 +437,7 @@ final class QuickPanelManager: ObservableObject {
                         self.ephemeralConversation.currentResponse += chunk
                     }
                 },
-                onComplete: { [weak self] in
+                onComplete: { [weak self] _ in
                     Task { @MainActor in
                         guard let self = self, !self.isStreamingCancelled else { return }
                         // Record assistant turn with completed response
@@ -745,7 +745,7 @@ final class QuickPanelManager: ObservableObject {
                 onChunk: { chunk in
                     responseMarkdown += chunk
                 },
-                onComplete: { [weak self] in
+                onComplete: { [weak self] _ in
                     Task { @MainActor in
                         guard let self else { return }
 

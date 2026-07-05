@@ -17,7 +17,8 @@
         "requiredPayloadKeys": ["requestId", "chunk"]
       },
       "documentAIComplete": {
-        "requiredPayloadKeys": ["requestId"]
+        "requiredPayloadKeys": ["requestId"],
+        "optionalPayloadKeys": ["citations", "sourceContextMode"]
       },
       "documentAIError": {
         "requiredPayloadKeys": ["requestId", "error"],
@@ -153,8 +154,8 @@
         "requiredPayloadKeys": ["sourceId"]
       },
       "openPdfDestination": {
-        "requiredPayloadKeys": ["streamId", "sourceId"],
-        "optionalPayloadKeys": ["highlightId", "page"]
+        "requiredPayloadKeys": ["streamId"],
+        "optionalPayloadKeys": ["sourceId", "highlightId", "page", "chunkId", "quote", "url"]
       },
       "refreshProxyAuth": {
         "requiredPayloadKeys": [],

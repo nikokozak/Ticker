@@ -1,5 +1,47 @@
 import Foundation
 
+struct DocumentAICitationManifestEntry: Equatable {
+    let n: Int
+    let chunkId: UUID
+    let sourceId: UUID
+    let page: Int
+    let shortTitle: String
+
+    var bridgePayload: [String: Any] {
+        [
+            "n": n,
+            "chunkId": chunkId.uuidString,
+            "sourceId": sourceId.uuidString,
+            "page": page,
+            "shortTitle": shortTitle
+        ]
+    }
+}
+
+enum DocumentAICitationManifest {
+    static func entries(from context: SourceContext?) -> [DocumentAICitationManifestEntry]? {
+        guard let context,
+              context.mode == .retrieved,
+              !context.chunks.isEmpty else {
+            return nil
+        }
+
+        return context.chunks.enumerated().map { index, chunk in
+            DocumentAICitationManifestEntry(
+                n: index + 1,
+                chunkId: chunk.id,
+                sourceId: chunk.sourceId,
+                page: chunk.pageStart,
+                shortTitle: SourceShortTitle.derive(displayName: chunk.sourceName)
+            )
+        }
+    }
+
+    static func bridgePayload(from context: SourceContext?) -> [[String: Any]]? {
+        entries(from: context)?.map(\.bridgePayload)
+    }
+}
+
 final class AIMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
         "thinkDocument"
@@ -9,12 +51,14 @@ final class AIMessageHandler: BridgeMessageHandler {
     private let assetService: AssetService
     private let orchestrator: AIOrchestrator
     private let deviceKeyService: DeviceKeyService
+    private let persistence: PersistenceService?
 
     init?(container: ServiceContainer) {
         self.bridgeService = container.bridgeService
         self.assetService = container.assetService
         self.orchestrator = container.orchestrator
         self.deviceKeyService = container.deviceKeyService
+        self.persistence = container.persistence
     }
 
     func handle(_ message: BridgeMessage) async {
@@ -42,6 +86,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                let streamId = UUID(uuidString: streamIdValue) {
                 streamIdForRAG = streamId
             }
+            let hasStreamSources = streamHasSources(streamIdForRAG)
 
             var resolvedQuery = query
             if let context = payload["context"]?.value as? String, !context.isEmpty {
@@ -65,10 +110,19 @@ final class AIMessageHandler: BridgeMessageHandler {
                     payload: ["requestId": AnyCodable(requestId), "chunk": AnyCodable(chunk)]
                 ))
             }
-            let onComplete: () -> Void = { [weak self] in
+            let onComplete: (SourceContext?) -> Void = { [weak self] sourceContext in
+                var payload: [String: AnyCodable] = ["requestId": AnyCodable(requestId)]
+                if let citations = DocumentAICitationManifest.bridgePayload(from: sourceContext) {
+                    payload["citations"] = AnyCodable(citations)
+                }
+                if sourceContext?.mode == .retrieved {
+                    payload["sourceContextMode"] = AnyCodable("retrieved")
+                } else if sourceContext == nil, hasStreamSources {
+                    payload["sourceContextMode"] = AnyCodable("none")
+                }
                 self?.bridgeService.send(BridgeMessage(
                     type: "documentAIComplete",
-                    payload: ["requestId": AnyCodable(requestId)]
+                    payload: payload
                 ))
             }
             let onError: (Error) -> Void = { [weak self] error in
@@ -136,6 +190,19 @@ final class AIMessageHandler: BridgeMessageHandler {
 
         default:
             DebugLog.log("[AIMessageHandler] Unknown message type: \(message.type)")
+        }
+    }
+
+    private func streamHasSources(_ streamId: UUID?) -> Bool {
+        guard let streamId, let persistence else {
+            return false
+        }
+
+        do {
+            return try persistence.loadStream(id: streamId)?.sources.isEmpty == false
+        } catch {
+            DebugLog.log("[AIMessageHandler] Failed to load stream sources (\(DebugLog.errorSummary(error)))")
+            return false
         }
     }
 }

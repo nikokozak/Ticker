@@ -408,12 +408,16 @@ final class WebViewManager: NSObject {
         _ source: SourceReference,
         sourceService: SourceService,
         highlightId: String?,
-        page: Int?
+        page: Int?,
+        chunkId: UUID?,
+        quote: String?
     ) async {
         guard source.fileType == .pdf else {
             sendSourceError("Source is not a PDF.")
             return
         }
+
+        let chunk = loadPDFDestinationChunk(id: chunkId, sourceId: source.id)
 
         let isAlreadyPresenting = await MainActor.run {
             pdfPaneController.isPresenting(sourceId: source.id)
@@ -422,13 +426,30 @@ final class WebViewManager: NSObject {
         if isAlreadyPresenting {
             await MainActor.run {
                 activePDFPaneStreamId = source.streamId
-                pdfPaneController.navigateToHighlight(id: highlightId, page: page)
+                pdfPaneController.navigateToDestination(highlightId: highlightId, page: page, chunk: chunk, quote: quote)
             }
             return
         }
 
         openPDFSource(source, sourceService: sourceService) { controller in
-            controller.navigateToHighlight(id: highlightId, page: page)
+            controller.navigateToDestination(highlightId: highlightId, page: page, chunk: chunk, quote: quote)
+        }
+    }
+
+    private func loadPDFDestinationChunk(id chunkId: UUID?, sourceId: UUID) -> SourceChunk? {
+        guard let chunkId, let persistence else {
+            return nil
+        }
+
+        do {
+            guard let chunk = try persistence.loadSourceChunk(id: chunkId),
+                  chunk.sourceId == sourceId else {
+                return nil
+            }
+            return chunk
+        } catch {
+            DebugLog.log("[WebViewManager] Failed to load source chunk for PDF destination (\(DebugLog.errorSummary(error)))")
+            return nil
         }
     }
 

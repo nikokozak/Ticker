@@ -71,6 +71,226 @@ private enum PDFHighlightAnnotationStyle {
     static let escapeKeyCode: UInt16 = 53
 }
 
+struct PDFCitationMatch {
+    let selection: PDFSelection
+    let page: PDFPage
+    let bounds: CGRect
+}
+
+enum PDFCitationFallbackAffordance {
+    static func shouldShow(chunkPresent: Bool, matchFound: Bool) -> Bool {
+        chunkPresent && !matchFound
+    }
+}
+
+struct PDFPaneOpeningLayout: Equatable {
+    let targetWindowFrame: CGRect
+    let paneWidth: CGFloat
+    let shouldResizeWindow: Bool
+
+    static func calculate(
+        currentFrame: CGRect,
+        visibleFrame: CGRect,
+        isNativeFullscreen: Bool
+    ) -> PDFPaneOpeningLayout {
+        if isNativeFullscreen || currentFrame.width >= visibleFrame.width {
+            return PDFPaneOpeningLayout(
+                targetWindowFrame: currentFrame,
+                paneWidth: floor(currentFrame.width * 0.5),
+                shouldResizeWindow: false
+            )
+        }
+
+        let height = min(currentFrame.height, visibleFrame.height)
+        let minY = visibleFrame.minY
+        let maxY = visibleFrame.maxY - height
+        let y = min(max(currentFrame.origin.y, minY), maxY)
+        let targetFrame = CGRect(
+            x: visibleFrame.minX,
+            y: y,
+            width: visibleFrame.width,
+            height: height
+        )
+
+        return PDFPaneOpeningLayout(
+            targetWindowFrame: targetFrame,
+            paneWidth: floor(targetFrame.width * 0.5),
+            shouldResizeWindow: true
+        )
+    }
+}
+
+enum PDFPaneWindowRestore {
+    static func targetFrame(savedFrame: CGRect?, isNativeFullscreen: Bool) -> CGRect? {
+        isNativeFullscreen ? nil : savedFrame
+    }
+}
+
+enum PDFCitationNavigator {
+    static func normalizeQuote(_ quote: String) -> String {
+        NormalizedTextMap.build(from: quote).normalized
+    }
+
+    static func verifiedOriginalSpan(in chunkText: String, quote: String?) -> String? {
+        guard let quote else { return nil }
+
+        let normalizedQuote = normalizeQuote(quote)
+        guard !normalizedQuote.isEmpty else { return nil }
+
+        let chunkMap = NormalizedTextMap.build(from: chunkText)
+        guard let normalizedRange = chunkMap.normalized.range(of: normalizedQuote),
+              let originalRange = chunkMap.originalRange(for: normalizedRange) else {
+            return nil
+        }
+
+        return String(chunkText[originalRange])
+    }
+
+    static func match(in document: PDFDocument, chunk: SourceChunk, quote: String?) -> PDFCitationMatch? {
+        guard let pageRange = pageRange(for: chunk, pageCount: document.pageCount) else {
+            return nil
+        }
+
+        guard let verifiedSpan = verifiedOriginalSpan(in: chunk.text, quote: quote) else {
+            return nil
+        }
+
+        for pageNumber in pageRange {
+            guard let page = document.page(at: pageNumber - 1),
+                  let selection = selection(on: page, matching: verifiedSpan) else { continue }
+            let bounds = selection.bounds(for: page)
+            guard bounds.isFiniteAndNonEmpty else { continue }
+
+            return PDFCitationMatch(selection: selection, page: page, bounds: bounds)
+        }
+
+        return nil
+    }
+
+    static func fallbackPage(for chunk: SourceChunk, requestedPage: Int?) -> Int {
+        requestedPage ?? chunk.pageStart
+    }
+
+    static func pageRange(for chunk: SourceChunk, pageCount: Int) -> ClosedRange<Int>? {
+        guard pageCount > 0 else { return nil }
+        let start = max(1, min(chunk.pageStart, chunk.pageEnd))
+        let end = min(pageCount, max(chunk.pageStart, chunk.pageEnd))
+        guard start <= end else { return nil }
+        return start...end
+    }
+
+    private static func selection(on page: PDFPage, matching verifiedSpan: String) -> PDFSelection? {
+        guard let pageText = page.string else { return nil }
+
+        let normalizedSpan = normalizeQuote(verifiedSpan)
+        guard !normalizedSpan.isEmpty else { return nil }
+
+        let pageMap = NormalizedTextMap.build(from: pageText)
+        guard let normalizedRange = pageMap.normalized.range(of: normalizedSpan),
+              let originalRange = pageMap.originalRange(for: normalizedRange) else {
+            return nil
+        }
+
+        let nsRange = NSRange(originalRange, in: pageText)
+        guard nsRange.location != NSNotFound, nsRange.length > 0 else { return nil }
+        return page.selection(for: nsRange)
+    }
+
+    private struct NormalizedTextMap {
+        struct OriginalSpan {
+            let start: String.Index
+            let end: String.Index
+        }
+
+        let normalized: String
+        let originalSpans: [OriginalSpan]
+
+        static func build(from text: String) -> NormalizedTextMap {
+            var normalized = ""
+            var originalSpans: [OriginalSpan] = []
+            var pendingWhitespaceStart: String.Index?
+            var pendingWhitespaceEnd: String.Index?
+            var index = text.startIndex
+
+            while index < text.endIndex {
+                let nextIndex = text.index(after: index)
+                let character = text[index]
+
+                if normalizedReplacement(for: character).isEmpty {
+                    index = nextIndex
+                    continue
+                }
+
+                if isWhitespace(character) {
+                    if !normalized.isEmpty {
+                        pendingWhitespaceStart = pendingWhitespaceStart ?? index
+                        pendingWhitespaceEnd = nextIndex
+                    }
+                    index = nextIndex
+                    continue
+                }
+
+                if let whitespaceStart = pendingWhitespaceStart,
+                   let whitespaceEnd = pendingWhitespaceEnd {
+                    normalized.append(" ")
+                    originalSpans.append(OriginalSpan(start: whitespaceStart, end: whitespaceEnd))
+                    pendingWhitespaceStart = nil
+                    pendingWhitespaceEnd = nil
+                }
+
+                for normalizedCharacter in normalizedReplacement(for: character) {
+                    normalized.append(normalizedCharacter)
+                    originalSpans.append(OriginalSpan(start: index, end: nextIndex))
+                }
+                index = nextIndex
+            }
+
+            return NormalizedTextMap(normalized: normalized, originalSpans: originalSpans)
+        }
+
+        func originalRange(for normalizedRange: Range<String.Index>) -> Range<String.Index>? {
+            let lowerOffset = normalized.distance(from: normalized.startIndex, to: normalizedRange.lowerBound)
+            let upperOffset = normalized.distance(from: normalized.startIndex, to: normalizedRange.upperBound)
+            guard lowerOffset >= 0,
+                  upperOffset > lowerOffset,
+                  lowerOffset < originalSpans.count,
+                  upperOffset <= originalSpans.count else {
+                return nil
+            }
+
+            return originalSpans[lowerOffset].start..<originalSpans[upperOffset - 1].end
+        }
+
+        private static func normalizedReplacement(for character: Character) -> String {
+            String(character)
+                .replacingOccurrences(of: "\u{00AD}", with: "")
+                .replacingOccurrences(of: "\u{201C}", with: "\"")
+                .replacingOccurrences(of: "\u{201D}", with: "\"")
+                .replacingOccurrences(of: "\u{2018}", with: "'")
+                .replacingOccurrences(of: "\u{2019}", with: "'")
+                .lowercased()
+        }
+
+        private static func isWhitespace(_ character: Character) -> Bool {
+            !character.unicodeScalars.isEmpty
+                && character.unicodeScalars.allSatisfy {
+                    CharacterSet.whitespacesAndNewlines.contains($0)
+                }
+        }
+    }
+}
+
+private extension CGRect {
+    var isFiniteAndNonEmpty: Bool {
+        origin.x.isFinite
+            && origin.y.isFinite
+            && size.width.isFinite
+            && size.height.isFinite
+            && width > 0
+            && height > 0
+    }
+}
+
 private final class PDFPaneResizeHandleView: NSView {
     override func resetCursorRects() {
         super.resetCursorRects()
@@ -102,6 +322,7 @@ final class PDFReaderPaneController: NSViewController {
     private let minimumPDFPaneWidth: CGFloat = 320
     private let minimumEditorPaneWidth: CGFloat = 440
     private var pdfPaneResizeStartWidth: CGFloat = 0
+    private var prePDFPaneWindowFrame: CGRect?
     private var activePDFContext: (streamId: UUID, sourceId: UUID, sourceName: String, fileURL: URL)?
     private var isAnchorPickMode = false
     private var anchorPickMouseMonitor: Any?
@@ -217,6 +438,15 @@ final class PDFReaderPaneController: NSViewController {
         navigate(toPageNumber: pageNumber)
     }
 
+    func navigateToDestination(highlightId: String?, page pageNumber: Int?, chunk: SourceChunk?, quote: String?) {
+        if let chunk {
+            navigateToCitationChunk(chunk, fallbackPage: pageNumber, quote: quote)
+            return
+        }
+
+        navigateToHighlight(id: highlightId, page: pageNumber)
+    }
+
     func removeHighlightAnnotations(ids: [String]) {
         guard !ids.isEmpty,
               let document = pdfPanePDFView.document else {
@@ -253,21 +483,43 @@ final class PDFReaderPaneController: NSViewController {
                 return true
             }
 
-            let targetWidth = min(preferredPDFPaneWidth, max(minimumPDFPaneWidth, maxAllowedPDFPaneWidth()))
-            let grownWidth: CGFloat
+            let paneWidth: CGFloat
+            var targetWindowFrame: CGRect?
+            var shouldResizeWindow = false
+
             if let window = view.window {
-                grownWidth = growMainWindowForPDFPane(window, by: targetWidth)
+                let isFullscreen = window.styleMask.contains(.fullScreen)
+                if prePDFPaneWindowFrame == nil, !isFullscreen {
+                    prePDFPaneWindowFrame = window.frame
+                }
+                let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? window.frame
+                let layout = PDFPaneOpeningLayout.calculate(
+                    currentFrame: window.frame,
+                    visibleFrame: screenFrame,
+                    isNativeFullscreen: isFullscreen
+                )
+                paneWidth = layout.paneWidth
+                targetWindowFrame = layout.targetWindowFrame
+                shouldResizeWindow = layout.shouldResizeWindow
             } else {
-                grownWidth = targetWidth
+                paneWidth = preferredPDFPaneWidth
             }
-            guard grownWidth >= minimumPDFPaneWidth else {
+
+            guard paneWidth >= minimumPDFPaneWidth else {
+                prePDFPaneWindowFrame = nil
                 return false
             }
 
-            widthConstraint.constant = grownWidth
-            pdfPaneView.isHidden = false
+            widthConstraint.constant = paneWidth
             view.superview?.layoutSubtreeIfNeeded()
+            pdfPaneView.isHidden = false
             isPDFPaneVisible = true
+
+            if shouldResizeWindow,
+               let window = view.window,
+               let targetWindowFrame {
+                window.setFrame(targetWindowFrame, display: true, animate: true)
+            }
             return true
         }
 
@@ -278,13 +530,18 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         exitAnchorPickMode(notifyCancelled: true)
-        let paneWidth = max(0, widthConstraint.constant)
+        let restoreFrame = PDFPaneWindowRestore.targetFrame(
+            savedFrame: prePDFPaneWindowFrame,
+            isNativeFullscreen: view.window?.styleMask.contains(.fullScreen) == true
+        )
+        prePDFPaneWindowFrame = nil
         widthConstraint.constant = 0
         view.superview?.layoutSubtreeIfNeeded()
         pdfPaneView.isHidden = true
         isPDFPaneVisible = false
-        if let window = view.window {
-            shrinkMainWindowAfterClosingPDFPane(window, by: paneWidth)
+        if let window = view.window,
+           let restoreFrame {
+            window.setFrame(restoreFrame, display: true, animate: true)
         }
         releaseActivePDFContext()
         return true
@@ -488,36 +745,6 @@ final class PDFReaderPaneController: NSViewController {
         return max(minimumPDFPaneWidth, min(screenCap, localCap))
     }
 
-    private func growMainWindowForPDFPane(_ window: NSWindow, by requestedWidth: CGFloat) -> CGFloat {
-        let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? window.frame
-        let rightEdge = min(window.frame.maxX, screenFrame.maxX - 8)
-        let maxWidthAtPosition = rightEdge - (screenFrame.minX + 8)
-        let maxGrow = max(0, maxWidthAtPosition - window.frame.width)
-        let actualGrow = min(requestedWidth, maxGrow)
-
-        guard actualGrow > 0 else { return 0 }
-
-        var frame = window.frame
-        frame.origin.x -= actualGrow
-        frame.size.width += actualGrow
-        window.setFrame(frame, display: true, animate: true)
-        return actualGrow
-    }
-
-    private func shrinkMainWindowAfterClosingPDFPane(_ window: NSWindow, by paneWidth: CGFloat) {
-        guard paneWidth > 0 else { return }
-        let minimumWidth = max(window.minSize.width, 300)
-        let maxShrink = max(0, window.frame.width - minimumWidth)
-        let actualShrink = min(paneWidth, maxShrink)
-
-        guard actualShrink > 0 else { return }
-
-        var frame = window.frame
-        frame.origin.x += actualShrink
-        frame.size.width -= actualShrink
-        window.setFrame(frame, display: true, animate: true)
-    }
-
     private func clampPDFPaneWidth(_ proposed: CGFloat) -> CGFloat {
         let hardMax = maxAllowedPDFPaneWidth()
         let hostWidth = view.superview?.bounds.width ?? view.bounds.width
@@ -715,6 +942,23 @@ final class PDFReaderPaneController: NSViewController {
             .map { ($0.annotation, $0.page) }
     }
 
+    private func navigateToCitationChunk(_ chunk: SourceChunk, fallbackPage pageNumber: Int?, quote: String?) {
+        guard let document = pdfPanePDFView.document,
+              let match = PDFCitationNavigator.match(in: document, chunk: chunk, quote: quote) else {
+            let fallbackPage = PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: pageNumber)
+            if let page = navigate(toPageNumber: fallbackPage),
+               PDFCitationFallbackAffordance.shouldShow(chunkPresent: true, matchFound: false) {
+                showCitationPageFallbackAffordance(on: page)
+            }
+            return
+        }
+
+        navigate(to: match.bounds, on: match.page)
+        if let pageRange = PDFCitationNavigator.pageRange(for: chunk, pageCount: document.pageCount) {
+            flashCitationSelection(match.selection, pageRange: pageRange)
+        }
+    }
+
     private func navigate(to rect: CGRect, on page: PDFPage) {
         let visibleHeight = pdfPanePDFView.convert(pdfPanePDFView.bounds, to: page).height
         let pageBounds = page.bounds(for: .mediaBox)
@@ -735,20 +979,59 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.go(to: destination)
     }
 
-    private func navigate(toPageNumber pageNumber: Int?) {
+    @discardableResult
+    private func navigate(toPageNumber pageNumber: Int?) -> PDFPage? {
         guard let document = pdfPanePDFView.document,
               document.pageCount > 0 else {
-            return
+            return nil
         }
 
         let clampedPage = max(1, min(pageNumber ?? 1, document.pageCount))
-        guard let page = document.page(at: clampedPage - 1) else { return }
+        guard let page = document.page(at: clampedPage - 1) else { return nil }
         let bounds = page.bounds(for: .mediaBox)
         let destination = PDFDestination(page: page, at: CGPoint(x: bounds.minX, y: bounds.maxY))
         pdfPanePDFView.go(to: destination)
+        return page
     }
 
-    private func pulseAnnotations(_ annotations: [PDFAnnotation]) {
+    private func showCitationPageFallbackAffordance(on page: PDFPage) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+
+            self.pdfPanePDFView.layoutSubtreeIfNeeded()
+            let pageRect = self.pdfPanePDFView.convert(page.bounds(for: .cropBox), from: page)
+            let visiblePageRect = pageRect.intersection(self.pdfPanePDFView.bounds)
+            guard visiblePageRect.isFiniteAndNonEmpty else { return }
+
+            let flash = self.makeCitationPageFallbackFlash(visiblePageRect: visiblePageRect)
+            self.pdfPanePDFView.addSubview(flash)
+            self.fadeTransientCitationFallbackViews([flash])
+        }
+    }
+
+    private func makeCitationPageFallbackFlash(visiblePageRect: CGRect) -> NSView {
+        let flash = NSView(frame: visiblePageRect)
+        flash.wantsLayer = true
+        flash.layer?.backgroundColor = PDFHighlightAnnotationStyle.pulseColor.withAlphaComponent(0.38).cgColor
+        flash.alphaValue = 0
+        return flash
+    }
+
+    private func fadeTransientCitationFallbackViews(_ views: [NSView]) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            views.forEach { $0.animator().alphaValue = 1 }
+        } completionHandler: {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 1.0
+                views.forEach { $0.animator().alphaValue = 0 }
+            } completionHandler: {
+                views.forEach { $0.removeFromSuperview() }
+            }
+        }
+    }
+
+    private func pulseAnnotations(_ annotations: [PDFAnnotation], removeAfterPulse: Bool = false) {
         guard !annotations.isEmpty else { return }
         let originalColors = annotations.map(\.color)
         let originalInteriorColors = annotations.map(\.interiorColor)
@@ -763,12 +1046,48 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.needsDisplay = true
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            for ((annotation, color), interiorColor) in zip(zip(annotations, originalColors), originalInteriorColors) {
-                annotation.color = color
-                annotation.interiorColor = interiorColor
+            if removeAfterPulse {
+                annotations.forEach { annotation in
+                    annotation.page?.removeAnnotation(annotation)
+                }
+            } else {
+                for ((annotation, color), interiorColor) in zip(zip(annotations, originalColors), originalInteriorColors) {
+                    annotation.color = color
+                    annotation.interiorColor = interiorColor
+                }
             }
             self?.pdfPanePDFView.needsDisplay = true
         }
+    }
+
+    private func flashCitationSelection(_ selection: PDFSelection, pageRange: ClosedRange<Int>) {
+        guard let document = pdfPanePDFView.document else { return }
+
+        let lineSelections = selection.selectionsByLine()
+        let selections = lineSelections.isEmpty ? [selection] : lineSelections
+        var annotations: [PDFAnnotation] = []
+
+        for lineSelection in selections {
+            for page in lineSelection.pages {
+                let pageNumber = document.index(for: page) + 1
+                guard pageRange.contains(pageNumber) else {
+                    continue
+                }
+
+                let bounds = lineSelection.bounds(for: page)
+                guard bounds.isFiniteAndNonEmpty else {
+                    continue
+                }
+
+                let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
+                annotation.color = PDFHighlightAnnotationStyle.color
+                annotation.userName = "Ticker-Next"
+                page.addAnnotation(annotation)
+                annotations.append(annotation)
+            }
+        }
+
+        pulseAnnotations(annotations, removeAfterPulse: true)
     }
 
     private func handleAnchorPickMouseDown(_ event: NSEvent) -> NSEvent? {

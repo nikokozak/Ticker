@@ -251,6 +251,38 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_loadSourceChunkReturnsSingleChunkById() throws {
+        try withTempPersistenceService { service in
+            let source = try savePDFSource(in: service)
+            let first = SourceChunk(
+                sourceId: source.id,
+                seq: 0,
+                text: "First chunk text.",
+                pageStart: 1,
+                pageEnd: 1
+            )
+            let second = SourceChunk(
+                sourceId: source.id,
+                seq: 1,
+                text: "Second chunk text.",
+                pageStart: 2,
+                pageEnd: 2
+            )
+
+            try service.saveSourceChunks([first, second], for: source.id)
+
+            let loaded = try XCTUnwrap(service.loadSourceChunk(id: second.id))
+            XCTAssertEqual(loaded.id, second.id)
+            XCTAssertEqual(loaded.sourceId, second.sourceId)
+            XCTAssertEqual(loaded.seq, second.seq)
+            XCTAssertEqual(loaded.text, second.text)
+            XCTAssertEqual(loaded.pageStart, second.pageStart)
+            XCTAssertEqual(loaded.pageEnd, second.pageEnd)
+            XCTAssertEqual(loaded.sectionPath, second.sectionPath)
+            XCTAssertNil(try service.loadSourceChunk(id: UUID()))
+        }
+    }
+
     func test_retrievalReturnsNoContextForIrrelevantQuery() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Large Source")
@@ -412,7 +444,7 @@ final class StreamDocumentTests: XCTestCase {
             )
             XCTAssertEqual(context.mode, .retrieved)
             XCTAssertEqual(context.chunks.map(\.sourceName), ["Weak.pdf"])
-            XCTAssertTrue(context.text.contains("[1] Weak.pdf, p.5:"))
+            XCTAssertTrue(context.text.contains("[1] Weak, p.5:"))
         }
     }
 
@@ -527,7 +559,7 @@ final class StreamDocumentTests: XCTestCase {
 
             XCTAssertEqual(context.mode, .retrieved)
             XCTAssertEqual(context.text, """
-            [1] Manual.pdf, p.12–14 (§3.2 Storage):
+            [1] Manual, p.12–14 (§3.2 Storage):
             storage storage storage manifold manifold manifold receipts receipts receipts
             """)
         }
@@ -791,6 +823,310 @@ final class StreamDocumentTests: XCTestCase {
         let ids = PDFHighlightLinkReferenceExtractor.highlightIds(in: markdown)
 
         XCTAssertEqual(ids, Set([firstHighlightId.uuidString, secondHighlightId.uuidString]))
+    }
+
+    func test_tickerPDFURLParserAcceptsExistingHighlightDestination() throws {
+        let sourceId = try XCTUnwrap(UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+        let highlightId = try XCTUnwrap(UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
+
+        let destination = try XCTUnwrap(
+            TickerPDFURLParser.parse("ticker-pdf://\(sourceId.uuidString)?highlight=\(highlightId.uuidString)&page=4")
+        )
+
+        XCTAssertEqual(destination.sourceId, sourceId)
+        XCTAssertEqual(destination.highlightId, highlightId.uuidString)
+        XCTAssertEqual(destination.page, 4)
+        XCTAssertNil(destination.chunkId)
+        XCTAssertNil(destination.quote)
+    }
+
+    func test_tickerPDFURLParserAcceptsLegacyBareHighlightDestination() throws {
+        let highlightId = try XCTUnwrap(UUID(uuidString: "33333333-3333-3333-3333-333333333333"))
+
+        let destination = try XCTUnwrap(
+            TickerPDFURLParser.parse("ticker-pdf://\(highlightId.uuidString)")
+        )
+
+        XCTAssertNil(destination.sourceId)
+        XCTAssertEqual(destination.highlightId, highlightId.uuidString)
+        XCTAssertNil(destination.page)
+        XCTAssertNil(destination.chunkId)
+        XCTAssertNil(destination.quote)
+    }
+
+    func test_tickerPDFURLParserAcceptsCitationChunkDestination() throws {
+        let sourceId = try XCTUnwrap(UUID(uuidString: "44444444-4444-4444-4444-444444444444"))
+        let chunkId = try XCTUnwrap(UUID(uuidString: "55555555-5555-5555-5555-555555555555"))
+
+        let destination = try XCTUnwrap(
+            TickerPDFURLParser.parse("ticker-pdf://\(sourceId.uuidString)?page=12&chunk=\(chunkId.uuidString)")
+        )
+
+        XCTAssertEqual(destination.sourceId, sourceId)
+        XCTAssertNil(destination.highlightId)
+        XCTAssertEqual(destination.page, 12)
+        XCTAssertEqual(destination.chunkId, chunkId)
+        XCTAssertNil(destination.quote)
+    }
+
+    func test_tickerPDFURLParserAcceptsCitationQuoteDestination() throws {
+        let sourceId = try XCTUnwrap(UUID(uuidString: "44444444-4444-4444-4444-444444444444"))
+        let chunkId = try XCTUnwrap(UUID(uuidString: "55555555-5555-5555-5555-555555555555"))
+
+        let destination = try XCTUnwrap(
+            TickerPDFURLParser.parse("ticker-pdf://\(sourceId.uuidString)?page=12&chunk=\(chunkId.uuidString)&q=quoted%20evidence%20%26%20support")
+        )
+
+        XCTAssertEqual(destination.sourceId, sourceId)
+        XCTAssertNil(destination.highlightId)
+        XCTAssertEqual(destination.page, 12)
+        XCTAssertEqual(destination.chunkId, chunkId)
+        XCTAssertEqual(destination.quote, "quoted evidence & support")
+    }
+
+    func test_openPDFDestinationFailureMessagesArePlainLanguage() throws {
+        XCTAssertEqual(
+            OpenPDFDestinationFailure.missingSource.userMessage,
+            "This link points to a source that's no longer in this stream."
+        )
+        XCTAssertEqual(
+            OpenPDFDestinationFailure.damagedLink.userMessage,
+            "This link is damaged and can't be opened."
+        )
+        XCTAssertEqual(
+            OpenPDFDestinationFailure.wrongStream.userMessage,
+            "This link points to a source in another stream."
+        )
+    }
+
+    func test_pdfPaneOpeningLayoutExpandsToVisibleFrameWidthAndSplitsEvenly() throws {
+        let layout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: 220, y: 120, width: 900, height: 700),
+            visibleFrame: CGRect(x: 0, y: 25, width: 1440, height: 875),
+            isNativeFullscreen: false
+        )
+
+        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: 120, width: 1440, height: 700))
+        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertTrue(layout.shouldResizeWindow)
+    }
+
+    func test_pdfPaneOpeningLayoutClampsHeightAndVerticalPositionInsideVisibleFrame() throws {
+        let layout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: 220, y: -200, width: 900, height: 900),
+            visibleFrame: CGRect(x: 0, y: 25, width: 1440, height: 800),
+            isNativeFullscreen: false
+        )
+
+        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: 25, width: 1440, height: 800))
+        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertTrue(layout.shouldResizeWindow)
+    }
+
+    func test_pdfPaneOpeningLayoutSkipsResizeForFullWidthOrFullscreenWindow() throws {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1440, height: 875)
+        let fullWidthLayout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: -10, y: 120, width: 1500, height: 700),
+            visibleFrame: visibleFrame,
+            isNativeFullscreen: false
+        )
+        let fullscreenLayout = PDFPaneOpeningLayout.calculate(
+            currentFrame: CGRect(x: 220, y: 120, width: 900, height: 700),
+            visibleFrame: visibleFrame,
+            isNativeFullscreen: true
+        )
+
+        XCTAssertEqual(fullWidthLayout.targetWindowFrame, CGRect(x: -10, y: 120, width: 1500, height: 700))
+        XCTAssertEqual(fullWidthLayout.paneWidth, 750)
+        XCTAssertFalse(fullWidthLayout.shouldResizeWindow)
+        XCTAssertEqual(fullscreenLayout.targetWindowFrame, CGRect(x: 220, y: 120, width: 900, height: 700))
+        XCTAssertEqual(fullscreenLayout.paneWidth, 450)
+        XCTAssertFalse(fullscreenLayout.shouldResizeWindow)
+    }
+
+    func test_pdfPaneWindowRestoreUsesSavedFrameExceptInFullscreen() throws {
+        let saved = CGRect(x: 120, y: 80, width: 900, height: 700)
+
+        XCTAssertEqual(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: false), saved)
+        XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: true))
+        XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: nil, isNativeFullscreen: false))
+    }
+
+    func test_pdfCitationNavigatorNormalizesQuoteText() throws {
+        XCTAssertEqual(
+            PDFCitationNavigator.normalizeQuote("Reader\u{2019}s \u{201C}quoted\u{201D}\ntext\u{00AD} across   lines"),
+            "reader's \"quoted\" text across lines"
+        )
+    }
+
+    func test_pdfCitationNavigatorRecoversOriginalChunkSpanFromNormalizedQuote() throws {
+        let chunkText = "Before reader's \u{201C}quoted\u{201D}\ntext\u{00AD} across   lines after."
+        let span = PDFCitationNavigator.verifiedOriginalSpan(
+            in: chunkText,
+            quote: "reader\u{2019}s \"quoted\"   text across lines"
+        )
+
+        XCTAssertEqual(span, "reader's \u{201C}quoted\u{201D}\ntext\u{00AD} across   lines")
+    }
+
+    func test_pdfCitationNavigatorUsesFirstGenericPhraseInChunk() throws {
+        let chunkText = "First CHECK for stack underflow here. Later check for stack underflow there."
+        let span = PDFCitationNavigator.verifiedOriginalSpan(
+            in: chunkText,
+            quote: "check for stack underflow"
+        )
+
+        XCTAssertEqual(span, "CHECK for stack underflow")
+    }
+
+    func test_pdfCitationNavigatorReturnsNilWhenQuoteIsAbsentFromChunk() throws {
+        XCTAssertNil(
+            PDFCitationNavigator.verifiedOriginalSpan(
+                in: "Chunk text contains unrelated evidence.",
+                quote: "absent quoted evidence"
+            )
+        )
+    }
+
+    func test_pdfCitationFallbackAffordanceOnlyShowsForCitationChunkFallback() throws {
+        XCTAssertTrue(PDFCitationFallbackAffordance.shouldShow(chunkPresent: true, matchFound: false))
+        XCTAssertFalse(PDFCitationFallbackAffordance.shouldShow(chunkPresent: true, matchFound: true))
+        XCTAssertFalse(PDFCitationFallbackAffordance.shouldShow(chunkPresent: false, matchFound: false))
+    }
+
+    func test_pdfCitationNavigatorSelectsVerifiedQuoteOnExtractedPage() throws {
+        let document = try makePDFDocument(pages: [
+            "First page has only setup text.",
+            "Second page says stack cells remain available for verified citation flashes.",
+            "Third page has unrelated text."
+        ])
+        let chunkText = (0..<document.pageCount)
+            .compactMap { document.page(at: $0)?.string }
+            .joined(separator: "\n")
+        let chunk = SourceChunk(
+            sourceId: UUID(),
+            seq: 0,
+            text: chunkText,
+            pageStart: 1,
+            pageEnd: 3
+        )
+
+        let quote = "stack cells remain available for verified citation flashes"
+        let match = try XCTUnwrap(PDFCitationNavigator.match(in: document, chunk: chunk, quote: quote))
+
+        XCTAssertEqual(document.index(for: match.page), 1)
+        XCTAssertFalse(match.bounds.isEmpty)
+        XCTAssertTrue(PDFCitationNavigator.normalizeQuote(match.selection.string ?? "").contains(quote))
+    }
+
+    func test_pdfCitationNavigatorReturnsNilWhenVerifiedSpanIsAbsentFromPageText() throws {
+        let document = try makePDFDocument(pages: [
+            "First page text.",
+            "Second page text."
+        ])
+        let chunk = SourceChunk(
+            sourceId: UUID(),
+            seq: 0,
+            text: "The stored chunk has absent quoted evidence that the page text does not expose.",
+            pageStart: 2,
+            pageEnd: 2
+        )
+
+        XCTAssertNil(PDFCitationNavigator.match(in: document, chunk: chunk, quote: "absent quoted evidence"))
+    }
+
+    func test_pdfCitationNavigatorFallsBackToPageWhenQuoteIsAbsentOrMissed() throws {
+        let document = try makePDFDocument(pages: [
+            "First page text.",
+            "Second page text."
+        ])
+        let chunk = SourceChunk(
+            sourceId: UUID(),
+            seq: 0,
+            text: "This absent sentence is long enough to become the citation search needle.",
+            pageStart: 2,
+            pageEnd: 2
+        )
+
+        XCTAssertNil(PDFCitationNavigator.match(in: document, chunk: chunk, quote: nil))
+        XCTAssertNil(PDFCitationNavigator.match(in: document, chunk: chunk, quote: "absent quoted evidence"))
+        XCTAssertEqual(PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: nil), 2)
+        XCTAssertEqual(PDFCitationNavigator.fallbackPage(for: chunk, requestedPage: 1), 1)
+    }
+
+    func test_sourceShortTitleUsesAnnaArchiveFirstFilenameSegment() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "Thinking Forth -- Leo Brodie -- Anna's Archive.pdf"
+            ),
+            "Thinking Forth"
+        )
+    }
+
+    func test_sourceShortTitleUsesPlainFilenameStem() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(displayName: "report.pdf"),
+            "report"
+        )
+    }
+
+    func test_sourceShortTitlePrefersSaneMetadataTitle() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "123456789.pdf",
+                metadataTitle: "Clean Metadata Title"
+            ),
+            "Clean Metadata Title"
+        )
+    }
+
+    func test_documentAICitationPayloadBuildsFromRetrievedSourceContext() throws {
+        let firstSourceId = try XCTUnwrap(UUID(uuidString: "66666666-6666-6666-6666-666666666666"))
+        let secondSourceId = try XCTUnwrap(UUID(uuidString: "77777777-7777-7777-7777-777777777777"))
+        let firstChunkId = try XCTUnwrap(UUID(uuidString: "88888888-8888-8888-8888-888888888888"))
+        let secondChunkId = try XCTUnwrap(UUID(uuidString: "99999999-9999-9999-9999-999999999999"))
+        let context = SourceContext(
+            text: "[1] abcdefghijklmnopqrstuvwxyzABCDE.pdf, p.12:\nAlpha\n\n[2] Guide.md, p.2:\nBeta",
+            chunks: [
+                RetrievedChunk(
+                    id: firstChunkId,
+                    sourceId: firstSourceId,
+                    sourceName: "abcdefghijklmnopqrstuvwxyzABCDE.pdf",
+                    seq: 0,
+                    text: "Alpha",
+                    pageStart: 12,
+                    pageEnd: 12,
+                    sectionPath: nil,
+                    score: -10
+                ),
+                RetrievedChunk(
+                    id: secondChunkId,
+                    sourceId: secondSourceId,
+                    sourceName: "Guide.md",
+                    seq: 1,
+                    text: "Beta",
+                    pageStart: 2,
+                    pageEnd: 3,
+                    sectionPath: nil,
+                    score: -8
+                )
+            ],
+            mode: .retrieved
+        )
+
+        let payload = try XCTUnwrap(DocumentAICitationManifest.bridgePayload(from: context))
+
+        XCTAssertEqual(payload.count, 2)
+        XCTAssertEqual(payload[0]["n"] as? Int, 1)
+        XCTAssertEqual(payload[0]["chunkId"] as? String, firstChunkId.uuidString)
+        XCTAssertEqual(payload[0]["sourceId"] as? String, firstSourceId.uuidString)
+        XCTAssertEqual(payload[0]["page"] as? Int, 12)
+        XCTAssertEqual(payload[0]["shortTitle"] as? String, "abcdefghijk...vwxyzABCDE")
+        XCTAssertEqual(payload[1]["n"] as? Int, 2)
+        XCTAssertEqual(payload[1]["chunkId"] as? String, secondChunkId.uuidString)
+        XCTAssertEqual(payload[1]["sourceId"] as? String, secondSourceId.uuidString)
+        XCTAssertEqual(payload[1]["page"] as? Int, 2)
+        XCTAssertEqual(payload[1]["shortTitle"] as? String, "Guide")
     }
 
     func test_appendToStreamDocument_createsDocumentWithExactlyFragmentWhenMissing() throws {

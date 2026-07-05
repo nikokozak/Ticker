@@ -5,9 +5,12 @@ import type { SyntaxNode } from '@lezer/common';
 import { bridge } from '../types';
 
 export interface TickerPDFDestination {
-  sourceId: string;
+  sourceId?: string;
   highlightId?: string;
   page?: number;
+  chunkId?: string;
+  quote?: string;
+  rawURL: string;
 }
 
 export function parseTickerPDFURL(rawURL: string): TickerPDFDestination | null {
@@ -15,18 +18,33 @@ export function parseTickerPDFURL(rawURL: string): TickerPDFDestination | null {
 
   try {
     const url = new URL(rawURL);
-    const sourceId = decodeURIComponent(url.hostname || url.pathname.replace(/^\/+/, ''));
-    if (!sourceId) return null;
+    const host = decodeURIComponent(url.hostname || url.pathname.replace(/^\/+/, ''));
+    if (!host) return null;
 
     const highlight = url.searchParams.get('highlight')?.trim() || undefined;
+    const chunk = url.searchParams.get('chunk')?.trim() || undefined;
+    const quote = url.searchParams.get('q') || undefined;
     const pageValue = url.searchParams.get('page');
     const pageNumber = pageValue ? Number(pageValue) : NaN;
     const page = Number.isInteger(pageNumber) && pageNumber > 0 ? pageNumber : undefined;
 
+    if (!highlight && !chunk && !page && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(host)) {
+      return {
+        highlightId: host,
+        page: undefined,
+        chunkId: undefined,
+        quote: undefined,
+        rawURL,
+      };
+    }
+
     return {
-      sourceId,
+      sourceId: host,
       highlightId: highlight,
       page,
+      chunkId: chunk,
+      quote,
+      rawURL,
     };
   } catch {
     return null;
@@ -123,9 +141,12 @@ export function tickerPDFLinkExtension(streamId: string): Extension {
           type: 'openPdfDestination',
           payload: {
             streamId,
+            url: destination.rawURL,
             sourceId: destination.sourceId,
             highlightId: destination.highlightId,
             page: destination.page,
+            chunkId: destination.chunkId,
+            quote: destination.quote,
           },
         });
         return true;
