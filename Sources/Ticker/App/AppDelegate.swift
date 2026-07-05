@@ -44,6 +44,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        CrashSessionSentinel.markLaunch()
         setupStatusItem()
         setupMenuBar()
         setupAppearanceObserver()
@@ -170,6 +171,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        CrashSessionSentinel.markCleanTermination()
         if let pdfFindKeyMonitor {
             NSEvent.removeMonitor(pdfFindKeyMonitor)
             self.pdfFindKeyMonitor = nil

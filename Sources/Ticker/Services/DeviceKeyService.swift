@@ -188,6 +188,74 @@ struct RequestIdEntry {
     let endpoint: String  // "llm", "feedback", "auth", etc.
 }
 
+enum SupportDiagnostics {
+    static let recentLogsMaxBytes = 16 * 1024
+    static let recentCrashMaxBytes = 32 * 1024
+    static let recentCrashMaxAge: TimeInterval = 7 * 24 * 60 * 60
+
+    static func defaultDiagnosticReportsDirectory(fileManager: FileManager = .default) -> URL {
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+    }
+
+    static func newestTickerCrashReport(
+        in directoryURL: URL,
+        now: Date = Date(),
+        fileManager: FileManager = .default,
+        maxAge: TimeInterval = recentCrashMaxAge,
+        maxBytes: Int = recentCrashMaxBytes
+    ) -> String? {
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        let cutoff = now.addingTimeInterval(-maxAge)
+        let newestCrash = entries.compactMap { url -> (url: URL, modifiedAt: Date)? in
+            guard url.lastPathComponent.hasPrefix("TickerNext-"),
+                  url.pathExtension == "ips" else {
+                return nil
+            }
+
+            let resourceValues = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
+            if resourceValues?.isRegularFile == false {
+                return nil
+            }
+
+            guard let modifiedAt = resourceValues?.contentModificationDate,
+                  modifiedAt >= cutoff else {
+                return nil
+            }
+
+            return (url, modifiedAt)
+        }
+        .max { lhs, rhs in
+            lhs.modifiedAt < rhs.modifiedAt
+        }
+
+        guard let newestCrash else {
+            return nil
+        }
+
+        guard let handle = try? FileHandle(forReadingFrom: newestCrash.url) else {
+            return nil
+        }
+        defer {
+            try? handle.close()
+        }
+
+        guard let data = try? handle.read(upToCount: maxBytes),
+              !data.isEmpty else {
+            return nil
+        }
+
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
 // MARK: - Feedback Response Types
 
 /// Response from proxy `/v1/feedback` endpoint
@@ -231,6 +299,11 @@ actor DeviceKeyService {
 
     private let fileManager: FileManager
     private let fileURL: URL
+    private let diagnosticReportsDirectoryURL: URL
+    private let launchDate: Date
+    private let nowProvider: @Sendable () -> Date
+    private let recentLogsProvider: @Sendable () -> String
+    private let lastSessionCrashedProvider: @Sendable () -> Bool
 
     private var cachedData: DeviceKeyData?
     private(set) var currentState: ProxyAuthState = .unregistered
@@ -266,9 +339,27 @@ actor DeviceKeyService {
         return "https://ticker-proxy.fly.dev"
     }
 
-    init(fileURL: URL? = nil, fileManager: FileManager = .default) {
+    init(
+        fileURL: URL? = nil,
+        fileManager: FileManager = .default,
+        diagnosticReportsDirectoryURL: URL? = nil,
+        launchDate: Date = Date(),
+        nowProvider: @escaping @Sendable () -> Date = { Date() },
+        recentLogsProvider: @escaping @Sendable () -> String = {
+            DebugLog.recentLines(maxBytes: SupportDiagnostics.recentLogsMaxBytes)
+        },
+        lastSessionCrashedProvider: @escaping @Sendable () -> Bool = {
+            CrashSessionSentinel.lastSessionCrashed
+        }
+    ) {
         self.fileManager = fileManager
         self.fileURL = fileURL ?? Self.defaultFileURL(fileManager: fileManager)
+        self.diagnosticReportsDirectoryURL = diagnosticReportsDirectoryURL
+            ?? SupportDiagnostics.defaultDiagnosticReportsDirectory(fileManager: fileManager)
+        self.launchDate = launchDate
+        self.nowProvider = nowProvider
+        self.recentLogsProvider = recentLogsProvider
+        self.lastSessionCrashedProvider = lastSessionCrashedProvider
     }
 
     private static func defaultFileURL(fileManager: FileManager) -> URL {
@@ -541,9 +632,9 @@ actor DeviceKeyService {
     func getSupportBundle() -> [String: Any] {
         let data = loadOrCreate()
         let formatter = ISO8601DateFormatter()
-
-        return [
-            "generated_at": formatter.string(from: Date()),
+        let now = nowProvider()
+        var bundle: [String: Any] = [
+            "generated_at": formatter.string(from: now),
             "app_version": appVersion(),
             "build_number": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown",
             "os_version": osVersion(),
@@ -551,6 +642,9 @@ actor DeviceKeyService {
             "support_id": data.supportId ?? "none",
             "auth_state": currentState.rawValue,
             "diagnostics_enabled": SettingsService.shared.diagnosticsEnabled,
+            "uptime_seconds": max(0, Int(now.timeIntervalSince(launchDate))),
+            "last_session_crashed": lastSessionCrashedProvider(),
+            "recent_logs": recentLogsProvider(),
             "recent_request_ids": recentRequestIds.map { entry in
                 [
                     "request_id": entry.requestId,
@@ -563,6 +657,16 @@ actor DeviceKeyService {
                 "tokens_this_month": cachedUsage?.tokensThisMonth ?? 0
             ]
         ]
+
+        if let recentCrash = SupportDiagnostics.newestTickerCrashReport(
+            in: diagnosticReportsDirectoryURL,
+            now: now,
+            fileManager: fileManager
+        ) {
+            bundle["recent_crash"] = recentCrash
+        }
+
+        return bundle
     }
 
     // MARK: - Feedback Submission (D5)

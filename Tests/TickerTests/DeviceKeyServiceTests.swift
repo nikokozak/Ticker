@@ -3,6 +3,42 @@ import XCTest
 @testable import Ticker
 
 final class DeviceKeyServiceTests: XCTestCase {
+    func test_logRingCapsAndPreservesOrder() {
+        let ring = LogRing(capacity: 3)
+
+        for i in 0..<5 {
+            ring.append("line-\(i)", date: Date(timeIntervalSince1970: TimeInterval(i)))
+        }
+
+        let snapshot = ring.snapshot()
+        XCTAssertEqual(snapshot.count, 3)
+        XCTAssertTrue(snapshot[0].contains("line-2"))
+        XCTAssertTrue(snapshot[1].contains("line-3"))
+        XCTAssertTrue(snapshot[2].contains("line-4"))
+        XCTAssertLessThanOrEqual(Data(ring.joined(maxBytes: 20).utf8).count, 20)
+    }
+
+    func test_logRingThreadSafetySmoke() {
+        let ring = LogRing(capacity: 1_000)
+
+        DispatchQueue.concurrentPerform(iterations: 1_000) { index in
+            ring.append("line-\(index)")
+        }
+
+        XCTAssertEqual(ring.snapshot().count, 1_000)
+    }
+
+    func test_crashSessionSentinelEvaluateLaunch() {
+        XCTAssertEqual(
+            CrashSessionSentinel.evaluateLaunch(markerExisted: true, markerWriteSucceeded: true),
+            CrashSessionSentinel.LaunchResult(lastSessionCrashed: true, markerWriteSucceeded: true)
+        )
+        XCTAssertEqual(
+            CrashSessionSentinel.evaluateLaunch(markerExisted: false, markerWriteSucceeded: false),
+            CrashSessionSentinel.LaunchResult(lastSessionCrashed: false, markerWriteSucceeded: false)
+        )
+    }
+
     func test_loadProxyAuth_createsDeviceJsonWithPrivatePermissions() async throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -102,5 +138,57 @@ final class DeviceKeyServiceTests: XCTestCase {
         XCTAssertEqual(recent.count, 50)
         XCTAssertEqual(recent.first?["request_id"] as? String, "req-10")
         XCTAssertEqual(recent.last?["request_id"] as? String, "req-59")
+    }
+
+    func test_getSupportBundle_includesLogsCrashUptimeAndCrashSentinel() async throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let diagnosticReportsDir = tempDir.appendingPathComponent("DiagnosticReports", isDirectory: true)
+        try fileManager.createDirectory(at: diagnosticReportsDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let recentCrashURL = diagnosticReportsDir.appendingPathComponent("TickerNext-2026-07-05-133000.ips")
+        let staleCrashURL = diagnosticReportsDir.appendingPathComponent("TickerNext-2026-06-01-133000.ips")
+        let otherCrashURL = diagnosticReportsDir.appendingPathComponent("OtherApp-2026-07-05-133000.ips")
+        let recentCrashPayload = "newest crash header\n" + String(repeating: "x", count: 40 * 1024)
+
+        try recentCrashPayload.write(to: recentCrashURL, atomically: true, encoding: .utf8)
+        try "stale crash".write(to: staleCrashURL, atomically: true, encoding: .utf8)
+        try "other crash".write(to: otherCrashURL, atomically: true, encoding: .utf8)
+        try fileManager.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-60)],
+            ofItemAtPath: recentCrashURL.path
+        )
+        try fileManager.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-(8 * 24 * 60 * 60))],
+            ofItemAtPath: staleCrashURL.path
+        )
+        try fileManager.setAttributes(
+            [.modificationDate: now],
+            ofItemAtPath: otherCrashURL.path
+        )
+
+        let fileURL = tempDir.appendingPathComponent("device.json")
+        let service = DeviceKeyService(
+            fileURL: fileURL,
+            diagnosticReportsDirectoryURL: diagnosticReportsDir,
+            launchDate: now.addingTimeInterval(-65),
+            nowProvider: { now },
+            recentLogsProvider: { "log-a\nlog-b" },
+            lastSessionCrashedProvider: { true }
+        )
+
+        _ = await service.loadProxyAuth()
+        let bundle = await service.getSupportBundle()
+
+        XCTAssertEqual(bundle["recent_logs"] as? String, "log-a\nlog-b")
+        XCTAssertEqual(bundle["uptime_seconds"] as? Int, 65)
+        XCTAssertEqual(bundle["last_session_crashed"] as? Bool, true)
+
+        let recentCrash = try XCTUnwrap(bundle["recent_crash"] as? String)
+        XCTAssertTrue(recentCrash.contains("newest crash header"))
+        XCTAssertFalse(recentCrash.contains("stale crash"))
+        XCTAssertLessThanOrEqual(Data(recentCrash.utf8).count, SupportDiagnostics.recentCrashMaxBytes)
     }
 }
