@@ -326,8 +326,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         mainWindow?.minSize = NSSize(width: 300, height: 400)
         mainWindow?.delegate = self  // Handle close to hide instead of quit
-        mainWindow?.level = .floating  // Always on top
-        mainWindow?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         webViewManager = WebViewManager(container: container)
         mainWindow?.contentView = webViewManager?.rootView

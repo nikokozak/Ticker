@@ -999,49 +999,34 @@ final class PDFReaderPaneController: NSViewController {
             guard let self else { return }
 
             self.pdfPanePDFView.layoutSubtreeIfNeeded()
-            let pageRect = self.pdfPanePDFView.convert(page.bounds(for: .mediaBox), from: page)
+            let pageRect = self.pdfPanePDFView.convert(page.bounds(for: .cropBox), from: page)
             let visiblePageRect = pageRect.intersection(self.pdfPanePDFView.bounds)
             guard visiblePageRect.isFiniteAndNonEmpty else { return }
 
-            let bar = self.makeCitationPageFallbackBar(pageRect: pageRect, visiblePageRect: visiblePageRect)
-            self.pdfPanePDFView.addSubview(bar)
-            self.fadeTransientCitationFallbackViews([bar])
+            let flash = self.makeCitationPageFallbackFlash(visiblePageRect: visiblePageRect)
+            self.pdfPanePDFView.addSubview(flash)
+            self.fadeTransientCitationFallbackViews([flash])
         }
     }
 
-    private func makeCitationPageFallbackBar(pageRect: CGRect, visiblePageRect: CGRect) -> NSView {
-        let barWidth: CGFloat = 4
-        let horizontalInset: CGFloat = 8
-        let x = max(
-            pdfPanePDFView.bounds.minX + horizontalInset,
-            min(pageRect.minX + horizontalInset, pdfPanePDFView.bounds.maxX - barWidth - horizontalInset)
-        )
-        let bar = NSView(frame: CGRect(
-            x: x,
-            y: visiblePageRect.minY,
-            width: barWidth,
-            height: visiblePageRect.height
-        ))
-        bar.wantsLayer = true
-        bar.layer?.backgroundColor = PDFHighlightAnnotationStyle.pulseColor.cgColor
-        bar.layer?.cornerRadius = barWidth / 2
-        bar.layer?.masksToBounds = true
-        bar.alphaValue = 0
-        return bar
+    private func makeCitationPageFallbackFlash(visiblePageRect: CGRect) -> NSView {
+        let flash = NSView(frame: visiblePageRect)
+        flash.wantsLayer = true
+        flash.layer?.backgroundColor = PDFHighlightAnnotationStyle.pulseColor.withAlphaComponent(0.22).cgColor
+        flash.alphaValue = 0
+        return flash
     }
 
     private func fadeTransientCitationFallbackViews(_ views: [NSView]) {
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
+            context.duration = 0.12
             views.forEach { $0.animator().alphaValue = 1 }
         } completionHandler: {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.8
-                    views.forEach { $0.animator().alphaValue = 0 }
-                } completionHandler: {
-                    views.forEach { $0.removeFromSuperview() }
-                }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 1.0
+                views.forEach { $0.animator().alphaValue = 0 }
+            } completionHandler: {
+                views.forEach { $0.removeFromSuperview() }
             }
         }
     }
