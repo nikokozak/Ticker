@@ -963,10 +963,8 @@ final class PDFReaderPaneController: NSViewController {
             guard visiblePageRect.isFiniteAndNonEmpty else { return }
 
             let bar = self.makeCitationPageFallbackBar(pageRect: pageRect, visiblePageRect: visiblePageRect)
-            let pill = self.makeCitationPageFallbackPill()
             self.pdfPanePDFView.addSubview(bar)
-            self.pdfPanePDFView.addSubview(pill)
-            self.fadeTransientCitationFallbackViews([bar, pill])
+            self.fadeTransientCitationFallbackViews([bar])
         }
     }
 
@@ -989,44 +987,6 @@ final class PDFReaderPaneController: NSViewController {
         bar.layer?.masksToBounds = true
         bar.alphaValue = 0
         return bar
-    }
-
-    private func makeCitationPageFallbackPill() -> NSView {
-        let horizontalPadding: CGFloat = 20
-        let pillHeight: CGFloat = 28
-        let topInset: CGFloat = 14
-        let label = NSTextField(labelWithString: "Cited on this page")
-        label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        label.textColor = PDFPaneStyle.textMuted
-        label.alignment = .center
-        label.maximumNumberOfLines = 1
-        label.usesSingleLineMode = true
-        label.sizeToFit()
-
-        let labelSize = label.intrinsicContentSize
-        let pillWidth = ceil(labelSize.width + horizontalPadding)
-        let pill = NSView(frame: CGRect(
-            x: max(0, (pdfPanePDFView.bounds.width - pillWidth) / 2),
-            y: max(0, pdfPanePDFView.bounds.maxY - pillHeight - topInset),
-            width: pillWidth,
-            height: pillHeight
-        ))
-        pill.wantsLayer = true
-        pill.layer?.backgroundColor = PDFPaneStyle.background.withAlphaComponent(0.94).cgColor
-        pill.layer?.borderColor = PDFPaneStyle.separator.cgColor
-        pill.layer?.borderWidth = 1
-        pill.layer?.cornerRadius = pillHeight / 2
-        pill.layer?.masksToBounds = true
-        pill.alphaValue = 0
-
-        label.frame = CGRect(
-            x: horizontalPadding / 2,
-            y: max(0, (pillHeight - labelSize.height) / 2),
-            width: labelSize.width,
-            height: labelSize.height
-        )
-        pill.addSubview(label)
-        return pill
     }
 
     private func fadeTransientCitationFallbackViews(_ views: [NSView]) {
