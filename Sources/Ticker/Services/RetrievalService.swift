@@ -67,8 +67,9 @@ final class RetrievalService {
             return nil
         }
 
-        let extractedTexts = stream.sources
+        let nonPrivateSources = stream.sources
             .filter { !$0.aiExcluded }
+        let extractedTexts = nonPrivateSources
             .compactMap(\.extractedText)
         let combinedText = extractedTexts.joined(separator: "\n\n---\n\n")
         let totalTokens = extractedTexts.reduce(0) { $0 + estimatedTokenCount($1) }
@@ -80,14 +81,52 @@ final class RetrievalService {
             return SourceContext(text: combinedText, chunks: [], mode: .passthrough)
         }
 
-        let chunks = try retrieve(query: query, streamId: streamId, applyThreshold: scope == .auto)
-        guard !chunks.isEmpty else {
+        if scope == .all {
+            let chunks = try retrieve(query: query, streamId: streamId, applyThreshold: false)
+            guard !chunks.isEmpty else {
+                return nil
+            }
+
+            return SourceContext(
+                text: Self.buildManifest(from: chunks),
+                chunks: chunks,
+                mode: .retrieved
+            )
+        }
+
+        let contentSourceCount = try nonPrivateSources.reduce(0) { count, source in
+            if source.extractedText?.isEmpty == false {
+                return count + 1
+            }
+
+            return try persistence.loadSourceChunks(sourceId: source.id).isEmpty ? count : count + 1
+        }
+
+        let candidates = try retrieve(query: query, streamId: streamId, applyThreshold: false)
+        guard !candidates.isEmpty,
+              let ftsQuery = Self.sanitizedFTSQuery(query) else {
             return nil
         }
 
+        let relevanceCutoff = Self.relevanceCutoff(tokenCount: ftsQuery.tokenCount)
+        let chunks = candidates.filter { $0.score <= relevanceCutoff }
+        if !chunks.isEmpty {
+            return SourceContext(
+                text: Self.buildManifest(from: chunks),
+                chunks: chunks,
+                mode: .retrieved
+            )
+        }
+
+        guard contentSourceCount == 1 else {
+            return nil
+        }
+
+        // ponytail: Single-source weak lexical matches are an intent floor; upgrade with
+        // R3 golden-set embeddings before loosening the shared BM25 cutoff.
         return SourceContext(
-            text: Self.buildManifest(from: chunks),
-            chunks: chunks,
+            text: Self.buildManifest(from: candidates),
+            chunks: candidates,
             mode: .retrieved
         )
     }

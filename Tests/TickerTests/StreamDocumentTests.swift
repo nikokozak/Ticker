@@ -524,7 +524,7 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_retrievalReturnsNoContextForIrrelevantQuery() throws {
+    func test_retrievalSingleSourceFloorReturnsBestChunkForWeakQuery() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Large Source")
             try service.saveStream(stream)
@@ -534,19 +534,29 @@ final class StreamDocumentTests: XCTestCase {
                 displayName: "Manual.pdf",
                 extractedText: largeExtractedText(),
                 chunks: [
-                    (0, "Storage manifolds and caliper fixtures are indexed here.", 4, 4, "Storage")
+                    (0, "Storage manifolds and caliper fixtures are indexed as the best fallback.", 4, 4, "Storage")
                 ]
             )
 
             let retrieval = RetrievalService(persistence: service)
 
-            let unrelatedQuery = "what is the best way to do this"
-            XCTAssertTrue(try retrieval.retrieve(query: unrelatedQuery, streamId: stream.id).isEmpty)
-            XCTAssertNil(try retrieval.assembleSourceContext(query: unrelatedQuery, streamId: stream.id))
+            let weakQuery = "what is the best way to do this"
+            let rawResults = try retrieval.retrieve(query: weakQuery, streamId: stream.id, applyThreshold: false)
+
+            XCTAssertFalse(rawResults.isEmpty)
+            XCTAssertTrue(try retrieval.retrieve(query: weakQuery, streamId: stream.id).isEmpty)
+
+            // H1.1: one content source plus a weak lexical candidate is user intent, not no-context.
+            let context = try XCTUnwrap(
+                retrieval.assembleSourceContext(query: weakQuery, streamId: stream.id)
+            )
+            XCTAssertEqual(context.mode, .retrieved)
+            XCTAssertEqual(context.chunks.map(\.sourceName), ["Manual.pdf"])
+            XCTAssertTrue(context.text.contains("Storage manifolds and caliper fixtures"))
         }
     }
 
-    func test_retrievalReturnsNoContextWhenAllQueryTokensMatchOnlyWeakly() throws {
+    func test_retrievalSingleSourceFloorReturnsBestChunkWhenAllQueryTokensMatchOnlyWeakly() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Weak Matches")
             try service.saveStream(stream)
@@ -572,7 +582,106 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertLessThan(bestScore, 0)
             XCTAssertGreaterThan(bestScore, cutoff)
             XCTAssertTrue(try retrieval.retrieve(query: query, streamId: stream.id).isEmpty)
+
+            // H1.1: the single-source floor deliberately abandoned the old nil here.
+            let context = try XCTUnwrap(
+                retrieval.assembleSourceContext(query: query, streamId: stream.id)
+            )
+            XCTAssertEqual(context.mode, .retrieved)
+            XCTAssertFalse(context.chunks.isEmpty)
+            XCTAssertTrue(context.chunks.allSatisfy { $0.sourceName == "Technical.pdf" })
+        }
+    }
+
+    func test_retrievalSingleSourceFloorStillGatesZeroVocabularyQuery() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Zero Vocabulary")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (0, "Storage manifolds and caliper fixtures are indexed here.", 4, 4, "Storage")
+                ]
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+            let query = "orchid saxophone nebula"
+            let rawResults = try retrieval.retrieve(query: query, streamId: stream.id, applyThreshold: false)
+
+            XCTAssertTrue(rawResults.isEmpty)
             XCTAssertNil(try retrieval.assembleSourceContext(query: query, streamId: stream.id))
+        }
+    }
+
+    func test_retrievalMultiSourceWeakMatchesStillGateAutoContext() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Weak Multi Source")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Alpha.pdf",
+                extractedText: largeExtractedText("alpha"),
+                chunks: weakUnrelatedChunks()
+            )
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Beta.pdf",
+                extractedText: largeExtractedText("beta"),
+                chunks: weakUnrelatedChunks()
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+            let query = "good dish party friends"
+            let sanitized = try XCTUnwrap(RetrievalService.sanitizedFTSQuery(query))
+            let cutoff = -1.0 * Double(sanitized.tokenCount)
+            let rawResults = try retrieval.retrieve(query: query, streamId: stream.id, applyThreshold: false)
+            let bestScore = try XCTUnwrap(rawResults.first?.score)
+
+            XCTAssertFalse(rawResults.isEmpty)
+            XCTAssertGreaterThan(bestScore, cutoff)
+            XCTAssertTrue(try retrieval.retrieve(query: query, streamId: stream.id).isEmpty)
+            XCTAssertNil(try retrieval.assembleSourceContext(query: query, streamId: stream.id))
+        }
+    }
+
+    func test_retrievalMultiSourceStrongMatchRetrievesConfidentChunk() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Strong Multi Source")
+            try service.saveStream(stream)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Lease.pdf",
+                extractedText: largeExtractedText("lease"),
+                chunks: stronglyRelevantChunks(
+                    strongText: "termination termination termination lease lease lease option option option",
+                    pageStart: 7,
+                    pageEnd: 7
+                )
+            )
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Appendix.pdf",
+                extractedText: largeExtractedText("appendix"),
+                chunks: [
+                    (0, "Storage manifolds and caliper fixtures are indexed here.", 4, 4, "Storage")
+                ]
+            )
+
+            let retrieval = RetrievalService(persistence: service)
+            let context = try XCTUnwrap(
+                retrieval.assembleSourceContext(query: "termination lease option", streamId: stream.id)
+            )
+
+            XCTAssertEqual(context.mode, .retrieved)
+            XCTAssertEqual(context.chunks.map(\.sourceName), ["Lease.pdf"])
+            XCTAssertTrue(context.text.contains("termination termination termination"))
         }
     }
 
