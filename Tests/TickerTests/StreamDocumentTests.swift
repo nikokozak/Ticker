@@ -36,6 +36,139 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         """)
     }
 
+    func test_buildFragment_usesClipboardTextAsBlockquoteContext() throws {
+        let context = QuickPanelContext(
+            selectedText: nil,
+            activeApp: "Terminal",
+            windowTitle: "Shell",
+            panelPosition: CGPoint(x: 0, y: 0),
+            clipboardImage: nil,
+            clipboardText: " Copied line ",
+            isScreenshot: false
+        )
+
+        let fragment = try QuickPanelMarkdownFormatter.buildFragment(
+            context: context,
+            inputText: ""
+        ) { _ in
+            XCTFail("Image formatter should not run for text-only context")
+            return ""
+        }
+
+        XCTAssertEqual(context.contextText, "Copied line")
+        XCTAssertTrue(context.isClipboardTextContext)
+        XCTAssertEqual(fragment, """
+        > Copied line
+
+        *— Terminal — Shell*
+        """)
+    }
+
+    func test_recentClipboardTextCandidateReturnsRecentPlainText() throws {
+        let pasteboard = makeTrackedPasteboard()
+        defer { pasteboard.clearContents() }
+
+        writeText(" Copied text ", to: pasteboard)
+
+        XCTAssertEqual(
+            SelectionReaderService.recentClipboardTextCandidate(pasteboard: pasteboard),
+            "Copied text"
+        )
+    }
+
+    func test_recentClipboardTextCandidateRejectsStaleEmptyAndPrivateText() throws {
+        let stalePasteboard = makeTrackedPasteboard()
+        defer { stalePasteboard.clearContents() }
+        writeText("Stale text", to: stalePasteboard)
+        ClipboardService.syncChangeCount(pasteboard: stalePasteboard)
+        XCTAssertNil(SelectionReaderService.recentClipboardTextCandidate(pasteboard: stalePasteboard))
+
+        let emptyPasteboard = makeTrackedPasteboard()
+        defer { emptyPasteboard.clearContents() }
+        writeText(" \n\t ", to: emptyPasteboard)
+        XCTAssertNil(SelectionReaderService.recentClipboardTextCandidate(pasteboard: emptyPasteboard))
+
+        let concealedPasteboard = makeTrackedPasteboard()
+        defer { concealedPasteboard.clearContents() }
+        writeText("Password", to: concealedPasteboard, extraTypes: [ClipboardService.concealedType])
+        XCTAssertNil(SelectionReaderService.recentClipboardTextCandidate(pasteboard: concealedPasteboard))
+
+        let transientPasteboard = makeTrackedPasteboard()
+        defer { transientPasteboard.clearContents() }
+        writeText("Transient", to: transientPasteboard, extraTypes: [ClipboardService.transientType])
+        XCTAssertNil(SelectionReaderService.recentClipboardTextCandidate(pasteboard: transientPasteboard))
+    }
+
+    func test_recentClipboardTextCandidateTruncatesLongText() throws {
+        let pasteboard = makeTrackedPasteboard()
+        defer { pasteboard.clearContents() }
+        writeText(String(repeating: "x", count: 10_005), to: pasteboard)
+
+        let result = try XCTUnwrap(SelectionReaderService.recentClipboardTextCandidate(pasteboard: pasteboard))
+
+        XCTAssertEqual(result.count, 10_001)
+        XCTAssertEqual(result.last, "…")
+        XCTAssertEqual(result.dropLast().count, 10_000)
+    }
+
+    func test_clipboardSyncChangeCountIgnoresSyntheticCopyRestoreBumps() throws {
+        let pasteboard = makeTrackedPasteboard()
+        defer { pasteboard.clearContents() }
+        let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
+
+        writeText("Synthetic copy", to: pasteboard)
+        snapshot.restore(to: pasteboard)
+        ClipboardService.syncChangeCount(pasteboard: pasteboard)
+
+        XCTAssertFalse(ClipboardService.wasRecentlyModified(threshold: 15, pasteboard: pasteboard))
+
+        writeText("Genuine copy", to: pasteboard)
+        XCTAssertTrue(ClipboardService.wasRecentlyModified(threshold: 15, pasteboard: pasteboard))
+    }
+
+    func test_buildContextPrefersSelectionOverClipboardText() {
+        let context = SelectionReaderService().buildContext(
+            selectedText: " Selected text ",
+            clipboardTextCandidate: "Copied text",
+            readSelectionFromAX: false
+        )
+
+        XCTAssertEqual(context.contextText, "Selected text")
+        XCTAssertNil(context.clipboardText)
+        XCTAssertTrue(context.hasSelection)
+        XCTAssertFalse(context.isClipboardTextContext)
+    }
+
+    @MainActor
+    func test_clipboardTextDismissSuppressionSkipsSameChangeCountOnly() {
+        let context = QuickPanelContext(
+            selectedText: nil,
+            activeApp: "Terminal",
+            windowTitle: nil,
+            panelPosition: CGPoint(x: 0, y: 0),
+            clipboardImage: nil,
+            clipboardText: "Copied text",
+            isScreenshot: false
+        )
+        var suppressedChangeCount: Int? = 7
+
+        let sameCopy = QuickPanelManager.contextRespectingDismissedClipboardText(
+            context,
+            suppressedChangeCount: &suppressedChangeCount,
+            currentClipboardChangeCount: 7
+        )
+        XCTAssertNil(sameCopy.clipboardText)
+        XCTAssertEqual(suppressedChangeCount, 7)
+
+        let newCopy = QuickPanelManager.contextRespectingDismissedClipboardText(
+            context,
+            suppressedChangeCount: &suppressedChangeCount,
+            currentClipboardChangeCount: 8
+        )
+        XCTAssertEqual(newCopy.clipboardText, "Copied text")
+        XCTAssertNil(suppressedChangeCount)
+    }
+
     @MainActor
     func test_localSelectionProviderPrefersPDFSelectionOverEditorSelection() async {
         var editorSelectionWasRequested = false
@@ -220,7 +353,7 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(
             QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal, activeApp: "Chrome"),
             QuickPanelStatus(
-                message: "No text selected in Chrome",
+                message: "No text selected in Chrome — copy it (⌘C) and press ⌘L to attach.",
                 tone: .info,
                 action: nil
             )
@@ -228,7 +361,7 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(
             QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal, activeApp: " "),
             QuickPanelStatus(
-                message: "No text selected",
+                message: "No text selected — copy it (⌘C) and press ⌘L to attach.",
                 tone: .info,
                 action: nil
             )
@@ -269,6 +402,29 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(restoredItems[0].string(forType: .string), "Original string")
         XCTAssertEqual(restoredItems[0].data(forType: binaryType), binaryData)
         XCTAssertEqual(restoredItems[1].string(forType: customTextType), "Custom payload")
+    }
+
+    private func makeTrackedPasteboard() -> NSPasteboard {
+        let pasteboardName = NSPasteboard.Name("TickerClipboardTextTests.\(UUID().uuidString)")
+        let pasteboard = NSPasteboard(name: pasteboardName)
+        pasteboard.clearContents()
+        ClipboardService.syncChangeCount(pasteboard: pasteboard)
+        return pasteboard
+    }
+
+    private func writeText(
+        _ text: String,
+        to pasteboard: NSPasteboard,
+        extraTypes: [NSPasteboard.PasteboardType] = []
+    ) {
+        let item = NSPasteboardItem()
+        XCTAssertTrue(item.setString(text, forType: .string))
+        for type in extraTypes {
+            XCTAssertTrue(item.setString("", forType: type))
+        }
+
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([item]))
     }
 }
 

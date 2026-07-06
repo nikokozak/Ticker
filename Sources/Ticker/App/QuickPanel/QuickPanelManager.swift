@@ -90,9 +90,9 @@ struct QuickPanelStatus: Equatable {
             let appName = activeApp?.trimmingCharacters(in: .whitespacesAndNewlines)
             let message: String
             if let appName, !appName.isEmpty {
-                message = "No text selected in \(appName)"
+                message = "No text selected in \(appName) — copy it (⌘C) and press ⌘L to attach."
             } else {
-                message = "No text selected"
+                message = "No text selected — copy it (⌘C) and press ⌘L to attach."
             }
             return QuickPanelStatus(
                 message: message,
@@ -156,6 +156,7 @@ final class QuickPanelManager: ObservableObject {
     private var hostingView: NSHostingView<QuickPanelView>?
     private var currentAppearance: NSAppearance?  // Stored to apply when panel is created
     private var suppressedClipboardImageChangeCount: Int?
+    private var suppressedClipboardTextChangeCount: Int?
     private var presentationGeneration: Int = 0
 
     // MARK: - Initialization
@@ -216,13 +217,15 @@ final class QuickPanelManager: ObservableObject {
 
     private func toggleAfterCapturingContext() async {
         // Capture context BEFORE we steal focus
-        let capturedContext = contextRespectingDismissedClipboardImage(await buildContextForQuickPanelToggle())
+        let capturedContext = contextRespectingDismissedClipboardText(
+            contextRespectingDismissedClipboardImage(await buildContextForQuickPanelToggle())
+        )
         logCapturedContext(capturedContext)
 
         if isVisible {
             // Check if there's a new selection
-            let hasNewSelection = capturedContext.hasSelection &&
-                capturedContext.selectedText != context?.selectedText
+            let hasNewSelection = capturedContext.contextText != nil &&
+                capturedContext.contextText != context?.contextText
 
             if hasNewSelection {
                 // Update context in place, don't move the panel
@@ -242,6 +245,7 @@ final class QuickPanelManager: ObservableObject {
     private func buildContextForQuickPanelToggle() async -> QuickPanelContext {
         let activeBundleId = selectionService.getActiveAppBundleId()
         let appBundleId = Bundle.main.bundleIdentifier
+        let clipboardTextCandidate = SelectionReaderService.recentClipboardTextCandidate()
         let selectionResult = await SelectionReaderService.resolveSelectedTextWithOutcome(
             activeBundleId: activeBundleId,
             currentBundleId: appBundleId,
@@ -255,6 +259,7 @@ final class QuickPanelManager: ObservableObject {
 
         return selectionService.buildContext(
             selectedText: selectionResult.text,
+            clipboardTextCandidate: clipboardTextCandidate,
             selectionCaptureOutcome: selectionResult.outcome,
             readSelectionFromAX: false,
             panelSize: currentPanelSizeForPositioning()
@@ -276,6 +281,7 @@ final class QuickPanelManager: ObservableObject {
                 windowTitle: capturedContext.windowTitle,
                 panelPosition: capturedContext.panelPosition,
                 clipboardImage: imageData,
+                clipboardText: capturedContext.clipboardText,
                 isScreenshot: true,
                 selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
             )
@@ -302,6 +308,7 @@ final class QuickPanelManager: ObservableObject {
             windowTitle: capturedContext.windowTitle,
             panelPosition: capturedContext.panelPosition,
             clipboardImage: nil,
+            clipboardText: nil,
             isScreenshot: false,
             selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
         )
@@ -320,7 +327,7 @@ final class QuickPanelManager: ObservableObject {
         // Load available streams for picker
         loadAvailableStreams()
 
-        if showAccessibilityWarning && !capturedContext.hasSelection {
+        if showAccessibilityWarning && !capturedContext.hasSelection && !capturedContext.isClipboardTextContext {
             status = QuickPanelStatus.selectionCaptureStatus(
                 for: capturedContext.selectionCaptureOutcome,
                 activeApp: capturedContext.activeApp
@@ -463,14 +470,13 @@ final class QuickPanelManager: ObservableObject {
     }
 
     private func logCapturedContext(_ capturedContext: QuickPanelContext) {
-        let selectedLength = capturedContext.selectedText?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .count ?? 0
+        let contextTextLength = capturedContext.contextText?.count ?? 0
         DebugLog.log(
             "[QuickPanel] toggle captured context " +
             "axTrusted=\(cursorService.hasAccessibilityPermission) " +
             "hasSelection=\(capturedContext.hasSelection) " +
-            "selectedLength=\(selectedLength) " +
+            "isClipboardText=\(capturedContext.isClipboardTextContext) " +
+            "contextTextLength=\(contextTextLength) " +
             "hasImage=\(capturedContext.hasImage) " +
             "activeApp=\(capturedContext.activeApp ?? "unknown")"
         )
@@ -510,7 +516,7 @@ final class QuickPanelManager: ObservableObject {
 
         // Build context for first turn only
         let isFirstTurn = ephemeralConversation.turns.isEmpty
-        let contextForAI: String? = isFirstTurn ? context?.selectedText : nil
+        let contextForAI: String? = isFirstTurn ? context?.contextText : nil
 
         // Record user turn
         ephemeralConversation.turns.append(ConversationTurn(
@@ -588,7 +594,7 @@ final class QuickPanelManager: ObservableObject {
 
         // Second: clear input/context
         if !inputText.isEmpty || context?.hasContent == true {
-            suppressDismissedClipboardImageIfNeeded()
+            suppressDismissedClipboardContextIfNeeded()
             inputText = ""
             context = nil
             return
@@ -600,7 +606,7 @@ final class QuickPanelManager: ObservableObject {
 
     /// Clear attached context
     func clearContext() {
-        suppressDismissedClipboardImageIfNeeded()
+        suppressDismissedClipboardContextIfNeeded()
         context = nil
     }
 
@@ -618,10 +624,21 @@ final class QuickPanelManager: ObservableObject {
         ephemeralConversation.clear()
     }
 
+    private func suppressDismissedClipboardContextIfNeeded() {
+        suppressDismissedClipboardImageIfNeeded()
+        suppressDismissedClipboardTextIfNeeded()
+    }
+
     /// Suppress reattaching the current clipboard image on Cmd+L until clipboard changes.
     private func suppressDismissedClipboardImageIfNeeded() {
         guard context?.hasImage == true else { return }
         suppressedClipboardImageChangeCount = ClipboardService.changeCount()
+    }
+
+    /// Suppress reattaching the current clipboard text on Cmd+L until clipboard changes.
+    private func suppressDismissedClipboardTextIfNeeded() {
+        guard context?.isClipboardTextContext == true else { return }
+        suppressedClipboardTextChangeCount = ClipboardService.changeCount()
     }
 
     /// Applies explicit image-dismissal state to freshly captured context.
@@ -644,7 +661,45 @@ final class QuickPanelManager: ObservableObject {
             windowTitle: capturedContext.windowTitle,
             panelPosition: capturedContext.panelPosition,
             clipboardImage: nil,
+            clipboardText: capturedContext.clipboardText,
             isScreenshot: false,
+            selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
+        )
+    }
+
+    /// Applies explicit text-dismissal state to freshly captured context.
+    private func contextRespectingDismissedClipboardText(_ capturedContext: QuickPanelContext) -> QuickPanelContext {
+        let currentClipboardChangeCount = ClipboardService.changeCount()
+        return Self.contextRespectingDismissedClipboardText(
+            capturedContext,
+            suppressedChangeCount: &suppressedClipboardTextChangeCount,
+            currentClipboardChangeCount: currentClipboardChangeCount
+        )
+    }
+
+    static func contextRespectingDismissedClipboardText(
+        _ capturedContext: QuickPanelContext,
+        suppressedChangeCount: inout Int?,
+        currentClipboardChangeCount: Int
+    ) -> QuickPanelContext {
+        if let suppressedCount = suppressedChangeCount,
+           suppressedCount != currentClipboardChangeCount {
+            suppressedChangeCount = nil
+        }
+
+        guard capturedContext.isClipboardTextContext,
+              suppressedChangeCount == currentClipboardChangeCount else {
+            return capturedContext
+        }
+
+        return QuickPanelContext(
+            selectedText: capturedContext.selectedText,
+            activeApp: capturedContext.activeApp,
+            windowTitle: capturedContext.windowTitle,
+            panelPosition: capturedContext.panelPosition,
+            clipboardImage: capturedContext.clipboardImage,
+            clipboardText: nil,
+            isScreenshot: capturedContext.isScreenshot,
             selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
         )
     }
@@ -658,7 +713,7 @@ final class QuickPanelManager: ObservableObject {
             return
         }
 
-        let hasContext = nonEmptyTrimmed(context?.selectedText) != nil || context?.clipboardImage != nil
+        let hasContext = context?.hasContext == true
         let prompt = nonEmptyTrimmed(inputText)
         let hasInput = prompt != nil
 
@@ -1048,8 +1103,8 @@ enum QuickPanelMarkdownFormatter {
         var blocks: [String] = []
 
         if let context {
-            if let selectedText = nonEmptyTrimmed(context.selectedText) {
-                blocks.append(markdownBlockquote(selectedText))
+            if let contextText = nonEmptyTrimmed(context.contextText) {
+                blocks.append(markdownBlockquote(contextText))
 
                 if let source = sourceAttribution(for: context) {
                     blocks.append("*— \(escapeMarkdownEmphasis(source))*")
