@@ -36,10 +36,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var quickPanelManager: QuickPanelManager?
     private var pdfFindKeyMonitor: Any?
 
-    // Sparkle updater (lives for app lifetime)
-    private let updaterController = SPUStandardUpdaterController(
+    // Sparkle updater (lives for app lifetime). Delegate is self so we can clear the
+    // crash sentinel before Sparkle relaunches — an update relaunch does not reliably
+    // fire applicationWillTerminate, which would otherwise report a false crash.
+    private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
-        updaterDelegate: nil,
+        updaterDelegate: self,
         userDriverDelegate: nil
     )
 
@@ -426,5 +428,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         quickPanelManager?.showWithStatusMessage(
             "Screenshot mode is deprecated. Use macOS screenshot shortcuts, then press Cmd+L."
         )
+    }
+}
+
+extension AppDelegate: SPUUpdaterDelegate {
+    /// Sparkle relaunches the app to finish an update; that path does not reliably fire
+    /// applicationWillTerminate, so clear the crash sentinel here to avoid a false
+    /// "last session crashed" in the first feedback after an update.
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        CrashSessionSentinel.markCleanTermination()
     }
 }
