@@ -260,17 +260,26 @@ struct QuickPanelView: View {
         let title = context.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         let sourceApp = app?.isEmpty == false ? app : nil
         let sourceTitle = title?.isEmpty == false ? title : nil
+        let baseLabel: String?
 
         switch (sourceApp, sourceTitle) {
         case let (sourceApp?, sourceTitle?):
-            return "\(sourceApp) — \(truncate(sourceTitle, maxLength: 60))"
+            baseLabel = "\(sourceApp) — \(truncate(sourceTitle, maxLength: 60))"
         case let (sourceApp?, nil):
-            return sourceApp
+            baseLabel = sourceApp
         case let (nil, sourceTitle?):
-            return truncate(sourceTitle, maxLength: 60)
+            baseLabel = truncate(sourceTitle, maxLength: 60)
         case (nil, nil):
-            return nil
+            baseLabel = nil
         }
+
+        guard context.selectionCaptureOutcome == .clipboard else {
+            return baseLabel
+        }
+
+        return [baseLabel, "from clipboard"]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
 
     private func truncate(_ text: String, maxLength: Int) -> String {
