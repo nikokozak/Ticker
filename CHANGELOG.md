@@ -36,6 +36,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Bug reports no longer falsely claim the previous session crashed after an app auto-update.
 - Quick Panel now avoids copying an editor cursor line when Accessibility reports that no text is selected.
 - Debug builds now use a distinct bundle id and display name so they do not share the release app's macOS permission identity.
 - Bug report support bundles now include recent metadata logs, crash evidence, uptime, and prior-crash detection.
