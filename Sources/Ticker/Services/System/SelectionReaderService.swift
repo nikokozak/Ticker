@@ -98,6 +98,8 @@ final class SelectionReaderService {
     private let hintedSelectionReadRetryDelay: TimeInterval = 0.05
     private let clipboardPollAttempts = 15
     private let clipboardPollDelay: TimeInterval = 0.02
+    private static let recentClipboardTextThreshold: TimeInterval = 15
+    private static let maxClipboardTextContextLength = 10_000
     private var hintedApplicationPIDs = Set<pid_t>()
 
     private static let axEnhancedUserInterfaceAttribute = "AXEnhancedUserInterface" as CFString
@@ -479,6 +481,9 @@ final class SelectionReaderService {
         // (kitty, Alacritty) never see pid-targeted events. Capture runs before the
         // panel shows, so the target app is still the focused one.
         postCopyShortcut()
+        defer {
+            ClipboardService.syncChangeCount(pasteboard: pasteboard)
+        }
 
         guard waitForPasteboardChange(pasteboard, after: snapshot.changeCount) else {
             return nil
@@ -594,6 +599,7 @@ final class SelectionReaderService {
     /// Captures everything at once BEFORE focus changes
     func buildContext(
         selectedText providedSelectedText: String? = nil,
+        clipboardTextCandidate: String? = nil,
         selectionCaptureOutcome: SelectionCaptureOutcome = .notAttempted,
         readSelectionFromAX: Bool = true,
         panelSize: CGSize = CGSize(width: QuickPanelWindow.defaultWidth, height: QuickPanelWindow.minHeight)
@@ -605,10 +611,12 @@ final class SelectionReaderService {
         let position = cursorService.calculatePanelPosition(panelSize: panelSize)
 
         let selectedText = providedSelectedText ?? (readSelectionFromAX ? getSelectedText() : nil)
+        let hasSelectedText = Self.nonEmptyText(selectedText) != nil
+        let clipboardText = hasSelectedText ? nil : Self.nonEmptyText(clipboardTextCandidate)
 
-        // Only grab clipboard image if no text selection
+        // Only grab clipboard image if no text context.
         var clipboardImageData: Data? = nil
-        if selectedText == nil || selectedText?.isEmpty == true {
+        if !hasSelectedText && clipboardText == nil {
             clipboardImageData = getRecentClipboardImage()
         }
 
@@ -618,13 +626,14 @@ final class SelectionReaderService {
             windowTitle: getActiveWindowTitle(),
             panelPosition: position,
             clipboardImage: clipboardImageData,
+            clipboardText: clipboardText,
             isScreenshot: false,
             selectionCaptureOutcome: selectionCaptureOutcome
         )
         DebugLog.log(
             "[SelectionReader] buildContext result " +
             "hasSelection=\(context.hasSelection) " +
-            "selectedLength=\(context.trimmedSelectedText?.count ?? 0) " +
+            "contextTextLength=\(context.contextText?.count ?? 0) " +
             "hasImage=\(context.hasImage) " +
             "activeApp=\(context.activeApp ?? "unknown")"
         )
@@ -644,6 +653,28 @@ final class SelectionReaderService {
 
         return ClipboardService.getImageData()
     }
+
+    static func recentClipboardTextCandidate(
+        pasteboard: NSPasteboard = .general,
+        threshold: TimeInterval = recentClipboardTextThreshold,
+        maxLength: Int = maxClipboardTextContextLength
+    ) -> String? {
+        guard ClipboardService.wasRecentlyModified(threshold: threshold, pasteboard: pasteboard),
+              !ClipboardService.hasConcealedOrTransientTypes(pasteboard: pasteboard),
+              let rawText = ClipboardService.getText(pasteboard: pasteboard) else {
+            return nil
+        }
+
+        guard let text = Self.nonEmptyText(rawText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+
+        guard text.count > maxLength else {
+            return text
+        }
+
+        return String(text.prefix(maxLength)) + "…"
+    }
 }
 
 /// Context captured when Quick Panel is invoked
@@ -655,6 +686,8 @@ struct QuickPanelContext {
     let panelPosition: CGPoint
     /// Clipboard image data (if no text selection and clipboard has image)
     let clipboardImage: Data?
+    /// Recent user-copied clipboard text used as context when no real selection exists.
+    let clipboardText: String?
     /// True only for explicit app-initiated screenshot mode (currently deprecated).
     /// Clipboard-derived images should keep this false.
     let isScreenshot: Bool
@@ -667,6 +700,7 @@ struct QuickPanelContext {
         windowTitle: String?,
         panelPosition: CGPoint,
         clipboardImage: Data?,
+        clipboardText: String? = nil,
         isScreenshot: Bool,
         selectionCaptureOutcome: SelectionCaptureOutcome = .notAttempted
     ) {
@@ -675,6 +709,7 @@ struct QuickPanelContext {
         self.windowTitle = windowTitle
         self.panelPosition = panelPosition
         self.clipboardImage = clipboardImage
+        self.clipboardText = clipboardText
         self.isScreenshot = isScreenshot
         self.selectionCaptureOutcome = selectionCaptureOutcome
     }
@@ -687,6 +722,22 @@ struct QuickPanelContext {
         return trimmed
     }
 
+    var trimmedClipboardText: String? {
+        guard let trimmed = clipboardText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    var contextText: String? {
+        trimmedSelectedText ?? trimmedClipboardText
+    }
+
+    var isClipboardTextContext: Bool {
+        trimmedSelectedText == nil && trimmedClipboardText != nil
+    }
+
     var hasSelection: Bool {
         trimmedSelectedText != nil
     }
@@ -695,8 +746,12 @@ struct QuickPanelContext {
         clipboardImage != nil
     }
 
+    var hasContext: Bool {
+        contextText != nil || hasImage
+    }
+
     var hasContent: Bool {
-        hasSelection || hasImage
+        hasContext
     }
 
     /// Truncated preview of selected text for display

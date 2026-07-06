@@ -4,12 +4,24 @@ import AppKit
 enum ClipboardService {
 
     /// Track last known change count and when it changed
-    private static var lastChangeCount: Int = NSPasteboard.general.changeCount
-    private static var lastChangeTime: Date = Date.distantPast
+    private struct ChangeTracker {
+        var lastChangeCount: Int
+        var lastChangeTime: Date
+    }
+
+    private static var changeTrackers: [NSPasteboard.Name: ChangeTracker] = [
+        .general: ChangeTracker(
+            lastChangeCount: NSPasteboard.general.changeCount,
+            lastChangeTime: .distantPast
+        )
+    ]
+
+    static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
     /// Get current clipboard text
-    static func getText() -> String? {
-        NSPasteboard.general.string(forType: .string)
+    static func getText(pasteboard: NSPasteboard = .general) -> String? {
+        pasteboard.string(forType: .string)
     }
 
     /// Check if clipboard contains an image
@@ -60,23 +72,55 @@ enum ClipboardService {
     }
 
     /// Get clipboard change count (to detect changes)
-    static func changeCount() -> Int {
-        NSPasteboard.general.changeCount
+    static func changeCount(pasteboard: NSPasteboard = .general) -> Int {
+        pasteboard.changeCount
     }
 
     /// Check if clipboard was recently modified (within threshold)
     /// Updates internal tracking on each call
-    static func wasRecentlyModified(threshold: TimeInterval = 60) -> Bool {
-        let currentCount = NSPasteboard.general.changeCount
+    static func wasRecentlyModified(
+        threshold: TimeInterval = 60,
+        pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        let currentCount = pasteboard.changeCount
+        var tracker = changeTracker(for: pasteboard)
 
         // If change count differs, clipboard was modified
-        if currentCount != lastChangeCount {
-            lastChangeCount = currentCount
-            lastChangeTime = Date()
+        if currentCount != tracker.lastChangeCount {
+            tracker.lastChangeCount = currentCount
+            tracker.lastChangeTime = Date()
+            changeTrackers[pasteboard.name] = tracker
             return true
         }
 
         // Check if last change was within threshold
-        return Date().timeIntervalSince(lastChangeTime) < threshold
+        changeTrackers[pasteboard.name] = tracker
+        return Date().timeIntervalSince(tracker.lastChangeTime) < threshold
+    }
+
+    /// A synthetic copy/restore cycle can bump changeCount without being user intent.
+    /// Sync the count while preserving lastChangeTime so only genuine copies remain recent.
+    static func syncChangeCount(pasteboard: NSPasteboard = .general) {
+        var tracker = changeTracker(for: pasteboard)
+        tracker.lastChangeCount = pasteboard.changeCount
+        changeTrackers[pasteboard.name] = tracker
+    }
+
+    static func hasConcealedOrTransientTypes(pasteboard: NSPasteboard = .general) -> Bool {
+        let types = pasteboard.types ?? []
+        return types.contains(concealedType) || types.contains(transientType)
+    }
+
+    private static func changeTracker(for pasteboard: NSPasteboard) -> ChangeTracker {
+        if let tracker = changeTrackers[pasteboard.name] {
+            return tracker
+        }
+
+        let tracker = ChangeTracker(
+            lastChangeCount: pasteboard.changeCount,
+            lastChangeTime: .distantPast
+        )
+        changeTrackers[pasteboard.name] = tracker
+        return tracker
     }
 }

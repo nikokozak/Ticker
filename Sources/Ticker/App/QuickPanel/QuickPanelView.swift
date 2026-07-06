@@ -146,8 +146,8 @@ struct QuickPanelView: View {
 
     @ViewBuilder
     private func contextBadge(context: QuickPanelContext) -> some View {
-        if let selectedText = context.trimmedSelectedText {
-            selectedTextContextPreview(context: context, selectedText: selectedText)
+        if let contextText = context.contextText {
+            selectedTextContextPreview(context: context, selectedText: contextText)
         } else {
             attachmentContextBadge(context: context)
         }
@@ -243,7 +243,7 @@ struct QuickPanelView: View {
         if context.isScreenshot {
             return "Screenshot attached"
         }
-        if let text = context.trimmedSelectedText {
+        if let text = context.contextText {
             if text.count > 40 {
                 return String(text.prefix(37)) + "..."
             }
@@ -273,13 +273,12 @@ struct QuickPanelView: View {
             baseLabel = nil
         }
 
-        guard context.selectionCaptureOutcome == .clipboard else {
+        let isClipboardText = context.selectionCaptureOutcome == .clipboard || context.isClipboardTextContext
+        guard isClipboardText else {
             return baseLabel
         }
 
-        return [baseLabel, "from clipboard"]
-            .compactMap { $0 }
-            .joined(separator: " · ")
+        return "\(baseLabel ?? "Copied text") · from clipboard"
     }
 
     private func truncate(_ text: String, maxLength: Int) -> String {
