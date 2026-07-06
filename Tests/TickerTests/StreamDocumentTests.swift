@@ -96,21 +96,21 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         XCTAssertFalse(localSelectionWasRequested)
     }
 
-    func test_selectionCaptureLadderRunsRungsInOrder() {
+    func test_selectionCaptureLadderUsesClipboardWhenAXUnavailable() {
         var calls: [String] = []
 
         let result = SelectionReaderService.captureExternalSelectedText(
             hasAccessibilityPermission: true,
             axSelection: {
                 calls.append("ax")
-                return nil
+                return .unavailable
             },
             hintAccessibilityTree: {
                 calls.append("hint")
             },
             hintedAXSelection: {
                 calls.append("hinted")
-                return nil
+                return .unavailable
             },
             clipboardSelection: {
                 calls.append("clipboard")
@@ -122,21 +122,47 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(calls, ["ax", "hint", "hinted", "clipboard"])
     }
 
-    func test_selectionCaptureLadderShortCircuitsOnFirstSuccess() {
+    func test_selectionCaptureLadderDoesNotClipboardWhenAXSaysEmpty() {
         var calls: [String] = []
 
         let result = SelectionReaderService.captureExternalSelectedText(
             hasAccessibilityPermission: true,
             axSelection: {
                 calls.append("ax")
-                return "AX selection"
+                return .empty
             },
             hintAccessibilityTree: {
                 calls.append("hint")
             },
             hintedAXSelection: {
                 calls.append("hinted")
-                return "Hinted selection"
+                return .empty
+            },
+            clipboardSelection: {
+                calls.append("clipboard")
+                return "Cursor line copied by editor"
+            }
+        )
+
+        XCTAssertEqual(result, SelectionCaptureResult(text: nil, outcome: .emptyExternal))
+        XCTAssertEqual(calls, ["ax", "hint", "hinted"])
+    }
+
+    func test_selectionCaptureLadderShortCircuitsOnAXText() {
+        var calls: [String] = []
+
+        let result = SelectionReaderService.captureExternalSelectedText(
+            hasAccessibilityPermission: true,
+            axSelection: {
+                calls.append("ax")
+                return .text("AX selection")
+            },
+            hintAccessibilityTree: {
+                calls.append("hint")
+            },
+            hintedAXSelection: {
+                calls.append("hinted")
+                return .text("Hinted selection")
             },
             clipboardSelection: {
                 calls.append("clipboard")
@@ -155,14 +181,14 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
             hasAccessibilityPermission: false,
             axSelection: {
                 calls.append("ax")
-                return "AX selection"
+                return .text("AX selection")
             },
             hintAccessibilityTree: {
                 calls.append("hint")
             },
             hintedAXSelection: {
                 calls.append("hinted")
-                return "Hinted selection"
+                return .text("Hinted selection")
             },
             clipboardSelection: {
                 calls.append("clipboard")

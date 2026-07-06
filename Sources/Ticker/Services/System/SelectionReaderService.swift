@@ -29,6 +29,12 @@ enum SelectionCaptureOutcome: Equatable {
     }
 }
 
+enum AXSelectionRead: Equatable {
+    case text(String)
+    case empty
+    case unavailable
+}
+
 struct SelectionCaptureResult: Equatable {
     let text: String?
     let outcome: SelectionCaptureOutcome
@@ -140,23 +146,29 @@ final class SelectionReaderService {
 
     static func captureExternalSelectedText(
         hasAccessibilityPermission: Bool,
-        axSelection: () -> String?,
+        axSelection: () -> AXSelectionRead,
         hintAccessibilityTree: () -> Void,
-        hintedAXSelection: () -> String?,
+        hintedAXSelection: () -> AXSelectionRead,
         clipboardSelection: () -> String?
     ) -> SelectionCaptureResult {
         guard hasAccessibilityPermission else {
             return SelectionCaptureResult(text: nil, outcome: .noPermission)
         }
 
-        if let text = nonEmptyText(axSelection()) {
+        let first = axSelection()
+        if case .text(let text) = first, let text = nonEmptyText(text) {
             return SelectionCaptureResult(text: text, outcome: .ax)
         }
 
         hintAccessibilityTree()
 
-        if let text = nonEmptyText(hintedAXSelection()) {
+        let second = hintedAXSelection()
+        if case .text(let text) = second, let text = nonEmptyText(text) {
             return SelectionCaptureResult(text: text, outcome: .axHinted)
+        }
+
+        guard second == .unavailable else {
+            return SelectionCaptureResult(text: nil, outcome: .emptyExternal)
         }
 
         if let text = nonEmptyText(clipboardSelection()) {
@@ -171,28 +183,24 @@ final class SelectionReaderService {
     /// Get currently selected text from the focused application
     /// Returns nil if no permission, no selection, or app doesn't support it
     func getSelectedText() -> String? {
-        guard cursorService.hasAccessibilityPermission else {
-            return nil
-        }
-
-        for attempt in 1...maxSelectionReadAttempts {
-            guard let focusedElement = getFocusedElement() else {
-                return nil
-            }
-
-            let selectionResult = extractSelectedText(from: focusedElement)
-            if let text = selectionResult.text {
-                return text
-            }
-
-            if attempt == maxSelectionReadAttempts || !shouldRetrySelectionRead(for: selectionResult.error) {
-                break
-            }
-
-            Thread.sleep(forTimeInterval: selectionReadRetryDelay)
+        if case .text(let text) = readSelection() {
+            return text
         }
 
         return nil
+    }
+
+    func readSelection() -> AXSelectionRead {
+        guard cursorService.hasAccessibilityPermission else {
+            return .unavailable
+        }
+
+        return readSelectionFromFocusedElement(
+            attempts: maxSelectionReadAttempts,
+            retryDelay: selectionReadRetryDelay,
+            retryMissingFocusedElement: false,
+            retryEmptySelection: false
+        )
     }
 
     func captureSelectedText() -> SelectionCaptureResult {
@@ -203,13 +211,13 @@ final class SelectionReaderService {
         let result = Self.captureExternalSelectedText(
             hasAccessibilityPermission: cursorService.hasAccessibilityPermission,
             axSelection: { [self] in
-                getSelectedText()
+                readSelection()
             },
             hintAccessibilityTree: { [self] in
                 useHintSettleBudget = hintAccessibilityTree(for: frontmostApp)
             },
             hintedAXSelection: { [self] in
-                readSelectedTextFromFocusedElement(
+                readSelectionFromFocusedElement(
                     attempts: useHintSettleBudget ? hintedSelectionReadAttempts : 1,
                     retryDelay: useHintSettleBudget ? hintedSelectionReadRetryDelay : 0,
                     retryMissingFocusedElement: useHintSettleBudget,
@@ -251,12 +259,12 @@ final class SelectionReaderService {
         return result == .apiDisabled
     }
 
-    private func readSelectedTextFromFocusedElement(
+    private func readSelectionFromFocusedElement(
         attempts: Int,
         retryDelay: TimeInterval,
         retryMissingFocusedElement: Bool,
         retryEmptySelection: Bool
-    ) -> String? {
+    ) -> AXSelectionRead {
         let cappedAttempts = max(1, attempts)
 
         for attempt in 1...cappedAttempts {
@@ -265,23 +273,26 @@ final class SelectionReaderService {
                     Thread.sleep(forTimeInterval: retryDelay)
                     continue
                 }
-                return nil
+                return .unavailable
             }
 
             let selectionResult = extractSelectedText(from: focusedElement)
             if let text = selectionResult.text {
-                return text
+                return .text(text)
             }
 
-            let shouldRetry = retryEmptySelection || shouldRetrySelectionRead(for: selectionResult.error)
+            let read: AXSelectionRead = selectionResult.error == nil ? .empty : .unavailable
+            let shouldRetry = read == .empty
+                ? retryEmptySelection
+                : shouldRetrySelectionRead(for: selectionResult.error)
             if attempt == cappedAttempts || !shouldRetry {
-                break
+                return read
             }
 
             Thread.sleep(forTimeInterval: retryDelay)
         }
 
-        return nil
+        return .unavailable
     }
 
     private func getFocusedElement() -> AXUIElement? {
@@ -457,7 +468,7 @@ final class SelectionReaderService {
     }
 
     private func copySelectedTextThroughClipboard(from app: NSRunningApplication?) -> String? {
-        guard let app else {
+        guard app != nil else {
             return nil
         }
 
