@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- PDF sources now reopen to the last-read page, expose document outlines when available, and describe pane failures in text.
 - Markdown links now open on click and can be edited from a compact popover without exposing raw URL markup.
 - Streams now restore editor scroll position and hide the first frame until markdown concealment is ready.
 - Stream list cards now show content previews, word counts, and global search from the list.

@@ -906,6 +906,30 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_saveSourceLastPageIndexRoundTripsThroughPersistence() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "PDF Resume")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                fileType: .pdf,
+                bookmarkData: Data(),
+                status: .ready
+            )
+            try service.saveSource(source)
+
+            XCTAssertNil(try service.loadSource(id: source.id)?.lastPageIndex)
+
+            try service.saveSourceLastPageIndex(sourceId: source.id, pageIndex: 117)
+            XCTAssertEqual(try service.loadSource(id: source.id)?.lastPageIndex, 117)
+            XCTAssertEqual(try service.loadStream(id: stream.id)?.sources.first?.lastPageIndex, 117)
+
+            try service.saveSourceLastPageIndex(sourceId: source.id, pageIndex: -4)
+            XCTAssertEqual(try service.loadSource(id: source.id)?.lastPageIndex, 0)
+        }
+    }
+
     func test_chunkerUsesOutlineSectionPathsAndPageRanges() throws {
         let document = try makePDFDocument(pages: [
             "Opening receipts establish the first page.",

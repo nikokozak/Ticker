@@ -14,6 +14,7 @@ struct SourceReference: Identifiable, Codable {
     var embeddingStatus: SourceEmbeddingStatus
     var indexStatus: SourceIndexStatus
     var aiExcluded: Bool
+    var lastPageIndex: Int?
     let addedAt: Date
 
     var shortTitle: String {
@@ -33,6 +34,7 @@ struct SourceReference: Identifiable, Codable {
         embeddingStatus: SourceEmbeddingStatus = .none,
         indexStatus: SourceIndexStatus = .pending,
         aiExcluded: Bool = false,
+        lastPageIndex: Int? = nil,
         addedAt: Date = Date()
     ) {
         self.id = id
@@ -47,6 +49,7 @@ struct SourceReference: Identifiable, Codable {
         self.embeddingStatus = embeddingStatus
         self.indexStatus = indexStatus
         self.aiExcluded = aiExcluded
+        self.lastPageIndex = lastPageIndex
         self.addedAt = addedAt
     }
 }

@@ -592,6 +592,7 @@ final class PersistenceService {
                     embeddingStatus: embeddingStatus,
                     indexStatus: indexStatus,
                     aiExcluded: aiExcluded != 0,
+                    lastPageIndex: row["last_page_index"],
                     addedAt: Date(timeIntervalSince1970: row["added_at"])
                 )
             }
@@ -964,6 +965,7 @@ final class PersistenceService {
                 embeddingStatus: embeddingStatus,
                 indexStatus: indexStatus,
                 aiExcluded: aiExcluded != 0,
+                lastPageIndex: row["last_page_index"],
                 addedAt: Date(timeIntervalSince1970: row["added_at"])
             )
         }
@@ -1014,6 +1016,15 @@ final class PersistenceService {
             try db.execute(
                 sql: "UPDATE sources SET ai_excluded = ? WHERE id = ?",
                 arguments: [excluded ? 1 : 0, sourceId.uuidString]
+            )
+        }
+    }
+
+    func saveSourceLastPageIndex(sourceId: UUID, pageIndex: Int) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE sources SET last_page_index = ? WHERE id = ?",
+                arguments: [max(0, pageIndex), sourceId.uuidString]
             )
         }
     }
