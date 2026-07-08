@@ -916,11 +916,13 @@ export function StreamEditor({
     const trimmedTitle = title.trim() || 'Untitled';
     setTitle(trimmedTitle);
     setIsEditingTitle(false);
+    if (trimmedTitle === stream.title) return;
+
     bridge.send({
       type: 'updateStreamTitle',
       payload: { id: stream.id, title: trimmedTitle },
     });
-  }, [title, stream.id]);
+  }, [title, stream.id, stream.title]);
 
   const handleTitleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {

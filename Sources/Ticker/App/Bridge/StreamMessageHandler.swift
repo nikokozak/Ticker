@@ -56,6 +56,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
     private let bridgeService: BridgeService
     private let assetService: AssetService
     private let ingestService: IngestService?
+    private let autoTitleService: AutoTitleService?
     private weak var delegate: StreamMessageHandlerDelegate?
 
     init?(container: ServiceContainer, delegate: StreamMessageHandlerDelegate) {
@@ -64,6 +65,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         self.bridgeService = container.bridgeService
         self.assetService = container.assetService
         self.ingestService = container.ingestService
+        self.autoTitleService = container.autoTitleService
         self.delegate = delegate
     }
 
@@ -124,9 +126,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 return
             }
             do {
-                if var stream = try persistence.loadStream(id: id) {
-                    stream.title = title
-                    try persistence.updateStream(stream)
+                if try persistence.updateStreamTitle(id: id, title: title) {
                     bridgeService.send(BridgeMessage(type: "streamTitleUpdated", payload: ["id": AnyCodable(id.uuidString), "title": AnyCodable(title)]))
                 }
             } catch {
@@ -177,6 +177,11 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 await bridgeService.respond(to: callbackId, with: [
                     "revision": AnyCodable(revision)
                 ])
+                if let autoTitleService {
+                    Task {
+                        await autoTitleService.scheduleIfNeeded(streamId: streamId, markdown: markdown)
+                    }
+                }
             } catch let conflict as StreamDocumentRevisionConflict {
                 await bridgeService.send(BridgeMessage(type: "streamDocumentConflict", payload: [
                     "streamId": AnyCodable(conflict.streamId.uuidString),
