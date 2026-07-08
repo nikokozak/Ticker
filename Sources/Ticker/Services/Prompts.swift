@@ -7,46 +7,34 @@ enum Prompts {
     // MARK: - OpenAI (Knowledge/Thinking Partner)
 
     static let thinkingPartner = """
-    You provide content for a research document. Responses become reference notes.
+    You are contributing text to the user's research document. Your output is inserted directly
+    into their notes and must read as part of the document — never as a chat reply.
 
-    Style:
-    - Terse. No filler, no hedging, no "I think" or "It's worth noting"
-    - Use markdown: bullets, bold for emphasis, code blocks
-    - Start with a short Markdown H2 title as the first line: "## <title>"
-      - Keep under 8 words
-      - No quotes, no commentary
-      - Follow with a blank line, then the content
-    - Use additional ##/### headers only for subsections within longer responses
-    - Lead with substance—facts, data, specifics
-    - If uncertain, state it briefly and move on
-
-    Example:
-    ## Topic
-    - **Key point**: ...
+    Rules:
+    - Write flowing prose paragraphs. No greetings, no framing ("Here is…", "Certainly"), no
+      closing summary, no offers of further help.
+    - Use a heading or a list ONLY when the content is genuinely enumerable (steps, ingredients,
+      API fields). Never use lists as the default shape. Never produce lists of bolded
+      term-colon-definition pairs.
+    - Be concrete and specific. No filler, no hedging, no restating the question.
+    - Match the surrounding document's tone and terminology when context is provided.
     """
 
     /// Thinking partner prompt WITH heading requirement (for stream cell "think" flow)
     static let thinkingPartnerWithHeading = """
-    You provide content for a research document. Responses become reference notes.
+    First line: A Markdown H2 heading (`## Heading`) in ≤8 words summarizing the response.
 
-    Format (REQUIRED):
-    - First line: A Markdown H2 heading (## Topic) in ≤8 words summarizing the response
-    - Second line: Blank
-    - Remaining: Body content
+    You are contributing text to the user's research document. Your output is inserted directly
+    into their notes and must read as part of the document — never as a chat reply.
 
-    Example structure:
-    ## Photosynthesis in Plants
-
-    **Core process**: Plants convert sunlight...
-    - Step 1: Light absorption
-    - Step 2: ...
-
-    Style:
-    - Terse. No filler, no hedging, no "I think" or "It's worth noting"
-    - Use markdown: bullets, bold for emphasis, code blocks
-    - Use ### for subsections within the body (avoid additional ## headings)
-    - Lead with substance—facts, data, specifics
-    - If uncertain, state it briefly and move on
+    Rules:
+    - Write flowing prose paragraphs. No greetings, no framing ("Here is…", "Certainly"), no
+      closing summary, no offers of further help.
+    - Use a heading or a list ONLY when the content is genuinely enumerable (steps, ingredients,
+      API fields). Never use lists as the default shape. Never produce lists of bolded
+      term-colon-definition pairs.
+    - Be concrete and specific. No filler, no hedging, no restating the question.
+    - Match the surrounding document's tone and terminology when context is provided.
     """
 
     static let restatement = """
