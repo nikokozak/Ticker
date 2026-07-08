@@ -7,7 +7,7 @@ import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, type Stream, type SourceReference, type DocumentAICitation, type DocumentAISourceContextMode } from '../types';
+import { bridge, type Stream, type SourceReference, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
@@ -69,6 +69,7 @@ interface PDFPaneState {
   streamId?: string;
   sourceId?: string;
   sourceName?: string;
+  shortTitle?: string;
 }
 
 const SELECTION_MENU_DELAY_MS = 180;
@@ -808,7 +809,9 @@ export function StreamEditor({
       if (!payloadStreamId || payloadStreamId !== stream.id) return;
 
       const sourceId = message.payload?.sourceId as string | undefined;
-      const sourceName = message.payload?.sourceName as string | undefined;
+      const sourcePayload = message.payload as SourceTitlePayload | undefined;
+      const sourceName = sourcePayload?.sourceName;
+      const shortTitle = sourcePayload?.shortTitle;
       const highlightId = message.payload?.highlightId as string | undefined;
       const page = message.payload?.page as number | undefined;
       const quote = message.payload?.quote as string | undefined;
@@ -819,7 +822,7 @@ export function StreamEditor({
       const linkUrl = `ticker-pdf://${sourceId}?highlight=${encodeURIComponent(highlightId)}&page=${pageNumber}`;
       const compactQuote = (quote || '').trim().replace(/\s+/g, ' ');
       const quoteLine = compactQuote ? `> ${compactQuote}\n` : '';
-      const linkLabel = `${sourceName || 'PDF'} p.${pageNumber}`;
+      const linkLabel = `${shortTitle || sourceName || 'PDF'} p.${pageNumber}`;
       const snippet = `\n${quoteLine}[${linkLabel}](${linkUrl})\n`;
 
       insertTextAtCursor(snippet);
@@ -844,7 +847,8 @@ export function StreamEditor({
           visible,
           streamId: message.payload?.streamId as string | undefined,
           sourceId: message.payload?.sourceId as string | undefined,
-          sourceName: message.payload?.sourceName as string | undefined,
+          sourceName: (message.payload as SourceTitlePayload | undefined)?.sourceName,
+          shortTitle: (message.payload as SourceTitlePayload | undefined)?.shortTitle,
         };
         setPDFPaneState(nextState);
         if (!visible || nextState.streamId !== stream.id) {
@@ -1302,7 +1306,7 @@ export function StreamEditor({
       return status === 'indexing' || status === 'pending';
     });
     if (indexingSource) {
-      showSourceIndexNotice(indexingSource.displayName);
+      showSourceIndexNotice(indexingSource.shortTitle || indexingSource.displayName);
     }
 
     bridge.send({

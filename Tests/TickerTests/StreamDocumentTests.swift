@@ -1751,6 +1751,15 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
+    func test_sourceShortTitleFreezesCanonicalUglyFilename() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "Forth Programmer's Handbook (3rd Edition) -- Edward K_ Conklin … -- Anna's Archive.pdf"
+            ),
+            "Forth Progr...d Edition)"
+        )
+    }
+
     func test_sourceShortTitleUsesPlainFilenameStem() throws {
         XCTAssertEqual(
             SourceShortTitle.derive(displayName: "report.pdf"),

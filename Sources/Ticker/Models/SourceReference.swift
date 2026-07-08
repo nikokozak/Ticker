@@ -16,6 +16,10 @@ struct SourceReference: Identifiable, Codable {
     var aiExcluded: Bool
     let addedAt: Date
 
+    var shortTitle: String {
+        SourceShortTitle.derive(displayName: displayName)
+    }
+
     init(
         id: UUID = UUID(),
         streamId: UUID,

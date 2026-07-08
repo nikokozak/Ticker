@@ -55,6 +55,7 @@ final class SearchService {
                 streamTitle: textResult.streamTitle,
                 sourceType: .cell,
                 title: title,
+                shortTitle: nil,
                 snippet: snippet,
                 cellType: "text",
                 sourceId: nil,
@@ -77,6 +78,7 @@ final class SearchService {
                 streamTitle: textResult.streamTitle,
                 sourceType: .cell,
                 title: title,
+                shortTitle: nil,
                 snippet: snippet,
                 cellType: "text",
                 sourceId: nil,
@@ -89,13 +91,15 @@ final class SearchService {
         // Add source chunk results (only for current stream)
         for chunkResult in chunkResults {
             let snippet = truncate(chunkResult.text, maxLength: 150)
+            let shortTitle = SourceShortTitle.derive(displayName: chunkResult.sourceName)
 
             currentStreamResults.append(SearchResult(
                 id: chunkResult.id.uuidString,
                 streamId: currentStreamId.uuidString,
                 streamTitle: currentStreamTitle,
                 sourceType: .chunk,
-                title: chunkResult.sourceName,
+                title: shortTitle,
+                shortTitle: shortTitle,
                 snippet: snippet,
                 cellType: nil,
                 sourceId: chunkResult.sourceId.uuidString,
@@ -216,6 +220,7 @@ struct SearchResult: Encodable {
     let streamTitle: String
     let sourceType: SearchResultSourceType
     let title: String
+    let shortTitle: String?
     let snippet: String
     let cellType: String?
     let sourceId: String?

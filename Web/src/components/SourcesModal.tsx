@@ -331,6 +331,8 @@ const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
       aiExcluded: source.aiExcluded,
     });
     const showsRetry = canRetryIndexing(currentStatus);
+    const title = source.shortTitle || source.displayName;
+    const showFullName = source.displayName !== title;
 
     return (
       <div
@@ -349,7 +351,10 @@ const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
       >
         <span className="sources-modal-item-icon">{icon}</span>
         <div className="sources-modal-item-info">
-          <span className="sources-modal-item-name">{source.displayName}</span>
+          <span className="sources-modal-item-name">{title}</span>
+          {showFullName && (
+            <span className="sources-modal-item-full-name">{source.displayName}</span>
+          )}
           <div className="sources-modal-item-meta" aria-live="polite">
             {statusLine && <span>{statusLine}</span>}
             {showsRetry && (

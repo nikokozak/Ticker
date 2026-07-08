@@ -24,6 +24,7 @@ struct SourcePayload: Codable {
     let id: String
     let streamId: String
     let displayName: String
+    let shortTitle: String
     let fileType: String
     let status: String
     let extractedText: String?
@@ -37,6 +38,7 @@ struct SourcePayload: Codable {
         self.id = source.id.uuidString
         self.streamId = source.streamId.uuidString
         self.displayName = source.displayName
+        self.shortTitle = source.shortTitle
         self.fileType = source.fileType.rawValue
         self.status = source.status.rawValue
         self.extractedText = source.extractedText

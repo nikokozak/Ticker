@@ -1353,6 +1353,14 @@ body {
   text-overflow: ellipsis;
 }
 
+.sources-modal-item-full-name {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .sources-modal-item-meta {
   display: flex;
   flex-wrap: wrap;

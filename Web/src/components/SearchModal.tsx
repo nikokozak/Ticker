@@ -259,11 +259,18 @@ interface SearchResultItemProps {
 function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps) {
   const icon = getResultIcon(result);
   const badge = getMatchBadge(result.matchType);
+  const title = result.sourceType === 'chunk'
+    ? result.shortTitle ?? result.title
+    : result.title;
+  const fullTitle = result.sourceType === 'chunk'
+    ? result.sourceName ?? result.title
+    : result.title;
 
   return (
     <button
       className={`search-result-item ${isSelected ? 'search-result-item--selected' : ''}`}
       onClick={onClick}
+      title={fullTitle}
     >
       <span className="search-result-icon">{icon}</span>
       <div className="search-result-content">
@@ -271,7 +278,7 @@ function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps
           {result.streamTitle !== '' && result.sourceType === 'cell' && (
             <span className="search-result-stream">[{result.streamTitle}]</span>
           )}
-          {result.title}
+          {title}
         </div>
         <div className="search-result-snippet">{result.snippet}</div>
       </div>

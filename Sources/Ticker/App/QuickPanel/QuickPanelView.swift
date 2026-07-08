@@ -172,6 +172,7 @@ struct QuickPanelView: View {
                         .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
                         .foregroundColor(QuickPanelStyle.textMuted)
                         .lineLimit(1)
+                        .help(contextSourceFullLabel(context) ?? source)
                 }
             }
 
@@ -259,16 +260,16 @@ struct QuickPanelView: View {
         let app = context.activeApp?.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = context.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         let sourceApp = app?.isEmpty == false ? app : nil
-        let sourceTitle = title?.isEmpty == false ? title : nil
+        let sourceTitle = title.flatMap { $0.isEmpty ? nil : SourceShortTitle.derive(displayName: $0) }
         let baseLabel: String?
 
         switch (sourceApp, sourceTitle) {
         case let (sourceApp?, sourceTitle?):
-            baseLabel = "\(sourceApp) — \(truncate(sourceTitle, maxLength: 60))"
+            baseLabel = "\(sourceApp) — \(sourceTitle)"
         case let (sourceApp?, nil):
             baseLabel = sourceApp
         case let (nil, sourceTitle?):
-            baseLabel = truncate(sourceTitle, maxLength: 60)
+            baseLabel = sourceTitle
         case (nil, nil):
             baseLabel = nil
         }
@@ -281,9 +282,22 @@ struct QuickPanelView: View {
         return "\(baseLabel ?? "Copied text") · from clipboard"
     }
 
-    private func truncate(_ text: String, maxLength: Int) -> String {
-        guard text.count > maxLength else { return text }
-        return "\(text.prefix(maxLength - 3))..."
+    private func contextSourceFullLabel(_ context: QuickPanelContext) -> String? {
+        let app = context.activeApp?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = context.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceApp = app?.isEmpty == false ? app : nil
+        let sourceTitle = title?.isEmpty == false ? title : nil
+
+        switch (sourceApp, sourceTitle) {
+        case let (sourceApp?, sourceTitle?):
+            return "\(sourceApp) — \(sourceTitle)"
+        case let (sourceApp?, nil):
+            return sourceApp
+        case let (nil, sourceTitle?):
+            return sourceTitle
+        case (nil, nil):
+            return nil
+        }
     }
 
     // MARK: - Stream Destination Picker

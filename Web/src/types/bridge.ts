@@ -86,6 +86,11 @@ export interface DocumentAICitation {
   shortTitle: string;
 }
 
+export interface SourceTitlePayload {
+  sourceName?: string;
+  shortTitle?: string;
+}
+
 export type DocumentAISourceContextMode = 'passthrough' | 'retrieved' | 'none';
 
 /** Callback registry for async responses */
