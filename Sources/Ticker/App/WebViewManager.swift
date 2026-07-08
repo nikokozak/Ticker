@@ -211,9 +211,11 @@ final class WebViewManager: NSObject {
 
             let document = try persistence.loadOrCreateStreamDocument(streamId: createdStream.id)
             let streamPayload = StreamCodec.encodeStream(reloadedStream, document: document)
-            bridgeService.send(BridgeMessage(type: "streamLoaded", payload: [
-                "stream": AnyCodable(streamPayload)
-            ]))
+            let streamLoadedPayload: [String: AnyCodable] = [
+                "stream": AnyCodable(streamPayload),
+                "scrollOffset": AnyCodable(document.scrollOffset)
+            ]
+            bridgeService.send(BridgeMessage(type: "streamLoaded", payload: streamLoadedPayload))
 
             let summaries = try persistence.loadStreamSummaries()
             let payload = StreamCodec.encodeSummaries(summaries)

@@ -868,6 +868,10 @@ body {
   overflow: visible;
 }
 
+.document-editor-shell.cm-prepaint {
+  visibility: hidden;
+}
+
 .document-editor-codemirror {
   min-height: inherit;
 }

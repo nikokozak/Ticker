@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Streams now restore editor scroll position and hide the first frame until markdown concealment is ready.
 - Stream list cards now show content previews, word counts, and global search from the list.
 - Untitled streams can now keep their titles updated from document text until renamed manually.
 - Quick Panel can now attach recently copied clipboard text as context when no live selection is available.

@@ -58,6 +58,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'retrySourceIndexing',
   'saveImage',
   'saveSettings',
+  'saveScrollPosition',
   'saveStreamDocument',
   'setFileDropContext',
   'setSourceAIExclusion',

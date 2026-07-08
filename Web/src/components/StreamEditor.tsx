@@ -5,7 +5,7 @@ import { languages } from '@codemirror/language-data';
 import { EditorView } from '@codemirror/view';
 import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { bridge, type Stream, type SourceReference, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload } from '../types';
 import { SourcesModal } from './SourcesModal';
@@ -138,6 +138,19 @@ function focusEditorAtDocumentEnd(view: EditorView) {
   view.focus();
 }
 
+function restoreViewportEnd(view: EditorView, scrollOffset: number): number {
+  const docLength = view.state.doc.length;
+  if (docLength === 0 || scrollOffset <= 0) return view.viewport.to;
+
+  const scrollHeight = view.scrollDOM.scrollHeight;
+  const clientHeight = view.scrollDOM.clientHeight;
+  if (scrollHeight <= clientHeight) return view.viewport.to;
+
+  // ponytail: pixel-to-doc estimate; upgrade to measured CodeMirror mapping if deep restores ever flash.
+  const ratio = Math.min(1, (scrollOffset + clientHeight) / scrollHeight);
+  return Math.max(view.viewport.to, Math.min(docLength, Math.ceil(docLength * ratio)));
+}
+
 const clickToDocumentEndExtension: Extension = EditorView.domEventHandlers({
   mousedown: (event, view) => {
     if (event.button !== 0 || event.defaultPrevented) return false;
@@ -233,6 +246,7 @@ export function StreamEditor({
   const [title, setTitle] = useState(stream.title);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isPrepaintHidden, setIsPrepaintHidden] = useState(true);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
@@ -270,6 +284,9 @@ export function StreamEditor({
   const selectionMenuTimerRef = useRef<number | null>(null);
   const aiFeedbackTimerRef = useRef<number | null>(null);
   const sourceIndexNoticeTimerRef = useRef<number | null>(null);
+  const scrollSaveTimerRef = useRef<number | null>(null);
+  const scrollCleanupRef = useRef<(() => void) | null>(null);
+  const revealFrameRef = useRef<number | null>(null);
   const pendingPDFAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
   const sourcesRef = useRef<SourceReference[]>(stream.sources);
   const sourceIndexStatusesRef = useRef<Map<string, SourceReference['indexStatus']>>(new Map());
@@ -447,6 +464,46 @@ export function StreamEditor({
     }, AI_INDEXING_NOTICE_MS);
   }, [clearSourceIndexNoticeTimer]);
 
+  const clearScrollSaveTimer = useCallback(() => {
+    if (scrollSaveTimerRef.current !== null) {
+      window.clearTimeout(scrollSaveTimerRef.current);
+      scrollSaveTimerRef.current = null;
+    }
+  }, []);
+
+  const sendScrollPosition = useCallback((offset: number) => {
+    bridge.send({
+      type: 'saveScrollPosition',
+      payload: { streamId: stream.id, offset: Math.max(0, offset) },
+    });
+  }, [stream.id]);
+
+  const scheduleScrollPositionSave = useCallback(() => {
+    clearScrollSaveTimer();
+    scrollSaveTimerRef.current = window.setTimeout(() => {
+      scrollSaveTimerRef.current = null;
+      const view = editorViewRef.current;
+      if (view) {
+        sendScrollPosition(view.scrollDOM.scrollTop);
+      }
+    }, 1000);
+  }, [clearScrollSaveTimer, sendScrollPosition]);
+
+  const flushScrollPosition = useCallback(() => {
+    clearScrollSaveTimer();
+    const view = editorViewRef.current;
+    if (view) {
+      sendScrollPosition(view.scrollDOM.scrollTop);
+    }
+  }, [clearScrollSaveTimer, sendScrollPosition]);
+
+  const clearRevealFrame = useCallback(() => {
+    if (revealFrameRef.current !== null) {
+      window.cancelAnimationFrame(revealFrameRef.current);
+      revealFrameRef.current = null;
+    }
+  }, []);
+
   const cycleSourceScope = useCallback(() => {
     setSourceScope((previous) => {
       const next = nextSourceScope(previous);
@@ -488,17 +545,6 @@ export function StreamEditor({
       dispatchAiRangeClear(view);
     }
   }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.title]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const view = editorViewRef.current;
-      if (view) {
-        focusEditorAtDocumentEnd(view);
-      }
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [stream.id]);
 
   useEffect(() => {
     markdownContentRef.current = markdownContent;
@@ -1486,6 +1532,15 @@ export function StreamEditor({
   }, [clearSourceIndexNoticeTimer]);
 
   useEffect(() => {
+    return () => {
+      flushScrollPosition();
+      scrollCleanupRef.current?.();
+      scrollCleanupRef.current = null;
+      clearRevealFrame();
+    };
+  }, [clearRevealFrame, flushScrollPosition]);
+
+  useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
       if (!isEditorActive()) return;
       if (!event.clipboardData?.items?.length) return;
@@ -1745,7 +1800,7 @@ export function StreamEditor({
         <div className="stream-content">
           <div
             ref={editorShellRef}
-            className="document-editor-shell"
+            className={`document-editor-shell ${isPrepaintHidden ? 'cm-prepaint' : ''}`}
             onDrop={handleDrop}
             onDragOver={handleDragOver}
           >
@@ -1777,11 +1832,25 @@ export function StreamEditor({
               ]}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
-                window.setTimeout(() => {
-                  if (editorViewRef.current === view) {
-                    focusEditorAtDocumentEnd(view);
-                  }
-                }, 0);
+
+                scrollCleanupRef.current?.();
+                const handleScroll = () => scheduleScrollPositionSave();
+                view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true });
+                scrollCleanupRef.current = () => view.scrollDOM.removeEventListener('scroll', handleScroll);
+
+                clearRevealFrame();
+                const scrollOffset = Math.max(0, Number(stream.document?.scrollOffset ?? 0));
+                ensureSyntaxTree(view.state, restoreViewportEnd(view, scrollOffset), 50);
+                view.scrollDOM.scrollTop = scrollOffset;
+                revealFrameRef.current = window.requestAnimationFrame(() => {
+                  revealFrameRef.current = window.requestAnimationFrame(() => {
+                    revealFrameRef.current = null;
+                    if (editorViewRef.current === view) {
+                      setIsPrepaintHidden(false);
+                    }
+                  });
+                });
+
               }}
               onChange={(value) => {
                 setMarkdownContent(value);

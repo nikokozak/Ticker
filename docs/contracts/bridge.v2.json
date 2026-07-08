@@ -101,7 +101,8 @@
         "requiredPayloadKeys": ["streamId", "markdown", "revision"]
       },
       "streamLoaded": {
-        "requiredPayloadKeys": ["stream"]
+        "requiredPayloadKeys": ["stream"],
+        "optionalPayloadKeys": ["scrollOffset"]
       },
       "streamTitleUpdated": {
         "requiredPayloadKeys": ["id", "title"]
@@ -197,6 +198,9 @@
       "saveStreamDocument": {
         "requiredPayloadKeys": ["streamId", "markdown", "baseRevision"],
         "requiredCallbackId": true
+      },
+      "saveScrollPosition": {
+        "requiredPayloadKeys": ["streamId", "offset"]
       },
       "setFileDropContext": {
         "requiredPayloadKeys": ["mode"],
