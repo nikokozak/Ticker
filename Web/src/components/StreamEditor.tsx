@@ -9,7 +9,6 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { bridge, type Stream, type SourceReference, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload } from '../types';
 import { SourcesModal } from './SourcesModal';
-import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
@@ -33,7 +32,6 @@ interface StreamEditorProps {
   stream: Stream;
   onBack: () => void;
   onDelete: () => void;
-  onNavigateToStream?: (streamId: string, targetId: string, targetType?: 'cell' | 'source') => void;
   pendingCellId?: string | null;
   pendingSourceId?: string | null;
   onClearPendingCell?: () => void;
@@ -225,7 +223,6 @@ export function StreamEditor({
   stream,
   onBack,
   onDelete,
-  onNavigateToStream,
   pendingCellId,
   pendingSourceId,
   onClearPendingCell,
@@ -236,7 +233,6 @@ export function StreamEditor({
   const [title, setTitle] = useState(stream.title);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
@@ -1457,11 +1453,6 @@ export function StreamEditor({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setShowSearch(true);
-        return;
-      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         if (!isEditorActive()) return;
         e.preventDefault();
@@ -1546,19 +1537,6 @@ export function StreamEditor({
       payload: { sourceId: source.id },
     });
   }, []);
-
-  const handleNavigateToCell = useCallback(() => {
-    addToast('Cell anchors are not available in document editor mode yet.', 'info');
-  }, [addToast]);
-
-  const handleNavigateToSource = useCallback((sourceId: string) => {
-    if (!sources.some((source) => source.id === sourceId)) {
-      addToast('Source is not attached to this stream.', 'info');
-      return;
-    }
-    setHighlightedSourceId(sourceId);
-    setShowSourcesModal(true);
-  }, [addToast, sources]);
 
   return (
     <div className="stream-editor">
@@ -1844,14 +1822,6 @@ export function StreamEditor({
         }}
       />
 
-      <SearchModal
-        isOpen={showSearch}
-        onClose={() => setShowSearch(false)}
-        currentStreamId={stream.id}
-        onNavigateToCell={handleNavigateToCell}
-        onNavigateToStream={onNavigateToStream || (() => {})}
-        onNavigateToSource={handleNavigateToSource}
-      />
     </div>
   );
 }

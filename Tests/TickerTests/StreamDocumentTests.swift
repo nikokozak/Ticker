@@ -2275,12 +2275,37 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_streamCodecPreviewLineSkipsHeadingsAndImages() throws {
+        let markdown = """
+        # Heading to skip
+
+        ![diagram](ticker-asset://stream/diagram.png)
+
+        First readable line.
+        """
+
+        XCTAssertEqual(StreamCodec.previewLine(from: markdown), "First readable line.")
+    }
+
+    func test_streamCodecPreviewLineStripsMarkdownMarksAndLinks() throws {
+        let markdown = "> **# [Linked idea](https://example.com)** with `code`"
+
+        XCTAssertEqual(StreamCodec.previewLine(from: markdown), "Linked idea with code")
+    }
+
     func test_loadStreamSummariesUsesDocumentMarkdownAndUpdatedAtOrdering() throws {
         try withTempPersistenceService { service in
             let olderStream = Stream(title: "Older Stream")
             let newerStream = Stream(title: "Newer Stream")
             try service.saveStream(olderStream)
             try service.saveStream(newerStream)
+            try service.saveSource(SourceReference(
+                streamId: newerStream.id,
+                displayName: "Notebook.pdf",
+                fileType: .pdf,
+                bookmarkData: Data("bookmark".utf8),
+                status: .ready
+            ))
 
             let olderMarkdown = "# Older Notes\n\nThe older document preview comes from markdown."
             let newerMarkdown = """
@@ -2311,6 +2336,8 @@ final class StreamDocumentTests: XCTestCase {
 
             let newerSummary = try XCTUnwrap(summaries.first { $0.id == newerStream.id })
             XCTAssertEqual(newerSummary.previewText, newerMarkdown)
+            XCTAssertEqual(newerSummary.sourceCount, 1)
+            XCTAssertEqual(newerSummary.sourceShortTitle, "Notebook")
             XCTAssertEqual(newerSummary.charCount, newerMarkdown.count)
             XCTAssertEqual(newerSummary.imageCount, 2)
 
@@ -2318,6 +2345,14 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(olderSummary.previewText, olderMarkdown)
             XCTAssertEqual(olderSummary.charCount, olderMarkdown.count)
             XCTAssertEqual(olderSummary.imageCount, 0)
+
+            let payload = StreamCodec.encodeSummaries([newerSummary])
+            let encodedStreams = try XCTUnwrap(payload["streams"]?.value as? [[String: Any]])
+            let encodedSummary = try XCTUnwrap(encodedStreams.first)
+            XCTAssertEqual(encodedSummary["previewLine"] as? String, "Newer document preview")
+            XCTAssertEqual(encodedSummary["sourceShortTitle"] as? String, "Notebook")
+            XCTAssertEqual(encodedSummary["wordCount"] as? Int, newerMarkdown.split { $0.isWhitespace }.count)
+            XCTAssertEqual(encodedSummary["charCount"] as? Int, newerMarkdown.count)
         }
     }
 

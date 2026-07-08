@@ -28,6 +28,7 @@ struct StreamSummary: Identifiable, Codable {
     let id: UUID
     let title: String
     let sourceCount: Int
+    let sourceShortTitle: String?
     let cellCount: Int
     let charCount: Int
     let imageCount: Int

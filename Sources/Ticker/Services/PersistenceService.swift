@@ -522,6 +522,7 @@ final class PersistenceService {
                 SELECT
                     s.id, s.title, s.updated_at,
                     (SELECT COUNT(*) FROM sources WHERE stream_id = s.id) as source_count,
+                    (SELECT display_name FROM sources WHERE stream_id = s.id ORDER BY added_at LIMIT 1) as source_display_name,
                     (SELECT COUNT(*) FROM cells WHERE stream_id = s.id) as cell_count,
                     (SELECT markdown FROM stream_documents WHERE stream_id = s.id) as document_markdown,
                     COALESCE(
@@ -536,10 +537,13 @@ final class PersistenceService {
                 // ponytail: raw markdown counts are the ceiling here; upgrade to parser-backed rendered-text/image metrics if list metadata needs semantic precision.
                 let charCount = documentMarkdown.count
                 let imageCount = Self.countMarkdownImageTokens(in: documentMarkdown)
+                let sourceCount: Int = row["source_count"]
+                let sourceDisplayName: String? = row["source_display_name"]
                 return StreamSummary(
                     id: UUID(uuidString: row["id"])!,
                     title: row["title"],
-                    sourceCount: row["source_count"],
+                    sourceCount: sourceCount,
+                    sourceShortTitle: sourceCount == 1 ? sourceDisplayName.map { SourceShortTitle.derive(displayName: $0) } : nil,
                     cellCount: row["cell_count"],
                     charCount: charCount,
                     imageCount: imageCount,

@@ -22,11 +22,14 @@ export interface StreamSummary {
   id: string;
   title: string;
   sourceCount: number;
+  sourceShortTitle?: string;
   cellCount: number;
   charCount: number;
+  wordCount: number;
   imageCount: number;
   updatedAt: string;
   previewText: string | null;
+  previewLine: string | null;
 }
 
 /** A reference to an external file */

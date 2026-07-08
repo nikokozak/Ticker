@@ -266,6 +266,16 @@ body {
   color: var(--color-text);
 }
 
+.stream-preview {
+  width: 100%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .stream-meta {
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
