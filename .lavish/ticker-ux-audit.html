@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticker-Next · UX &amp; Aesthetic Audit</title>
+<style>
+  /* ============ Ticker design tokens (Web/src/styles/index.css) ============ */
+  :root {
+    --bg: #fbfbfa;
+    --surface: #f4f4f2;
+    --surface-raised: #ffffff;
+    --text: #1f1f1d;
+    --text-muted: #6f6f68;
+    --text-subtle: #9b9a91;
+    --text-faint: #c8c7bf;
+    /* accent switched to the CHOSEN sienna (decision 2026-07-08) — this page now demonstrates it */
+    --accent: #a4502e;
+    --accent-soft: rgba(164, 80, 46, 0.1);
+    --border: rgba(31, 31, 29, 0.1);
+    --border-subtle: rgba(31, 31, 29, 0.06);
+    --surface-hover: #ecebea;
+    --success: #16813d;
+    --success-soft: rgba(22, 129, 61, 0.1);
+    --warning: #9d6a03;
+    --warning-soft: rgba(157, 106, 3, 0.14);
+    --danger: #c73a32;
+    --danger-soft: rgba(199, 58, 50, 0.1);
+    --overlay-shadow: 0 16px 44px rgba(31, 31, 29, 0.16);
+    --control-shadow: 0 4px 12px rgba(31, 31, 29, 0.12);
+    --radius: 8px;
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+    --space-5: 24px; --space-6: 32px; --space-7: 40px; --space-8: 64px;
+    --font-mono: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+    /* proposed-accent candidates used in §5 */
+    --ink: #34506b;
+    --sienna: #a4502e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    font-size: 15px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: var(--space-7) var(--space-5) var(--space-8); }
+
+  /* ---------- report chrome ---------- */
+  .masthead { margin-bottom: var(--space-7); }
+  .masthead h1 { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; }
+  .masthead .sub { color: var(--text-muted); margin-top: var(--space-2); max-width: 72ch; }
+  .method { font-size: 13px; color: var(--text-subtle); margin-top: var(--space-3); }
+  nav.toc { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-5); }
+  nav.toc a {
+    font-size: 13px; text-decoration: none; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; background: var(--surface-raised);
+  }
+  nav.toc a:hover { color: var(--text); border-color: var(--text-subtle); }
+
+  section { margin-top: var(--space-8); }
+  section > h2 { font-size: 22px; font-weight: 650; letter-spacing: -0.01em; margin-bottom: var(--space-2); }
+  section > .lede { color: var(--text-muted); max-width: 76ch; margin-bottom: var(--space-5); }
+  h3.sub-h { font-size: 16px; font-weight: 600; margin: var(--space-6) 0 var(--space-3); }
+  p.note { max-width: 76ch; }
+  .prose-gap { margin-top: var(--space-3); }
+
+  .chip { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; border-radius: 999px; padding: 2px 9px; vertical-align: 2px; }
+  .chip.p0 { background: var(--danger-soft); color: var(--danger); }
+  .chip.p1 { background: var(--warning-soft); color: var(--warning); }
+  .chip.polish { background: var(--accent-soft); color: var(--accent); }
+  .chip.good { background: var(--success-soft); color: var(--success); }
+
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: var(--space-4); }
+  .card { background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: var(--space-4) var(--space-4) var(--space-4); min-width: 0; }
+  .card h4 { font-size: 15px; font-weight: 600; margin: var(--space-2) 0 var(--space-2); }
+  .card p { font-size: 13.5px; color: var(--text-muted); }
+  .card .fix { margin-top: var(--space-3); font-size: 13.5px; color: var(--text); }
+  .card .fix strong { font-weight: 600; }
+  .loc { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-subtle); word-break: break-all; }
+
+  /* ---------- evidence figures ---------- */
+  .evidence { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-4); }
+  figure { min-width: 0; }
+  figure .frame { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+    background: var(--surface-raised); box-shadow: var(--control-shadow); }
+  figure img { display: block; width: 100%; height: auto; max-height: 460px; object-fit: cover; object-position: top; }
+  figcaption { font-size: 12.5px; color: var(--text-muted); margin-top: var(--space-2); line-height: 1.5; }
+  figcaption b { color: var(--text); font-weight: 600; }
+
+  /* ---------- before / after scaffolding ---------- */
+  .ba { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--space-4); align-items: start; }
+  .ba > div { min-width: 0; }
+  .ba-label { font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: var(--space-2); }
+  .ba-label.now { color: var(--danger); }
+  .ba-label.then { color: var(--success); }
+  .ba-label.rej { color: var(--warning); }
+
+  /* provenance x-ray + marginalia mocks */
+  .xr-ai { background: rgba(164,80,46,0.08); border-bottom: 1px dotted rgba(164,80,46,0.45); }
+  .xr-src { background: var(--warning-soft); border-bottom: 1px dotted rgba(157,106,3,0.45); }
+  .xr-key { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 11.5px; color: var(--text-subtle); margin-top: 10px; }
+  .xr-key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .xr-meta { font-size: 11.5px; color: var(--text-subtle); margin-top: 8px; font-family: var(--font-mono); }
+  .state-tag { display: inline-block; font-size: 10.5px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text-subtle); background: var(--surface); border-radius: 4px; padding: 2px 7px; margin-bottom: 8px; }
+  .margin-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 148px; gap: 14px; align-items: start; }
+  .mnote { font-size: 11.5px; color: var(--text-muted); border-left: 2px solid var(--accent-soft); padding-left: 8px; margin-bottom: 12px; }
+  .mnote .mk { color: var(--text-subtle); font-size: 10.5px; display: block; margin-top: 3px; }
+  .ba-note { font-size: 12.5px; color: var(--text-muted); margin-top: var(--space-2); line-height: 1.5; }
+
+  /* ---------- app mockup primitives (faithful to Ticker) ---------- */
+  .app {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: var(--control-shadow); overflow: hidden; font-size: 14px;
+  }
+  .app .titlebar { display: flex; align-items: center; gap: 6px; padding: 9px 12px; }
+  .app .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .dot.r { background: #f5655b; } .dot.y { background: #f5bd4f; } .dot.g { background: #62c454; }
+  .app .body { padding: var(--space-4) var(--space-5) var(--space-5); }
+
+  /* stream list mock */
+  .sl-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-3); padding: 0 0 var(--space-4); }
+  .sl-head .t { font-size: 22px; font-weight: 650; }
+  .sl-head .actions { display: flex; gap: var(--space-2); align-items: center; flex-shrink: 0; }
+  .btn-ghost { font-size: 13px; color: var(--text-muted); background: none; border: none; }
+  .btn-dark { font-size: 13px; color: #fff; background: var(--text); border: none; border-radius: var(--radius); padding: 6px 13px; }
+  .stream-card { padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); min-width: 0; }
+  .stream-card .st { font-size: 15px; font-weight: 550; line-height: 1.45; overflow-wrap: anywhere; }
+  .stream-card .sm { font-size: 12.5px; color: var(--text-subtle); margin-top: 3px; }
+  .stream-card .sp { font-size: 13px; color: var(--text-muted); margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .badge { display: inline-block; font-size: 11px; border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: 1px; }
+  .badge.q { background: var(--accent-soft); color: var(--accent); }
+  .badge.r { background: var(--surface-hover); color: var(--text-muted); }
+  .searchbox { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 7px 12px; color: var(--text-subtle); font-size: 13.5px; background: var(--surface-raised); margin-bottom: var(--space-3); }
+
+  /* editor mock */
+  .ed { font-size: 15px; line-height: 1.58; }
+  .ed .hd { display: flex; align-items: center; gap: var(--space-3); font-size: 13px; color: var(--text-muted);
+    padding-bottom: var(--space-4); }
+  .ed .hd .ttl { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .ed .hd .pill { border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 10px; font-size: 12.5px; flex-shrink: 0; }
+  .raw { color: var(--text); }
+  .raw .mk { color: var(--text-subtle); }
+  .rendered h1v { display: block; font-size: 25px; font-weight: 650; margin: var(--space-3) 0 var(--space-2); letter-spacing: -0.015em; }
+  .rendered h2v { display: block; font-size: 20px; font-weight: 630; margin: var(--space-3) 0 var(--space-2); letter-spacing: -0.01em; }
+  .flat h2v { font-size: 17px; font-weight: 620; }
+  .bq { border-left: 2px solid var(--border); padding-left: 12px; color: var(--text-muted); margin: var(--space-2) 0; }
+  a.mockl { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+  a.mockl.short { overflow-wrap: normal; }
+  .prov { font-style: italic; color: var(--text-subtle); font-size: 13px; margin-top: var(--space-2); }
+  .ai-block { border-left: 2px solid var(--accent-soft); padding: 2px 0 2px 14px; margin: var(--space-3) 0; }
+  .ai-meta { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-subtle); margin-bottom: 6px; }
+  .ai-meta .m { font-family: var(--font-mono); background: var(--surface); border-radius: 4px; padding: 1px 6px; }
+  .followup { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; margin-top: var(--space-2); background: var(--surface-raised); }
+  .user-q { font-weight: 550; }
+
+  /* selection menu mock */
+  .selbar { display: inline-flex; flex-wrap: wrap; max-width: 100%; align-items: center; gap: 2px; background: var(--surface-raised);
+    border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--control-shadow); padding: 4px; }
+  .selbar .sb { font-size: 13px; padding: 5px 11px; border-radius: 6px; border: none; background: none; color: var(--text); white-space: nowrap; }
+  .selbar .sb.fmt { font-weight: 650; width: 32px; text-align: center; }
+  .selbar .sb.mono { font-family: var(--font-mono); font-size: 12px; }
+  .selbar .sb.ai { color: var(--accent); font-weight: 550; }
+  .selbar .div { width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
+  .selctx { position: relative; padding: var(--space-5) var(--space-4); }
+  .selctx .selline { background: rgba(164,80,46,0.14); border-radius: 2px; }
+
+  /* quick panel mock */
+  .qp { width: 100%; max-width: 360px; background: var(--surface-raised); border: 1px solid var(--border);
+    border-radius: 14px; box-shadow: var(--overlay-shadow); padding: var(--space-3); margin: 0 auto; }
+  .qp .picker { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; margin-bottom: var(--space-2);
+    max-width: 100%; }
+  .qp .picker span { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; min-width: 0; }
+  .qp .in { border: 1px solid var(--border-subtle); background: var(--surface); border-radius: 10px; padding: 10px 12px;
+    color: var(--text-subtle); font-size: 14px; }
+  .qp .hints { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 11px; color: var(--text-faint); padding: 8px 4px 0; }
+  .qp .turn { font-size: 13.5px; padding: 6px 2px; }
+  .qp .turn.you { font-weight: 550; }
+  .qp .turn.ai { color: var(--text-muted); }
+  .qp .saved { font-size: 11.5px; color: var(--success); padding: 4px 2px 0; }
+
+  /* swatches / type scale */
+  .swrow { display: flex; flex-wrap: wrap; gap: var(--space-4); }
+  .sw { min-width: 150px; }
+  .sw .swatch { height: 56px; border-radius: var(--radius); border: 1px solid var(--border); }
+  .sw .lab { font-size: 12.5px; margin-top: 6px; }
+  .sw .lab code { font-family: var(--font-mono); font-size: 11px; color: var(--text-subtle); }
+  .ts { display: grid; gap: 2px; }
+  .ts span { display: block; overflow-wrap: break-word; min-width: 0; }
+
+  /* comparison table */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--surface-raised);
+    border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .tblwrap { overflow-x: auto; border-radius: var(--radius); }
+  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-subtle);
+    font-weight: 600; padding: 10px 14px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.bad { color: var(--danger); }
+  td.goodc { color: var(--success); }
+  td .rank { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center;
+    background: var(--text); color: #fff; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .eff { font-size: 11px; font-weight: 600; border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+  .eff.s { background: var(--success-soft); color: var(--success); }
+  .eff.m { background: var(--warning-soft); color: var(--warning); }
+  .eff.l { background: var(--danger-soft); color: var(--danger); }
+
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 var(--radius) var(--radius) 0;
+    padding: var(--space-3) var(--space-4); font-size: 14px; max-width: 80ch; }
+  .callout.warn { border-left-color: var(--warning); background: var(--warning-soft); }
+
+  footer { margin-top: var(--space-8); padding-top: var(--space-5); border-top: 1px solid var(--border);
+    font-size: 12.5px; color: var(--text-subtle); }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============================== MASTHEAD ============================== -->
+<div class="masthead">
+  <h1>Ticker-Next · UX &amp; Aesthetic Audit</h1>
+  <p class="sub">The engineering core is solid — append primitive, revision saves, verified citations, one-undo AI.
+  But the product currently <em>demos</em> its philosophy instead of embodying it. The frame for every fix in this report:
+  <strong>Ticker is not an AI-enhanced app.</strong> It is an instrument for the user’s journey through information —
+  IA (intelligence amplification), not AI-as-destination. The model dissolves into the medium; the document, not the
+  assistant, is the center. Where today’s dogmatic AI-interaction patterns (chat windows, answer blocks, assistant personas)
+  leak in, they are treated below as defects — even when they’d look “normal” in any other product.</p>
+  <p class="method">Method: three parallel code audits (web UI · native shell · AI layer) with file:line evidence, plus a live
+  session driving the installed release build 2026.7.2 against real data. Screenshots below are from that session.
+  Mockups are rendered in Ticker’s own design tokens from <code>Web/src/styles/index.css</code>.</p>
+  <nav class="toc">
+    <a href="#evidence">1 · Live evidence</a>
+    <a href="#journey">2 · The journey</a>
+    <a href="#inversion">3 · The inversion</a>
+    <a href="#mockups">4 · Interface fixes, mocked</a>
+    <a href="#aesthetic">5 · Aesthetic system</a>
+    <a href="#radical">6 · Radical directions</a>
+    <a href="#provenance">7 · The provenance layer</a>
+    <a href="#priorities">8 · Priorities</a>
+  </nav>
+</div>
+
+<!-- ============================== 1 · EVIDENCE ============================== -->
+<section id="evidence">
+  <h2>1 · What the release build showed, live <span class="chip p0">trust</span></h2>
+  <p class="lede">Three screenshots from the real app, real data, release 2026.7.2. Each one is a moment where the
+  product contradicts its own promise within the first minute of use.</p>
+  <div class="evidence">
+    <figure>
+      <div class="frame"><img src="ev-untitled.png" alt="Stream list: six Untitled streams and one six-line filename title"></div>
+      <figcaption><b>The default page is a wall of amnesia.</b> 7 of 8 streams are “Untitled”; the only named one is a raw
+      Anna’s-Archive filename that wraps to six lines, ISBN and hash included. Metadata is “611 chars” — engineer units.
+      No previews, no search (⌘K only mounts <em>inside</em> a stream — <span class="loc">StreamEditor.tsx:1841</span>).</figcaption>
+    </figure>
+    <figure>
+      <div class="frame"><img src="ev-rawmarks.png" alt="Editor open showing raw markdown marks and a raw URL-encoded citation"></div>
+      <figcaption><b>Every stream opens on broken rendering.</b> The editor opens scrolled to the end showing raw
+      <code>##</code>/<code>**</code> marks and the URL-encoded tail of a citation link. Conceal only kicks in after the
+      first click. Reproduced in light and dark. This is the app’s first frame, every time.</figcaption>
+    </figure>
+    <figure>
+      <div class="frame"><img src="ev-longlink.png" alt="A five-line blue citation link of a raw filename"></div>
+      <figcaption><b>Naming pollution reaches every surface.</b> The same raw filename becomes a five-line blue link in the
+      document, the PDF pane title, the quick-panel picker, and search results. <code>SourceShortTitle</code> exists and works
+      in AI citations — it just isn’t applied anywhere else.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ============================== 2 · JOURNEY ============================== -->
+<section id="journey">
+  <h2>2 · The journey, finding by finding</h2>
+  <p class="lede">Ordered by where a user hits them. Severity: <span class="chip p0">trust</span> actively erodes confidence ·
+  <span class="chip p1">friction</span> blocks or confuses · <span class="chip polish">polish</span> reads as unfinished.</p>
+
+  <div class="card-grid">
+    <div class="card"><span class="chip p1">friction</span>
+      <h4>Onboarding teaches one hotkey, then abandons you</h4>
+      <p>Three screens teach ⌘L, mention the Device Key — and never take you to enter it. AI is dead until the user finds
+      Settings on their own. “Skip for now” and “Continue” are the same button. Closing the window counts as onboarded.</p>
+      <p class="fix"><strong>Fix:</strong> device-key step in onboarding + a “try a capture on this very window” moment (your own planned H2.3).</p>
+      <p class="loc">OnboardingView.swift:151–161, 223</p>
+    </div>
+    <div class="card"><span class="chip p0">trust</span>
+      <h4>No search, no scent on the stream list</h4>
+      <p>The page whose job is “re-enter your thinking” offers no search, no content preview, no pinning.
+      ⌘K exists only after you’ve opened a stream.</p>
+      <p class="fix"><strong>Fix:</strong> mount SearchModal at App level; add a preview line + reading state to cards (mocked in §4.1).</p>
+      <p class="loc">StreamEditor.tsx:1841 · App.tsx:341–389</p>
+    </div>
+    <div class="card"><span class="chip p1">friction</span>
+      <h4>Replace-in-place is the only AI verb</h4>
+      <p>“Send” overwrites the selection (<code>mode:&nbsp;'replace'</code>). Replacement itself is a legitimate — even core — Ticker
+      move: a seed sentence <em>develops</em> into a fuller idea, and the boundary between your words and the model’s is meant to blur.
+      The defect is that it’s the unlabeled default and the <em>only</em> shape: no appending thought-verbs beside it, no way to tell
+      which move you’re making.</p>
+      <p class="fix"><strong>Fix:</strong> name it (Develop), and give it siblings that append instead of overwrite (§4.3).</p>
+      <p class="loc">StreamEditor.tsx:1333, 1393</p>
+    </div>
+    <div class="card"><span class="chip good">decided</span>
+      <h4>Every AI call is one-shot — by decision, not accident</h4>
+      <p><code>priorCells: []</code> is hardcoded. The audit initially proposed feeding prior exchanges back as invisible memory;
+      <b>final review decision: the past is the past</b> — prior exchanges are never fed back as context, on any surface.
+      Exchanges are recorded for receipts (§7.4) only. The one exception: the quick panel’s own live ephemeral turns, which are a
+      conversation the user is currently having, not resurrected history.</p>
+      <p class="loc">AIMessageHandler.swift:177 · locked as D1 in docs/IA_CORE_PLAN.md</p>
+    </div>
+    <div class="card"><span class="chip p1">friction</span>
+      <h4>No stop button, no model name, hidden scope</h4>
+      <p>Once Send fires you wait. The proxy reports which model ran; the web layer discards it in an empty handler.
+      The Auto/All/None source scope lives only inside the prompt popover but silently governs plain Send too.</p>
+      <p class="fix"><strong>Fix:</strong> Stop control on the pill; model chip on answers; scope visible wherever Send is possible.</p>
+      <p class="loc">StreamEditor.tsx:651–655, 1240–1243, 1652</p>
+    </div>
+    <div class="card"><span class="chip p1">friction</span>
+      <h4>The reader is the least-invested surface</h4>
+      <p>For a “document reading” north star: opens at page 1 every time, no outline/TOC (PDFKit gives it free),
+      no thumbnails, no zoom UI, one PDF at a time, and failures are a literal <code>NSSound.beep()</code>.</p>
+      <p class="fix"><strong>Fix:</strong> resume position + outline sidebar + words instead of beeps. (R4 plans part of this — pull it forward.)</p>
+      <p class="loc">PDFReaderPaneController.swift (outlineRoot unused)</p>
+    </div>
+    <div class="card"><span class="chip p1">friction</span>
+      <h4>Capture hotkeys collide and can’t be changed</h4>
+      <p>⌘L hijacks the address bar in every browser; ⌃Space collides with macOS input-source switching; neither is rebindable.
+      Permission warnings only evaluate the first time the panel shows.</p>
+      <p class="fix"><strong>Fix:</strong> rebindable hotkeys in Settings; re-evaluate permission state per toggle.</p>
+      <p class="loc">HotkeyService.swift:11 · QuickPanelManager.swift:330</p>
+    </div>
+    <div class="card"><span class="chip polish">polish</span>
+      <h4>The app forgets itself between launches</h4>
+      <p>No window-frame restoration (recomputes right-⅜ position every launch), no memory of the open stream or PDF.
+      Menus lack ⌘, Settings, Window/Help menus, dock menu. No URL scheme, Services, Share extension, or Shortcuts —
+      every standard macOS “get things in” channel is closed. Dev tools (Inspect Element) ship enabled in release.</p>
+      <p class="fix"><strong>Fix:</strong> frame autosave + reopen last stream; URL scheme + Share extension first (they feed capture ubiquity).</p>
+      <p class="loc">AppDelegate.swift:338–377 · WebViewManager.swift:28 · Info.plist</p>
+    </div>
+    <div class="card"><span class="chip good">works</span>
+      <h4>What’s already excellent — protect it</h4>
+      <p>The capture ladder with honest statuses. Verified quote-flash citations (system-checked, never fabricated).
+      One-⌘Z AI apply. Revision-checked saves. The PDF window choreography. Warm paper palette, working dark theme.
+      These are the trust assets the fixes above should match.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 3 · INVERSION ============================== -->
+<section id="inversion">
+  <h2>3 · The philosophical inversion <span class="chip p0">strategic</span></h2>
+  <p class="lede">Put the two AI surfaces side by side and the core problem is visible: <strong>the app’s depth and its
+  dialogue live on opposite surfaces.</strong> The persistent, source-grounded surface can’t converse; the conversational
+  surface is sourceless and evaporates on Esc.</p>
+
+  <div class="tblwrap"><table>
+    <thead><tr><th style="width:32%"></th><th>Document AI — the “deep work” surface</th><th>Quick panel ⌥↵ — the “throwaway” surface</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Multi-turn conversation</strong></td><td class="bad">No — every call cold (<span class="loc">priorCells: []</span>)</td><td class="goodc">Yes — real threaded chat</td></tr>
+      <tr><td><strong>Your sources / RAG</strong></td><td class="goodc">Yes — retrieval, citations, provenance</td><td class="bad">No (<span class="loc">streamId: nil</span>)</td></tr>
+      <tr><td><strong>Persistent</strong></td><td class="goodc">Yes — it’s the document</td><td>Ephemeral by design — and selective save is a <em>strength</em>, not a flaw</td></tr>
+      <tr><td><strong>Persona</strong> (<span class="loc">Prompts.swift</span>)</td><td class="bad">“Terse. No filler. Lead with substance — facts, data.”</td><td class="goodc">“Respond naturally… ask a clarifying question if needed.”</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="note prose-gap">The document persona is an <em>answer-dumper by instruction</em>: nothing in any document prompt ever asks
+  a question back, surfaces a tension, or pushes against a weak claim. The result is visible in every stream: the same
+  bold-term bullet wall. That is “AI replaces your thinking, in your own notebook.” Three moves fix it, all on existing
+  plumbing — mocked in the next section.</p>
+  <div class="callout prose-gap"><strong>Final resolution: neither chat nor memory.</strong> The fix for the inversion is
+  <em>not</em> a chat window — and, per the final review decision, not resurrected history either: <b>the past is the past; prior
+  exchanges are never fed back as context</b>. What changes instead: the output <em>shape</em> (prose by prompt, §4.2), the verbs
+  (§4.3), and honesty via summonable provenance (§7). The quick panel stays quick-and-dirty and ephemeral — its selective
+  per-message save is the powerful part, and its own live turns remain the one legitimate multi-turn context.</div>
+</section>
+
+<!-- ============================== 4 · MOCKUPS ============================== -->
+<section id="mockups">
+  <h2>4 · Interface fixes, mocked in Ticker’s own tokens</h2>
+  <p class="lede">Each pair shows current behavior (recreated faithfully) against the proposed change. Nothing here needs a
+  new data model — every “after” is markdown conventions + existing services + CM extensions.</p>
+
+  <!-- 4.1 stream list -->
+  <h3 class="sub-h">4.1 · Stream list: from amnesia to re-entry <span class="chip p0">trust</span></h3>
+  <div class="ba">
+    <div>
+      <div class="ba-label now">Now — live screenshot recreated</div>
+      <div class="app"><div class="titlebar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+        <div class="body">
+          <div class="sl-head"><span class="t">Streams</span>
+            <span class="actions"><button class="btn-ghost">Settings</button><button class="btn-dark">New Stream</button></span></div>
+          <div class="stream-card">
+            <div class="st">Forth Programmer's Handbook (3rd Edition) -- Edward K_ Conklin and Elizabeth D_ Rather -- 3rd edition, latest revision, Los Angeles, California, 2010 -- 9781419675492 -- 494e052437a10a0cfbbacb4c5bd4603c -- Anna’s Archive</div>
+            <div class="sm">2d ago · 1 source · 13.5k chars</div>
+          </div>
+          <div class="stream-card"><div class="st">Untitled</div><div class="sm">2d ago · 611 chars</div></div>
+          <div class="stream-card"><div class="st">Untitled</div><div class="sm">3d ago · 1 source · 1.1k chars</div></div>
+          <div class="stream-card"><div class="st">Untitled</div><div class="sm">3d ago · 1 source · 1.9k chars</div></div>
+          <div class="stream-card"><div class="st">Untitled</div><div class="sm">4d ago · 51 chars</div></div>
+        </div>
+      </div>
+      <p class="ba-note">No search on this page. Titles are raw filenames or nothing. “Chars” as the unit of thought.
+      Nothing tells you where you left off or what’s unresolved.</p>
+    </div>
+    <div>
+      <div class="ba-label then">Proposed</div>
+      <div class="app"><div class="titlebar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+        <div class="body">
+          <div class="sl-head"><span class="t">Streams</span>
+            <span class="actions"><button class="btn-ghost">Settings</button><button class="btn-dark">New Stream</button></span></div>
+          <div class="searchbox">⌘K — search streams and sources…</div>
+          <div class="stream-card">
+            <div class="st">Forth: numeric conversion &amp; OOP notes<span class="badge q">2 open questions</span><span class="badge r">p. 118 / 274</span></div>
+            <div class="sp">Automatic conversion: the text interpreter converts strings containing numeric…</div>
+            <div class="sm">2d ago · Forth Handbook · 2,100 words</div>
+          </div>
+          <div class="stream-card">
+            <div class="st">Lease renewal questions</div>
+            <div class="sp">Can the landlord raise rent mid-term if the lease says…</div>
+            <div class="sm">3d ago · Lease.pdf · 180 words</div>
+          </div>
+          <div class="stream-card">
+            <div class="st">Quick weeknight pasta ideas</div>
+            <div class="sp">Caprese pasta salad — fusilli, cherry tomatoes, mozzarella…</div>
+            <div class="sm">4d ago · 320 words</div>
+          </div>
+        </div>
+      </div>
+      <p class="ba-note"><b>Auto-title, living until claimed</b> via the existing <code>generateRestatement</code> service: the title
+      keeps regenerating as the stream evolves — until the user explicitly renames it, at which point it freezes and never
+      auto-updates again. <b>Preview line</b> from the doc’s first paragraph. <b>Reading position</b> gives a reason to come
+      back. Words, not chars. <em>Dependency, made explicit (your catch): the “open questions” badge is powered by open margin
+      notes (§7.5) and exists only once marginalia ships (§8 row 11) — until then cards show title + preview + reading position,
+      nothing the decided feature set can’t actually provide.</em></p>
+    </div>
+  </div>
+
+  <!-- 4.2 fusion document -->
+  <h3 class="sub-h">4.2 · Document AI: a fusion document with memory — not a chat window <span class="chip p0">strategic</span></h3>
+  <p class="note" style="margin-bottom:16px">What’s wrong today is the output <em>shape</em> (bullet-wall). The obvious industry
+  fix — threads, avatars, attribution blocks — is wrong for Ticker: the product’s point is that your ideas and the model’s
+  <em>blur into one research document</em>. And per the final decision, so is memory: every call stays one-shot; the past is the
+  past. So: fix the prose by prompt, and make provenance something you <em>summon</em>, not something that decorates every block.</p>
+  <div class="ba">
+    <div>
+      <div class="ba-label now">Now — one-shot answer dump (live content)</div>
+      <div class="app"><div class="body ed">
+        <div class="raw">
+          <span class="user-q">what's the recipe for a quick pasta dish?</span><br><br>
+          <span><span class="mk">##</span> <b>Quick Weeknight Pasta Recipe</b></span><br>
+          <span>- <span class="mk">**</span><b>Ingredients</b><span class="mk">**</span>:</span><br>
+          <span>&nbsp;&nbsp;- 8 ounces of pasta (spaghetti, penne, etc.)</span><br>
+          <span>&nbsp;&nbsp;- 2 tablespoons olive oil</span><br>
+          <span>- <span class="mk">**</span><b>Instructions</b><span class="mk">**</span>:</span><br>
+          <span>&nbsp;&nbsp;1. <span class="mk">**</span><b>Cook Pasta</b><span class="mk">**</span>: boil water in a large pot…</span>
+        </div>
+      </div></div>
+      <p class="ba-note">The bullet-wall is what the prompt asks for (“terse… lead with facts”). It reads as a bot transcript —
+      the exact aesthetic Ticker exists to escape — and the next Send starts cold (<code>priorCells: []</code>).</p>
+      <div class="ba-label rej" style="margin-top:20px">Rejected — the standard chat pattern</div>
+      <div class="app"><div class="body ed rendered">
+        <div class="ai-block">
+          <div class="ai-meta"><span class="m">claude-sonnet</span><span>· consulted Forth Handbook (3 passages)</span></div>
+          <p style="font-size:13.5px">Threads, model chips, attribution headers on every block, “↩ Follow up” buttons…</p>
+        </div>
+      </div></div>
+      <p class="ba-note">Looks tidy, and every AI product does it — which is the argument against it. Permanent attribution
+      chrome re-erects the human/AI boundary the product is trying to dissolve, and turns the document into a transcript.</p>
+    </div>
+    <div>
+      <div class="ba-label then">Proposed — seamless prose, provenance on demand</div>
+      <div class="app"><div class="body ed rendered">
+        <span class="state-tag">As written — no seams</span>
+        <p>&gt;NUMBER only converts unsigned digit strings, so a sign has to be handled before conversion: peek for “-”,
+        convert the rest, negate — the pattern NUMBER? itself uses <a class="mockl short">[Forth Handbook p.112]</a>.
+        That explains the crash: the interpreter never saw my minus sign as part of the number.</p>
+      </div></div>
+      <div class="app" style="margin-top:12px"><div class="body ed rendered">
+        <span class="state-tag">X-ray toggled on (👁 header toggle — chosen)</span>
+        <p><span class="xr-ai">&gt;NUMBER only converts unsigned digit strings, so a sign has to be handled before conversion:
+        peek for “-”, convert the rest, negate — the pattern NUMBER? itself uses</span>
+        <span class="xr-src"><a class="mockl short">[Forth Handbook p.112]</a></span>.
+        That explains the crash: the interpreter never saw my minus sign as part of the number.</p>
+        <div class="xr-key">
+          <span><i style="background:transparent;border:1px solid var(--border)"></i>yours</span>
+          <span><i style="background:rgba(37,99,235,0.14)"></i>developed with the model</span>
+          <span><i style="background:var(--warning-soft)"></i>grounded in a source</span>
+        </div>
+        <div class="xr-meta">claude-sonnet · developed from your sentence · ⏎ dissolve to plain text</div>
+      </div></div>
+      <p class="ba-note"><b>One-shot by decision (D1):</b> no prior-exchange memory anywhere — the past is the past.
+      <b>Prose by prompt</b> kills the bullet wall.
+      <b>X-ray as a toggle</b> answers “what came from where” only when asked; toggle off and the seams vanish again.
+      <b>Dissolve</b> strips a passage’s AI metadata into plain text — absorption as a deliberate act.
+      <em>This is the chosen direction — the full design (data model, edit semantics, affordances) is fleshed out in §7.</em></p>
+    </div>
+  </div>
+
+  <!-- 4.3 selection menu -->
+  <h3 class="sub-h">4.3 · Selection menu: thought-moves, not content-moves <span class="chip p0">strategic</span></h3>
+  <div class="ba">
+    <div>
+      <div class="ba-label now">Now</div>
+      <div class="app"><div class="selctx">
+        <p class="ed" style="margin-bottom:14px"><span class="selline">Raising rent mid-term is probably fine because the lease is silent on it.</span></p>
+        <span class="selbar">
+          <button class="sb fmt">B</button><button class="sb fmt" style="font-style:italic">I</button><button class="sb mono">&lt;/&gt;</button>
+          <span class="div"></span>
+          <button class="sb ai">Send</button><button class="sb ai">Send &amp; Prompt</button>
+        </span>
+      </div></div>
+      <p class="ba-note">“Send” <b>replaces the selected sentence</b> with model output — your claim vanishes under the answer.
+      Two undifferentiated AI verbs; formatting and thinking share one flat bar.</p>
+    </div>
+    <div>
+      <div class="ba-label then">Proposed — the selection-action registry’s first entries</div>
+      <div class="app"><div class="selctx">
+        <p class="ed" style="margin-bottom:14px"><span class="selline">Raising rent mid-term is probably fine because the lease is silent on it.</span></p>
+        <span class="selbar">
+          <button class="sb ai">Ask</button>
+          <button class="sb ai">Challenge</button>
+          <button class="sb ai">Define</button>
+          <span class="div"></span>
+          <button class="sb">Rewrite ▾</button>
+          <button class="sb fmt">B</button><button class="sb fmt" style="font-style:italic">I</button>
+        </span>
+        <div class="ai-block" style="margin-top:16px">
+          <div class="ai-meta"><span>Challenge · consulted Lease.pdf (2 passages)</span></div>
+          <p style="font-size:13.5px">Weakest point: silence doesn’t create permission. §4.2 fixes rent “for the Term”
+          <a class="mockl short">[Lease p.3]</a> — a mid-term raise would need a modification clause, and §11 requires
+          written consent for any amendment. What’s your basis for “probably fine”?</p>
+        </div>
+      </div></div>
+      <p class="ba-note"><b>Ask</b> appends an answer grounded in the document and its sources (one-shot, per D1). <b>Challenge</b> finds the weakest point in your
+      claim and ends with a question back — augmentation made tangible. <b>Rewrite ▾</b> holds the replacing verbs — including
+      <b>Develop</b> (today’s Send: seed sentence → fuller idea in place), which stays a first-class Ticker move, now named.
+      Registry pattern = your own Feature Surface §1; each verb is a prompt + a replace/append flag. <em>(Direction approved —
+      Challenge ships in the first pass.)</em></p>
+    </div>
+  </div>
+
+  <!-- 4.4 citations -->
+  <h3 class="sub-h">4.4 · Names: short titles everywhere <span class="chip p0">trust</span></h3>
+  <div class="ba">
+    <div>
+      <div class="ba-label now">Now</div>
+      <div class="app"><div class="body ed">
+        <div class="bq">OOP extensions have been developed for several popular Forth implementations…</div>
+        <a class="mockl">Forth Programmer's Handbook (3rd Edition) -- Edward K_ Conklin and Elizabeth D_ Rather -- 3rd edition, latest revision, Los Angeles, California, 2010 -- 9781419675492 -- 494e052437a10a0cfbbacb4c5bd4603c -- Anna's Archive.pdf p.11</a>
+      </div></div>
+      <p class="ba-note">A five-line link. The same string is the stream title, the PDF pane header, the quick-panel picker
+      and every search result.</p>
+    </div>
+    <div>
+      <div class="ba-label then">Proposed</div>
+      <div class="app"><div class="body ed">
+        <div class="bq">OOP extensions have been developed for several popular Forth implementations…</div>
+        <a class="mockl short">Forth Handbook · p.11</a>
+        <p class="prov" style="margin-top:14px">Consulted: Forth Handbook (4)</p>
+      </div></div>
+      <p class="ba-note"><code>SourceShortTitle</code> already derives “Forth Handbook”-class names for AI citations — apply it to
+      highlight links, pane headers, pickers, search results, and stream seeds. Keep the full filename as hover/tooltip metadata.
+      <b>And fix link interaction itself:</b> today, putting the cursor on a link explodes it into the full raw markdown —
+      URL-encoded query and all (see §1, screenshot 2). Click should navigate, period; editing gets a small popover
+      (label · target · unlink), and the raw form appears only for a naked-markdown power-edit (e.g. ⌥-click). The document
+      never has to look like plumbing.</p>
+    </div>
+  </div>
+
+  <!-- 4.5 quick panel -->
+  <h3 class="sub-h">4.5 · Quick panel: quick-and-dirty is the point — sharpen it, don’t grow it</h3>
+  <p class="note" style="margin-bottom:16px"><em>(Revised per review: the panel must not become a ChatGPT replica, and threads must
+  not auto-persist — random questions would pollute streams. Selective persistence is the power move. Longer inquiry belongs in
+  the stream, §4.2.)</em></p>
+  <div class="ba">
+    <div>
+      <div class="ba-label now">Now</div>
+      <div class="qp">
+        <div class="picker">▾ <span>Forth Programmer's Handbook (3rd Edition) -- Edward K_ Conk…</span></div>
+        <div class="turn you">what does CREATE actually allot?</div>
+        <div class="turn ai">CREATE adds a new dictionary entry and… <em>(sourceless — answers from model knowledge only)</em></div>
+        <div class="in">Reply…</div>
+        <div class="hints"><span>↵ send</span><span>esc discard</span><span>💾 save this message</span></div>
+      </div>
+      <p class="ba-note">Right instincts already: ephemeral, per-message save. Two real gaps: it can’t see the picked stream’s
+      sources (<code>streamId: nil</code>), and a conversation that turns out to matter has no exit besides copying messages
+      one by one.</p>
+    </div>
+    <div>
+      <div class="ba-label then">Proposed — same speed, two additions</div>
+      <div class="qp">
+        <div class="picker">▾ <span>Forth notes</span></div>
+        <div class="turn you">what does CREATE actually allot?</div>
+        <div class="turn ai">Nothing, by itself — CREATE makes the entry; ALLOT reserves the space
+        <a class="mockl short">[Forth Handbook p.156]</a>. That’s why they’re idiomatically paired… <span style="color:var(--text-faint)">· ↳ keep</span></div>
+        <div class="in">Reply…</div>
+        <div class="hints"><span>↵ reply</span><span>↳ keep one message</span><span>⤴ continue in stream</span><span>esc discard all</span></div>
+      </div>
+      <p class="ba-note"><b>Ephemeral stays the default</b> — Esc still discards everything; “keep” persists exactly the messages
+      you choose (exists today, kept). <b>Addition 1 (now):</b> the panel sees the picked stream’s sources — it already holds the
+      streamId; answers get the same citations as the editor. <b>Addition 2 (deferred — end-stage):</b> “⤴ continue in stream”
+      would need a real conversation mode inside the editor, which is meaningful extra work; per review it’s worth doing but
+      tackled last, after the provenance layer (§7) exists to carry it.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 5 · AESTHETIC ============================== -->
+<section id="aesthetic">
+  <h2>5 · Aesthetic system <span class="chip polish">polish</span></h2>
+  <p class="lede">What’s right: the warm paper palette, the calm low-chrome register, a real token file, a working dark theme.
+  What reads as prototype, with the specific fix for each.</p>
+
+  <h3 class="sub-h">5.1 · The accent — decided: sienna <span class="chip good">chosen</span></h3>
+  <div class="swrow">
+    <div class="sw"><div class="swatch" style="background:#2563eb"></div><div class="lab"><b>Outgoing</b> · <code>#2563eb</code><br>Tailwind blue-600 — the default of defaults; it colored the product’s identity: every AI action, citation, link.</div></div>
+    <div class="sw"><div class="swatch" style="background:var(--ink)"></div><div class="lab"><b>Candidate: ink</b> · <code>#34506b</code><br>Desaturated ink-blue; passed over.</div></div>
+    <div class="sw"><div class="swatch" style="background:var(--sienna); outline: 2px solid var(--text); outline-offset: 2px;"></div><div class="lab"><b>Chosen: sienna</b> · <code>#a4502e</code><br>Warm editorial rust; strong signature, pairs with the paper bg, distinct from every AI-tool blue.</div></div>
+  </div>
+  <p class="ba-note" style="max-width:76ch"><b>This page has been repainted with it</b> — every link, citation, x-ray tint, and
+  selection highlight above now renders in sienna, so you’re looking at the decision, not imagining it. In the app it’s one token
+  swap: <code>--accent</code> (+ soft/hover/focus derivatives and a lighter dark-mode variant, e.g. <code>#d98a63</code>-class).</p>
+
+  <h3 class="sub-h">5.2 · Heading hierarchy is nearly flat</h3>
+  <div class="ba">
+    <div>
+      <div class="ba-label now">Now — h1 1.26em / h2 1.16em / h3 1.08em over 16px</div>
+      <div class="app"><div class="body ed ts">
+        <span style="font-size:20.2px;font-weight:600">Numeric Input Conversion</span>
+        <span style="font-size:18.6px;font-weight:600">Automatic conversion</span>
+        <span style="font-size:17.3px;font-weight:600">Edge cases</span>
+        <span style="font-size:16px">Body text sits at 16px, so the entire structure of a document lives inside 4 pixels.</span>
+      </div></div>
+      <p class="ba-note">Confirmed live: headings read as slightly-bold body text; document structure disappears at a glance.
+      (The graded 620–650 weights also collapse to ~600 — SF Pro isn’t variable in that range.)</p>
+    </div>
+    <div>
+      <div class="ba-label then">Proposed — ~1.6 / 1.35 / 1.15, weight steps that exist</div>
+      <div class="app"><div class="body ed ts">
+        <span style="font-size:25.6px;font-weight:650;letter-spacing:-0.015em">Numeric Input Conversion</span>
+        <span style="font-size:21.6px;font-weight:600;letter-spacing:-0.01em">Automatic conversion</span>
+        <span style="font-size:18.4px;font-weight:600">Edge cases</span>
+        <span style="font-size:16px">Calm ≠ flat: iA’s restraint works because its scale still has scale.</span>
+      </div></div>
+    </div>
+  </div>
+
+  <h3 class="sub-h">5.3 · The rest of the prototype tells, each with its one-line fix</h3>
+  <p class="note" style="margin-bottom:14px"><em>(Governing rule, per review: any styling that marks text as AI-made must be
+  whisper-subtle and user-removable — the whole point is dissolving the human/AI boundary, so AI “accent” is a debug layer you
+  summon (§4.2 x-ray), never permanent decoration.)</em></p>
+  <div class="tblwrap"><table>
+    <thead><tr><th>Tell</th><th>Where</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>Two competing “primary” button colors — near-black vs accent blue, no rule</td><td class="loc">primary-button / settings-save-key vs ai-send / search-go</td><td>One rule: black = act, accent = AI. Enforce everywhere.</td></tr>
+      <tr><td>Emoji iconography (📝 🔑 ⏳ 📄) mixed with hand-drawn SVGs; toast close is a literal lowercase “x”; <code>alert()</code> dialogs</td><td class="loc">App.tsx:364 · ToastStack.tsx:67 · Settings.tsx:242</td><td>One SVG icon set (SF-Symbols-adjacent); kill every emoji and alert().</td></tr>
+      <tr><td>One 8px radius for everything — boxy on 20px chips, fine on modals</td><td class="loc">--radius-xs…xl all alias 8px</td><td>Add a real 4px small-control radius token.</td></tr>
+      <tr><td>Inline code is just a font swap; fenced blocks unstyled entirely</td><td class="loc">index.css:209–212</td><td>Background chip + padding inline; surface + hairline for fences.</td></tr>
+      <tr><td>Modal scrim so subtle the page behind stays readable (live); search modal is a mostly-empty sheet with raw <code>**</code> in snippets</td><td class="loc">SourcesModal / SearchModal</td><td>One real scrim token; strip markdown in snippets; size modals to content.</td></tr>
+      <tr><td>Ad-hoc transition durations (0.1–0.3s); appended fragments just pop into existence</td><td class="loc">scattered</td><td><code>--duration-fast/base</code> tokens + one signature “arrival” animation for appends — make the append primitive <em>felt</em>.</td></tr>
+      <tr><td>AI output itself is an aesthetic problem — the bullet-wall is what the prompt requests</td><td class="loc">Prompts.swift:9</td><td>“Write flowing prose; lists only when structure demands; never bold term-lists.” Cheapest visual upgrade in the app.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================== 6 · RADICAL ============================== -->
+<section id="radical">
+  <h2>6 · Radical directions — IA, not AI <span class="chip p0">strategic</span></h2>
+  <p class="lede">Per review: the center of this product is <strong>the user’s journey as they encounter information</strong> —
+  not the model. These are the directions that would move Ticker from interesting to a genuinely different category:
+  intelligence amplification, deliberately breaking today’s dogmatic AI-interaction patterns. Each is buildable on primitives
+  that already exist.</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h4>The document is the prompt — no prompt boxes</h4>
+      <p>Kill the notion of “prompting” entirely: cursor position + surrounding text + sources <em>are</em> the query. One gesture
+      (⌘↵ with nothing selected) means “think onward from here” — the model continues the document’s reasoning, in the
+      document’s voice, grounded in its sources. Writing and querying become the same act; the chat box never appears.</p>
+      <p class="fix"><strong>Built from:</strong> the existing paragraph-fallback in <code>getSelectionContext</code> + stream memory
+      (§4.2). It’s a prompt template, not an architecture.</p>
+    </div>
+    <div class="card">
+      <h4>Provenance x-ray + dissolve <span class="chip good">chosen — first prototype</span></h4>
+      <p>Boundaries dissolve by default; honesty survives as a <em>summonable</em> layer. Toggle x-ray on: the document reveals
+      what’s yours, what was developed with the model, what’s grounded where (§4.2 mock). Toggle off: seams vanish. Any passage can
+      be <b>dissolved</b> — metadata stripped, text absorbed as plainly yours. Resolves “nothing silent” and “no boundaries” in one
+      move. <em>Full design sketch: §7.</em></p>
+      <p class="fix"><strong>Built from:</strong> a sidecar span layer (§7.1) + one CM decoration extension keyed to the toggle.</p>
+    </div>
+    <div class="card">
+      <h4>Invited marginalia — the document reads you back <span class="chip good">chosen — second, as a toggle</span></h4>
+      <p>Instead of the AI writing <em>in</em> your document, invite it to the margins: “read this back to me” annotates your
+      draft from the side — the gap in an argument, a tension with something you wrote three weeks ago, a passage in your sources
+      that disagrees. Margin notes are ephemeral until you promote one into the text. Your prose stays untouched; the model
+      becomes a reader, not a co-author — the Socratic register the philosophy calls for.</p>
+      <p class="fix"><strong>Built from:</strong> a CM gutter/widget extension + the append API + retrieval across the stream’s
+      sources (all shipped). Anchors ride the same span substrate as §7 — and yes, this is the “customize the editor more heavily”
+      workstream: one deliberate editor investment (spans + margins + decorations) that x-ray, marginalia, and provenance all share.</p>
+      <div class="margin-wrap" style="margin-top:12px">
+        <div class="ed" style="font-size:13px">Raising rent mid-term is probably fine because the lease is silent on it, so I’ll
+        plan the budget around the current rate through December…</div>
+        <div>
+          <div class="mnote">Silence ≠ permission — §4.2 fixes rent “for the Term”<span class="mk">↑ promote · esc dismiss</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h4>Trails — the memex loop</h4>
+      <p>Every capture, reading position, link, and exchange is already a timestamped event. Surface them as a <b>trail</b>: how an
+      idea developed — what you read, what you asked, what you kept — replayable per stream. Resurfacing (“you were circling this
+      three weeks ago”) draws from trails, giving the app a memory of your <em>journey</em>, not just your text. This is the
+      retention loop that respects the philosophy: it pulls you back to your own thinking.</p>
+      <p class="fix"><strong>Built from:</strong> append events, pdf positions, revision history — the data exists; this is a view.</p>
+    </div>
+    <div class="card">
+      <h4>Reading as dialogue, not extraction</h4>
+      <p>While the PDF pane is open, the stream alongside it becomes the conversation with the book: select a passage → “what would
+      the author say about my §2 claim?” — answers grounded in <em>both</em> the book and your draft, anchored both ways. The
+      citation plumbing already round-trips; this makes reading an argument you’re part of rather than a thing you summarize.</p>
+      <p class="fix"><strong>Built from:</strong> PDF selection capture (shipped), retrieval, bidirectional anchors (Feature Surface §4).</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 7 · PROVENANCE LAYER ============================== -->
+<section id="provenance">
+  <h2>7 · The provenance layer — design sketch <span class="chip p0">strategic</span></h2>
+  <p class="lede">Per review, this is the future of the product, so it gets a real design. First, the mode question you raised,
+  resolved: <strong>inline AI text is always injected as-is and carries provenance</strong> (your lean — one rule, no per-feature
+  choice); explicitly <em>quoted</em> AI voice exists only where the AI is structurally a commenter, not a co-author — margin
+  notes (§6) and Challenge replies. Two registers, one boundary: <em>in the text = fused with provenance; beside the text = quoted.</em></p>
+
+  <h3 class="sub-h">7.1 · Data design: sidecar spans, never markup</h3>
+  <div class="ba">
+    <div>
+      <div class="app"><div class="body" style="font-family:var(--font-mono); font-size:12px; line-height:1.7; color:var(--text-muted)">
+        <div style="color:var(--text); font-weight:600; margin-bottom:6px">provenance_spans <span style="color:var(--text-subtle); font-weight:400">(v18 migration)</span></div>
+        <div>stream_id&nbsp;&nbsp;TEXT&nbsp;&nbsp;→ streams.id, cascade</div>
+        <div>span_id&nbsp;&nbsp;&nbsp;&nbsp;TEXT&nbsp;&nbsp;stable UUID</div>
+        <div>start, end&nbsp;INT&nbsp;&nbsp;&nbsp;offsets into markdown</div>
+        <div>origin&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;TEXT&nbsp;&nbsp;ai · source · capture</div>
+        <div>meta&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;JSON&nbsp;&nbsp;model, requestId, sourceId,</div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;chunkId/page, sourceApp</div>
+        <div>text_hash&nbsp;&nbsp;TEXT&nbsp;&nbsp;integrity check (see 7.4)</div>
+        <div>created_at&nbsp;REAL</div>
+      </div></div>
+    </div>
+    <div>
+      <p class="ba-note" style="margin-top:0"><b>Why sidecar and not inline markers:</b> the markdown stays pure — invariant #1
+      (“one data model, text is text”) survives untouched, export stays clean, no parser forks, and copy-paste into another app
+      leaks nothing. <b>Why not a block/cell model:</b> that’s the cell era again; spans are character ranges over the one
+      document.<br><br>
+      <b>The editor is the authority for positions.</b> A CM <code>StateField</code> holds the spans and maps them through every
+      transaction (<code>ChangeSet.mapPos</code> — CodeMirror has already solved the hard problem). Autosave persists spans in the
+      same 350ms debounced, revision-guarded save as the text — spans and markdown can never drift a revision apart.
+      <b>External writers keep the invariant:</b> <code>appendToStreamDocument</code> computes the fragment’s spans at append time,
+      in the same transaction — the single-write-primitive rule is exactly what makes this tractable.</p>
+    </div>
+  </div>
+
+  <h3 class="sub-h">7.2 · Edit semantics: provenance decays as you rework — never spreads</h3>
+  <div class="card-grid">
+    <div class="card">
+      <h4>The one rule</h4>
+      <p>Provenance is <b>never inferred, only inherited</b>. Text you type is always yours — typing <em>inside</em> an AI span
+      splits it in two around your insertion; nothing you write is ever marked. Deletions shrink and merge spans mechanically via
+      position mapping. No heuristics, no “probably AI” — a span exists only because a specific request created it.</p>
+    </div>
+    <div class="card">
+      <h4>Emergent decay, manual dissolve</h4>
+      <p>Heavy reworking naturally fragments spans into slivers — in x-ray, a passage you’ve truly absorbed <em>looks</em> mostly
+      yours, automatically. Deliberate <b>dissolve</b> (per-span or per-selection) deletes the rows; it rides the CM history as an
+      effect, so ⌘Z restores it. No auto-dissolve threshold in v1 — decay-by-editing is emergent and honest.</p>
+    </div>
+    <div class="card">
+      <h4>Boundaries of the system</h4>
+      <p>Paste <em>out</em> of Ticker: plain text, nothing leaks (spans are sidecar). Paste <em>within</em> the doc: provenance is
+      dropped — moved text becomes yours. Simple and predictable; revisit only if it bites. Revision conflict (external append vs
+      stale editor): the reload that already handles the text reloads the spans with it — one source of truth, same code path.</p>
+    </div>
+  </div>
+
+  <h3 class="sub-h">7.3 · The full affordance set</h3>
+  <div class="ba">
+    <div>
+      <div class="app"><div class="body ed rendered">
+        <span class="state-tag">X-ray on · hovering a span</span>
+        <p><span class="xr-ai">peek for “-”, convert the rest, negate — the pattern NUMBER? itself uses</span>
+        <span class="xr-src"><a class="mockl short">[Forth Handbook p.112]</a></span></p>
+        <div style="display:inline-block; background:var(--surface-raised); border:1px solid var(--border); border-radius:8px; box-shadow:var(--control-shadow); padding:8px 12px; font-size:12px; margin-top:10px">
+          <div style="color:var(--text-muted)">Developed with <b style="color:var(--text)">claude-sonnet</b> · Jul 6 · grounded in Forth Handbook</div>
+          <div style="margin-top:6px; display:flex; gap:10px; flex-wrap:wrap">
+            <span style="color:var(--accent)">dissolve</span>
+            <span style="color:var(--accent)">show exchange</span>
+            <span style="color:var(--accent)">re-develop</span>
+            <span style="color:var(--accent)">open source →</span>
+          </div>
+        </div>
+      </div></div>
+    </div>
+    <div>
+      <p class="ba-note" style="margin-top:0"><b>Writing mode (default): zero decoration.</b> No pills, no tints, no layout shift —
+      the padding question answers itself because provenance detail never renders inline; it lives in the hover card (above) and
+      the margin, so line spacing never changes.<br><br>
+      <b>X-ray toggle (👁 in the header — chosen):</b> tint + dotted underline per origin; hover card per span with
+      dissolve · show exchange (the request/response that produced it) · re-develop (run the verb again in place) · open source.
+      Selection while in x-ray gets “dissolve selection”.<br><br>
+      <b>Marginalia toggle (second prototype):</b> same substrate — margin notes anchor to spans.<br>
+      <b>Export:</b> provenance stripped by default; optional “with receipts” export renders spans as footnotes.<br>
+      <b>Trails (§6):</b> span-creation events are the trail’s raw material — the layer pays forward.</p>
+    </div>
+  </div>
+
+  <h3 class="sub-h">7.4 · “Show exchange” and “re-develop”, precisely</h3>
+  <p class="note">Both need one new table, written by <code>AIMessageHandler</code> at completion time (it holds every field at
+  that moment): <code>ai_exchanges(request_id PK, stream_id, verb, user_input, source_manifest JSON, response_raw, model,
+  created_at)</code>. Retention: an exchange row is deleted when the last span referencing its <code>request_id</code> dissolves —
+  they’re text-only and tiny, so no other GC.</p>
+  <div class="card-grid" style="margin-top:16px">
+    <div class="card">
+      <h4>Show exchange — a read-only receipt, step by step</h4>
+      <p>1 · X-ray on → hover a span → card → “show exchange”.<br>
+      2 · An overlay opens (same surface tokens as SearchModal) with three labeled blocks: <b>You</b> (the selection + typed
+      prompt that produced it), <b>Consulted</b> (the source manifest — page links clickable straight into the PDF pane),
+      <b>Model returned</b> (the raw pre-swap response, markers and all).<br>
+      3 · Footer: <b>re-develop</b> · <b>copy raw</b> · esc. Strictly read-only — editing an exchange would blur the quoted
+      register.</p>
+      <p class="fix"><strong>Edge cases:</strong> exchange row missing (pre-feature span, or GC’d) → the card shows “exchange no
+      longer stored” instead of the action — honest absence. A span split into five slivers shares one <code>request_id</code> —
+      any sliver opens the same overlay. Overlay during an in-flight AI call: fine, it’s a read.</p>
+    </div>
+    <div class="card">
+      <h4>Re-develop — re-run the verb, never blind, step by step</h4>
+      <p>1 · Available only on <b>ai-origin</b> spans (you don’t “re-develop” a captured quote — you Develop a selection over it,
+      which creates an ai span), only when no request is in flight, and only when the span is ≥ 3 words (a 2-word sliver isn’t a
+      unit of thought — the action hides).<br>
+      2 · Click → the span’s <em>current</em> text becomes the selection and the original prompt (if the verb had one) appears
+      pre-filled in the prompt popover — <b>nothing fires without you seeing what will run</b>.<br>
+      3 · Confirm → the standard Develop pipeline: replace mode, streaming, one-⌘Z undo.<br>
+      4 · Result: a new span, new <code>request_id</code>, with <code>meta.parent_request_id</code> pointing at the old one — a
+      lineage chain (trails, §6, gets its raw material free).</p>
+      <p class="fix"><strong>Edge cases:</strong> ⌘Z restores both the prior text and the prior span (span ops ride history,
+      §7.6). A span crossing a structural boundary (heading → list) can come back as prose — same accepted risk as Develop today.</p>
+    </div>
+  </div>
+  <div class="app" style="margin-top:16px"><div class="body" style="overflow-x:auto">
+    <div style="font-size:11px; font-weight:650; letter-spacing:0.05em; text-transform:uppercase; color:var(--text-subtle); margin-bottom:8px">Span lifecycle</div>
+    <pre class="mermaid">
+stateDiagram-v2
+  direction LR
+  [*] --> Live: verb/append writes text + span in ONE transaction
+  Live --> Live: user types inside → span splits around insertion
+  Live --> Live: deletions shrink / merge via position mapping
+  Live --> Replaced: re-develop (new span, parent_request_id lineage)
+  Live --> Dissolved: manual dissolve (undoable, rides ⌘Z)
+  Live --> Dropped: text_hash mismatch on load → dropped silently
+  Replaced --> [*]
+  Dissolved --> [*]
+  Dropped --> [*]
+    </pre>
+  </div></div>
+
+  <h3 class="sub-h">7.5 · Marginalia, precisely</h3>
+  <p class="note"><b>Born of invitation only (v1).</b> No automatic ambient commentary — uninvited notes are exactly the AI-centric
+  noise the product rejects, and they burn tokens on documents nobody asked about. Two entry points: a <b>“Read back”</b> action
+  when the marginalia toggle is on (scope picker: <b>viewport · section · document</b>, viewport default), and — once this ships —
+  <b>Challenge migrates here</b>: its reply is structurally a comment, so it becomes a margin note anchored to your selection
+  (until then it appends as a quoted block; that dependency is explicit, §8 rows 4 vs 11).</p>
+  <div class="card-grid" style="margin-top:16px">
+    <div class="card">
+      <h4>What a note is</h4>
+      <p>Three kinds, labeled by kind, never by persona: <b>question</b> (a gap in the argument), <b>tension</b> (contradicts your
+      own text or a source), <b>connection</b> (another stream or a source passage, deep-linked). One “Read back” pass returns a
+      JSON manifest; each item must include a <b>verbatim quote of the text it anchors to</b> — verified against the document with
+      the same <code>NormalizedTextMap</code> machinery citations use. Unverifiable anchor → item silently dropped
+      (wrong-worse-than-none). Cap: 5 per pass, deduped against prior notes by (anchor, kind, body-hash).</p>
+    </div>
+    <div class="card">
+      <h4>What you can do with one</h4>
+      <p><b>Not edit it.</b> Margin notes are the quoted register — editing would fuse voices in the one place they must stay
+      distinct. Three actions: <b>promote</b> (its text inserts at the anchor as ordinary prose carrying an ai span — it crosses
+      into the fused register deliberately), <b>dismiss</b> (deleted and suppressed by body-hash — the same never-re-offer pattern
+      as clipboard dismissal), or leave it <b>open</b>. Open questions are countable — <em>this is what the §4.1 “open questions”
+      badge actually counts; until marginalia ships that badge doesn’t exist and stream cards show reading position only</em>
+      (your catch — the mock previously promised a mechanism nothing provided).</p>
+    </div>
+    <div class="card">
+      <h4>Where it lives</h4>
+      <p>Sidecar table <code>margin_notes(id, stream_id, anchor_start, anchor_end, anchor_hash, kind, body, request_id,
+      status, created_at)</code> — never in the markdown. Anchors map through edits via the same <code>ProvenanceField</code>;
+      if the anchored passage is edited beyond hash match the note flips to <b>unanchored</b> — shown grayed at the margin top
+      as “passage changed”, dismissible, never guessed back into place. Narrow window (margin needs ~1100pt+): notes collapse to
+      gutter dots; click opens the note as a popover. Notes persist across relaunch — that persistence is what makes the badge real.</p>
+    </div>
+  </div>
+  <div class="app" style="margin-top:16px"><div class="body" style="overflow-x:auto">
+    <div style="font-size:11px; font-weight:650; letter-spacing:0.05em; text-transform:uppercase; color:var(--text-subtle); margin-bottom:8px">Margin-note lifecycle</div>
+    <pre class="mermaid">
+stateDiagram-v2
+  direction LR
+  [*] --> Proposed: Read back (scope viewport/section/doc) or Challenge
+  Proposed --> Open: anchor quote verified in doc (max 5, deduped)
+  Proposed --> Discarded: anchor unverifiable → dropped silently
+  Open --> Promoted: ↑ promote → prose at anchor + ai span (fused register)
+  Open --> Dismissed: × dismiss → suppressed by body-hash, never re-offered
+  Open --> Unanchored: anchored passage edited past hash match
+  Unanchored --> Dismissed
+  Promoted --> [*]
+  Dismissed --> [*]
+  Discarded --> [*]
+    </pre>
+  </div></div>
+
+  <h3 class="sub-h">7.6 · Robustness — wrong provenance is worse than none, and the list of things that will bite</h3>
+  <p class="note">Your citation principle, applied to the layer: every span and every note anchor stores a hash of its covered
+  text; mismatches drop silently on load rather than render wrong. Property tests on the mapping: random edit sequences must
+  preserve span↔text correspondence; append round-trips and conflict-reload rebases get their own suite. And the pre-mortem —
+  the specific ways this bites later, named now:</p>
+  <div class="tblwrap" style="margin-top:14px"><table>
+    <thead><tr><th>Bite</th><th>Why it hurts</th><th>Defense</th></tr></thead>
+    <tbody>
+      <tr><td><b>Offset units differ between Swift and CodeMirror</b></td><td>CM offsets are UTF-16 code units; naïve Swift
+        <code>String</code> counting is grapheme-based — one emoji in a capture and every span after it is shifted. The silent killer.</td>
+        <td>Spans computed on the Swift side (<code>appendToStreamDocument</code>) MUST count UTF-16; a round-trip test with
+        emoji/CJK content in CI.</td></tr>
+      <tr><td><b>Undo vs sidecar state</b></td><td>⌘Z after dissolve must restore the span too, or undo manufactures
+        provenance-less AI text.</td><td>Span/note ops are CM <code>StateEffect</code>s registered with the history extension —
+        they invert with the edit they rode in on.</td></tr>
+      <tr><td><b>Save/conflict divergence</b></td><td>Spans persisted out of step with markdown = anchors one revision stale.</td>
+        <td>Spans serialize inside the same 350ms debounced, revision-guarded save; a conflict reload replaces text and spans
+        together from the DB — one code path.</td></tr>
+      <tr><td><b>Decoration stacking</b></td><td>X-ray tints must compose with conceal replacements and atomic image widgets —
+        wrong precedence = flicker or broken conceal.</td><td>Explicit CM extension precedence; tints skip widget ranges
+        (the hash covers raw text, so integrity is unaffected).</td></tr>
+      <tr><td><b>Span-count creep</b></td><td>A heavily-reworked old doc accumulates hundreds of 2-char slivers — noise in x-ray,
+        weight in every save.</td><td>Normalization on save: adjacent same-request slivers merge; slivers &lt; 3 chars dissolve
+        automatically (the one auto-dissolve, mechanical not semantic).</td></tr>
+      <tr><td><b>Pre-v18 documents</b></td><td>Existing text has no provenance and someone will be tempted to infer it.</td>
+        <td>Never. Unmarked = yours, by definition, forever. No backfill, no classifier.</td></tr>
+      <tr><td><b>Read-back cost on big docs</b></td><td>Document-scope marginalia over a 400KB stream = a large prompt, silently.</td>
+        <td>Scope picker defaults to viewport; document scope routes through the existing retrieval budget instead of raw concat.</td></tr>
+      <tr><td><b>Register leaks</b></td><td>Future features (in-stream conversation mode, share/export) will be tempted to render
+        AI voice inline with chrome.</td><td>The two-register rule is written down here: in the text = fused + span; beside the
+        text = quoted. New features pick one, never invent a third.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note" style="margin-top:14px">One extension (<code>ProvenanceField</code>), two sidecar tables, one append-API touch —
+  <b>this is the “heavier editor customization” investment, made once, that x-ray, dissolve, marginalia, trails, and the eventual
+  in-stream conversation mode all stand on.</b></p>
+</section>
+
+<!-- ============================== 8 · PRIORITIES ============================== -->
+<section id="priorities">
+  <h2>8 · Priorities, leverage-ordered</h2>
+  <p class="lede">Effort: <span class="eff s">S</span> ≤ 1 Codex round · <span class="eff m">M</span> a few rounds ·
+  <span class="eff l">L</span> a phase. The top five are each small enough to be one governed task.</p>
+  <div class="tblwrap"><table>
+    <thead><tr><th style="width:36px"></th><th>Change</th><th>Why it leads</th><th style="width:70px">Effort</th></tr></thead>
+    <tbody>
+      <tr><td><span class="rank">1</span></td><td><strong>Auto-title streams + short source titles everywhere</strong> (§4.1, §4.4)</td>
+        <td>Both services exist (<code>generateRestatement</code>, <code>SourceShortTitle</code>). Erases the ugliest thing on every surface at once.</td><td><span class="eff s">S</span></td></tr>
+      <tr><td><span class="rank">2</span></td><td><strong>The document never looks like plumbing</strong> — open at top / last position with conceal
+        pre-painted, and link clicks navigate (edit via popover, not raw-MD explode) (§4.4)</td>
+        <td>The current first frame and every link click contradict the core rendering promise.</td><td><span class="eff s">S</span></td></tr>
+      <tr><td><span class="rank">3</span></td><td><strong style="text-decoration:line-through; color:var(--text-subtle)">Stream memory</strong> — REMOVED by final decision (D1: the past is the past; every call stays one-shot)</td>
+        <td style="color:var(--text-subtle)">Withdrawn. Exchanges are receipts only, never context.</td><td>—</td></tr>
+      <tr><td><span class="rank">4</span></td><td><strong>Prompt rewrite: socratic verbs + prose style</strong> (§4.3 — approved direction)</td>
+        <td>Prompts, not architecture. Kills the bullet wall; Ask/Challenge/Define append, Develop replaces, named.</td><td><span class="eff s">S</span></td></tr>
+      <tr><td><span class="rank">5</span></td><td><strong>⌘K + previews on the stream list</strong> (§4.1)</td>
+        <td>The default page currently offers nothing to grab onto.</td><td><span class="eff s">S</span></td></tr>
+      <tr><td><span class="rank">6</span></td><td><strong>Provenance layer foundation + x-ray toggle</strong> (§7 — the chosen first radical prototype)</td>
+        <td>The platform investment everything strategic rides on: spans migration, <code>ProvenanceField</code>, x-ray, dissolve.</td><td><span class="eff l">L</span></td></tr>
+      <tr><td><span class="rank">7</span></td><td><strong>Quick panel sharpening</strong>: sources when a stream is picked; ephemeral stays the default
+        (§4.5 — “continue in stream” deferred to end-stage)</td>
+        <td>Keeps the panel quick-and-dirty while making its answers as grounded as the editor’s.</td><td><span class="eff s">S</span></td></tr>
+      <tr><td><span class="rank">8</span></td><td><strong>Reading dignity</strong>: resume position, outline sidebar, words instead of beeps</td>
+        <td>The north-star surface is currently the least-invested. <code>outlineRoot</code> is free.</td><td><span class="eff m">M</span></td></tr>
+      <tr><td><span class="rank">9</span></td><td><strong>Aesthetic unification sprint</strong> (§5): sienna rollout (decided), type scale, button rule, icons, scrim/radius/duration tokens, code styling</td>
+        <td>One or two days; disproportionate perceived-quality jump.</td><td><span class="eff m">M</span></td></tr>
+      <tr><td><span class="rank">10</span></td><td><strong>Honesty controls</strong>: Stop button, model visibility (x-ray carries it), scope visible on plain Send</td>
+        <td>Cheap, and consistent with the nothing-silent principle you already enforce elsewhere.</td><td><span class="eff s">S</span></td></tr>
+      <tr><td><span class="rank">11</span></td><td><strong>Invited marginalia toggle</strong> (§6 — chosen second prototype, rides the §7 substrate)</td>
+        <td>The Socratic register made real, once spans + margin machinery exist.</td><td><span class="eff m">M</span></td></tr>
+      <tr><td><span class="rank">12</span></td><td><strong>macOS integration</strong>: URL scheme + Share extension, frame/state restoration, dev tools off in release</td>
+        <td>Capture ubiquity (your Feature Surface §6) needs the channels open; the rest is table stakes.</td><td><span class="eff l">L</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="callout" style="margin-top:24px"><strong>Implementation document:</strong> the executable form of everything decided
+  here now lives at <code>docs/IA_CORE_PLAN.md</code> (Roadmap 4 — IA Core): phased tasks, exact schemas, prompts, contracts, and
+  the D1–D11 locked-decision table, written for a smaller model to implement under the usual governed protocol.</div>
+  <div class="callout" style="margin-top:12px"><strong>Decisions locked from your review:</strong> <b>the past is the past — no
+  prior-exchange memory, ever (D1)</b> · accent = <b>sienna</b>
+  (this page already wears it) · first radical prototype = <b>provenance x-ray</b>, then <b>marginalia</b>, both as toggles ·
+  inline AI text is injected as-is with provenance; quoted AI voice only in margins/Challenge · auto-titles living until
+  explicitly renamed, then frozen · Develop (replace-in-place) stays first-class, gains named siblings · no chat UI anywhere;
+  memory is invisible, provenance summonable and strippable · panel threads never auto-persist; “continue in stream” deferred
+  to end-stage · paste-within-doc drops provenance (confirmed OK) · marginalia are invited-only, unedit­able, promote/dismiss ·
+  Challenge’s long-term home is the margin (quoted register); it ships inline-quoted first and migrates when §7.5 lands.</div>
+  <div class="callout warn" style="margin-top:12px"><strong>Still open (small):</strong> the dark-mode sienna value — needs a real
+  glance on the warm dark bg (<code>#d98a63</code>-class as starting point). Everything else raised in review is resolved above.</div>
+</section>
+
+<footer>
+  Audit run 2026-07-08 · code audit at <code>main</code> (c824ab4) · live session on release 2026.7.2 · real DB backed up and
+  verified untouched · mockups rendered in Ticker’s design tokens (<code>Web/src/styles/index.css</code>), evidence screenshots
+  cropped to the app window only.
+</footer>
+
+</main>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    securityLevel: "strict",
+    themeVariables: {
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif",
+      fontSize: "13px",
+      primaryColor: "#f4f4f2",
+      primaryTextColor: "#1f1f1d",
+      primaryBorderColor: "#c8c7bf",
+      lineColor: "#6f6f68",
+      tertiaryColor: "#fbfbfa",
+      noteBkgColor: "#fbfbfa"
+    }
+  });
+</script>
+</body>
+</html>
