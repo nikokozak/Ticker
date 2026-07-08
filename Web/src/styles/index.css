@@ -855,6 +855,69 @@ body {
   opacity: 0.5;
 }
 
+.link-edit-popover {
+  position: fixed;
+  z-index: 930;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: var(--overlay-shadow);
+  backdrop-filter: var(--overlay-backdrop);
+}
+
+.link-edit-input {
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: 0 var(--space-2);
+  outline: none;
+}
+
+.link-edit-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.link-edit-input--label {
+  width: 150px;
+}
+
+.link-edit-input--url {
+  width: 260px;
+}
+
+.link-edit-button {
+  height: 30px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: 0 var(--space-2);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.link-edit-button:hover {
+  color: var(--color-accent);
+  background: var(--accent-soft);
+}
+
+.link-edit-button--remove:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 .document-editor-shell {
   position: relative;
   width: 100%;

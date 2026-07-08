@@ -157,6 +157,9 @@
       "loadStreams": {
         "requiredPayloadKeys": []
       },
+      "openExternalURL": {
+        "requiredPayloadKeys": ["url"]
+      },
       "openSource": {
         "requiredPayloadKeys": ["sourceId"]
       },

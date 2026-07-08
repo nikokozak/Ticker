@@ -50,6 +50,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         "deleteStream",
         "saveStreamDocument",
         "saveScrollPosition",
+        "openExternalURL",
         "exportStream"
     ]
 
@@ -216,6 +217,23 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 try persistence.saveScrollOffset(streamId: streamId, offset: offset)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to save scroll position (\(DebugLog.errorSummary(error)))")
+            }
+
+        case "openExternalURL":
+            guard let payload = message.payload,
+                  let rawURL = payload["url"]?.value as? String,
+                  rawURL.range(of: #"^https?://"#, options: [.regularExpression, .caseInsensitive]) != nil,
+                  let components = URLComponents(string: rawURL),
+                  let scheme = components.scheme?.lowercased(),
+                  (scheme == "http" || scheme == "https"),
+                  components.host != nil,
+                  let url = components.url else {
+                DebugLog.log("[StreamMessageHandler] Rejected external URL")
+                return
+            }
+
+            await MainActor.run {
+                _ = NSWorkspace.shared.open(url)
             }
 
         case "exportStream":

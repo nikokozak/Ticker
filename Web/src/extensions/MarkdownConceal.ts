@@ -1,10 +1,12 @@
-import { type Extension, type Range } from '@codemirror/state';
+import { EditorState, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 
 const MARK_NODE_NAMES = new Set(['EmphasisMark', 'StrongEmphasisMark', 'CodeMark', 'CodeInfo']);
 const LINK_CONCEAL_NODE_NAMES = new Set(['LinkMark', 'URL', 'LinkTitle']);
 const INITIAL_MARKDOWN_PARSE_TIMEOUT_MS = 20;
+
+export const revealRawLinksEffect = StateEffect.define<number | null>();
 
 function isLineSelected(view: EditorView, lineFrom: number, lineTo: number): boolean {
   const doc = view.state.doc;
@@ -21,6 +23,52 @@ function isLineSelected(view: EditorView, lineFrom: number, lineTo: number): boo
 
     return lineFrom < to && lineEnd > from;
   });
+}
+
+function selectionIntersectsLine(state: EditorState, lineFrom: number, lineTo: number): boolean {
+  const lineEnd = lineTo < state.doc.length ? lineTo + 1 : lineTo;
+
+  return state.selection.ranges.some((range) => {
+    const from = Math.min(range.from, range.to);
+    const to = Math.max(range.from, range.to);
+
+    if (from === to) {
+      return state.doc.lineAt(from).from === lineFrom;
+    }
+
+    return lineFrom < to && lineEnd > from;
+  });
+}
+
+const revealRawLinksField = StateField.define<number | null>({
+  create: () => null,
+  update(value, transaction) {
+    let next = value;
+    if (next !== null && transaction.docChanged) {
+      next = transaction.changes.mapPos(next);
+    }
+
+    for (const effect of transaction.effects) {
+      if (effect.is(revealRawLinksEffect)) {
+        next = effect.value;
+      }
+    }
+
+    if (next !== null && (transaction.selection || transaction.docChanged)) {
+      const line = transaction.state.doc.lineAt(Math.min(next, transaction.state.doc.length));
+      if (!selectionIntersectsLine(transaction.state, line.from, line.to)) {
+        next = null;
+      } else {
+        next = line.from;
+      }
+    }
+
+    return next;
+  },
+});
+
+export function rawLinksAreRevealedOnLine(state: EditorState, lineFrom: number): boolean {
+  return state.field(revealRawLinksField, false) === lineFrom;
 }
 
 function rangeWithFollowingSpace(view: EditorView, from: number, to: number): { from: number; to: number } {
@@ -56,6 +104,7 @@ function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = 
   const decorations: Array<Range<Decoration>> = [];
   const blockquoteLineStarts = new Set<number>();
   const tree = markdownTreeForDecorations(view, ensureInitialParse);
+  const rawLinksLineFrom = view.state.field(revealRawLinksField, false);
 
   for (const visibleRange of view.visibleRanges) {
     tree.iterate({
@@ -63,7 +112,10 @@ function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = 
       to: visibleRange.to,
       enter: (node) => {
         const line = view.state.doc.lineAt(node.from);
-        if (isLineSelected(view, line.from, line.to)) return;
+        const isLinkConcealNode = LINK_CONCEAL_NODE_NAMES.has(node.name) && node.matchContext(['Link']);
+        if (isLineSelected(view, line.from, line.to) && (!isLinkConcealNode || rawLinksLineFrom === line.from)) {
+          return;
+        }
 
         if (node.name === 'HeaderMark') {
           const range = rangeWithFollowingSpace(view, node.from, node.to);
@@ -90,7 +142,7 @@ function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = 
           return;
         }
 
-        if (LINK_CONCEAL_NODE_NAMES.has(node.name) && node.matchContext(['Link'])) {
+        if (isLinkConcealNode) {
           const range = node.name === 'URL' ? rangeWithFollowingSpaces(view, node.from, node.to) : { from: node.from, to: node.to };
           const decoration = concealRange(range.from, range.to);
           if (decoration) decorations.push(decoration);
@@ -110,7 +162,9 @@ const markdownConcealPlugin = ViewPlugin.fromClass(class {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.viewportChanged || update.selectionSet) {
+    const rawLinksChanged = update.startState.field(revealRawLinksField, false) !==
+      update.state.field(revealRawLinksField, false);
+    if (update.docChanged || update.viewportChanged || update.selectionSet || rawLinksChanged) {
       this.decorations = buildMarkdownConcealDecorations(update.view);
     }
   }
@@ -118,4 +172,4 @@ const markdownConcealPlugin = ViewPlugin.fromClass(class {
   decorations: (value) => value.decorations,
 });
 
-export const markdownConcealExtension: Extension = markdownConcealPlugin;
+export const markdownConcealExtension: Extension = [revealRawLinksField, markdownConcealPlugin];

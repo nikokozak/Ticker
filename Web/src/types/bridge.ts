@@ -51,6 +51,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'loadSettings',
   'loadStream',
   'loadStreams',
+  'openExternalURL',
   'openPdfDestination',
   'openSource',
   'refreshProxyAuth',

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -15,6 +15,7 @@ import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWrit
 import { editorFindExtension } from '../extensions/EditorFindPanel';
 import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
+import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
@@ -52,6 +53,19 @@ interface FloatingMenuState {
   selectionFrom: number;
   selectionTo: number;
   selectionHead: number;
+  menuWidth?: number;
+  menuHeight?: number;
+}
+
+interface LinkPopoverState {
+  visible: boolean;
+  left: number;
+  top: number;
+  from: number;
+  to: number;
+  labelFrom: number;
+  label: string;
+  url: string;
   menuWidth?: number;
   menuHeight?: number;
 }
@@ -265,6 +279,16 @@ export function StreamEditor({
     selectionTo: 0,
     selectionHead: 0,
   });
+  const [linkPopover, setLinkPopover] = useState<LinkPopoverState>({
+    visible: false,
+    left: 0,
+    top: 0,
+    from: 0,
+    to: 0,
+    labelFrom: 0,
+    label: '',
+    url: '',
+  });
   const [aiFeedback, setAiFeedback] = useState<AiFeedbackState>({
     visible: false,
     kind: 'writing',
@@ -277,6 +301,7 @@ export function StreamEditor({
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const selectionActionMenuRef = useRef<HTMLDivElement>(null);
+  const linkPopoverRef = useRef<HTMLDivElement>(null);
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
   const markdownContentRef = useRef(stream.document?.markdown ?? '');
   const revisionRef = useRef(stream.document?.revision ?? 0);
@@ -535,6 +560,7 @@ export function StreamEditor({
       selectionTo: 0,
       selectionHead: 0,
     });
+    setLinkPopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
     setShowPrompt(false);
     setPromptValue('');
     setSourceScope(sourceScopeByStreamId.get(stream.id) ?? 'auto');
@@ -1122,6 +1148,10 @@ export function StreamEditor({
     setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearSelectionMenuTimer]);
 
+  const hideLinkPopover = useCallback(() => {
+    setLinkPopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+  }, []);
+
   const getSelectionMenuPlacement = useCallback((
     view: EditorView,
     measuredMenuSize?: { width: number; height: number }
@@ -1135,6 +1165,31 @@ export function StreamEditor({
 
     const shellRect = shell.getBoundingClientRect();
     const menu = selectionActionMenuRef.current;
+    return computeSelectionMenuPlacement({
+      coords,
+      shellRect,
+      menuSize: measuredMenuSize ?? {
+        width: menu?.offsetWidth,
+        height: menu?.offsetHeight,
+      },
+      viewportHeight: window.innerHeight,
+    });
+  }, []);
+
+  const getLinkPopoverPlacement = useCallback((
+    view: EditorView,
+    link: Pick<LinkPopoverState, 'from' | 'labelFrom'>,
+    measuredMenuSize?: { width: number; height: number }
+  ): { left: number; top: number } | null => {
+    const shell = editorShellRef.current;
+    if (!shell) return null;
+
+    const anchor = Math.min(Math.max(link.labelFrom, link.from), view.state.doc.length);
+    const coords = view.coordsAtPos(anchor) ?? view.coordsAtPos(link.from);
+    if (!coords) return null;
+
+    const shellRect = shell.getBoundingClientRect();
+    const menu = linkPopoverRef.current;
     return computeSelectionMenuPlacement({
       coords,
       shellRect,
@@ -1197,6 +1252,50 @@ export function StreamEditor({
     stream.id,
   ]);
 
+  useLayoutEffect(() => {
+    if (!linkPopover.visible) return;
+
+    const menu = linkPopoverRef.current;
+    const view = editorViewRef.current;
+    if (!menu || !view) return;
+
+    const measuredMenuSize = {
+      width: menu.offsetWidth,
+      height: menu.offsetHeight,
+    };
+    if (measuredMenuSize.width <= 0 || measuredMenuSize.height <= 0) return;
+
+    const placement = getLinkPopoverPlacement(view, linkPopover, measuredMenuSize);
+    if (!placement) return;
+
+    setLinkPopover((previous) => {
+      if (!previous.visible) return previous;
+
+      const sameSize = previous.menuWidth === measuredMenuSize.width &&
+        previous.menuHeight === measuredMenuSize.height;
+      const samePlacement = Math.abs(previous.left - placement.left) < 0.5 &&
+        Math.abs(previous.top - placement.top) < 0.5;
+
+      if (sameSize && samePlacement) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        left: placement.left,
+        top: placement.top,
+        menuWidth: measuredMenuSize.width,
+        menuHeight: measuredMenuSize.height,
+      };
+    });
+  }, [
+    getLinkPopoverPlacement,
+    linkPopover,
+    pdfPaneState.streamId,
+    pdfPaneState.visible,
+    stream.id,
+  ]);
+
   const scheduleSelectionMenu = useCallback((view: EditorView) => {
     clearSelectionMenuTimer();
 
@@ -1239,14 +1338,116 @@ export function StreamEditor({
     }, SELECTION_MENU_DELAY_MS);
   }, [clearSelectionMenuTimer, getSelectionMenuPlacement, hideSelectionMenu]);
 
+  const openLinkPopover = useCallback((view: EditorView, link: MarkdownLinkInfo | null) => {
+    if (!link) {
+      hideLinkPopover();
+      return;
+    }
+
+    const placement = getLinkPopoverPlacement(view, link);
+    if (!placement) {
+      hideLinkPopover();
+      return;
+    }
+
+    hideSelectionMenu();
+    setLinkPopover({
+      visible: true,
+      left: placement.left,
+      top: placement.top,
+      from: link.from,
+      to: link.to,
+      labelFrom: link.labelFrom,
+      label: link.label,
+      url: link.url,
+    });
+  }, [getLinkPopoverPlacement, hideLinkPopover, hideSelectionMenu]);
+
+  const linkInteraction = useMemo<Extension>(
+    () => linkInteractionExtension(openLinkPopover),
+    [openLinkPopover]
+  );
+
+  const commitLinkPopover = useCallback(() => {
+    if (!linkPopover.visible) return;
+
+    const view = editorViewRef.current;
+    const change = buildLinkEditChange(linkPopover, linkPopover.label, linkPopover.url);
+    if (view && change) {
+      view.dispatch({
+        changes: change,
+        selection: { anchor: change.from + change.insert.length },
+        annotations: Transaction.addToHistory.of(true),
+      });
+      view.focus();
+    }
+
+    hideLinkPopover();
+  }, [hideLinkPopover, linkPopover]);
+
+  const unlinkLinkPopover = useCallback(() => {
+    if (!linkPopover.visible) return;
+
+    const view = editorViewRef.current;
+    if (view) {
+      view.dispatch({
+        changes: { from: linkPopover.from, to: linkPopover.to, insert: linkPopover.label },
+        selection: { anchor: linkPopover.from + linkPopover.label.length },
+        annotations: Transaction.addToHistory.of(true),
+      });
+      view.focus();
+    }
+
+    hideLinkPopover();
+  }, [hideLinkPopover, linkPopover]);
+
+  const removeLinkPopover = useCallback(() => {
+    if (!linkPopover.visible) return;
+
+    const view = editorViewRef.current;
+    if (view) {
+      view.dispatch({
+        changes: { from: linkPopover.from, to: linkPopover.to, insert: '' },
+        selection: { anchor: linkPopover.from },
+        annotations: Transaction.addToHistory.of(true),
+      });
+      view.focus();
+    }
+
+    hideLinkPopover();
+  }, [hideLinkPopover, linkPopover]);
+
+  const handleLinkPopoverBlur = useCallback((event: FocusEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+
+    window.setTimeout(() => {
+      const menu = linkPopoverRef.current;
+      if (menu && document.activeElement instanceof Node && menu.contains(document.activeElement)) return;
+      commitLinkPopover();
+    }, 0);
+  }, [commitLinkPopover]);
+
+  const handleLinkPopoverKeyDown = useCallback((event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commitLinkPopover();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      hideLinkPopover();
+      editorViewRef.current?.focus();
+    }
+  }, [commitLinkPopover, hideLinkPopover]);
+
   useEffect(() => {
     showPromptRef.current = showPrompt;
     isAiThinkingRef.current = isAiThinking;
 
     if (showPrompt || isAiThinking) {
       hideSelectionMenu();
+      hideLinkPopover();
     }
-  }, [hideSelectionMenu, isAiThinking, showPrompt]);
+  }, [hideLinkPopover, hideSelectionMenu, isAiThinking, showPrompt]);
 
   const selectionMenuExtension = useMemo<Extension>(() => [
     EditorView.updateListener.of((update) => {
@@ -1796,6 +1997,46 @@ export function StreamEditor({
         </div>
       )}
 
+      {linkPopover.visible && (
+        <div
+          ref={linkPopoverRef}
+          className="link-edit-popover"
+          style={{ left: `${linkPopover.left}px`, top: `${linkPopover.top}px` }}
+          onBlur={handleLinkPopoverBlur}
+        >
+          <input
+            className="link-edit-input link-edit-input--label"
+            value={linkPopover.label}
+            aria-label="Link label"
+            onChange={(event) => setLinkPopover((previous) => ({ ...previous, label: event.target.value }))}
+            onKeyDown={handleLinkPopoverKeyDown}
+          />
+          <input
+            className="link-edit-input link-edit-input--url"
+            value={linkPopover.url}
+            aria-label="Link URL"
+            onChange={(event) => setLinkPopover((previous) => ({ ...previous, url: event.target.value }))}
+            onKeyDown={handleLinkPopoverKeyDown}
+          />
+          <button
+            type="button"
+            className="link-edit-button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={unlinkLinkPopover}
+          >
+            Unlink
+          </button>
+          <button
+            type="button"
+            className="link-edit-button link-edit-button--remove"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={removeLinkPopover}
+          >
+            Remove
+          </button>
+        </div>
+      )}
+
       <div className="stream-body">
         <div className="stream-content">
           <div
@@ -1829,6 +2070,7 @@ export function StreamEditor({
                 markdownConcealExtension,
                 markdownImageWidgetExtension,
                 tickerPDFLinkExtension(stream.id),
+                linkInteraction,
               ]}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
