@@ -75,6 +75,18 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
 
 export type WebToSwiftMessageType = (typeof WEB_TO_SWIFT_MESSAGE_TYPES)[number];
 export type DocumentAIVerb = 'develop' | 'ask' | 'challenge' | 'define';
+export type DocumentAISourceScope = 'auto' | 'all' | 'none';
+
+export interface ThinkDocumentPayload extends Record<string, unknown> {
+  requestId: string;
+  streamId: string;
+  query: string;
+  imageURLs: string[];
+  context?: string;
+  sourceScope?: DocumentAISourceScope;
+  verb?: DocumentAIVerb;
+  parentRequestId?: string;
+}
 
 export interface BridgeMessage {
   type: string;

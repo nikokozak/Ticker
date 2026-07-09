@@ -130,6 +130,34 @@ export function documentAIErrorRecovery(originalText: string, errorCode: string 
   };
 }
 
+export function buildDocumentAIProvenanceSpan(options: {
+  requestId: string;
+  start: number;
+  text: string;
+  verb: DocumentAIVerb;
+  model?: string;
+  parentRequestId?: string;
+  spanId?: string;
+  createdAt?: number;
+}): Span {
+  const meta: Record<string, unknown> = {
+    model: options.model ?? null,
+    verb: options.verb,
+  };
+  if (options.parentRequestId) meta.parentRequestId = options.parentRequestId;
+
+  return {
+    spanId: options.spanId ?? crypto.randomUUID(),
+    start: options.start,
+    end: options.start + options.text.length,
+    origin: 'ai',
+    requestId: options.requestId,
+    meta,
+    textHash: fnv1a(options.text),
+    createdAt: options.createdAt ?? Date.now(),
+  };
+}
+
 function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
   if (!Array.isArray(value)) return null;
 
@@ -397,6 +425,8 @@ export function StreamEditor({
     verb: DocumentAIVerb;
     originalText: string;
     prefix: string;
+    model?: string;
+    parentRequestId?: string;
   } | null>(null);
 
   const insertImageAtCursor = useCallback((imageUrl: string, altText = 'image') => {
@@ -810,6 +840,8 @@ export function StreamEditor({
       if (message.type === 'documentModelSelected') {
         const requestId = message.payload?.requestId as string | undefined;
         if (!requestId || requestId !== active.id) return;
+        const modelId = message.payload?.modelId as string | undefined;
+        if (modelId) active.model = modelId;
         return;
       }
 
@@ -940,6 +972,14 @@ export function StreamEditor({
         const insertText = `${active.prefix}${finalOutput}${suffix}`;
         const finalFrom = range.from;
         const originalTo = finalFrom + active.originalText.length;
+        const span = buildDocumentAIProvenanceSpan({
+          requestId,
+          start: finalFrom,
+          text: insertText,
+          verb: active.verb,
+          model: active.model,
+          parentRequestId: active.parentRequestId,
+        });
 
         view.dispatch({
           changes: { from: range.from, to: range.to, insert: active.originalText },
@@ -949,7 +989,10 @@ export function StreamEditor({
         view.dispatch({
           changes: { from: finalFrom, to: originalTo, insert: insertText },
           selection: { anchor: finalFrom + insertText.length },
-          effects: setAiWritingRangeEffect.of(null),
+          effects: [
+            setAiWritingRangeEffect.of(null),
+            addSpans.of([span]),
+          ],
           annotations: [
             Transaction.addToHistory.of(true),
             Transaction.userEvent.of(AI_HISTORY_USER_EVENT),
@@ -1586,6 +1629,7 @@ export function StreamEditor({
     to: number;
     mode: 'replace' | 'after';
     verb?: DocumentAIVerb;
+    parentRequestId?: string;
   }) => {
     if (isAiThinking) {
       addToast('AI is already running for this stream.', 'info');
@@ -1644,6 +1688,7 @@ export function StreamEditor({
       verb: options.verb ?? 'develop',
       originalText,
       prefix,
+      parentRequestId: options.parentRequestId,
     };
     setAiStatus('thinking');
     showAiWritingFeedback();
@@ -1666,6 +1711,7 @@ export function StreamEditor({
         sourceScope,
         verb: options.verb ?? 'develop',
         imageURLs: options.imageUrls ?? [],
+        ...(options.parentRequestId ? { parentRequestId: options.parentRequestId } : {}),
       },
     });
   }, [addToast, isAiThinking, showAiWritingFeedback, showSourceIndexNotice, sourceScope, stream.id]);

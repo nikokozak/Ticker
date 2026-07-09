@@ -64,6 +64,41 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         """)
     }
 
+    func test_captureSpansCoverCapturedTextAndAttributionOnly() throws {
+        let streamId = UUID()
+        let context = QuickPanelContext(
+            selectedText: " First line\nSecond line ",
+            activeApp: "Safari",
+            windowTitle: "Article *Title*",
+            panelPosition: CGPoint(x: 0, y: 0),
+            clipboardImage: nil,
+            isScreenshot: false
+        )
+        let fragment = try QuickPanelMarkdownFormatter.buildFragment(
+            context: context,
+            inputText: "Saved note"
+        ) { _ in
+            XCTFail("Image formatter should not run for text-only context")
+            return ""
+        }
+
+        let spans = QuickPanelMarkdownFormatter.captureSpans(context: context, fragment: fragment, streamId: streamId)
+
+        let captured = """
+        > First line
+        > Second line
+
+        *— Safari — Article \\*Title\\**
+        """
+        XCTAssertEqual(spans.count, 1)
+        XCTAssertEqual(spans[0].streamId, streamId)
+        XCTAssertEqual(spans[0].start, 0)
+        XCTAssertEqual(spans[0].end, UTF16Offsets.utf16Length(captured))
+        XCTAssertEqual(spans[0].origin, "capture")
+        XCTAssertEqual(spans[0].meta, #"{"sourceApp":"Safari"}"#)
+        XCTAssertEqual(spans[0].textHash, FNV1a.hash(captured))
+    }
+
     func test_recentClipboardTextCandidateReturnsRecentPlainText() throws {
         let pasteboard = makeTrackedPasteboard()
         defer { pasteboard.clearContents() }
@@ -969,6 +1004,70 @@ final class StreamDocumentTests: XCTestCase {
         let prompt = await provider.prompt()
         XCTAssertEqual(prompt, Prompts.verbChallenge)
         XCTAssertTrue(recorder.messages(ofType: "documentAIComplete").isEmpty)
+    }
+
+    func test_documentAICompletionSavesExchangeReceipt() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Exchange Receipt")
+            try service.saveStream(stream)
+            let recorder = BridgeMessageRecorder()
+            let requestId = "request-doc-ai"
+            let chunkId = UUID()
+            let sourceId = UUID()
+            let handler = AIMessageHandler(
+                persistence: service,
+                sendToWeb: { recorder.send($0) },
+                routeDocumentAI: { _, _, _, _, _, onChunk, onComplete, _, onModelSelected in
+                    onModelSelected?("provider/model")
+                    onChunk("Raw [1]")
+                    onComplete(SourceContext(
+                        text: "Source context",
+                        chunks: [
+                            RetrievedChunk(
+                                id: chunkId,
+                                sourceId: sourceId,
+                                sourceName: "Source PDF",
+                                seq: 0,
+                                text: "quoted source",
+                                pageStart: 4,
+                                pageEnd: 4,
+                                sectionPath: nil,
+                                score: -10
+                            )
+                        ],
+                        mode: .retrieved
+                    ))
+                }
+            )
+
+            await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
+                "requestId": AnyCodable(requestId),
+                "streamId": AnyCodable(stream.id.uuidString),
+                "query": AnyCodable("Explain this"),
+                "context": AnyCodable(" Selected text "),
+                "imageURLs": AnyCodable([]),
+                "verb": AnyCodable("ask")
+            ]))
+
+            try await waitUntil {
+                (try? service.loadExchange(requestId: requestId)) != nil
+            }
+
+            let exchange = try XCTUnwrap(try service.loadExchange(requestId: requestId))
+            XCTAssertEqual(exchange.streamId, stream.id)
+            XCTAssertEqual(exchange.verb, "ask")
+            XCTAssertEqual(exchange.userInput, "Selection:\nSelected text\n\nPrompt:\nExplain this")
+            XCTAssertEqual(exchange.responseRaw, "Raw [1]")
+            XCTAssertEqual(exchange.model, "provider/model")
+
+            let manifestData = try XCTUnwrap(exchange.sourceManifest.data(using: .utf8))
+            let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [[String: Any]])
+            XCTAssertEqual(manifest.count, 1)
+            XCTAssertEqual(manifest[0]["chunkId"] as? String, chunkId.uuidString)
+            XCTAssertEqual(manifest[0]["sourceId"] as? String, sourceId.uuidString)
+            XCTAssertEqual(manifest[0]["shortTitle"] as? String, "Source PDF")
+            XCTAssertFalse(recorder.messages(ofType: "documentAIComplete").isEmpty)
+        }
     }
 
     func test_v19MigrationAddsScrollRestoreColumnsToFreshDatabase() throws {
@@ -2570,6 +2669,71 @@ final class StreamDocumentTests: XCTestCase {
             let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
             XCTAssertEqual(document.markdown, "First append\n\nSecond append")
             XCTAssertEqual(document.revision, 2)
+        }
+    }
+
+    func test_appendToStreamDocumentOffsetsFragmentSpansAfterEmojiTail() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Append Span Offset")
+            try service.saveStream(stream)
+            try service.saveStreamDocument(streamId: stream.id, markdown: "a🙂")
+            let span = ProvenanceSpan(
+                spanId: "span-ai",
+                streamId: stream.id,
+                start: 0,
+                end: UTF16Offsets.utf16Length("Hello"),
+                origin: "ai",
+                requestId: "request-1",
+                textHash: FNV1a.hash("Hello"),
+                createdAt: Date(timeIntervalSince1970: 2_020)
+            )
+
+            let result = try service.appendToStreamDocument(streamId: stream.id, fragment: "Hello", spans: [span])
+
+            XCTAssertEqual(try service.loadStreamDocument(streamId: stream.id)?.markdown, "a🙂\n\nHello")
+            XCTAssertEqual(result.spans.count, 1)
+            XCTAssertEqual(result.spans[0].start, 5)
+            XCTAssertEqual(result.spans[0].end, 10)
+            XCTAssertEqual(result.spans[0].textHash, FNV1a.hash("Hello"))
+            XCTAssertEqual(try service.loadSpans(streamId: stream.id), result.spans)
+        }
+    }
+
+    @MainActor
+    func test_quickPanelAIFragmentAppendSavesExchangeAndSpan() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Quick Panel AI")
+            try service.saveStream(stream)
+            let manager = QuickPanelManager()
+
+            manager.appendQuickPanelAIFragment(
+                streamId: stream.id,
+                fragment: "AI answer",
+                persistence: service,
+                requestId: "quick-ai-request",
+                model: "provider/model",
+                prompt: "Summarize",
+                documentMarkdown: "Captured context"
+            )
+
+            let spans = try service.loadSpans(streamId: stream.id)
+            XCTAssertEqual(spans.count, 1)
+            XCTAssertEqual(spans[0].origin, "ai")
+            XCTAssertEqual(spans[0].requestId, "quick-ai-request")
+            XCTAssertEqual(spans[0].start, 0)
+            XCTAssertEqual(spans[0].end, UTF16Offsets.utf16Length("AI answer"))
+            XCTAssertEqual(spans[0].textHash, FNV1a.hash("AI answer"))
+            let spanMetaData = try XCTUnwrap(spans[0].meta.data(using: .utf8))
+            let spanMeta = try XCTUnwrap(JSONSerialization.jsonObject(with: spanMetaData) as? [String: String])
+            XCTAssertEqual(spanMeta["model"], "provider/model")
+            XCTAssertEqual(spanMeta["verb"], "develop")
+
+            let exchange = try XCTUnwrap(service.loadExchange(requestId: "quick-ai-request"))
+            XCTAssertEqual(exchange.streamId, stream.id)
+            XCTAssertEqual(exchange.verb, "develop")
+            XCTAssertEqual(exchange.userInput, "Selection:\nCaptured context\n\nPrompt:\nSummarize")
+            XCTAssertEqual(exchange.responseRaw, "AI answer")
+            XCTAssertEqual(exchange.model, "provider/model")
         }
     }
 

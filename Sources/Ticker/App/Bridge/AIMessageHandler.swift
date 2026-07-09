@@ -40,6 +40,16 @@ enum DocumentAICitationManifest {
     static func bridgePayload(from context: SourceContext?) -> [[String: Any]]? {
         entries(from: context)?.map(\.bridgePayload)
     }
+
+    static func jsonString(from context: SourceContext?) -> String {
+        guard let payload = bridgePayload(from: context),
+              JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
+    }
 }
 
 private enum DocumentAIVerb: String {
@@ -171,23 +181,19 @@ final class AIMessageHandler: BridgeMessageHandler {
             let hasStreamSources = streamHasSources(streamIdForRAG)
 
             var resolvedQuery = query
+            let cleanedContext = (payload["context"]?.value as? String).flatMap(Self.cleanedDocumentContext)
             if let context = payload["context"]?.value as? String, !context.isEmpty {
-                let cleanContext = context
-                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-                    .replacingOccurrences(of: "&nbsp;", with: " ")
-                    .replacingOccurrences(of: "&amp;", with: "&")
-                    .replacingOccurrences(of: "&lt;", with: "<")
-                    .replacingOccurrences(of: "&gt;", with: ">")
-                    .replacingOccurrences(of: "&quot;", with: "\"")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-
-                if !cleanContext.isEmpty {
+                if let cleanContext = Self.cleanedDocumentContext(context) {
                     resolvedQuery = "Regarding this context:\n\"\"\"\n\(cleanContext)\n\"\"\"\n\n\(resolvedQuery)"
                 }
             }
+            let userInput = Self.userInput(selection: cleanedContext ?? query, prompt: cleanedContext == nil ? "" : query)
 
+            var responseRaw = ""
+            var selectedModel: String?
             let onChunk: (String) -> Void = { [weak self] chunk in
                 guard !Task.isCancelled else { return }
+                responseRaw += chunk
                 self?.sendToWeb(BridgeMessage(
                     type: "documentAIChunk",
                     payload: ["requestId": AnyCodable(requestId), "chunk": AnyCodable(chunk)]
@@ -195,6 +201,22 @@ final class AIMessageHandler: BridgeMessageHandler {
             }
             let onComplete: (SourceContext?) -> Void = { [weak self] sourceContext in
                 guard !Task.isCancelled else { return }
+                if let streamId = streamIdForRAG, let persistence = self?.persistence {
+                    do {
+                        try persistence.saveExchange(AIExchange(
+                            requestId: requestId,
+                            streamId: streamId,
+                            verb: verb.rawValue,
+                            userInput: userInput,
+                            sourceManifest: DocumentAICitationManifest.jsonString(from: sourceContext),
+                            responseRaw: responseRaw,
+                            model: selectedModel
+                        ))
+                    } catch {
+                        DebugLog.log("[AIMessageHandler] Failed to save exchange (\(DebugLog.errorSummary(error)))")
+                    }
+                }
+
                 var payload: [String: AnyCodable] = ["requestId": AnyCodable(requestId)]
                 if let citations = DocumentAICitationManifest.bridgePayload(from: sourceContext) {
                     payload["citations"] = AnyCodable(citations)
@@ -272,6 +294,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                     onError,
                     { [weak self] modelId in
                         guard !Task.isCancelled else { return }
+                        selectedModel = modelId
                         self?.sendToWeb(BridgeMessage(
                             type: "documentModelSelected",
                             payload: ["requestId": AnyCodable(requestId), "modelId": AnyCodable(modelId)]
@@ -314,5 +337,21 @@ final class AIMessageHandler: BridgeMessageHandler {
             DebugLog.log("[AIMessageHandler] Failed to load stream sources (\(DebugLog.errorSummary(error)))")
             return false
         }
+    }
+
+    private static func cleanedDocumentContext(_ context: String) -> String? {
+        let cleaned = context
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
+    private static func userInput(selection: String, prompt: String) -> String {
+        "Selection:\n\(selection)\n\nPrompt:\n\(prompt)"
     }
 }

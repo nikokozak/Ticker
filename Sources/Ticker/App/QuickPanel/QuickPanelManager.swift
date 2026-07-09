@@ -730,7 +730,12 @@ final class QuickPanelManager: ObservableObject {
             // Get target stream (may create new one)
             let (streamId, isNewStream) = try getTargetStreamId()
             let fragment = try buildMarkdownFragment(streamId: streamId)
-            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
+            let spans = QuickPanelMarkdownFormatter.captureSpans(
+                context: context,
+                fragment: fragment,
+                streamId: streamId
+            )
+            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment, spans: spans)
             notifyFrontend(
                 streamId: streamId,
                 fragment: result.fragment,
@@ -896,7 +901,9 @@ final class QuickPanelManager: ObservableObject {
         orchestrator: AIOrchestrator
     ) {
         let taskId = UUID()
+        let requestId = taskId.uuidString
         var responseMarkdown = ""
+        var selectedModel: String?
 
         documentAITasks[taskId] = Task { [weak self] in
             await orchestrator.route(
@@ -923,7 +930,11 @@ final class QuickPanelManager: ObservableObject {
                             self.appendQuickPanelAIFragment(
                                 streamId: streamId,
                                 fragment: fragment,
-                                persistence: persistence
+                                persistence: persistence,
+                                requestId: requestId,
+                                model: selectedModel,
+                                prompt: prompt,
+                                documentMarkdown: documentMarkdown
                             )
                         }
 
@@ -941,14 +952,55 @@ final class QuickPanelManager: ObservableObject {
                         )
                         self.documentAITasks[taskId] = nil
                     }
+                },
+                onModelSelected: { model in
+                    selectedModel = model
                 }
             )
         }
     }
 
-    private func appendQuickPanelAIFragment(streamId: UUID, fragment: String, persistence: PersistenceService) {
+    func appendQuickPanelAIFragment(
+        streamId: UUID,
+        fragment: String,
+        persistence: PersistenceService,
+        requestId: String? = nil,
+        model: String? = nil,
+        prompt: String? = nil,
+        documentMarkdown: String? = nil
+    ) {
         do {
-            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
+            let spans = requestId.map { id in
+                [
+                    ProvenanceSpan(
+                        streamId: streamId,
+                        start: 0,
+                        end: UTF16Offsets.utf16Length(fragment),
+                        origin: "ai",
+                        requestId: id,
+                        meta: QuickPanelMarkdownFormatter.metadataJSON([
+                            "model": model ?? "unknown",
+                            "verb": "develop"
+                        ]),
+                        textHash: FNV1a.hash(fragment)
+                    )
+                ]
+            } ?? []
+            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment, spans: spans)
+            if let requestId {
+                do {
+                    try persistence.saveExchange(AIExchange(
+                        requestId: requestId,
+                        streamId: streamId,
+                        verb: "develop",
+                        userInput: "Selection:\n\(documentMarkdown ?? "")\n\nPrompt:\n\(prompt ?? "")",
+                        responseRaw: fragment,
+                        model: model
+                    ))
+                } catch {
+                    DebugLog.log("[QuickPanel] Failed to save AI exchange (\(DebugLog.errorSummary(error)))")
+                }
+            }
             notifyFrontend(
                 streamId: streamId,
                 fragment: result.fragment,
@@ -1136,6 +1188,40 @@ enum QuickPanelMarkdownFormatter {
         }
 
         return blocks.joined(separator: "\n\n")
+    }
+
+    static func captureSpans(context: QuickPanelContext?, fragment: String, streamId: UUID) -> [ProvenanceSpan] {
+        guard let context,
+              let contextText = nonEmptyTrimmed(context.contextText) else {
+            return []
+        }
+
+        var blocks = [markdownBlockquote(contextText)]
+        if let source = sourceAttribution(for: context) {
+            blocks.append("*— \(escapeMarkdownEmphasis(source))*")
+        }
+        let capturedMarkdown = blocks.joined(separator: "\n\n")
+        guard fragment.hasPrefix(capturedMarkdown) else { return [] }
+
+        return [
+            ProvenanceSpan(
+                streamId: streamId,
+                start: 0,
+                end: UTF16Offsets.utf16Length(capturedMarkdown),
+                origin: "capture",
+                meta: metadataJSON(["sourceApp": nonEmptyTrimmed(context.activeApp) ?? "Unknown"]),
+                textHash: FNV1a.hash(capturedMarkdown)
+            )
+        ]
+    }
+
+    static func metadataJSON(_ values: [String: String]) -> String {
+        guard JSONSerialization.isValidJSONObject(values),
+              let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return json
     }
 
     static func nonEmptyTrimmed(_ text: String?) -> String? {
