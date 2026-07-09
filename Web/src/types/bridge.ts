@@ -41,6 +41,7 @@ export type SwiftToWebMessageType = (typeof SWIFT_TO_WEB_MESSAGE_TYPES)[number];
 export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'addSource',
   'beginPdfAnchorPick',
+  'cancelDocumentAI',
   'clearProxyDeviceKey',
   'createStream',
   'deleteStream',
@@ -63,6 +64,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'saveStreamDocument',
   'setFileDropContext',
   'setSourceAIExclusion',
+  'setSourceScope',
   'setProxyDeviceKey',
   'submitFeedback',
   'thinkDocument',
@@ -70,6 +72,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
 ] as const;
 
 export type WebToSwiftMessageType = (typeof WEB_TO_SWIFT_MESSAGE_TYPES)[number];
+export type DocumentAIVerb = 'develop' | 'ask' | 'challenge' | 'define';
 
 export interface BridgeMessage {
   type: string;

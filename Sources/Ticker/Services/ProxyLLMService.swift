@@ -227,6 +227,10 @@ final class ProxyLLMService {
             }
 
             for try await rawLine in bytes.lines {
+                if Task.isCancelled {
+                    debugLog("Proxy stream cancelled")
+                    return
+                }
                 let line = rawLine.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
                 if !didReceiveAnyEvent && !line.isEmpty {
                     // Lightweight signal that the stream is alive.
@@ -282,6 +286,10 @@ final class ProxyLLMService {
 
         } catch let urlError as URLError {
             headerWatchdog.cancel()
+            if Task.isCancelled {
+                debugLog("Proxy stream cancelled")
+                return
+            }
             if urlError.code == .timedOut {
                 let timeoutSeconds = Int(urlRequest.timeoutInterval)
                 if didReceiveHeaders {
@@ -296,6 +304,10 @@ final class ProxyLLMService {
             }
         } catch {
             headerWatchdog.cancel()
+            if Task.isCancelled {
+                debugLog("Proxy stream cancelled")
+                return
+            }
             debugLog("Proxy stream failed (\(DebugLog.errorSummary(error)))")
             await MainActor.run {
                 onError(ProxyLLMError.unreachable)

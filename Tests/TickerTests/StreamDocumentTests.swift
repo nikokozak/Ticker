@@ -479,6 +479,51 @@ private actor AutoTitleNotificationCounter {
     }
 }
 
+private final class BridgeMessageRecorder {
+    private let lock = NSLock()
+    private var storedMessages: [BridgeMessage] = []
+
+    func send(_ message: BridgeMessage) {
+        lock.lock()
+        storedMessages.append(message)
+        lock.unlock()
+    }
+
+    func messages(ofType type: String) -> [BridgeMessage] {
+        lock.lock()
+        let messages = storedMessages.filter { $0.type == type }
+        lock.unlock()
+        return messages
+    }
+}
+
+private actor SlowDocumentAIProvider {
+    private var lastSystemPrompt: String?
+    private var didCancel = false
+
+    func stream(
+        systemPrompt: String,
+        onChunk: @escaping (String) -> Void,
+        onComplete: @escaping (SourceContext?) -> Void
+    ) async {
+        lastSystemPrompt = systemPrompt
+        onChunk("first")
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        didCancel = true
+        onComplete(nil)
+    }
+
+    func prompt() -> String? {
+        lastSystemPrompt
+    }
+
+    func cancelled() -> Bool {
+        didCancel
+    }
+}
+
 final class StreamDocumentTests: XCTestCase {
     private enum TestPDFError: Error {
         case creationFailed
@@ -863,6 +908,67 @@ final class StreamDocumentTests: XCTestCase {
 
             XCTAssertEqual(try service.loadStream(id: stream.id)?.title, "Generated Once")
         }
+    }
+
+    func test_setSourceScopePersistsAcrossReload() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Scope")
+            try service.saveStream(stream)
+
+            XCTAssertTrue(try service.setSourceScope(streamId: stream.id, scope: .all))
+            XCTAssertEqual(try service.loadStream(id: stream.id)?.sourceScope, .all)
+
+            XCTAssertTrue(try service.setSourceScope(streamId: stream.id, scope: .none))
+            XCTAssertEqual(try service.loadStream(id: stream.id)?.sourceScope, SourceScope.none)
+        }
+    }
+
+    func test_documentAICancelStopsSlowStreamingProvider() async throws {
+        let recorder = BridgeMessageRecorder()
+        let provider = SlowDocumentAIProvider()
+        let handler = AIMessageHandler(
+            sendToWeb: { recorder.send($0) },
+            routeDocumentAI: { _, _, _, _, systemPrompt, onChunk, onComplete, _, _ in
+                await provider.stream(
+                    systemPrompt: systemPrompt,
+                    onChunk: onChunk,
+                    onComplete: onComplete
+                )
+            }
+        )
+        let requestId = UUID().uuidString
+
+        await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
+            "requestId": AnyCodable(requestId),
+            "streamId": AnyCodable(UUID().uuidString),
+            "query": AnyCodable("What is weak here?"),
+            "imageURLs": AnyCodable([]),
+            "verb": AnyCodable("challenge")
+        ]))
+
+        try await waitUntil {
+            recorder.messages(ofType: "documentAIChunk").contains { message in
+                message.payload?["requestId"]?.value as? String == requestId
+            }
+        }
+
+        await handler.handle(BridgeMessage(type: "cancelDocumentAI", payload: [
+            "requestId": AnyCodable(requestId)
+        ]))
+
+        try await waitUntil {
+            recorder.messages(ofType: "documentAIError").contains { message in
+                message.payload?["requestId"]?.value as? String == requestId
+                    && message.payload?["errorCode"]?.value as? String == "cancelled"
+            }
+        }
+        try await waitUntil {
+            await provider.cancelled()
+        }
+
+        let prompt = await provider.prompt()
+        XCTAssertEqual(prompt, Prompts.verbChallenge)
+        XCTAssertTrue(recorder.messages(ofType: "documentAIComplete").isEmpty)
     }
 
     func test_v19MigrationAddsScrollRestoreColumnsToFreshDatabase() throws {
@@ -2683,6 +2789,20 @@ final class StreamDocumentTests: XCTestCase {
                 "Existing document\n\n## Recovered captures\n\nRecovered once"
             )
         }
+    }
+
+    private func waitUntil(
+        _ condition: @escaping () async -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        for _ in 0..<100 {
+            if await condition() {
+                return
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Timed out waiting for condition", file: file, line: line)
     }
 
     private func withTempPersistenceService(_ body: (PersistenceService) throws -> Void) throws {

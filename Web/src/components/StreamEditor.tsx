@@ -7,7 +7,7 @@ import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, type Stream, type SourceReference, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload } from '../types';
+import { bridge, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
@@ -88,10 +88,6 @@ const SELECTION_MENU_DELAY_MS = 180;
 const AI_ERROR_FEEDBACK_MS = 2200;
 const AI_INDEXING_NOTICE_MS = 4000;
 
-export type SourceScope = 'auto' | 'all' | 'none';
-
-const sourceScopeByStreamId = new Map<string, SourceScope>();
-
 export function nextSourceScope(scope: SourceScope): SourceScope {
   switch (scope) {
     case 'auto':
@@ -115,6 +111,19 @@ function formatSourceScope(scope: SourceScope): string {
     default:
       return 'Auto';
   }
+}
+
+export function wrapChallengeOutput(text: string): string {
+  // Challenge renders inline-quoted until margin notes ship (Roadmap 4 P7); then it becomes a margin note. ponytail: inline placement is the ceiling here.
+  const quoted = text.trim().split(/\r?\n/).map((line) => `> ${line}`).join('\n');
+  return `${quoted}\n\n*— Challenge*`;
+}
+
+export function documentAIErrorRecovery(originalText: string, errorCode: string | undefined) {
+  return {
+    restoreText: originalText,
+    silent: errorCode === 'cancelled',
+  };
 }
 
 function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
@@ -267,10 +276,9 @@ export function StreamEditor({
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
-  const [sourceScope, setSourceScope] = useState<SourceScope>(
-    () => sourceScopeByStreamId.get(stream.id) ?? 'auto'
-  );
+  const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
+  const [showRewriteMenu, setShowRewriteMenu] = useState(false);
   const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState>({
     visible: false,
     left: 0,
@@ -321,6 +329,7 @@ export function StreamEditor({
     id: string;
     buffer: string;
     mode: 'replace' | 'after';
+    verb: DocumentAIVerb;
     originalText: string;
     prefix: string;
   } | null>(null);
@@ -532,7 +541,10 @@ export function StreamEditor({
   const cycleSourceScope = useCallback(() => {
     setSourceScope((previous) => {
       const next = nextSourceScope(previous);
-      sourceScopeByStreamId.set(stream.id, next);
+      bridge.send({
+        type: 'setSourceScope',
+        payload: { streamId: stream.id, scope: next },
+      });
       return next;
     });
   }, [stream.id]);
@@ -563,14 +575,15 @@ export function StreamEditor({
     setLinkPopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
     setShowPrompt(false);
     setPromptValue('');
-    setSourceScope(sourceScopeByStreamId.get(stream.id) ?? 'auto');
+    setSourceScope(stream.sourceScope ?? 'auto');
+    setShowRewriteMenu(false);
     promptContextRef.current = null;
     aiRequestRef.current = null;
     const view = editorViewRef.current;
     if (view) {
       dispatchAiRangeClear(view);
     }
-  }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.title]);
+  }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.title]);
 
   useEffect(() => {
     markdownContentRef.current = markdownContent;
@@ -729,6 +742,7 @@ export function StreamEditor({
         if (!requestId || requestId !== active.id) return;
 
         const errorCode = message.payload?.errorCode as string | undefined;
+        const recovery = documentAIErrorRecovery(active.originalText, errorCode);
         const proxyRequestId = message.payload?.proxyRequestId as string | undefined;
         let displayError = error || 'AI request failed.';
 
@@ -762,8 +776,8 @@ export function StreamEditor({
         const range = view ? getAiWritingRange(view.state) : null;
         if (view && range) {
           view.dispatch({
-            changes: { from: range.from, to: range.to, insert: active.originalText },
-            selection: { anchor: range.from + active.originalText.length },
+            changes: { from: range.from, to: range.to, insert: recovery.restoreText },
+            selection: { anchor: range.from + recovery.restoreText.length },
             effects: setAiWritingRangeEffect.of(null),
             annotations: Transaction.addToHistory.of(false),
           });
@@ -774,8 +788,12 @@ export function StreamEditor({
 
         setAiStatus('idle');
         aiRequestRef.current = null;
-        showAiErrorFeedback(displayError);
-        addToast(displayError, 'error');
+        if (recovery.silent) {
+          hideAiFeedback();
+        } else {
+          showAiErrorFeedback(displayError);
+          addToast(displayError, 'error');
+        }
         return;
       }
 
@@ -835,6 +853,10 @@ export function StreamEditor({
 
         if (provenanceLine) {
           finalOutput = `${finalOutput}\n\n${provenanceLine}`;
+        }
+
+        if (active.verb === 'challenge') {
+          finalOutput = wrapChallengeOutput(finalOutput);
         }
 
         const suffix = active.mode === 'after' && !finalOutput.endsWith('\n') ? '\n' : '';
@@ -1145,6 +1167,7 @@ export function StreamEditor({
 
   const hideSelectionMenu = useCallback(() => {
     clearSelectionMenuTimer();
+    setShowRewriteMenu(false);
     setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearSelectionMenuTimer]);
 
@@ -1485,6 +1508,7 @@ export function StreamEditor({
     from: number;
     to: number;
     mode: 'replace' | 'after';
+    verb?: DocumentAIVerb;
   }) => {
     if (isAiThinking) {
       addToast('AI is already running for this stream.', 'info');
@@ -1540,6 +1564,7 @@ export function StreamEditor({
       id: requestId,
       buffer: '',
       mode: options.mode,
+      verb: options.verb ?? 'develop',
       originalText,
       prefix,
     };
@@ -1562,6 +1587,7 @@ export function StreamEditor({
         query: options.query,
         context: options.context,
         sourceScope,
+        verb: options.verb ?? 'develop',
         imageURLs: options.imageUrls ?? [],
       },
     });
@@ -1580,6 +1606,7 @@ export function StreamEditor({
       from: context.from,
       to: context.to,
       mode: 'replace',
+      verb: 'develop',
     });
     hideSelectionMenu();
   }, [addToast, getSelectionContext, hideSelectionMenu, startDocumentAI]);
@@ -1604,8 +1631,6 @@ export function StreamEditor({
     openPromptWithContext(context);
   }, [addToast, getSelectionContext, isAiThinking, openPromptWithContext]);
 
-  const canLinkSelectionToPDF = pdfPaneState.visible && pdfPaneState.streamId === stream.id;
-
   const handleSelectionFormat = useCallback((marker: string) => {
     const view = editorViewRef.current;
     if (!view) {
@@ -1627,7 +1652,7 @@ export function StreamEditor({
     view.focus();
   }, [hideSelectionMenu]);
 
-  const handleSelectionSend = useCallback(() => {
+  const handleSelectionVerb = useCallback((verb: DocumentAIVerb) => {
     const context = getSelectionContext(false);
     if (!context || !context.text.trim()) {
       hideSelectionMenu();
@@ -1639,40 +1664,11 @@ export function StreamEditor({
       imageUrls: context.imageUrls,
       from: context.from,
       to: context.to,
-      mode: 'replace',
+      mode: verb === 'develop' ? 'replace' : 'after',
+      verb,
     });
     hideSelectionMenu();
   }, [getSelectionContext, hideSelectionMenu, startDocumentAI]);
-
-  const handleSelectionPrompt = useCallback(() => {
-    const context = getSelectionContext(false);
-    if (!context || !context.text.trim()) {
-      hideSelectionMenu();
-      return;
-    }
-    openPromptWithContext(context);
-  }, [getSelectionContext, hideSelectionMenu, openPromptWithContext]);
-
-  const handleSelectionLinkToPDF = useCallback(() => {
-    const context = getSelectionContext(false);
-    if (!context || !context.text.trim()) {
-      hideSelectionMenu();
-      return;
-    }
-    if (!canLinkSelectionToPDF) {
-      pendingPDFAnchorSelectionRef.current = null;
-      hideSelectionMenu();
-      addToast('Open a PDF source before linking to PDF.', 'info');
-      return;
-    }
-
-    pendingPDFAnchorSelectionRef.current = { from: context.from, to: context.to };
-    hideSelectionMenu();
-    bridge.send({
-      type: 'beginPdfAnchorPick',
-      payload: { streamId: stream.id },
-    });
-  }, [addToast, canLinkSelectionToPDF, getSelectionContext, hideSelectionMenu, stream.id]);
 
   const closePrompt = useCallback(() => {
     setShowPrompt(false);
@@ -1695,8 +1691,18 @@ export function StreamEditor({
       from: context.from,
       to: context.to,
       mode: 'after',
+      verb: 'ask',
     });
   }, [closePrompt, promptValue, startDocumentAI]);
+
+  const handleStopDocumentAI = useCallback(() => {
+    const active = aiRequestRef.current;
+    if (!active) return;
+    bridge.send({
+      type: 'cancelDocumentAI',
+      payload: { requestId: active.id },
+    });
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1869,8 +1875,8 @@ export function StreamEditor({
       {showPrompt && (
         <div className="ai-prompt-overlay" onClick={closePrompt}>
           <div className="ai-prompt-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>Send &amp; Prompt</h2>
-            <p>Selection will be attached as context. Write a prompt for the AI.</p>
+            <h2>Ask</h2>
+            <p>Selection will be attached as context.</p>
             <textarea
               className="ai-prompt-input"
               value={promptValue}
@@ -1884,7 +1890,7 @@ export function StreamEditor({
                   closePrompt();
                 }
               }}
-              placeholder="Ask the AI to summarize, rewrite, or expand the selected text…"
+              placeholder="Ask a question or continue the line of thought…"
               autoFocus
               rows={5}
             />
@@ -1910,7 +1916,7 @@ export function StreamEditor({
                 onClick={handlePromptSend}
                 disabled={!promptValue.trim()}
               >
-                Send
+                Ask
               </button>
             </div>
           </div>
@@ -1923,6 +1929,68 @@ export function StreamEditor({
           className="selection-action-menu"
           style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
         >
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text"
+            title="Ask"
+            aria-label="Ask"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionVerb('ask')}
+            disabled={isAiThinking}
+          >
+            Ask
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text"
+            title="Challenge"
+            aria-label="Challenge"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionVerb('challenge')}
+            disabled={isAiThinking}
+          >
+            Challenge
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text"
+            title="Define"
+            aria-label="Define"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionVerb('define')}
+            disabled={isAiThinking}
+          >
+            Define
+          </button>
+          <span className="selection-action-divider" aria-hidden="true" />
+          <div className="selection-action-submenu">
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--text"
+              title="Rewrite"
+              aria-label="Rewrite"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setShowRewriteMenu((value) => !value)}
+              disabled={isAiThinking}
+            >
+              Rewrite ▾
+            </button>
+            {showRewriteMenu && (
+              <div className="selection-action-submenu-panel">
+                <button
+                  type="button"
+                  className="selection-action-button selection-action-button--text selection-action-button--wide"
+                  title="Develop (replaces)"
+                  aria-label="Develop (replaces)"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => handleSelectionVerb('develop')}
+                >
+                  Develop (replaces)
+                </button>
+              </div>
+            )}
+          </div>
+          <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"
             className="selection-action-button selection-action-button--format selection-action-button--bold"
@@ -1956,44 +2024,14 @@ export function StreamEditor({
           <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"
-            className="selection-action-button"
-            title="Send"
-            aria-label="Send"
+            className="selection-action-button selection-action-button--text selection-action-source-scope"
+            title="Cycle source scope"
+            aria-label="Cycle source scope"
             onMouseDown={(event) => event.preventDefault()}
-            onClick={handleSelectionSend}
-            disabled={isAiThinking}
+            onClick={cycleSourceScope}
           >
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-              <path d="M3.2 4.2l17.6 7.8-17.6 7.8 2.4-7-2.4-8.6zm2.8 2.7 1.3 4.7h7.8v1h-7.8L6 17.1l11.8-5.1L6 6.9z" />
-            </svg>
+            Sources: {formatSourceScope(sourceScope)}
           </button>
-          <button
-            type="button"
-            className="selection-action-button"
-            title="Send & Prompt"
-            aria-label="Send and prompt"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={handleSelectionPrompt}
-            disabled={isAiThinking}
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-              <path d="M4 3h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-4 4v-4H4a1 1 0 01-1-1V4a1 1 0 011-1zm1 2v9h1v1.6L7.6 14H19V5H5zm3 2h8v1H8V7zm0 3h5v1H8v-1z" />
-            </svg>
-          </button>
-          {canLinkSelectionToPDF && (
-            <button
-              type="button"
-              className="selection-action-button"
-              title="Link to PDF"
-              aria-label="Link to PDF"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={handleSelectionLinkToPDF}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                <path d="M8.8 12.9a1 1 0 010-1.4l3.7-3.7a3.4 3.4 0 114.8 4.8l-1.5 1.5-.7-.7 1.5-1.5a2.4 2.4 0 10-3.4-3.4l-3.7 3.7a1 1 0 001.4 1.4l2.5-2.5.7.7-2.5 2.5a2 2 0 01-2.8 0zm-2.1 7a3.4 3.4 0 010-4.8l1.5-1.5.7.7-1.5 1.5a2.4 2.4 0 103.4 3.4l3.7-3.7a1 1 0 00-1.4-1.4l-2.5 2.5-.7-.7 2.5-2.5a2 2 0 112.8 2.8l-3.7 3.7a3.4 3.4 0 01-4.8 0z" />
-              </svg>
-            </button>
-          )}
         </div>
       )}
 
@@ -2107,6 +2145,15 @@ export function StreamEditor({
               >
                 <span className="document-ai-status-dot" aria-hidden="true" />
                 <span>{aiFeedback.message}</span>
+                {isAiThinking && aiFeedback.kind === 'writing' && (
+                  <button
+                    type="button"
+                    className="document-ai-stop-button"
+                    onClick={handleStopDocumentAI}
+                  >
+                    × Stop
+                  </button>
+                )}
               </div>
             )}
             {sourceIndexNotice && (

@@ -21,8 +21,9 @@
         "optionalPayloadKeys": ["citations", "sourceContextMode"]
       },
       "documentAIError": {
-        "requiredPayloadKeys": ["requestId", "error"],
+        "requiredPayloadKeys": ["requestId"],
         "optionalPayloadKeys": [
+          "error",
           "errorCode",
           "proxyRequestId",
           "quotaScope",
@@ -102,7 +103,7 @@
       },
       "streamLoaded": {
         "requiredPayloadKeys": ["stream"],
-        "optionalPayloadKeys": ["scrollOffset"]
+        "optionalPayloadKeys": ["scrollOffset", "sourceScope"]
       },
       "streamTitleUpdated": {
         "requiredPayloadKeys": ["id", "title"]
@@ -122,6 +123,9 @@
       },
       "beginPdfAnchorPick": {
         "requiredPayloadKeys": ["streamId"]
+      },
+      "cancelDocumentAI": {
+        "requiredPayloadKeys": ["requestId"]
       },
       "clearProxyDeviceKey": {
         "requiredPayloadKeys": [],
@@ -209,6 +213,9 @@
         "requiredPayloadKeys": ["mode"],
         "optionalPayloadKeys": ["streamId"]
       },
+      "setSourceScope": {
+        "requiredPayloadKeys": ["streamId", "scope"]
+      },
       "setProxyDeviceKey": {
         "requiredPayloadKeys": ["key"],
         "requiredCallbackId": true
@@ -220,7 +227,7 @@
       },
       "thinkDocument": {
         "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
-        "optionalPayloadKeys": ["context", "sourceScope"]
+        "optionalPayloadKeys": ["context", "sourceScope", "verb"]
       },
       "updateStreamTitle": {
         "requiredPayloadKeys": ["id", "title"]

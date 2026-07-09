@@ -37,6 +37,22 @@ enum Prompts {
     - Match the surrounding document's tone and terminology when context is provided.
     """
 
+    static let verbDevelop = """
+    Develop the following passage into a fuller, clearer version of the same idea. Preserve the author's voice and intent; deepen, do not pad. Output only the developed passage.
+    """
+
+    static let verbAsk = """
+    Answer the question or continue the line of thought, grounded in the provided context. Output only the answer prose.
+    """
+
+    static let verbChallenge = """
+    Identify the single weakest point in this passage — a hidden assumption, an internal contradiction, or an unsupported leap. State it plainly in two to four sentences, then end with one pointed question back to the author. Do not rewrite the passage. Do not answer your own question.
+    """
+
+    static let verbDefine = """
+    Define or explain the selected term or phrase concisely, in the context of the surrounding document. Two to four sentences. Output only the explanation.
+    """
+
     static let restatement = """
     Convert input to a brief heading. Return ONLY the heading, no quotes or explanation.
 

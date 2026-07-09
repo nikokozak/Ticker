@@ -42,23 +42,103 @@ enum DocumentAICitationManifest {
     }
 }
 
+private enum DocumentAIVerb: String {
+    case develop
+    case ask
+    case challenge
+    case define
+
+    var systemPrompt: String {
+        switch self {
+        case .develop:
+            return Prompts.verbDevelop
+        case .ask:
+            return Prompts.verbAsk
+        case .challenge:
+            return Prompts.verbChallenge
+        case .define:
+            return Prompts.verbDefine
+        }
+    }
+}
+
 final class AIMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
-        "thinkDocument"
+        "thinkDocument",
+        "cancelDocumentAI"
     ]
 
-    private let bridgeService: BridgeService
     private let assetService: AssetService
-    private let orchestrator: AIOrchestrator
-    private let deviceKeyService: DeviceKeyService
     private let persistence: PersistenceService?
+    private let sendToWeb: (BridgeMessage) -> Void
+    private let sendBridgeErrorMessage: (String, String) async -> Void
+    private let isProxyUsable: () async -> Bool
+    private let routeDocumentAI: (
+        _ query: String,
+        _ queryImages: [String],
+        _ streamId: UUID?,
+        _ sourceScope: SourceScope,
+        _ systemPromptOverride: String,
+        _ onChunk: @escaping (String) -> Void,
+        _ onComplete: @escaping (SourceContext?) -> Void,
+        _ onError: @escaping (Error) -> Void,
+        _ onModelSelected: ((String) -> Void)?
+    ) async -> Void
+    private var inFlightRequests: [String: Task<Void, Never>] = [:]
 
     init?(container: ServiceContainer) {
-        self.bridgeService = container.bridgeService
         self.assetService = container.assetService
-        self.orchestrator = container.orchestrator
-        self.deviceKeyService = container.deviceKeyService
         self.persistence = container.persistence
+        self.sendToWeb = { [bridgeService = container.bridgeService] message in
+            bridgeService.send(message)
+        }
+        self.sendBridgeErrorMessage = { [bridgeService = container.bridgeService] type, reason in
+            await bridgeService.sendBridgeError(type: type, reason: reason)
+        }
+        self.isProxyUsable = { [deviceKeyService = container.deviceKeyService] in
+            await deviceKeyService.currentState.isUsable
+        }
+        self.routeDocumentAI = { [orchestrator = container.orchestrator] query, queryImages, streamId, sourceScope, systemPromptOverride, onChunk, onComplete, onError, onModelSelected in
+            await orchestrator.route(
+                query: query,
+                queryImages: queryImages,
+                streamId: streamId,
+                sourceScope: sourceScope,
+                priorCells: [],
+                systemPromptOverride: systemPromptOverride,
+                includeHeading: false,
+                onChunk: onChunk,
+                onComplete: onComplete,
+                onError: onError,
+                onModelSelected: onModelSelected
+            )
+        }
+    }
+
+    init(
+        assetService: AssetService = AssetService(),
+        persistence: PersistenceService? = nil,
+        sendToWeb: @escaping (BridgeMessage) -> Void,
+        sendBridgeErrorMessage: @escaping (String, String) async -> Void = { _, _ in },
+        isProxyUsable: @escaping () async -> Bool = { true },
+        routeDocumentAI: @escaping (
+            _ query: String,
+            _ queryImages: [String],
+            _ streamId: UUID?,
+            _ sourceScope: SourceScope,
+            _ systemPromptOverride: String,
+            _ onChunk: @escaping (String) -> Void,
+            _ onComplete: @escaping (SourceContext?) -> Void,
+            _ onError: @escaping (Error) -> Void,
+            _ onModelSelected: ((String) -> Void)?
+        ) async -> Void
+    ) {
+        self.assetService = assetService
+        self.persistence = persistence
+        self.sendToWeb = sendToWeb
+        self.sendBridgeErrorMessage = sendBridgeErrorMessage
+        self.isProxyUsable = isProxyUsable
+        self.routeDocumentAI = routeDocumentAI
     }
 
     func handle(_ message: BridgeMessage) async {
@@ -68,7 +148,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                   let requestId = payload["requestId"]?.value as? String,
                   let query = payload["query"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid thinkDocument payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid thinkDocument payload")
+                await sendBridgeErrorMessage(message.type, "Invalid thinkDocument payload")
                 return
             }
 
@@ -79,6 +159,8 @@ final class AIMessageHandler: BridgeMessageHandler {
             }
             let sourceScopeRaw = payload["sourceScope"]?.value as? String
             let sourceScope = SourceScope(rawValue: sourceScopeRaw ?? "") ?? .auto
+            let verbRaw = payload["verb"]?.value as? String
+            let verb = DocumentAIVerb(rawValue: verbRaw ?? "") ?? .develop
 
             var streamIdForRAG: UUID? = nil
 
@@ -105,12 +187,14 @@ final class AIMessageHandler: BridgeMessageHandler {
             }
 
             let onChunk: (String) -> Void = { [weak self] chunk in
-                self?.bridgeService.send(BridgeMessage(
+                guard !Task.isCancelled else { return }
+                self?.sendToWeb(BridgeMessage(
                     type: "documentAIChunk",
                     payload: ["requestId": AnyCodable(requestId), "chunk": AnyCodable(chunk)]
                 ))
             }
             let onComplete: (SourceContext?) -> Void = { [weak self] sourceContext in
+                guard !Task.isCancelled else { return }
                 var payload: [String: AnyCodable] = ["requestId": AnyCodable(requestId)]
                 if let citations = DocumentAICitationManifest.bridgePayload(from: sourceContext) {
                     payload["citations"] = AnyCodable(citations)
@@ -120,12 +204,13 @@ final class AIMessageHandler: BridgeMessageHandler {
                 } else if sourceContext == nil, hasStreamSources {
                     payload["sourceContextMode"] = AnyCodable("none")
                 }
-                self?.bridgeService.send(BridgeMessage(
+                self?.sendToWeb(BridgeMessage(
                     type: "documentAIComplete",
                     payload: payload
                 ))
             }
             let onError: (Error) -> Void = { [weak self] error in
+                guard !Task.isCancelled else { return }
                 var payload: [String: AnyCodable] = [
                     "requestId": AnyCodable(requestId),
                     "error": AnyCodable(error.localizedDescription)
@@ -151,16 +236,19 @@ final class AIMessageHandler: BridgeMessageHandler {
                     }
                 }
 
-                self?.bridgeService.send(BridgeMessage(
+                self?.sendToWeb(BridgeMessage(
                     type: "documentAIError",
                     payload: payload
                 ))
             }
 
-            Task { [weak self] in
+            let task = Task { [weak self] in
                 guard let self else { return }
+                defer {
+                    self.inFlightRequests[requestId] = nil
+                }
 
-                let proxyUsable = await self.deviceKeyService.currentState.isUsable
+                let proxyUsable = await self.isProxyUsable()
 
                 guard proxyUsable else {
                     await MainActor.run {
@@ -169,24 +257,46 @@ final class AIMessageHandler: BridgeMessageHandler {
                     return
                 }
 
-                await self.orchestrator.route(
-                    query: resolvedQuery,
-                    queryImages: imageDataURLs,
-                    streamId: streamIdForRAG,
-                    sourceScope: sourceScope,
-                    priorCells: [],
-                    includeHeading: false,
-                    onChunk: onChunk,
-                    onComplete: onComplete,
-                    onError: onError,
-                    onModelSelected: { [weak self] modelId in
-                        self?.bridgeService.send(BridgeMessage(
+                if Task.isCancelled {
+                    return
+                }
+
+                await self.routeDocumentAI(
+                    resolvedQuery,
+                    imageDataURLs,
+                    streamIdForRAG,
+                    sourceScope,
+                    verb.systemPrompt,
+                    onChunk,
+                    onComplete,
+                    onError,
+                    { [weak self] modelId in
+                        guard !Task.isCancelled else { return }
+                        self?.sendToWeb(BridgeMessage(
                             type: "documentModelSelected",
                             payload: ["requestId": AnyCodable(requestId), "modelId": AnyCodable(modelId)]
                         ))
                     }
                 )
             }
+            inFlightRequests[requestId] = task
+
+        case "cancelDocumentAI":
+            guard let payload = message.payload,
+                  let requestId = payload["requestId"]?.value as? String else {
+                DebugLog.log("[WebViewManager] Invalid cancelDocumentAI payload")
+                await sendBridgeErrorMessage(message.type, "Invalid cancelDocumentAI payload")
+                return
+            }
+            inFlightRequests.removeValue(forKey: requestId)?.cancel()
+            sendToWeb(BridgeMessage(
+                type: "documentAIError",
+                payload: [
+                    "requestId": AnyCodable(requestId),
+                    "error": AnyCodable("Cancelled"),
+                    "errorCode": AnyCodable("cancelled")
+                ]
+            ))
 
         default:
             DebugLog.log("[AIMessageHandler] Unknown message type: \(message.type)")

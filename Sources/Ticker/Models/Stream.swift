@@ -5,6 +5,7 @@ struct Stream: Identifiable, Codable {
     let id: UUID
     var title: String
     var sources: [SourceReference]
+    var sourceScope: SourceScope
     let createdAt: Date
     var updatedAt: Date
 
@@ -12,12 +13,14 @@ struct Stream: Identifiable, Codable {
         id: UUID = UUID(),
         title: String = "Untitled",
         sources: [SourceReference] = [],
+        sourceScope: SourceScope = .auto,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
         self.title = title
         self.sources = sources
+        self.sourceScope = sourceScope
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
