@@ -494,26 +494,22 @@ struct QuickPanelView: View {
                     .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .medium))
                     .foregroundColor(QuickPanelStyle.textSubtle)
 
-                // Content - render markdown for AI responses
-                if turn.role == .assistant {
-                    MarkdownContentView(content: turn.content)
-                } else {
-                    Text(turn.content)
-                        .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
-                        .foregroundColor(QuickPanelStyle.textMuted)
-                        .textSelection(.enabled)
-                }
+                Text(verbatim: turn.content)
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
+                    .foregroundColor(turn.role == .assistant ? QuickPanelStyle.text : QuickPanelStyle.textMuted)
+                    .textSelection(.enabled)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            saveConversationMessageButton(content: turn.content)
+            saveConversationMessageButton(turn: turn)
         }
         .padding(.vertical, Spacing.xs)
         .id(id)
     }
 
-    private func saveConversationMessageButton(content: String) -> some View {
-        Button(action: { manager.saveConversationMessage(content) }) {
+    private func saveConversationMessageButton(turn: ConversationTurn) -> some View {
+        let content = turn.saveContent ?? turn.content
+        return Button(action: { manager.saveConversationMessage(turn) }) {
             Image(systemName: "tray.and.arrow.down")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize, weight: .semibold))
                 .foregroundColor(QuickPanelStyle.textMuted.opacity(0.64))
@@ -543,9 +539,11 @@ struct QuickPanelView: View {
                 }
                 .padding(.vertical, Spacing.xs)
             } else {
-                // Render streaming content with markdown + cursor
                 HStack(alignment: .bottom, spacing: 0) {
-                    MarkdownContentView(content: manager.ephemeralConversation.currentResponse)
+                    Text(verbatim: manager.ephemeralConversation.currentResponse)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
+                        .foregroundColor(QuickPanelStyle.text)
+                        .textSelection(.enabled)
                     Text(" ●")
                         .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize))
                         .foregroundColor(QuickPanelStyle.accent)
