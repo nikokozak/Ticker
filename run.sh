@@ -16,8 +16,10 @@ Notes:
   - This script builds an unsigned app (`CODE_SIGNING_ALLOWED=NO`) but will optionally
     codesign the installed lane app if `SIGN_IDENTITY` is set (recommended so macOS
     permissions like Accessibility/Screen Recording stick across rebuilds).
-  - Stable lane installs to `~/Applications/Ticker Next.app` by default.
-  - Debug stable builds keep the Xcode project's Debug bundle id/display name.
+  - Dev (Debug) installs to `~/Applications/TickerNextDebug.app`; prod (Release)
+    installs to `~/Applications/Ticker Next.app`.
+  - Debug stable builds keep the Xcode project's Debug bundle id/display name
+    (io.ticker.next.debug / TickerNextDebug) so it never competes with the real app.
   - QA lane installs to `~/Applications/Ticker Next QA.app` by default.
   - Distribution builds should follow the signing/notarization runbook.
   - Override build output location with DERIVED_DATA_PATH (or TICKER_NEXT_DERIVED_DATA_PATH), e.g.:
@@ -37,11 +39,12 @@ APP="$DERIVED_DATA_PATH/Build/Products"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.ticker.next}"
 DEBUG_APP_BUNDLE_ID="${DEBUG_APP_BUNDLE_ID:-io.ticker.next.debug}"
 QA_APP_BUNDLE_ID="${QA_APP_BUNDLE_ID:-io.ticker.next.qa}"
-DEBUG_APP_DISPLAY_NAME="${DEBUG_APP_DISPLAY_NAME:-Ticker Debug}"
-STABLE_APP_DISPLAY_NAME="${STABLE_APP_DISPLAY_NAME:-Ticker Next}"
+DEBUG_APP_DISPLAY_NAME="${DEBUG_APP_DISPLAY_NAME:-TickerNextDebug}"
+STABLE_APP_DISPLAY_NAME="${STABLE_APP_DISPLAY_NAME:-TickerNext}"
 QA_APP_DISPLAY_NAME="${QA_APP_DISPLAY_NAME:-Ticker Next QA}"
 STABLE_APP_PRODUCT_NAME="${STABLE_APP_PRODUCT_NAME:-TickerNext}"
 STABLE_APP_INSTALL_PATH="${STABLE_APP_INSTALL_PATH:-$HOME/Applications/Ticker Next.app}"
+DEBUG_APP_INSTALL_PATH="${DEBUG_APP_INSTALL_PATH:-$HOME/Applications/TickerNextDebug.app}"
 QA_APP_INSTALL_PATH="${QA_APP_INSTALL_PATH:-$HOME/Applications/Ticker Next QA.app}"
 XCODE_PROJECT="${XCODE_PROJECT:-Ticker.xcodeproj}"
 XCODE_SCHEME="${XCODE_SCHEME:-Ticker}"
@@ -105,6 +108,8 @@ lane_product_name() {
 lane_install_path() {
   if [[ "$LANE" == "qa" ]]; then
     echo "$QA_APP_INSTALL_PATH"
+  elif [[ "$MODE" == "dev" ]]; then
+    echo "$DEBUG_APP_INSTALL_PATH"
   else
     echo "$STABLE_APP_INSTALL_PATH"
   fi
