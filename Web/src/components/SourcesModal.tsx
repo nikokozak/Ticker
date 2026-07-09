@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, forwardRef } from 'react';
+import { useCallback, useEffect, useRef, useState, forwardRef, type ReactNode } from 'react';
 import type { SourceIndexStatus, SourceReference } from '../types';
 import { bridge } from '../types';
+import { DocumentIcon, ImageIcon, PaperclipIcon, XIcon } from './icons';
 
 interface SourceIndexStatusLineInput {
   status: SourceIndexStatus;
@@ -259,7 +260,7 @@ export function SourcesModal({
             aria-label="Close sources"
             title="Close"
           >
-            ×
+            <XIcon size={16} />
           </button>
         </div>
 
@@ -397,20 +398,20 @@ const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
           aria-label={`Remove ${source.displayName}`}
           disabled={isRemoving}
         >
-          {isRemoving ? '…' : '×'}
+          {isRemoving ? '…' : <XIcon size={14} />}
         </button>
       </div>
     );
   }
 );
 
-function getFileIcon(fileType: string): string {
+function getFileIcon(fileType: string): ReactNode {
   switch (fileType) {
-    case 'pdf': return '📄';
+    case 'pdf': return <DocumentIcon size={14} />;
     case 'text':
-    case 'markdown': return '📝';
-    case 'image': return '🖼';
-    default: return '📎';
+    case 'markdown': return <DocumentIcon size={14} />;
+    case 'image': return <ImageIcon size={14} />;
+    default: return <PaperclipIcon size={14} />;
   }
 }
 

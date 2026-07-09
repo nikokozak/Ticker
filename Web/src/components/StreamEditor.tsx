@@ -10,6 +10,7 @@ import { tags as t } from '@lezer/highlight';
 import { bridge, getExchange, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
+import { EyeIcon, XIcon } from './icons';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
@@ -2115,7 +2116,7 @@ export function StreamEditor({
             aria-label="Toggle provenance x-ray"
             aria-pressed={isProvenanceXrayVisible}
           >
-            👁
+            <EyeIcon size={16} />
           </button>
           <button
             onClick={() => setShowSourcesModal(true)}
@@ -2491,7 +2492,7 @@ export function StreamEditor({
                     className="document-ai-stop-button"
                     onClick={handleStopDocumentAI}
                   >
-                    × Stop
+                    <XIcon size={12} /> Stop
                   </button>
                 )}
               </div>

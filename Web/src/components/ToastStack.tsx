@@ -1,4 +1,5 @@
 import { useToastStore } from '../store/toastStore';
+import { XIcon } from './icons';
 
 /**
  * Bottom-right toast stack for transient notifications.
@@ -64,7 +65,7 @@ export function ToastStack() {
               onClick={() => removeToast(toast.id)}
               aria-label="Dismiss notification"
             >
-              x
+              <XIcon size={14} />
             </button>
           </div>
         </div>

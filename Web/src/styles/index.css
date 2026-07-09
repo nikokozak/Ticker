@@ -302,7 +302,8 @@ body {
 }
 
 .empty-state-icon {
-  font-size: 56px;
+  display: inline-flex;
+  color: var(--color-text-tertiary);
   margin-bottom: var(--spacing-lg);
   opacity: 0.9;
 }
@@ -335,16 +336,18 @@ body {
   margin-top: var(--spacing-md);
 }
 
+.ui-spinner,
 .loading-spinner {
+  display: inline-block;
   width: 24px;
   height: 24px;
   border: 2px solid var(--color-border);
   border-top-color: var(--color-text-secondary);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: border-spin 0.8s linear infinite;
 }
 
-@keyframes spin {
+@keyframes border-spin {
   to { transform: rotate(360deg); }
 }
 
@@ -473,6 +476,9 @@ body {
 .stream-sources-button,
 .stream-xray-button {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: 1px solid var(--color-border);
   color: var(--color-text-secondary);
@@ -1220,6 +1226,9 @@ body {
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   font: inherit;
   font-size: var(--type-ui-small);
   line-height: 1;
@@ -1449,7 +1458,6 @@ body {
   background: transparent;
   color: var(--color-text-tertiary);
   cursor: pointer;
-  font-size: var(--font-size-lg);
   line-height: 1;
   display: inline-flex;
   align-items: center;
@@ -1716,7 +1724,8 @@ body {
 }
 
 .search-modal-icon {
-  font-size: var(--font-size-md);
+  display: inline-flex;
+  color: var(--color-text-tertiary);
   opacity: 0.6;
 }
 
@@ -1734,13 +1743,8 @@ body {
 }
 
 .search-modal-spinner {
-  font-size: var(--font-size-sm);
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  width: 16px;
+  height: 16px;
 }
 
 .search-modal-error {
@@ -1846,7 +1850,8 @@ body {
 }
 
 .search-result-badge {
-  font-size: var(--font-size-xs);
+  display: inline-flex;
+  color: var(--color-accent);
   flex-shrink: 0;
   border-radius: var(--radius-small);
 }
@@ -2239,7 +2244,8 @@ body {
 }
 
 .auth-gate-icon {
-  font-size: 48px;
+  display: inline-flex;
+  color: var(--color-text-tertiary);
   margin-bottom: var(--spacing-md);
 }
 
@@ -2931,6 +2937,9 @@ body {
   width: 24px;
   height: 24px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
 }
 

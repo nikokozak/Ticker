@@ -4,6 +4,7 @@ import { StreamEditor } from './components/StreamEditor';
 import { SearchModal } from './components/SearchModal';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
+import { DocumentIcon, KeyIcon, Spinner } from './components/icons';
 import { useToastStore } from './store/toastStore';
 import { debugError, debugLog } from './utils/debug';
 import { deserializeProvenanceSpans } from './utils/provenanceSpans';
@@ -413,12 +414,12 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
       <div className="stream-list-content">
         {isLoading ? (
           <div className="loading-state">
-            <div className="loading-spinner" />
+            <Spinner className="loading-spinner" />
             <p>Loading...</p>
           </div>
         ) : streams.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-state-icon">📝</div>
+            <div className="empty-state-icon"><DocumentIcon size={56} /></div>
             <h2>No streams yet</h2>
             <p>Create a stream to start capturing your thoughts.</p>
             <button onClick={onCreate} className="primary-button">Create your first stream</button>
@@ -485,10 +486,10 @@ function AuthGate({ state, onOpenSettings }: AuthGateProps) {
   return (
     <div className="auth-gate">
       <div className="auth-gate-content">
-        <div className="auth-gate-icon">🔑</div>
+        <div className="auth-gate-icon"><KeyIcon size={48} /></div>
         <h1>{title}</h1>
         <p>{message}</p>
-        {state === 'validating' && <div className="loading-spinner" />}
+        {state === 'validating' && <Spinner className="loading-spinner" />}
         {showButton && (
           <button onClick={onOpenSettings} className="primary-button">
             {state === 'unregistered' ? 'Enter Device Key' : 'Update Device Key'}

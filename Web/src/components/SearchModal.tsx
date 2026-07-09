@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { SearchResult, HybridSearchResults, bridge } from '../types';
+import { DocumentIcon, SearchIcon, SparkleIcon, Spinner } from './icons';
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -179,7 +180,7 @@ export function SearchModal({
     <div className="search-modal-overlay" onClick={onClose}>
       <div className="search-modal" onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
         <div className="search-modal-input-wrapper">
-          <span className="search-modal-icon">🔍</span>
+          <span className="search-modal-icon"><SearchIcon size={16} /></span>
           <input
             ref={inputRef}
             type="text"
@@ -188,7 +189,7 @@ export function SearchModal({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          {loading && <span className="search-modal-spinner">⏳</span>}
+          {loading && <Spinner className="search-modal-spinner" />}
         </div>
 
         {error && (
@@ -300,15 +301,15 @@ function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps
   );
 }
 
-function getResultIcon(result: SearchResult): string {
+function getResultIcon(result: SearchResult): ReactNode {
   if (result.sourceType === 'chunk') {
-    return '📄'; // Source document
+    return <DocumentIcon size={14} />;
   }
   switch (result.cellType) {
     case 'text':
       return 'T';
     case 'aiResponse':
-      return '✦';
+      return <SparkleIcon size={14} />;
     case 'quote':
       return '"';
     default:
@@ -316,10 +317,10 @@ function getResultIcon(result: SearchResult): string {
   }
 }
 
-function getMatchBadge(matchType: string): string | null {
+function getMatchBadge(matchType: string): ReactNode | null {
   switch (matchType) {
     case 'semantic':
-      return '✨'; // Semantic match (from source embeddings)
+      return <SparkleIcon size={14} />;
     // Note: 'both' match type is reserved for future use when we can correlate
     // cell content with source chunks that share the same underlying text
     default:
