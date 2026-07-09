@@ -7,8 +7,9 @@ import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON } from '../types';
+import { bridge, getExchange, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
 import { SourcesModal } from './SourcesModal';
+import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
@@ -18,7 +19,7 @@ import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetE
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
-import { provenanceXrayExtension } from '../extensions/ProvenanceXray';
+import { canRedevelopSpan, provenanceXrayExtension } from '../extensions/ProvenanceXray';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
@@ -49,6 +50,20 @@ interface SelectionContext {
   from: number;
   to: number;
   imageUrls: string[];
+}
+
+type PromptIntent = {
+  kind: 'ask';
+} | {
+  kind: 'redevelop';
+  verb: DocumentAIVerb;
+  parentRequestId?: string;
+  preview: string;
+};
+
+interface ExchangeOverlayState {
+  exchange: AIExchangeJSON;
+  span: Span;
 }
 
 interface FloatingMenuState {
@@ -299,6 +314,23 @@ function spanIdsIntersectingRange(spans: Span[], from: number, to: number): stri
     .map((span) => span.spanId);
 }
 
+function parseDocumentAIVerb(value: unknown): DocumentAIVerb {
+  return value === 'ask' || value === 'challenge' || value === 'define' || value === 'develop'
+    ? value
+    : 'develop';
+}
+
+function promptFromUserInput(userInput: string): string {
+  const marker = '\n\nPrompt:\n';
+  const index = userInput.indexOf(marker);
+  return index >= 0 ? userInput.slice(index + marker.length).trim() : '';
+}
+
+function replacementPreview(text: string): string {
+  const compact = text.trim().replace(/\s+/g, ' ');
+  return compact.length > 60 ? `${compact.slice(0, 60)}…` : compact;
+}
+
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.heading,
@@ -377,6 +409,8 @@ export function StreamEditor({
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
+  const [promptIntent, setPromptIntent] = useState<PromptIntent>({ kind: 'ask' });
+  const [exchangeOverlay, setExchangeOverlay] = useState<ExchangeOverlayState | null>(null);
   const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
   const [showRewriteMenu, setShowRewriteMenu] = useState(false);
@@ -678,6 +712,8 @@ export function StreamEditor({
     setLinkPopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
     setShowPrompt(false);
     setPromptValue('');
+    setPromptIntent({ kind: 'ask' });
+    setExchangeOverlay(null);
     setSourceScope(stream.sourceScope ?? 'auto');
     setIsProvenanceXrayVisible(false);
     setShowRewriteMenu(false);
@@ -1747,6 +1783,7 @@ export function StreamEditor({
     hideSelectionMenu();
     promptContextRef.current = context;
     setPromptValue('');
+    setPromptIntent({ kind: 'ask' });
     setShowPrompt(true);
   }, [hideSelectionMenu]);
 
@@ -1844,6 +1881,7 @@ export function StreamEditor({
   const closePrompt = useCallback(() => {
     setShowPrompt(false);
     setPromptValue('');
+    setPromptIntent({ kind: 'ask' });
     promptContextRef.current = null;
     hideSelectionMenu();
   }, [hideSelectionMenu]);
@@ -1851,9 +1889,23 @@ export function StreamEditor({
   const handlePromptSend = useCallback(() => {
     const prompt = promptValue.trim();
     const context = promptContextRef.current;
-    if (!prompt || !context) return;
+    if ((!prompt && promptIntent.kind === 'ask') || !context) return;
 
     closePrompt();
+
+    if (promptIntent.kind === 'redevelop') {
+      startDocumentAI({
+        query: prompt || context.text.trim(),
+        context: prompt ? context.text.trim() : undefined,
+        imageUrls: context.imageUrls,
+        from: context.from,
+        to: context.to,
+        mode: 'replace',
+        verb: promptIntent.verb,
+        parentRequestId: promptIntent.parentRequestId,
+      });
+      return;
+    }
 
     startDocumentAI({
       query: prompt,
@@ -1864,7 +1916,7 @@ export function StreamEditor({
       mode: 'after',
       verb: 'ask',
     });
-  }, [closePrompt, promptValue, startDocumentAI]);
+  }, [closePrompt, promptIntent, promptValue, startDocumentAI]);
 
   const handleStopDocumentAI = useCallback(() => {
     const active = aiRequestRef.current;
@@ -1976,11 +2028,57 @@ export function StreamEditor({
     if (source) handleOpenSource(source);
   }, [handleOpenSource]);
 
+  const openRedevelopPrompt = useCallback((span: Span, exchange: AIExchangeJSON) => {
+    const view = editorViewRef.current;
+    if (!view) return;
+
+    const currentSpan = currentSpans(view.state).find((candidate) => candidate.spanId === span.spanId);
+    if (!currentSpan) return;
+    const text = view.state.doc.sliceString(currentSpan.start, currentSpan.end);
+    if (!canRedevelopSpan(currentSpan, text, isAiThinking)) return;
+
+    promptContextRef.current = {
+      text,
+      from: currentSpan.start,
+      to: currentSpan.end,
+      imageUrls: extractMarkdownImageUrls(text),
+    };
+    setPromptValue(promptFromUserInput(exchange.userInput));
+    setPromptIntent({
+      kind: 'redevelop',
+      verb: parseDocumentAIVerb(exchange.verb),
+      parentRequestId: currentSpan.requestId ?? exchange.requestId,
+      preview: replacementPreview(text),
+    });
+    setExchangeOverlay(null);
+    hideSelectionMenu();
+    setShowPrompt(true);
+  }, [hideSelectionMenu, isAiThinking]);
+
+  const handleOpenExchangeManifestEntry = useCallback((entry: ExchangeManifestEntry) => {
+    bridge.send({
+      type: 'openPdfDestination',
+      payload: {
+        streamId: stream.id,
+        sourceId: entry.sourceId,
+        page: entry.page,
+        chunkId: entry.chunkId,
+      },
+    });
+  }, [stream.id]);
+
   const provenanceXray = useMemo<Extension>(() => (
     isProvenanceXrayVisible
-      ? provenanceXrayExtension({ sources, onOpenSource: handleOpenSourceById })
+      ? provenanceXrayExtension({
+        sources,
+        isAiThinking,
+        loadExchange: getExchange,
+        onShowExchange: (exchange, span) => setExchangeOverlay({ exchange, span }),
+        onRedevelop: openRedevelopPrompt,
+        onOpenSource: handleOpenSourceById,
+      })
       : []
-  ), [handleOpenSourceById, isProvenanceXrayVisible, sources]);
+  ), [handleOpenSourceById, isAiThinking, isProvenanceXrayVisible, openRedevelopPrompt, sources]);
 
   const selectionDissolveSpanIds = (() => {
     const view = editorViewRef.current;
@@ -2073,8 +2171,12 @@ export function StreamEditor({
       {showPrompt && (
         <div className="ai-prompt-overlay" onClick={closePrompt}>
           <div className="ai-prompt-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>Ask</h2>
-            <p>Selection will be attached as context.</p>
+            <h2>{promptIntent.kind === 'redevelop' ? 'Re-develop' : 'Ask'}</h2>
+            <p>
+              {promptIntent.kind === 'redevelop'
+                ? `will replace: ${promptIntent.preview}`
+                : 'Selection will be attached as context.'}
+            </p>
             <textarea
               className="ai-prompt-input"
               value={promptValue}
@@ -2088,7 +2190,7 @@ export function StreamEditor({
                   closePrompt();
                 }
               }}
-              placeholder="Ask a question or continue the line of thought…"
+              placeholder={promptIntent.kind === 'redevelop' ? 'Edit the prompt…' : 'Ask a question or continue the line of thought…'}
               autoFocus
               rows={5}
             />
@@ -2112,13 +2214,22 @@ export function StreamEditor({
                 className="ai-prompt-send"
                 type="button"
                 onClick={handlePromptSend}
-                disabled={!promptValue.trim()}
+                disabled={promptIntent.kind === 'ask' && !promptValue.trim()}
               >
-                Ask
+                {promptIntent.kind === 'redevelop' ? 'Re-develop' : 'Ask'}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {exchangeOverlay && (
+        <ExchangeOverlay
+          exchange={exchangeOverlay.exchange}
+          onClose={() => setExchangeOverlay(null)}
+          onRedevelop={() => openRedevelopPrompt(exchangeOverlay.span, exchangeOverlay.exchange)}
+          onOpenManifestEntry={handleOpenExchangeManifestEntry}
+        />
       )}
 
       {floatingMenu.visible && (

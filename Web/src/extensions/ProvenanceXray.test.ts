@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fnv1a } from '../utils/fnv1a';
 import type { Span } from './ProvenanceField';
-import { buildProvenanceDecorationRanges } from './ProvenanceXray';
+import { buildProvenanceDecorationRanges, canRedevelopSpan } from './ProvenanceXray';
 
 function span(start: number, end: number, origin: Span['origin'] = 'ai'): Span {
   return {
@@ -52,5 +52,12 @@ describe('ProvenanceXray', () => {
       { from: 0, to: 5 },
       { from: 12, to: 20 },
     ]);
+  });
+
+  it('gates re-develop to idle AI spans with at least three words', () => {
+    expect(canRedevelopSpan(span(0, 30, 'ai'), 'one two three', false)).toBe(true);
+    expect(canRedevelopSpan(span(0, 30, 'ai'), 'one two', false)).toBe(false);
+    expect(canRedevelopSpan(span(0, 30, 'capture'), 'one two three', false)).toBe(false);
+    expect(canRedevelopSpan(span(0, 30, 'ai'), 'one two three', true)).toBe(false);
   });
 });

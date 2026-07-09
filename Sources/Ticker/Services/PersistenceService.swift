@@ -943,6 +943,7 @@ final class PersistenceService {
                     let validSpans = validatedSpans(spans, markdown: markdown, streamId: streamId)
                     logDroppedSpans(total: spans.count, kept: validSpans.count, context: "saveStreamDocument")
                     try replaceSpans(streamId: streamId, spans: validSpans, db: db)
+                    try deleteOrphanExchanges(streamId: streamId, db: db)
                 }
 
                 return newRevision
@@ -975,6 +976,7 @@ final class PersistenceService {
                 let validSpans = validatedSpans(spans, markdown: markdown, streamId: streamId)
                 logDroppedSpans(total: spans.count, kept: validSpans.count, context: "saveStreamDocument")
                 try replaceSpans(streamId: streamId, spans: validSpans, db: db)
+                try deleteOrphanExchanges(streamId: streamId, db: db)
             }
 
             return newRevision
@@ -1119,19 +1121,23 @@ final class PersistenceService {
 
     func deleteOrphanExchanges(streamId: UUID) throws {
         try dbQueue.write { db in
-            try db.execute(
-                sql: """
-                    DELETE FROM ai_exchanges
-                    WHERE stream_id = ?
-                      AND NOT EXISTS (
-                        SELECT 1
-                        FROM provenance_spans
-                        WHERE provenance_spans.request_id = ai_exchanges.request_id
-                      )
-                """,
-                arguments: [streamId.uuidString]
-            )
+            try deleteOrphanExchanges(streamId: streamId, db: db)
         }
+    }
+
+    private func deleteOrphanExchanges(streamId: UUID, db: Database) throws {
+        try db.execute(
+            sql: """
+                DELETE FROM ai_exchanges
+                WHERE stream_id = ?
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM provenance_spans
+                    WHERE provenance_spans.request_id = ai_exchanges.request_id
+                  )
+            """,
+            arguments: [streamId.uuidString]
+        )
     }
 
     private func fetchSpans(streamId: UUID, db: Database) throws -> [ProvenanceSpan] {

@@ -1218,6 +1218,58 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_getExchangePayloadRoundTripAndSavePrunesOrphans() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Exchange Save")
+            try service.saveStream(stream)
+            let exchange = AIExchange(
+                requestId: "request-save-gc",
+                streamId: stream.id,
+                verb: "ask",
+                userInput: "Selection:\nText\n\nPrompt:\nWhy?",
+                sourceManifest: #"[{"chunkId":"chunk-1","sourceId":"source-1","page":2,"shortTitle":"Manual"}]"#,
+                responseRaw: "Raw answer",
+                model: "provider/model",
+                createdAt: Date(timeIntervalSince1970: 1_240)
+            )
+            try service.saveExchange(exchange)
+
+            let loaded = try XCTUnwrap(try service.loadExchange(requestId: exchange.requestId))
+            let encoded = StreamCodec.encodeExchange(loaded)
+            XCTAssertEqual(encoded["requestId"] as? String, exchange.requestId)
+            XCTAssertEqual(encoded["userInput"] as? String, exchange.userInput)
+            XCTAssertEqual(encoded["sourceManifest"] as? String, exchange.sourceManifest)
+            XCTAssertEqual(encoded["responseRaw"] as? String, exchange.responseRaw)
+
+            let revision = try service.saveStreamDocument(
+                streamId: stream.id,
+                markdown: "Text",
+                baseRevision: 0,
+                spans: [
+                    ProvenanceSpan(
+                        spanId: "span-1",
+                        streamId: stream.id,
+                        start: 0,
+                        end: 4,
+                        origin: "ai",
+                        requestId: exchange.requestId,
+                        textHash: FNV1a.hash("Text"),
+                        createdAt: Date(timeIntervalSince1970: 1_241)
+                    )
+                ]
+            )
+            XCTAssertNotNil(try service.loadExchange(requestId: exchange.requestId))
+
+            _ = try service.saveStreamDocument(
+                streamId: stream.id,
+                markdown: "Text",
+                baseRevision: revision,
+                spans: []
+            )
+            XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
+        }
+    }
+
     func test_provenanceRowsCascadeWhenStreamIsDeleted() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Cascade")

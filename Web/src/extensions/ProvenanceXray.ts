@@ -9,6 +9,7 @@ import {
   type ViewUpdate,
 } from '@codemirror/view';
 import type { SourceReference } from '../types';
+import type { AIExchangeJSON } from '../types';
 import { currentSpans, dissolveSpans, type Span } from './ProvenanceField';
 
 export interface ProvenanceRange {
@@ -23,6 +24,10 @@ export interface ProvenanceDecorationRange extends ProvenanceRange {
 
 export interface ProvenanceXrayOptions {
   sources: SourceReference[];
+  isAiThinking: boolean;
+  loadExchange: (requestId: string) => Promise<{ exchange: AIExchangeJSON | null }>;
+  onShowExchange: (exchange: AIExchangeJSON, span: Span) => void;
+  onRedevelop: (span: Span, exchange: AIExchangeJSON) => void;
   onOpenSource: (sourceId: string) => void;
 }
 
@@ -117,6 +122,10 @@ function textMeta(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
+export function canRedevelopSpan(span: Pick<Span, 'origin'>, coveredText: string, isAiThinking: boolean): boolean {
+  return span.origin === 'ai' && !isAiThinking && coveredText.trim().split(/\s+/).filter(Boolean).length >= 3;
+}
+
 function originLine(span: Span, sources: SourceReference[]): string {
   if (span.origin === 'capture') {
     return `Captured from ${textMeta(span.meta.sourceApp, 'unknown app')}`;
@@ -149,6 +158,11 @@ function button(label: string, onClick?: () => void): HTMLButtonElement {
   return element;
 }
 
+function setButtonAction(element: HTMLButtonElement, onClick?: () => void): void {
+  element.disabled = !onClick;
+  element.onclick = onClick ?? null;
+}
+
 function tooltipForSpan(view: EditorView, span: Span, options: ProvenanceXrayOptions): Tooltip {
   return {
     pos: span.start,
@@ -173,12 +187,30 @@ function tooltipForSpan(view: EditorView, span: Span, options: ProvenanceXrayOpt
         view.focus();
       }));
       if (span.origin === 'ai' && span.requestId) {
-        // ponytail: P4.6 wires the receipt overlay; 4.5 only exposes the affordance.
-        actions.append(button('show exchange'));
-      }
-      if (span.origin === 'ai') {
-        // ponytail: P4.6 wires re-develop; keep this card state-free for the x-ray slice.
-        actions.append(button('re-develop'));
+        const showExchangeButton = button('show exchange');
+        actions.append(showExchangeButton);
+
+        const coveredText = view.state.doc.sliceString(span.start, span.end);
+        const redevelopButton = button('re-develop');
+        actions.append(redevelopButton);
+
+        void options.loadExchange(span.requestId).then(({ exchange }) => {
+          if (!exchange) {
+            showExchangeButton.textContent = 'exchange no longer stored';
+            setButtonAction(showExchangeButton);
+            setButtonAction(redevelopButton);
+            return;
+          }
+
+          setButtonAction(showExchangeButton, () => options.onShowExchange(exchange, span));
+          if (canRedevelopSpan(span, coveredText, options.isAiThinking)) {
+            setButtonAction(redevelopButton, () => options.onRedevelop(span, exchange));
+          }
+        }).catch(() => {
+          showExchangeButton.textContent = 'exchange no longer stored';
+          setButtonAction(showExchangeButton);
+          setButtonAction(redevelopButton);
+        });
       }
       if (span.origin === 'source' && span.sourceId) {
         actions.append(button('open source →', () => options.onOpenSource(span.sourceId!)));
