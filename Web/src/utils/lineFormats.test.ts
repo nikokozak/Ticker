@@ -1,6 +1,6 @@
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
-import { toggleLineFormat, type LineFormat } from './lineFormats';
+import { continueBulletListOnEnter, toggleLineFormat, type LineFormat } from './lineFormats';
 
 function apply(doc: string, anchor: number, head: number, format: LineFormat): string | null {
   const state = EditorState.create({ doc, selection: { anchor, head } });
@@ -47,5 +47,42 @@ describe('toggleLineFormat', () => {
 
   it('returns null for blank-only selections', () => {
     expect(apply('\n\n', 0, 2, 'h1')).toBeNull();
+  });
+});
+
+describe('continueBulletListOnEnter', () => {
+  function pressEnter(doc: string, caret: number): { handled: boolean; doc: string; caret: number } {
+    const state = EditorState.create({ doc, selection: { anchor: caret } });
+    let next = state;
+    const handled = continueBulletListOnEnter({ state, dispatch: (tr) => { next = tr.state; } });
+    return { handled, doc: next.doc.toString(), caret: next.selection.main.head };
+  }
+
+  it('continues tight even when the underlying list is loose', () => {
+    const doc = '- Apples\n\n- Pears\n\nplain';
+    const caret = doc.indexOf('Pears') + 'Pears'.length;
+    expect(pressEnter(doc, caret)).toEqual({
+      handled: true,
+      doc: '- Apples\n\n- Pears\n- \n\nplain',
+      caret: doc.indexOf('Pears') + 'Pears'.length + '\n- '.length,
+    });
+  });
+
+  it('splits mid-item text into the next bullet', () => {
+    const result = pressEnter('- one two', '- one'.length);
+    expect(result).toEqual({ handled: true, doc: '- one\n-  two', caret: '- one\n- '.length });
+  });
+
+  it('exits the list on an empty item', () => {
+    expect(pressEnter('- Pears\n- ', '- Pears\n- '.length)).toEqual({
+      handled: true,
+      doc: '- Pears\n',
+      caret: '- Pears\n'.length,
+    });
+  });
+
+  it('falls through on non-bullet lines and inside the marker', () => {
+    expect(pressEnter('plain text', 5).handled).toBe(false);
+    expect(pressEnter('- item', 1).handled).toBe(false);
   });
 });

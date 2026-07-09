@@ -1,4 +1,4 @@
-import { type ChangeSpec, type EditorState, type SelectionRange } from '@codemirror/state';
+import { EditorSelection, type ChangeSpec, type EditorState, type SelectionRange, type StateCommand } from '@codemirror/state';
 
 export type LineFormat = 'h1' | 'h2' | 'h3' | 'quote' | 'bullet';
 
@@ -23,6 +23,43 @@ function formatOfMarker(marker: string): LineFormat | null {
   if (bare === '-' || bare === '*' || bare === '+') return 'bullet';
   return null;
 }
+
+const BULLET_LINE = /^(\s*)([-*+])(\s+)/;
+
+/**
+ * Enter on a bullet line: always-tight continuation — the next bullet goes on
+ * the immediately following line, regardless of the underlying markdown
+ * list's loose/tight spacing (the stock markdown command inserts a blank line
+ * for loose lists). Enter on an empty item removes the marker and exits.
+ * Falls through (false) on non-bullet lines.
+ */
+export const continueBulletListOnEnter: StateCommand = ({ state, dispatch }) => {
+  const range = state.selection.main;
+  if (!range.empty) return false;
+  const line = state.doc.lineAt(range.head);
+  const match = BULLET_LINE.exec(line.text);
+  if (!match) return false;
+  const markerEnd = line.from + match[0].length;
+  if (range.head < markerEnd) return false;
+
+  if (markerEnd === line.to) {
+    // Empty item: drop the marker and exit the list.
+    dispatch(state.update({
+      changes: { from: line.from, to: line.to },
+      selection: EditorSelection.cursor(line.from),
+      userEvent: 'delete',
+    }));
+    return true;
+  }
+
+  const insert = `\n${match[1]}${match[2]}${match[3]}`;
+  dispatch(state.update({
+    changes: { from: range.head, insert },
+    selection: EditorSelection.cursor(range.head + insert.length),
+    userEvent: 'input',
+  }));
+  return true;
+};
 
 /**
  * Toggle a line-level markdown format on every line the selection touches.

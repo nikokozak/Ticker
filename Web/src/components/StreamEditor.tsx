@@ -45,7 +45,7 @@ import {
   type PendingPDFAnchorSelection,
 } from '../utils/pdfAnchorSelection';
 import { toggleInlineMark } from '../utils/inlineMarks';
-import { toggleLineFormat, type LineFormat } from '../utils/lineFormats';
+import { continueBulletListOnEnter, toggleLineFormat, type LineFormat } from '../utils/lineFormats';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 
 interface StreamEditorProps {
@@ -2855,10 +2855,11 @@ export function StreamEditor({
                 aiWritingExtension,
                 editorFindExtension,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
-                // basicSetup's default Enter shadows the markdown bindings;
-                // these make Enter continue a list (and exit it when the item
-                // is empty) and Backspace delete list/quote markers cleanly.
-                Prec.high(keymap.of(markdownKeymap)),
+                // basicSetup's default Enter shadows the markdown bindings.
+                // Bullet lines get our always-tight continuation; everything
+                // else falls through to markdownKeymap (quote continuation,
+                // Backspace marker deletion).
+                Prec.high(keymap.of([{ key: 'Enter', run: continueBulletListOnEnter }, ...markdownKeymap])),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
                 arrivalField,
