@@ -2760,12 +2760,27 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
-    func test_sourceShortTitleFreezesCanonicalUglyFilename() throws {
+    func test_sourceShortTitleShedsTrailingParentheticalWhenLong() throws {
         XCTAssertEqual(
             SourceShortTitle.derive(
                 displayName: "Forth Programmer's Handbook (3rd Edition) -- Edward K_ Conklin … -- Anna's Archive.pdf"
             ),
-            "Forth Progr...d Edition)"
+            "Forth Programmer's Handbook"
+        )
+    }
+
+    func test_sourceShortTitleShedsSubtitleThenEndTruncatesAtWordBoundary() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "Structure and Interpretation of Computer Programs: Second Edition.pdf"
+            ),
+            "Structure and Interpretation of…"
+        )
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "A Very Long Title Without Any Structural Separators To Shed Gracefully.pdf"
+            ),
+            "A Very Long Title Without Any…"
         )
     }
 
@@ -2827,7 +2842,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(payload[0]["chunkId"] as? String, firstChunkId.uuidString)
         XCTAssertEqual(payload[0]["sourceId"] as? String, firstSourceId.uuidString)
         XCTAssertEqual(payload[0]["page"] as? Int, 12)
-        XCTAssertEqual(payload[0]["shortTitle"] as? String, "abcdefghijk...vwxyzABCDE")
+        XCTAssertEqual(payload[0]["shortTitle"] as? String, "abcdefghijklmnopqrstuvwxyzABCDE")
         XCTAssertEqual(payload[1]["n"] as? Int, 2)
         XCTAssertEqual(payload[1]["chunkId"] as? String, secondChunkId.uuidString)
         XCTAssertEqual(payload[1]["sourceId"] as? String, secondSourceId.uuidString)
