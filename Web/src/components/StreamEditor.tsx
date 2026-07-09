@@ -914,10 +914,18 @@ export function StreamEditor({
     aiRequestRef.current = null;
     const view = editorViewRef.current;
     if (view) {
-      const notes = payloadMarginNotesForDoc(stream.marginNotes, stream.document?.markdown ?? '');
+      const nextMarkdown = stream.document?.markdown ?? '';
+      const notes = payloadMarginNotesForDoc(stream.marginNotes, nextMarkdown);
+      // Replace the document and set its spans in ONE dispatch. Setting
+      // new-doc spans while the view still holds the old doc leaves the
+      // provenance field with out-of-range positions; the wrapper's later
+      // value-sync transaction then maps them and mapPos throws (white
+      // window via React unmount).
+      const docChanged = view.state.doc.toString() !== nextMarkdown;
       view.dispatch({
+        ...(docChanged ? { changes: { from: 0, to: view.state.doc.length, insert: nextMarkdown } } : {}),
         effects: [
-          setSpans.of(payloadSpansForDoc(stream.spans, stream.document?.markdown ?? '')),
+          setSpans.of(payloadSpansForDoc(stream.spans, nextMarkdown)),
           setMarginNotes.of(notes),
         ],
         annotations: Transaction.addToHistory.of(false),
@@ -1029,6 +1037,20 @@ export function StreamEditor({
         const revision = Number(message.payload?.revision);
 
         if (!payloadStreamId || payloadStreamId !== stream.id || typeof fragment !== 'string' || fragment.length === 0) {
+          return;
+        }
+
+        // Revision gap = this editor missed an earlier append (it wasn't
+        // listening when it broadcast). Patching the fragment in and adopting
+        // the payload revision would make the next autosave pass the revision
+        // check and silently erase the missed content. Reload instead.
+        if (Number.isFinite(revision) && revision !== revisionRef.current + 1) {
+          debugWarn('[StreamEditor] Append revision gap; reloading document', {
+            streamId: stream.id,
+            localRevision: revisionRef.current,
+            appendRevision: revision,
+          });
+          bridge.send({ type: 'loadStream', payload: { id: stream.id } });
           return;
         }
 

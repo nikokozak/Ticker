@@ -71,6 +71,11 @@ final class WebViewManager: NSObject {
         configurePDFPaneCallbacks()
 
         webView.navigationDelegate = self
+        #if DEBUG
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
+        #endif
         bridgeService.webView = webView
         bridgeService.onMessage = { [weak self] message in
             self?.handleMessage(message)
@@ -739,5 +744,10 @@ extension WebViewManager: WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         DebugLog.log("[WebViewManager] WebView provisional navigation failed (\(DebugLog.errorSummary(error)))")
+    }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // Without this, a dead web content process leaves a permanent white window.
+        DebugLog.log("[WebViewManager] Web content process terminated; reloading")
+        webView.reload()
     }
 }

@@ -1,0 +1,11 @@
+[     269ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/chunk-TYILIMWK.js?v=b7aa758c:21550
+[     269ms] [LOG] [Bridge] window.bridge initialized @ http://localhost:5173/src/utils/debug.ts:3
+[     304ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5173/favicon.ico:0
+[    1102ms] [LOG] [Bridge.receive] streamsLoaded [streams] @ http://localhost:5173/src/utils/debug.ts:3
+[    1103ms] [LOG] [Bridge.receive] Dispatching to 1 handlers @ http://localhost:5173/src/utils/debug.ts:3
+[    1103ms] [LOG] [Bridge.receive] streamLoaded [stream, sourceScope, scrollOffset, spans, marginNotes] @ http://localhost:5173/src/utils/debug.ts:3
+[    1103ms] [LOG] [Bridge.receive] Dispatching to 1 handlers @ http://localhost:5173/src/utils/debug.ts:3
+[    1907ms] [LOG] [Bridge.receive] streamDocumentAppended [streamId, fragment, revision, isNewStream, source, spans] @ http://localhost:5173/src/utils/debug.ts:3
+[    1908ms] [LOG] [Bridge.receive] Dispatching to 1 handlers @ http://localhost:5173/src/utils/debug.ts:3
+[    2210ms] [LOG] [Bridge.receive] streamLoaded [stream, sourceScope, scrollOffset, spans, marginNotes] @ http://localhost:5173/src/utils/debug.ts:3
+[    2210ms] [LOG] [Bridge.receive] Dispatching to 1 handlers @ http://localhost:5173/src/utils/debug.ts:3
