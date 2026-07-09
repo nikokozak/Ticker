@@ -1276,6 +1276,11 @@ body {
   color: var(--color-text-secondary);
 }
 
+.document-editor-codemirror .cm-md-bullet {
+  color: var(--color-text-secondary);
+  padding-right: var(--space-2);
+}
+
 .document-editor-codemirror .cm-md-inline-code {
   background: var(--surface);
   border-radius: var(--radius-small);

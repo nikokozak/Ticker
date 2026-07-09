@@ -60,6 +60,16 @@ describe('MarkdownConceal static concealment', () => {
     }
   });
 
+  it('replaces bullet list marks but leaves ordered-list numbers raw', () => {
+    const doc = '- apples\n* pears\n1. ordered';
+    const state = stateWithSelection(doc, 0);
+    const ranges = concealRanges(buildMarkdownConcealDecorations(viewFor(state), true), doc.length);
+    expect(ranges).toEqual([
+      [0, 2], // '- '
+      [doc.indexOf('* pears'), doc.indexOf('* pears') + 2], // '* '
+    ]);
+  });
+
   it('show-formatting toggle disables every conceal decoration document-wide', () => {
     const doc = '# Title\n\n**bold** and [Book p.3](ticker-pdf://abc?page=3)';
     const base = stateWithSelection(doc, 0);

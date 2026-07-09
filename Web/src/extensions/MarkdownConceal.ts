@@ -1,6 +1,6 @@
 import { EditorState, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
-import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import { Decoration, type DecorationSet, EditorView, ViewPlugin, WidgetType, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 
 // CONCEALMENT IS STATIC. Decorations depend only on the document, the viewport,
@@ -123,6 +123,19 @@ function rangeWithFollowingSpaces(view: EditorView, from: number, to: number): {
   return { from, to: end };
 }
 
+class BulletWidget extends WidgetType {
+  override eq(): boolean {
+    return true;
+  }
+
+  override toDOM(): HTMLElement {
+    const bullet = document.createElement('span');
+    bullet.className = 'cm-md-bullet';
+    bullet.textContent = '•';
+    return bullet;
+  }
+}
+
 function concealRange(from: number, to: number): Range<Decoration> | null {
   if (from >= to) return null;
   return Decoration.replace({}).range(from, to);
@@ -174,6 +187,16 @@ export function buildMarkdownConcealDecorations(view: EditorView, ensureInitialP
           const range = rangeWithFollowingSpace(view, node.from, node.to);
           const decoration = concealRange(range.from, range.to);
           if (decoration) decorations.push(decoration);
+          return;
+        }
+
+        if (node.name === 'ListMark') {
+          // Bullet marks render as a real bullet; ordered-list numbers stay raw.
+          const mark = view.state.doc.sliceString(node.from, node.to);
+          if (/^[-*+]$/.test(mark)) {
+            const range = rangeWithFollowingSpace(view, node.from, node.to);
+            decorations.push(Decoration.replace({ widget: new BulletWidget() }).range(range.from, range.to));
+          }
           return;
         }
 

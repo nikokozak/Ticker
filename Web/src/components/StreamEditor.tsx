@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { markdown, markdownKeymap, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { Decoration, EditorView } from '@codemirror/view';
-import { RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
+import { Decoration, EditorView, keymap } from '@codemirror/view';
+import { Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
@@ -499,7 +499,9 @@ const markdownHighlightStyle = HighlightStyle.define([
     class: 'cm-md-inline-code',
   },
   {
-    tag: [t.quote, t.contentSeparator, t.list],
+    // NOT t.list: list content must read as normal text, and markdown's lazy
+    // continuation makes t.list cover every following line until a blank one.
+    tag: [t.quote, t.contentSeparator],
     color: 'var(--color-text-secondary)',
   },
   {
@@ -2853,6 +2855,10 @@ export function StreamEditor({
                 aiWritingExtension,
                 editorFindExtension,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
+                // basicSetup's default Enter shadows the markdown bindings;
+                // these make Enter continue a list (and exit it when the item
+                // is empty) and Backspace delete list/quote markers cleanly.
+                Prec.high(keymap.of(markdownKeymap)),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
                 arrivalField,
