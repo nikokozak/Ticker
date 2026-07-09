@@ -52,6 +52,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         "saveScrollPosition",
         "setSourceScope",
         "openExternalURL",
+        "getExchange",
         "exportStream"
     ]
 
@@ -98,12 +99,13 @@ final class StreamMessageHandler: BridgeMessageHandler {
             do {
                 if let stream = try persistence.loadStream(id: id) {
                     let document = try persistence.loadOrCreateStreamDocument(streamId: id)
-
+                    let spans = try persistence.loadSpans(streamId: id)
                     let streamPayload = StreamCodec.encodeStream(stream, document: document)
                     let payload: [String: AnyCodable] = [
                         "stream": AnyCodable(streamPayload),
                         "sourceScope": AnyCodable(stream.sourceScope.rawValue),
-                        "scrollOffset": AnyCodable(document.scrollOffset)
+                        "scrollOffset": AnyCodable(document.scrollOffset),
+                        "spans": AnyCodable(StreamCodec.encodeSpans(spans))
                     ]
                     bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
                     ingestService?.enqueuePendingSources(for: id)
@@ -122,7 +124,8 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 let payload: [String: AnyCodable] = [
                     "stream": AnyCodable(streamPayload),
                     "sourceScope": AnyCodable(stream.sourceScope.rawValue),
-                    "scrollOffset": AnyCodable(document.scrollOffset)
+                    "scrollOffset": AnyCodable(document.scrollOffset),
+                    "spans": AnyCodable(StreamCodec.encodeSpans([]))
                 ]
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
             } catch {
@@ -175,6 +178,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                   let streamId = UUID(uuidString: streamIdValue),
                   let markdown = payload["markdown"]?.value as? String,
                   let baseRevision = payload["baseRevision"]?.intValue,
+                  let spans = decodeSpans(payload["spans"]?.value, streamId: streamId),
                   let callbackId = message.callbackId else {
                 DebugLog.log("[WebViewManager] Invalid saveStreamDocument payload")
                 await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveStreamDocument payload")
@@ -184,7 +188,8 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 let revision = try persistence.saveStreamDocument(
                     streamId: streamId,
                     markdown: markdown,
-                    baseRevision: baseRevision
+                    baseRevision: baseRevision,
+                    spans: spans
                 )
                 await pruneUnreferencedPDFHighlights(streamId: streamId, markdown: markdown)
                 await bridgeService.respond(to: callbackId, with: [
@@ -199,7 +204,8 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 await bridgeService.send(BridgeMessage(type: "streamDocumentConflict", payload: [
                     "streamId": AnyCodable(conflict.streamId.uuidString),
                     "markdown": AnyCodable(conflict.markdown),
-                    "revision": AnyCodable(conflict.revision)
+                    "revision": AnyCodable(conflict.revision),
+                    "spans": AnyCodable(StreamCodec.encodeSpans(conflict.spans))
                 ]))
                 await bridgeService.respondWithError(to: callbackId, error: "Stream document revision conflict")
             } catch {
@@ -236,6 +242,24 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 _ = try persistence.setSourceScope(streamId: streamId, scope: scope)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to set source scope (\(DebugLog.errorSummary(error)))")
+            }
+
+        case "getExchange":
+            guard let payload = message.payload,
+                  let requestId = payload["requestId"]?.value as? String,
+                  let callbackId = message.callbackId else {
+                DebugLog.log("[WebViewManager] Invalid getExchange payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid getExchange payload")
+                return
+            }
+            do {
+                let exchange = try persistence.loadExchange(requestId: requestId)
+                await bridgeService.respond(to: callbackId, with: [
+                    "exchange": AnyCodable(exchange.map(StreamCodec.encodeExchange) as Any)
+                ])
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to load exchange (\(DebugLog.errorSummary(error)))")
+                await bridgeService.respondWithError(to: callbackId, error: error.localizedDescription)
             }
 
         case "openExternalURL":
@@ -326,6 +350,81 @@ final class StreamMessageHandler: BridgeMessageHandler {
         default:
             DebugLog.log("[StreamMessageHandler] Unknown message type: \(message.type)")
         }
+    }
+
+    private func decodeSpans(_ value: Any?, streamId: UUID) -> [ProvenanceSpan]? {
+        guard let items = value as? [[String: Any]] else { return nil }
+        var dropped = 0
+        let spans = items.compactMap { item -> ProvenanceSpan? in
+            guard let spanId = item["spanId"] as? String,
+                  let start = intValue(item["start"]),
+                  let end = intValue(item["end"]),
+                  let origin = item["origin"] as? String,
+                  let meta = metaString(item["meta"]),
+                  let textHash = item["textHash"] as? String,
+                  let createdAt = dateValue(item["createdAt"]) else {
+                dropped += 1
+                return nil
+            }
+
+            return ProvenanceSpan(
+                spanId: spanId,
+                streamId: streamId,
+                start: start,
+                end: end,
+                origin: origin,
+                requestId: optionalString(item["requestId"]),
+                sourceId: optionalString(item["sourceId"]),
+                meta: meta,
+                textHash: textHash,
+                createdAt: createdAt
+            )
+        }
+        if dropped > 0 {
+            DebugLog.log("[StreamMessageHandler] Dropped \(dropped) malformed provenance span(s)")
+        }
+        return spans
+    }
+
+    private func intValue(_ value: Any?) -> Int? {
+        if let int = value as? Int { return int }
+        if let double = value as? Double,
+           double.rounded(.towardZero) == double,
+           double >= Double(Int.min),
+           double <= Double(Int.max) {
+            return Int(double)
+        }
+        return nil
+    }
+
+    private func optionalString(_ value: Any?) -> String? {
+        if value == nil || value is NSNull { return nil }
+        return value as? String
+    }
+
+    private func metaString(_ value: Any?) -> String? {
+        if let string = value as? String { return string }
+        guard let value,
+              !(value is NSNull),
+              JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value),
+              let string = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return string
+    }
+
+    private func dateValue(_ value: Any?) -> Date? {
+        if let string = value as? String {
+            return ISO8601DateFormatter().date(from: string)
+        }
+        if let double = value as? Double {
+            return Date(timeIntervalSince1970: double)
+        }
+        if let int = value as? Int {
+            return Date(timeIntervalSince1970: Double(int))
+        }
+        return nil
     }
 
     private func pruneUnreferencedPDFHighlights(streamId: UUID, markdown: String) async {

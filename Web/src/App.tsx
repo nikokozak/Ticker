@@ -6,6 +6,7 @@ import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
 import { useToastStore } from './store/toastStore';
 import { debugError, debugLog } from './utils/debug';
+import { deserializeProvenanceSpans } from './utils/provenanceSpans';
 
 type View = 'list' | 'stream' | 'settings';
 
@@ -176,6 +177,7 @@ export function App() {
           const loadedStream = {
             ...payloadStream,
             sourceScope,
+            spans: deserializeProvenanceSpans(message.payload?.spans),
             document: {
               ...payloadStream.document,
               scrollOffset: Number.isFinite(scrollOffset) ? scrollOffset : 0,

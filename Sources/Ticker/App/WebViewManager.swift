@@ -218,11 +218,13 @@ final class WebViewManager: NSObject {
             }
 
             let document = try persistence.loadOrCreateStreamDocument(streamId: createdStream.id)
+            let spans = try persistence.loadSpans(streamId: createdStream.id)
             let streamPayload = StreamCodec.encodeStream(reloadedStream, document: document)
             let streamLoadedPayload: [String: AnyCodable] = [
                 "stream": AnyCodable(streamPayload),
                 "sourceScope": AnyCodable(reloadedStream.sourceScope.rawValue),
-                "scrollOffset": AnyCodable(document.scrollOffset)
+                "scrollOffset": AnyCodable(document.scrollOffset),
+                "spans": AnyCodable(StreamCodec.encodeSpans(spans))
             ]
             bridgeService.send(BridgeMessage(type: "streamLoaded", payload: streamLoadedPayload))
 

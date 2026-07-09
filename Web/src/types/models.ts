@@ -5,6 +5,7 @@ export interface Stream {
   sourceScope: SourceScope;
   sources: SourceReference[];
   document: StreamDocument;
+  spans: ProvenanceSpanJSON[];
   createdAt: string;
   updatedAt: string;
 }
@@ -19,6 +20,29 @@ export interface StreamDocument {
   scrollOffset: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProvenanceSpanJSON {
+  spanId: string;
+  start: number;
+  end: number;
+  origin: string;
+  requestId?: string;
+  sourceId?: string;
+  meta: string;
+  textHash: string;
+  createdAt: string;
+}
+
+export interface AIExchangeJSON {
+  requestId: string;
+  streamId: string;
+  verb: string;
+  userInput: string;
+  sourceManifest: string;
+  responseRaw: string;
+  model?: string | null;
+  createdAt: string;
 }
 
 /** Lightweight summary for list views */

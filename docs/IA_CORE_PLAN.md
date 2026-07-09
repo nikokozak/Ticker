@@ -400,8 +400,9 @@ CREATE TABLE ai_exchanges (
 
 **Hash algorithm (MUST be byte-identical in Swift and TypeScript — include the shared test vector):**
 FNV-1a 32-bit over the UTF-8 bytes of the covered text, rendered as 8-char lowercase hex.
-Test vector: `fnv1a("The quick brown fox") == "048fff90"` — hard-code this exact assertion in BOTH a Swift test and
-a vitest; if it fails, the implementation is wrong, not the vector.
+Test vector: `fnv1a("The quick brown fox") == "ae4d67e2"` — hard-code this exact assertion in BOTH a Swift test and
+a vitest; if it fails, the implementation is wrong, not the vector. (Corrected 2026-07-08: the original doc shipped
+an unverified vector; this value is the true standard FNV-1a-32.)
 ```
 hash = 0x811c9dc5
 for byte in utf8(text): hash = (hash XOR byte) * 0x01000193  (mod 2^32)
@@ -468,9 +469,10 @@ export const provenanceField: StateField<Span[]>;
 export function currentSpans(state: EditorState): Span[];
 ```
 Rules (implement exactly):
-1. On every transaction with `docChanged`: map each span's `start`/`end` through `tr.changes`
-   (`assoc` −1 for start, +1 for end so insertions AT the boundary fall OUTSIDE the span — user text at a span
-   edge is the user's).
+1. On every transaction with `docChanged`: map each span's `start`/`end` through `tr.changes` such that
+   insertions AT either boundary fall OUTSIDE the span — user text at a span edge is the user's. (Corrected
+   2026-07-08: the original text prescribed `assoc` −1/+1, which in CodeMirror semantics does the opposite;
+   the shipped implementation maps with that assoc pair and then trims edge insertions explicitly.)
 2. An insertion strictly INSIDE a span splits it: two spans, same `requestId`/origin/meta, new `spanId`s
    (`crypto.randomUUID()`), `textHash` recomputed for each half from the post-change doc.
 3. A span whose mapped length becomes `< 3` UTF-16 units is dropped (mechanical sliver rule).

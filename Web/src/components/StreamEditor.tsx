@@ -7,8 +7,9 @@ import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload } from '../types';
+import { bridge, getExchange, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
 import { SourcesModal } from './SourcesModal';
+import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
@@ -17,9 +18,13 @@ import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
+import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
+import { canRedevelopSpan, provenanceXrayExtension } from '../extensions/ProvenanceXray';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
+import { fnv1a } from '../utils/fnv1a';
+import { deserializeProvenanceSpans, serializeProvenanceSpans } from '../utils/provenanceSpans';
 import {
   beginPDFAnchorPick,
   buildPDFAnchorLinkEdit,
@@ -45,6 +50,20 @@ interface SelectionContext {
   from: number;
   to: number;
   imageUrls: string[];
+}
+
+type PromptIntent = {
+  kind: 'ask';
+} | {
+  kind: 'redevelop';
+  verb: DocumentAIVerb;
+  parentRequestId?: string;
+  preview: string;
+};
+
+interface ExchangeOverlayState {
+  exchange: AIExchangeJSON;
+  span: Span;
 }
 
 interface FloatingMenuState {
@@ -127,6 +146,34 @@ export function documentAIErrorRecovery(originalText: string, errorCode: string 
   };
 }
 
+export function buildDocumentAIProvenanceSpan(options: {
+  requestId: string;
+  start: number;
+  text: string;
+  verb: DocumentAIVerb;
+  model?: string;
+  parentRequestId?: string;
+  spanId?: string;
+  createdAt?: number;
+}): Span {
+  const meta: Record<string, unknown> = {
+    model: options.model ?? null,
+    verb: options.verb,
+  };
+  if (options.parentRequestId) meta.parentRequestId = options.parentRequestId;
+
+  return {
+    spanId: options.spanId ?? crypto.randomUUID(),
+    start: options.start,
+    end: options.start + options.text.length,
+    origin: 'ai',
+    requestId: options.requestId,
+    meta,
+    textHash: fnv1a(options.text),
+    createdAt: options.createdAt ?? Date.now(),
+  };
+}
+
 function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
   if (!Array.isArray(value)) return null;
 
@@ -198,6 +245,90 @@ function dispatchAiRangeClear(view: EditorView) {
     effects: setAiWritingRangeEffect.of(null),
     annotations: Transaction.addToHistory.of(false),
   });
+}
+
+function parseSpanMeta(meta: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(meta);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function payloadSpanToFieldSpan(span: ProvenanceSpanJSON, doc: string): Span | null {
+  if (span.start < 0 || span.end <= span.start || span.end > doc.length) return null;
+  const coveredText = doc.slice(span.start, span.end);
+  if (fnv1a(coveredText) !== span.textHash) return null;
+  const createdAt = Date.parse(span.createdAt);
+  if (!Number.isFinite(createdAt)) return null;
+  const origin = span.origin === 'ai' || span.origin === 'source' || span.origin === 'capture'
+    ? span.origin
+    : null;
+  if (!origin) return null;
+
+  return {
+    spanId: span.spanId,
+    start: span.start,
+    end: span.end,
+    origin,
+    requestId: span.requestId,
+    sourceId: span.sourceId,
+    meta: parseSpanMeta(span.meta),
+    textHash: span.textHash,
+    createdAt,
+  };
+}
+
+function payloadSpansForDoc(value: unknown, doc: string): Span[] {
+  return deserializeProvenanceSpans(value).flatMap((span) => {
+    const fieldSpan = payloadSpanToFieldSpan(span, doc);
+    return fieldSpan ? [fieldSpan] : [];
+  });
+}
+
+function fieldSpanToPayload(span: Span): ProvenanceSpanJSON {
+  const createdAtSeconds = Math.floor(span.createdAt / 1000) * 1000;
+  return {
+    spanId: span.spanId,
+    start: span.start,
+    end: span.end,
+    origin: span.origin,
+    requestId: span.requestId,
+    sourceId: span.sourceId,
+    meta: JSON.stringify(span.meta),
+    textHash: span.textHash,
+    createdAt: new Date(createdAtSeconds).toISOString().replace('.000Z', 'Z'),
+  };
+}
+
+function serializeFieldSpans(spans: Span[], doc: string): ProvenanceSpanJSON[] {
+  return serializeProvenanceSpans(normalizeSpans(spans, doc).map(fieldSpanToPayload));
+}
+
+function spanIdsIntersectingRange(spans: Span[], from: number, to: number): string[] {
+  return spans
+    .filter((span) => span.start < to && span.end > from)
+    .map((span) => span.spanId);
+}
+
+function parseDocumentAIVerb(value: unknown): DocumentAIVerb {
+  return value === 'ask' || value === 'challenge' || value === 'define' || value === 'develop'
+    ? value
+    : 'develop';
+}
+
+function promptFromUserInput(userInput: string): string {
+  const marker = '\n\nPrompt:\n';
+  const index = userInput.indexOf(marker);
+  return index >= 0 ? userInput.slice(index + marker.length).trim() : '';
+}
+
+function replacementPreview(text: string): string {
+  const compact = text.trim().replace(/\s+/g, ' ');
+  return compact.length > 60 ? `${compact.slice(0, 60)}…` : compact;
 }
 
 const markdownHighlightStyle = HighlightStyle.define([
@@ -273,10 +404,13 @@ export function StreamEditor({
   const [isPrepaintHidden, setIsPrepaintHidden] = useState(true);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
+  const [isProvenanceXrayVisible, setIsProvenanceXrayVisible] = useState(false);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
+  const [promptIntent, setPromptIntent] = useState<PromptIntent>({ kind: 'ask' });
+  const [exchangeOverlay, setExchangeOverlay] = useState<ExchangeOverlayState | null>(null);
   const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
   const [showRewriteMenu, setShowRewriteMenu] = useState(false);
@@ -333,6 +467,8 @@ export function StreamEditor({
     verb: DocumentAIVerb;
     originalText: string;
     prefix: string;
+    model?: string;
+    parentRequestId?: string;
   } | null>(null);
 
   const insertImageAtCursor = useCallback((imageUrl: string, altText = 'image') => {
@@ -576,15 +712,22 @@ export function StreamEditor({
     setLinkPopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
     setShowPrompt(false);
     setPromptValue('');
+    setPromptIntent({ kind: 'ask' });
+    setExchangeOverlay(null);
     setSourceScope(stream.sourceScope ?? 'auto');
+    setIsProvenanceXrayVisible(false);
     setShowRewriteMenu(false);
     promptContextRef.current = null;
     aiRequestRef.current = null;
     const view = editorViewRef.current;
     if (view) {
+      view.dispatch({
+        effects: setSpans.of(payloadSpansForDoc(stream.spans, stream.document?.markdown ?? '')),
+        annotations: Transaction.addToHistory.of(false),
+      });
       dispatchAiRangeClear(view);
     }
-  }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.title]);
+  }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
 
   useEffect(() => {
     markdownContentRef.current = markdownContent;
@@ -618,11 +761,13 @@ export function StreamEditor({
     const timer = window.setTimeout(() => {
       const contentToSave = markdownContent;
       const baseRevision = revisionRef.current;
+      const view = editorViewRef.current;
 
       void bridge.sendAsync<{ revision: number }>('saveStreamDocument', {
         streamId: stream.id,
         markdown: contentToSave,
         baseRevision,
+        spans: view ? serializeFieldSpans(currentSpans(view.state), contentToSave) : [],
       }).then((response) => {
         if (Number.isFinite(response.revision)) {
           revisionRef.current = response.revision;
@@ -655,9 +800,11 @@ export function StreamEditor({
         }
 
         const view = editorViewRef.current;
+        const spans = payloadSpansForDoc(message.payload?.spans, markdown);
         if (view) {
           view.dispatch({
             changes: { from: 0, to: view.state.doc.length, insert: markdown },
+            effects: setSpans.of(spans),
           });
         }
 
@@ -690,11 +837,15 @@ export function StreamEditor({
         const insertion = computeAppendInsertion(currentMarkdown.length, fragment);
         const insert = insertion.insert;
         const nextMarkdown = `${currentMarkdown}${insert}`;
+        const spans = payloadSpansForDoc(message.payload?.spans, nextMarkdown);
 
         if (view) {
           view.dispatch({
             changes: { from: insertion.from, insert },
-            effects: EditorView.scrollIntoView(insertion.insertedEnd, { y: 'nearest' }),
+            effects: [
+              EditorView.scrollIntoView(insertion.insertedEnd, { y: 'nearest' }),
+              addSpans.of(spans),
+            ],
           });
         }
 
@@ -734,6 +885,8 @@ export function StreamEditor({
       if (message.type === 'documentModelSelected') {
         const requestId = message.payload?.requestId as string | undefined;
         if (!requestId || requestId !== active.id) return;
+        const modelId = message.payload?.modelId as string | undefined;
+        if (modelId) active.model = modelId;
         return;
       }
 
@@ -864,6 +1017,14 @@ export function StreamEditor({
         const insertText = `${active.prefix}${finalOutput}${suffix}`;
         const finalFrom = range.from;
         const originalTo = finalFrom + active.originalText.length;
+        const span = buildDocumentAIProvenanceSpan({
+          requestId,
+          start: finalFrom,
+          text: insertText,
+          verb: active.verb,
+          model: active.model,
+          parentRequestId: active.parentRequestId,
+        });
 
         view.dispatch({
           changes: { from: range.from, to: range.to, insert: active.originalText },
@@ -873,7 +1034,10 @@ export function StreamEditor({
         view.dispatch({
           changes: { from: finalFrom, to: originalTo, insert: insertText },
           selection: { anchor: finalFrom + insertText.length },
-          effects: setAiWritingRangeEffect.of(null),
+          effects: [
+            setAiWritingRangeEffect.of(null),
+            addSpans.of([span]),
+          ],
           annotations: [
             Transaction.addToHistory.of(true),
             Transaction.userEvent.of(AI_HISTORY_USER_EVENT),
@@ -1510,6 +1674,7 @@ export function StreamEditor({
     to: number;
     mode: 'replace' | 'after';
     verb?: DocumentAIVerb;
+    parentRequestId?: string;
   }) => {
     if (isAiThinking) {
       addToast('AI is already running for this stream.', 'info');
@@ -1568,6 +1733,7 @@ export function StreamEditor({
       verb: options.verb ?? 'develop',
       originalText,
       prefix,
+      parentRequestId: options.parentRequestId,
     };
     setAiStatus('thinking');
     showAiWritingFeedback();
@@ -1590,6 +1756,7 @@ export function StreamEditor({
         sourceScope,
         verb: options.verb ?? 'develop',
         imageURLs: options.imageUrls ?? [],
+        ...(options.parentRequestId ? { parentRequestId: options.parentRequestId } : {}),
       },
     });
   }, [addToast, isAiThinking, showAiWritingFeedback, showSourceIndexNotice, sourceScope, stream.id]);
@@ -1616,6 +1783,7 @@ export function StreamEditor({
     hideSelectionMenu();
     promptContextRef.current = context;
     setPromptValue('');
+    setPromptIntent({ kind: 'ask' });
     setShowPrompt(true);
   }, [hideSelectionMenu]);
 
@@ -1673,6 +1841,25 @@ export function StreamEditor({
     beginPDFAnchorPick(stream.id);
   }, [addToast, canLinkSelectionToPDF, getSelectionContext, hideSelectionMenu, stream.id]);
 
+  const handleSelectionDissolve = useCallback(() => {
+    const view = editorViewRef.current;
+    if (!view) {
+      hideSelectionMenu();
+      return;
+    }
+
+    const selection = view.state.selection.main;
+    const spanIds = spanIdsIntersectingRange(currentSpans(view.state), selection.from, selection.to);
+    if (spanIds.length > 0) {
+      view.dispatch({
+        effects: dissolveSpans.of(spanIds),
+        annotations: Transaction.addToHistory.of(true),
+      });
+      view.focus();
+    }
+    hideSelectionMenu();
+  }, [hideSelectionMenu]);
+
   const handleSelectionVerb = useCallback((verb: DocumentAIVerb) => {
     const context = getSelectionContext(false);
     if (!context || !context.text.trim()) {
@@ -1694,6 +1881,7 @@ export function StreamEditor({
   const closePrompt = useCallback(() => {
     setShowPrompt(false);
     setPromptValue('');
+    setPromptIntent({ kind: 'ask' });
     promptContextRef.current = null;
     hideSelectionMenu();
   }, [hideSelectionMenu]);
@@ -1701,9 +1889,23 @@ export function StreamEditor({
   const handlePromptSend = useCallback(() => {
     const prompt = promptValue.trim();
     const context = promptContextRef.current;
-    if (!prompt || !context) return;
+    if ((!prompt && promptIntent.kind === 'ask') || !context) return;
 
     closePrompt();
+
+    if (promptIntent.kind === 'redevelop') {
+      startDocumentAI({
+        query: prompt || context.text.trim(),
+        context: prompt ? context.text.trim() : undefined,
+        imageUrls: context.imageUrls,
+        from: context.from,
+        to: context.to,
+        mode: 'replace',
+        verb: promptIntent.verb,
+        parentRequestId: promptIntent.parentRequestId,
+      });
+      return;
+    }
 
     startDocumentAI({
       query: prompt,
@@ -1714,7 +1916,7 @@ export function StreamEditor({
       mode: 'after',
       verb: 'ask',
     });
-  }, [closePrompt, promptValue, startDocumentAI]);
+  }, [closePrompt, promptIntent, promptValue, startDocumentAI]);
 
   const handleStopDocumentAI = useCallback(() => {
     const active = aiRequestRef.current;
@@ -1821,6 +2023,69 @@ export function StreamEditor({
     });
   }, []);
 
+  const handleOpenSourceById = useCallback((sourceId: string) => {
+    const source = sourcesRef.current.find((candidate) => candidate.id === sourceId);
+    if (source) handleOpenSource(source);
+  }, [handleOpenSource]);
+
+  const openRedevelopPrompt = useCallback((span: Span, exchange: AIExchangeJSON) => {
+    const view = editorViewRef.current;
+    if (!view) return;
+
+    const currentSpan = currentSpans(view.state).find((candidate) => candidate.spanId === span.spanId);
+    if (!currentSpan) return;
+    const text = view.state.doc.sliceString(currentSpan.start, currentSpan.end);
+    if (!canRedevelopSpan(currentSpan, text, isAiThinking)) return;
+
+    promptContextRef.current = {
+      text,
+      from: currentSpan.start,
+      to: currentSpan.end,
+      imageUrls: extractMarkdownImageUrls(text),
+    };
+    setPromptValue(promptFromUserInput(exchange.userInput));
+    setPromptIntent({
+      kind: 'redevelop',
+      verb: parseDocumentAIVerb(exchange.verb),
+      parentRequestId: currentSpan.requestId ?? exchange.requestId,
+      preview: replacementPreview(text),
+    });
+    setExchangeOverlay(null);
+    hideSelectionMenu();
+    setShowPrompt(true);
+  }, [hideSelectionMenu, isAiThinking]);
+
+  const handleOpenExchangeManifestEntry = useCallback((entry: ExchangeManifestEntry) => {
+    bridge.send({
+      type: 'openPdfDestination',
+      payload: {
+        streamId: stream.id,
+        sourceId: entry.sourceId,
+        page: entry.page,
+        chunkId: entry.chunkId,
+      },
+    });
+  }, [stream.id]);
+
+  const provenanceXray = useMemo<Extension>(() => (
+    isProvenanceXrayVisible
+      ? provenanceXrayExtension({
+        sources,
+        isAiThinking,
+        loadExchange: getExchange,
+        onShowExchange: (exchange, span) => setExchangeOverlay({ exchange, span }),
+        onRedevelop: openRedevelopPrompt,
+        onOpenSource: handleOpenSourceById,
+      })
+      : []
+  ), [handleOpenSourceById, isAiThinking, isProvenanceXrayVisible, openRedevelopPrompt, sources]);
+
+  const selectionDissolveSpanIds = (() => {
+    const view = editorViewRef.current;
+    if (!isProvenanceXrayVisible || !floatingMenu.visible || !view) return [];
+    return spanIdsIntersectingRange(currentSpans(view.state), floatingMenu.selectionFrom, floatingMenu.selectionTo);
+  })();
+
   return (
     <div className="stream-editor">
       <header className="stream-header">
@@ -1847,6 +2112,16 @@ export function StreamEditor({
           <span className={`stream-save-status stream-save-status--${saveState}`}>
             {saveState === 'saving' ? 'Saving…' : 'Saved'}
           </span>
+          <button
+            onClick={() => setIsProvenanceXrayVisible((value) => !value)}
+            className={`stream-xray-button ${isProvenanceXrayVisible ? 'stream-xray-button--active' : ''}`}
+            title="Toggle provenance x-ray"
+            type="button"
+            aria-label="Toggle provenance x-ray"
+            aria-pressed={isProvenanceXrayVisible}
+          >
+            👁
+          </button>
           <button
             onClick={() => setShowSourcesModal(true)}
             className="stream-sources-button"
@@ -1896,8 +2171,12 @@ export function StreamEditor({
       {showPrompt && (
         <div className="ai-prompt-overlay" onClick={closePrompt}>
           <div className="ai-prompt-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>Ask</h2>
-            <p>Selection will be attached as context.</p>
+            <h2>{promptIntent.kind === 'redevelop' ? 'Re-develop' : 'Ask'}</h2>
+            <p>
+              {promptIntent.kind === 'redevelop'
+                ? `will replace: ${promptIntent.preview}`
+                : 'Selection will be attached as context.'}
+            </p>
             <textarea
               className="ai-prompt-input"
               value={promptValue}
@@ -1911,7 +2190,7 @@ export function StreamEditor({
                   closePrompt();
                 }
               }}
-              placeholder="Ask a question or continue the line of thought…"
+              placeholder={promptIntent.kind === 'redevelop' ? 'Edit the prompt…' : 'Ask a question or continue the line of thought…'}
               autoFocus
               rows={5}
             />
@@ -1935,13 +2214,22 @@ export function StreamEditor({
                 className="ai-prompt-send"
                 type="button"
                 onClick={handlePromptSend}
-                disabled={!promptValue.trim()}
+                disabled={promptIntent.kind === 'ask' && !promptValue.trim()}
               >
-                Ask
+                {promptIntent.kind === 'redevelop' ? 'Re-develop' : 'Ask'}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {exchangeOverlay && (
+        <ExchangeOverlay
+          exchange={exchangeOverlay.exchange}
+          onClose={() => setExchangeOverlay(null)}
+          onRedevelop={() => openRedevelopPrompt(exchangeOverlay.span, exchangeOverlay.exchange)}
+          onOpenManifestEntry={handleOpenExchangeManifestEntry}
+        />
       )}
 
       {floatingMenu.visible && (
@@ -2056,6 +2344,22 @@ export function StreamEditor({
               </svg>
             </button>
           )}
+          {isProvenanceXrayVisible && (
+            <>
+              <span className="selection-action-divider" aria-hidden="true" />
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                title="Dissolve provenance in selection"
+                aria-label="Dissolve provenance in selection"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={handleSelectionDissolve}
+                disabled={selectionDissolveSpanIds.length === 0}
+              >
+                Dissolve
+              </button>
+            </>
+          )}
           <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"
@@ -2141,12 +2445,18 @@ export function StreamEditor({
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
+                provenanceField,
                 markdownImageWidgetExtension,
+                provenanceXray,
                 tickerPDFLinkExtension(stream.id),
                 linkInteraction,
               ]}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
+                view.dispatch({
+                  effects: setSpans.of(payloadSpansForDoc(stream.spans, view.state.doc.toString())),
+                  annotations: Transaction.addToHistory.of(false),
+                });
 
                 scrollCleanupRef.current?.();
                 const handleScroll = () => scheduleScrollPositionSave();
