@@ -1,4 +1,4 @@
-import { EditorState, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
+import { EditorState, StateEffect, StateField, type ChangeDesc, type Extension, type Range } from '@codemirror/state';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 
@@ -7,6 +7,7 @@ const LINK_CONCEAL_NODE_NAMES = new Set(['LinkMark', 'URL', 'LinkTitle']);
 const INITIAL_MARKDOWN_PARSE_TIMEOUT_MS = 20;
 
 export const revealRawLinksEffect = StateEffect.define<number | null>();
+const setConcealMouseDownEffect = StateEffect.define<boolean>();
 
 function isLineSelected(view: EditorView, lineFrom: number, lineTo: number): boolean {
   const doc = view.state.doc;
@@ -67,6 +68,17 @@ const revealRawLinksField = StateField.define<number | null>({
   },
 });
 
+const concealMouseDownField = StateField.define<boolean>({
+  create: () => false,
+  update(value, transaction) {
+    let next = value;
+    for (const effect of transaction.effects) {
+      if (effect.is(setConcealMouseDownEffect)) next = effect.value;
+    }
+    return next;
+  },
+});
+
 export function rawLinksAreRevealedOnLine(state: EditorState, lineFrom: number): boolean {
   return state.field(revealRawLinksField, false) === lineFrom;
 }
@@ -100,7 +112,7 @@ function markdownTreeForDecorations(view: EditorView, ensureInitialParse: boolea
   return ensureSyntaxTree(view.state, visibleRangeEnd(view), INITIAL_MARKDOWN_PARSE_TIMEOUT_MS) ?? syntaxTree(view.state);
 }
 
-function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = false): DecorationSet {
+export function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = false): DecorationSet {
   const decorations: Array<Range<Decoration>> = [];
   const blockquoteLineStarts = new Set<number>();
   const codeblockLineStarts = new Set<number>();
@@ -171,6 +183,62 @@ function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = 
   return Decoration.set(decorations, true);
 }
 
+export interface MarkdownConcealUpdateFlags {
+  docChanged: boolean;
+  viewportChanged: boolean;
+  selectionSet: boolean;
+  rawLinksChanged: boolean;
+  wasMouseDown: boolean;
+  isMouseDown: boolean;
+}
+
+export function nextMarkdownConcealDecorations(
+  current: DecorationSet,
+  view: EditorView,
+  changes: ChangeDesc,
+  flags: MarkdownConcealUpdateFlags
+): DecorationSet {
+  if (flags.isMouseDown) {
+    return flags.docChanged ? current.map(changes) : current;
+  }
+
+  if (
+    flags.docChanged ||
+    flags.viewportChanged ||
+    flags.selectionSet ||
+    flags.rawLinksChanged ||
+    (flags.wasMouseDown && !flags.isMouseDown)
+  ) {
+    return buildMarkdownConcealDecorations(view);
+  }
+
+  return current;
+}
+
+const concealMouseDownPlugin = ViewPlugin.fromClass(class {
+  private readonly window: Window;
+  private readonly onMouseDown = (event: MouseEvent) => {
+    if (event.button !== 0 || event.defaultPrevented) return;
+    if (this.view.state.field(concealMouseDownField, false)) return;
+    this.view.dispatch({ effects: setConcealMouseDownEffect.of(true) });
+  };
+  private readonly onMouseUp = () => {
+    if (!this.view.state.field(concealMouseDownField, false)) return;
+    this.view.dispatch({ effects: setConcealMouseDownEffect.of(false) });
+  };
+
+  constructor(private readonly view: EditorView) {
+    this.window = view.dom.ownerDocument.defaultView ?? window;
+    view.contentDOM.addEventListener('mousedown', this.onMouseDown);
+    this.window.addEventListener('mouseup', this.onMouseUp);
+  }
+
+  destroy(): void {
+    this.view.contentDOM.removeEventListener('mousedown', this.onMouseDown);
+    this.window.removeEventListener('mouseup', this.onMouseUp);
+  }
+});
+
 const markdownConcealPlugin = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
 
@@ -181,12 +249,22 @@ const markdownConcealPlugin = ViewPlugin.fromClass(class {
   update(update: ViewUpdate): void {
     const rawLinksChanged = update.startState.field(revealRawLinksField, false) !==
       update.state.field(revealRawLinksField, false);
-    if (update.docChanged || update.viewportChanged || update.selectionSet || rawLinksChanged) {
-      this.decorations = buildMarkdownConcealDecorations(update.view);
-    }
+    this.decorations = nextMarkdownConcealDecorations(this.decorations, update.view, update.changes, {
+      docChanged: update.docChanged,
+      viewportChanged: update.viewportChanged,
+      selectionSet: update.selectionSet,
+      rawLinksChanged,
+      wasMouseDown: update.startState.field(concealMouseDownField, false) === true,
+      isMouseDown: update.state.field(concealMouseDownField, false) === true,
+    });
   }
 }, {
   decorations: (value) => value.decorations,
 });
 
-export const markdownConcealExtension: Extension = [revealRawLinksField, markdownConcealPlugin];
+export const markdownConcealExtension: Extension = [
+  revealRawLinksField,
+  concealMouseDownField,
+  concealMouseDownPlugin,
+  markdownConcealPlugin,
+];

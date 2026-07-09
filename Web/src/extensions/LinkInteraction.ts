@@ -1,9 +1,15 @@
 import { syntaxTree } from '@codemirror/language';
-import { type Extension } from '@codemirror/state';
-import { EditorView } from '@codemirror/view';
+import { RangeSetBuilder, type Extension } from '@codemirror/state';
+import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 import { bridge } from '../types';
 import { rawLinksAreRevealedOnLine, revealRawLinksEffect } from './MarkdownConceal';
+
+const RENDERED_LINK_CLASS = 'cm-rendered-link';
+const RENDERED_LINK_SELECTOR = `.${RENDERED_LINK_CLASS}`;
+const LINK_X_TOLERANCE_PX = 4;
+
+export const LINK_NAVIGATION_MAX_POINTER_MOVEMENT_PX = 5;
 
 export interface MarkdownLinkInfo {
   from: number;
@@ -46,6 +52,24 @@ export function buildLinkEditChange(oldRange: LinkEditRange, label: string, url:
   };
 }
 
+interface Point {
+  x: number;
+  y: number;
+}
+
+export function pointerMovementAllowsNavigation(start: Point | null, end: Point): boolean {
+  if (!start) return false;
+  return Math.hypot(end.x - start.x, end.y - start.y) < LINK_NAVIGATION_MAX_POINTER_MOVEMENT_PX;
+}
+
+export function positionTouchesLinkRange(pos: number, link: Pick<MarkdownLinkInfo, 'from' | 'to'>): boolean {
+  return pos >= link.from && pos <= link.to;
+}
+
+export function xWithinLinkExtent(x: number, left: number, right: number, tolerance = LINK_X_TOLERANCE_PX): boolean {
+  return x >= Math.min(left, right) - tolerance && x <= Math.max(left, right) + tolerance;
+}
+
 function linkInfoFromNode(view: EditorView, linkNode: SyntaxNode): MarkdownLinkInfo | null {
   const marks: Array<{ from: number; to: number }> = [];
   let urlFrom = -1;
@@ -78,69 +102,162 @@ function linkInfoFromNode(view: EditorView, linkNode: SyntaxNode): MarkdownLinkI
   };
 }
 
-function linkInfoAt(view: EditorView, pos: number): MarkdownLinkInfo | null {
-  for (let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(pos, -1); node; node = node.parent) {
-    if (node.name === 'Link') return linkInfoFromNode(view, node);
+function linkNodeAt(view: EditorView, pos: number): SyntaxNode | null {
+  const tree = syntaxTree(view.state);
+  for (const side of [-1, 1] as const) {
+    for (let node: SyntaxNode | null = tree.resolveInner(pos, side); node; node = node.parent) {
+      if (node.name === 'Link' && positionTouchesLinkRange(pos, node)) return node;
+    }
   }
   return null;
 }
 
-function sameLink(left: MarkdownLinkInfo | null, right: MarkdownLinkInfo | null): boolean {
-  return Boolean(left && right && left.from === right.from && left.to === right.to);
+export function linkInfoAt(view: EditorView, pos: number): MarkdownLinkInfo | null {
+  const node = linkNodeAt(view, pos);
+  return node ? linkInfoFromNode(view, node) : null;
+}
+
+function linkKey(link: MarkdownLinkInfo): string {
+  return `${link.from}:${link.to}`;
+}
+
+function hasRenderedLinkTarget(target: EventTarget | null): boolean {
+  if (typeof Element !== 'undefined' && target instanceof Element) {
+    return Boolean(target.closest(RENDERED_LINK_SELECTOR));
+  }
+
+  if (typeof Node !== 'undefined' && target instanceof Node) {
+    return Boolean(target.parentElement?.closest(RENDERED_LINK_SELECTOR));
+  }
+
+  return false;
+}
+
+function linkHorizontalHitTest(view: EditorView, link: MarkdownLinkInfo, pos: number, clientX: number): boolean {
+  if (!view.coordsAtPos(pos)) return false;
+
+  const line = view.state.doc.lineAt(Math.min(pos, view.state.doc.length));
+  const startRect = view.coordsAtPos(Math.max(link.from, line.from));
+  const endRect = view.coordsAtPos(Math.min(link.to, line.to));
+  if (!startRect || !endRect) return false;
+
+  return xWithinLinkExtent(clientX, startRect.left, endRect.right);
+}
+
+function buildRenderedLinkDecorations(view: EditorView): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  const tree = syntaxTree(view.state);
+
+  for (const range of view.visibleRanges) {
+    tree.iterate({
+      from: range.from,
+      to: range.to,
+      enter: (node) => {
+        if (node.name === 'Link') {
+          builder.add(node.from, node.to, Decoration.mark({ class: RENDERED_LINK_CLASS }));
+        }
+      },
+    });
+  }
+
+  return builder.finish();
 }
 
 export function linkInteractionExtension(
   onEditLink: (view: EditorView, link: MarkdownLinkInfo | null) => void
 ): Extension {
-  let clickStartedInsideLink: MarkdownLinkInfo | null = null;
+  let pointerStart: Point | null = null;
   let suppressSelectionPopover = false;
+  let activePopoverLinkKey: string | null = null;
 
   return [
+    ViewPlugin.fromClass(class {
+      decorations: DecorationSet;
+
+      constructor(view: EditorView) {
+        this.decorations = buildRenderedLinkDecorations(view);
+      }
+
+      update(update: ViewUpdate): void {
+        if (update.docChanged || update.viewportChanged) {
+          this.decorations = buildRenderedLinkDecorations(update.view);
+        }
+      }
+    }, {
+      decorations: (value) => value.decorations,
+    }),
+    ViewPlugin.fromClass(class {
+      private readonly window: Window;
+      private readonly onKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Meta') this.view.dom.classList.add('cm-link-meta-down');
+      };
+      private readonly onKeyUp = (event: KeyboardEvent) => {
+        if (event.key === 'Meta') this.view.dom.classList.remove('cm-link-meta-down');
+      };
+      private readonly onBlur = () => {
+        this.view.dom.classList.remove('cm-link-meta-down');
+      };
+
+      constructor(private readonly view: EditorView) {
+        this.window = view.dom.ownerDocument.defaultView ?? window;
+        this.window.addEventListener('keydown', this.onKeyDown);
+        this.window.addEventListener('keyup', this.onKeyUp);
+        this.window.addEventListener('blur', this.onBlur);
+      }
+
+      destroy(): void {
+        this.window.removeEventListener('keydown', this.onKeyDown);
+        this.window.removeEventListener('keyup', this.onKeyUp);
+        this.window.removeEventListener('blur', this.onBlur);
+        this.view.dom.classList.remove('cm-link-meta-down');
+      }
+    }),
+    EditorView.theme({
+      '&.cm-link-meta-down .cm-rendered-link': {
+        cursor: 'pointer',
+      },
+    }),
     EditorView.updateListener.of((update) => {
       if (!update.selectionSet && !update.docChanged) return;
 
       const selection = update.state.selection.main;
       if (!selection.empty) {
+        activePopoverLinkKey = null;
         onEditLink(update.view, null);
         return;
       }
 
       const link = linkInfoAt(update.view, selection.head);
       if (!link || rawLinksAreRevealedOnLine(update.state, link.lineFrom) || suppressSelectionPopover) {
+        activePopoverLinkKey = null;
         onEditLink(update.view, null);
         return;
       }
 
+      const nextKey = linkKey(link);
+      if (activePopoverLinkKey === nextKey) return;
+      activePopoverLinkKey = nextKey;
       onEditLink(update.view, link);
     }),
     EditorView.domEventHandlers({
-      mousedown: (event, view) => {
-        clickStartedInsideLink = null;
+      mousedown: (event) => {
         suppressSelectionPopover = false;
         if (event.button !== 0 || event.defaultPrevented) return false;
-
-        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-        if (pos == null) return false;
-
-        const clickedLink = linkInfoAt(view, pos);
-        const selection = view.state.selection.main;
-        const currentLink = selection.empty ? linkInfoAt(view, selection.head) : null;
-        clickStartedInsideLink = sameLink(clickedLink, currentLink) ? clickedLink : null;
-        suppressSelectionPopover = Boolean(clickedLink && !clickStartedInsideLink);
+        pointerStart = { x: event.clientX, y: event.clientY };
         return false;
       },
       click: (event, view) => {
         if (event.button !== 0 || event.defaultPrevented) return false;
 
-        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-        const link = pos == null ? null : linkInfoAt(view, pos);
-        if (!link) {
-          suppressSelectionPopover = false;
-          onEditLink(view, null);
-          return false;
-        }
-
         if (event.altKey) {
+          const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+          const link = pos == null ? null : linkInfoAt(view, pos);
+          if (!link) {
+            suppressSelectionPopover = false;
+            onEditLink(view, null);
+            return false;
+          }
+
           event.preventDefault();
           event.stopPropagation();
           suppressSelectionPopover = true;
@@ -155,21 +272,32 @@ export function linkInteractionExtension(
           return true;
         }
 
-        if (link.url.startsWith('ticker-pdf://')) {
+        if (!event.metaKey) return false;
+
+        if (!pointerMovementAllowsNavigation(pointerStart, { x: event.clientX, y: event.clientY })) {
           suppressSelectionPopover = false;
           return false;
         }
 
-        if (sameLink(clickStartedInsideLink, link)) {
-          event.preventDefault();
-          event.stopPropagation();
+        if (!hasRenderedLinkTarget(event.target)) {
           suppressSelectionPopover = false;
-          onEditLink(view, link);
-          return true;
+          return false;
+        }
+
+        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+        if (pos == null) {
+          suppressSelectionPopover = false;
+          return false;
+        }
+
+        const link = linkInfoAt(view, pos);
+        if (!link || link.url.startsWith('ticker-pdf://') || !positionTouchesLinkRange(pos, link)) {
+          suppressSelectionPopover = false;
+          return false;
         }
 
         suppressSelectionPopover = false;
-        if (!isAllowedExternalURL(link.url)) return false;
+        if (!isAllowedExternalURL(link.url) || !linkHorizontalHitTest(view, link, pos, event.clientX)) return false;
 
         event.preventDefault();
         event.stopPropagation();
