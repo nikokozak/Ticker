@@ -225,17 +225,17 @@ body {
   box-shadow: var(--control-shadow);
 }
 
-.settings-button {
-  background: transparent !important;
-  color: var(--color-text-secondary) !important;
-  border: none !important;
+.stream-list-header .settings-button {
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: none;
 }
 
-.settings-button:hover {
-  color: var(--color-text) !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  transform: none !important;
+.stream-list-header .settings-button:hover {
+  color: var(--color-text);
+  background: transparent;
+  box-shadow: none;
+  transform: none;
 }
 
 .stream-list-content {
@@ -847,6 +847,10 @@ body {
   min-width: max-content;
 }
 
+.selection-action-button--ai {
+  color: var(--color-accent);
+}
+
 .selection-action-button svg {
   fill: currentColor;
 }
@@ -898,6 +902,11 @@ body {
   color: var(--color-accent);
   background: var(--accent-soft);
   transform: translateY(-1px);
+}
+
+.selection-action-button--ai:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--color-accent);
 }
 
 .selection-action-button:disabled {
@@ -1464,9 +1473,9 @@ body {
 
 .sources-modal-add {
   margin: var(--spacing-md) var(--spacing-lg) 0;
-  background: transparent;
-  border: 1px dashed var(--color-border);
-  color: var(--color-text-secondary);
+  background: var(--color-text);
+  border: 1px solid var(--color-text);
+  color: var(--color-bg);
   padding: var(--spacing-sm);
   border-radius: var(--radius);
   cursor: pointer;
@@ -1475,9 +1484,8 @@ body {
 }
 
 .sources-modal-add:hover {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--accent-soft);
+  box-shadow: var(--control-shadow);
+  transform: translateY(-1px);
 }
 
 .sources-modal-list {
@@ -1892,18 +1900,19 @@ body {
 .search-modal-go-button {
   width: 100%;
   padding: var(--spacing-sm) var(--spacing-md);
-  background: var(--color-accent);
-  color: var(--on-accent);
+  background: var(--color-text);
+  color: var(--color-bg);
   border: none;
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: background-color var(--duration-fast) ease;
+  transition: box-shadow var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 
 .search-modal-go-button:hover {
-  background: var(--color-accent-hover);
+  box-shadow: var(--control-shadow);
+  transform: translateY(-1px);
 }
 
 /* ==================== Exchange Overlay ==================== */
@@ -2747,18 +2756,20 @@ body {
 
 .settings-feedback-submit {
   padding: var(--spacing-sm) var(--spacing-lg);
-  background: var(--color-accent);
-  color: var(--on-accent);
+  background: var(--color-text);
+  color: var(--color-bg);
   border: none;
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: opacity var(--duration-fast) ease;
+  transition: opacity var(--duration-fast) ease, box-shadow var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 
 .settings-feedback-submit:hover:not(:disabled) {
   opacity: 0.9;
+  box-shadow: var(--control-shadow);
+  transform: translateY(-1px);
 }
 
 .settings-feedback-submit:disabled {

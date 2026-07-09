@@ -2235,7 +2235,7 @@ export function StreamEditor({
         >
           <button
             type="button"
-            className="selection-action-button selection-action-button--text"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
             title="Ask"
             aria-label="Ask"
             onMouseDown={(event) => event.preventDefault()}
@@ -2246,7 +2246,7 @@ export function StreamEditor({
           </button>
           <button
             type="button"
-            className="selection-action-button selection-action-button--text"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
             title="Challenge"
             aria-label="Challenge"
             onMouseDown={(event) => event.preventDefault()}
@@ -2257,7 +2257,7 @@ export function StreamEditor({
           </button>
           <button
             type="button"
-            className="selection-action-button selection-action-button--text"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
             title="Define"
             aria-label="Define"
             onMouseDown={(event) => event.preventDefault()}
@@ -2270,7 +2270,7 @@ export function StreamEditor({
           <div className="selection-action-submenu">
             <button
               type="button"
-              className="selection-action-button selection-action-button--text"
+              className="selection-action-button selection-action-button--text selection-action-button--ai"
               title="Rewrite"
               aria-label="Rewrite"
               onMouseDown={(event) => event.preventDefault()}
@@ -2283,7 +2283,7 @@ export function StreamEditor({
               <div className="selection-action-submenu-panel">
                 <button
                   type="button"
-                  className="selection-action-button selection-action-button--text selection-action-button--wide"
+                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
                   title="Develop (replaces)"
                   aria-label="Develop (replaces)"
                   onMouseDown={(event) => event.preventDefault()}
