@@ -1776,6 +1776,27 @@ export function StreamEditor({
     [openLinkPopover]
   );
 
+  const handleSelectionCreateLink = useCallback(() => {
+    const view = editorViewRef.current;
+    const context = getSelectionContext(false);
+    if (!view || !context || !context.text.trim()) {
+      hideSelectionMenu();
+      return;
+    }
+
+    // Open the popover in create mode over the selection; commit replaces the
+    // selection with [label](url). No malformed markdown ever enters the doc.
+    openLinkPopover(view, {
+      from: context.from,
+      to: context.to,
+      labelFrom: context.from,
+      labelTo: context.to,
+      label: context.text,
+      url: '',
+      lineFrom: view.state.doc.lineAt(context.from).from,
+    });
+  }, [getSelectionContext, hideSelectionMenu, openLinkPopover]);
+
   const commitLinkPopover = useCallback(() => {
     if (!linkPopover.visible) return;
 
@@ -2596,6 +2617,18 @@ export function StreamEditor({
           >
             &lt;/&gt;
           </button>
+          <button
+            type="button"
+            className="selection-action-button"
+            title="Add link"
+            aria-label="Add link"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={handleSelectionCreateLink}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M10.6 13.4a1 1 0 010-1.4l2.8-2.8a1 1 0 011.4 1.4l-2.8 2.8a1 1 0 01-1.4 0zm-3.5 3.5a3.5 3.5 0 010-5l1.8-1.8 1.4 1.4-1.8 1.8a1.5 1.5 0 002.2 2.2l1.8-1.8 1.4 1.4-1.8 1.8a3.5 3.5 0 01-5 0zm9.8-4.8l-1.4-1.4 1.8-1.8a1.5 1.5 0 00-2.2-2.2l-1.8 1.8-1.4-1.4 1.8-1.8a3.5 3.5 0 015 5z" />
+            </svg>
+          </button>
           {canLinkSelectionToPDF && (
             <button
               type="button"
@@ -2658,6 +2691,8 @@ export function StreamEditor({
             className="link-edit-input link-edit-input--url"
             value={linkPopover.url}
             aria-label="Link URL"
+            placeholder="https://…"
+            autoFocus={linkPopover.url === ''}
             onChange={(event) => setLinkPopover((previous) => ({ ...previous, url: event.target.value }))}
             onKeyDown={handleLinkPopoverKeyDown}
           />

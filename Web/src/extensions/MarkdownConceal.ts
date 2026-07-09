@@ -3,6 +3,11 @@ import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common';
 
+// Reveal model ported from Obsidian's live-preview semantics (reference:
+// obsidian-latex-suite conceal.ts). Reveal is PER CONSTRUCT: a concealed mark
+// expands only while a selection range touches its parent construct (the
+// emphasis span, the heading, the inline-code span). Never whole lines — line
+// reveal is what turned every caret move into layout reflow.
 const MARK_NODE_NAMES = new Set(['EmphasisMark', 'StrongEmphasisMark', 'CodeMark', 'CodeInfo']);
 const LINK_CONCEAL_NODE_NAMES = new Set(['LinkMark', 'URL', 'LinkTitle']);
 const INITIAL_MARKDOWN_PARSE_TIMEOUT_MS = 20;
@@ -10,28 +15,36 @@ const INITIAL_MARKDOWN_PARSE_TIMEOUT_MS = 20;
 export const revealRawLinksEffect = StateEffect.define<number | null>();
 const setConcealMouseDownEffect = StateEffect.define<boolean>();
 
-/** True when an http(s) link that the chip layer replaces wholesale — conceal leaves it alone. */
+function linkLabelRange(linkNode: SyntaxNode): { from: number; to: number } | null {
+  const marks = linkNode.getChildren('LinkMark');
+  if (marks.length < 2) return null;
+  return { from: marks[0].to, to: marks[1].from };
+}
+
+/** Complete = non-empty label AND non-empty URL. Incomplete links render fully raw. */
+export function isCompleteLink(state: EditorState, linkNode: SyntaxNode): boolean {
+  const urlNode = linkNode.getChild('URL');
+  if (!urlNode || urlNode.to <= urlNode.from) return false;
+  const label = linkLabelRange(linkNode);
+  if (!label || label.to <= label.from) return false;
+  return state.doc.sliceString(label.from, label.to).trim().length > 0;
+}
+
+/** True for complete http(s) links — the chip layer replaces these wholesale. */
 export function isChipEligibleLink(state: EditorState, linkNode: SyntaxNode): boolean {
+  if (!isCompleteLink(state, linkNode)) return false;
   const urlNode = linkNode.getChild('URL');
   if (!urlNode) return false;
   const url = state.doc.sliceString(urlNode.from, urlNode.to);
   return /^https?:\/\//i.test(url);
 }
 
-function isLineSelected(view: EditorView, lineFrom: number, lineTo: number): boolean {
-  const doc = view.state.doc;
-  const lineEnd = lineTo < doc.length ? lineTo + 1 : lineTo;
-
-  return view.state.selection.ranges.some((range) => {
-    const from = Math.min(range.from, range.to);
-    const to = Math.max(range.from, range.to);
-
-    if (from === to) {
-      const cursorLine = doc.lineAt(from);
-      return cursorLine.from === lineFrom;
-    }
-
-    return lineFrom < to && lineEnd > from;
+/** Inclusive overlap, latex-suite style: touching an edge counts as overlap. */
+export function selectionOverlapsRange(state: EditorState, from: number, to: number): boolean {
+  return state.selection.ranges.some((range) => {
+    const overlapFrom = Math.max(range.from, from);
+    const overlapTo = Math.min(range.to, to);
+    return overlapFrom <= overlapTo;
   });
 }
 
@@ -121,13 +134,23 @@ function markdownTreeForDecorations(view: EditorView, ensureInitialParse: boolea
   return ensureSyntaxTree(view.state, visibleRangeEnd(view), INITIAL_MARKDOWN_PARSE_TIMEOUT_MS) ?? syntaxTree(view.state);
 }
 
+/** The construct whose selection-overlap reveals this concealed mark. */
+function revealConstructRange(view: EditorView, node: SyntaxNodeRef): { from: number; to: number } {
+  if (node.name === 'QuoteMark') {
+    const line = view.state.doc.lineAt(node.from);
+    return { from: line.from, to: line.to };
+  }
+  const parent = node.node.parent;
+  return parent ? { from: parent.from, to: parent.to } : { from: node.from, to: node.to };
+}
+
 export interface MarkdownConcealBuildOptions {
   ensureInitialParse?: boolean;
   /**
-   * When false (mouse held down), selection-based reveal is disabled: everything
-   * stays concealed so layout cannot shift under an in-progress drag. The set is
-   * still rebuilt on every relevant update — freezing the DecorationSet itself
-   * desyncs viewport coverage (regions scrolled into view would render raw).
+   * When false (mouse held down), reveal is disabled entirely: everything stays
+   * concealed so layout cannot shift under an in-progress drag. The set is still
+   * rebuilt on every relevant update — freezing the DecorationSet itself desyncs
+   * viewport coverage.
    */
   revealForSelection?: boolean;
 }
@@ -142,37 +165,33 @@ export function buildMarkdownConcealDecorations(
   const codeblockLineStarts = new Set<number>();
   const tree = markdownTreeForDecorations(view, ensureInitialParse);
   const rawLinksLineFrom = view.state.field(revealRawLinksField, false);
-  let activeChipLink: { from: number; to: number } | null = null;
+  let skipLink: { from: number; to: number } | null = null;
 
   for (const visibleRange of view.visibleRanges) {
     tree.iterate({
       from: visibleRange.from,
       to: visibleRange.to,
-      enter: (node: SyntaxNodeRef) => {
+      enter: (node) => {
         if (node.name === 'Link') {
           const line = view.state.doc.lineAt(node.from);
-          if (rawLinksLineFrom !== line.from && isChipEligibleLink(view.state, node.node)) {
-            activeChipLink = { from: node.from, to: node.to };
+          const rawRevealed = rawLinksLineFrom === line.from;
+          // Chip links are replaced wholesale by the chip layer; incomplete
+          // links render fully raw so they stay visible and editable. Either
+          // way conceal leaves their innards alone.
+          if (rawRevealed || isChipEligibleLink(view.state, node.node) || !isCompleteLink(view.state, node.node)) {
+            skipLink = { from: node.from, to: node.to };
           }
           return;
         }
 
-        // Chip layer replaces the whole eligible link; conceal must not double-decorate inside it.
-        if (activeChipLink && node.from >= activeChipLink.from && node.to <= activeChipLink.to) {
+        if (skipLink && node.from >= skipLink.from && node.to <= skipLink.to) {
           return;
         }
 
-        const line = view.state.doc.lineAt(node.from);
         const isLinkConcealNode = LINK_CONCEAL_NODE_NAMES.has(node.name) && node.matchContext(['Link']);
-        if (
-          revealForSelection &&
-          isLineSelected(view, line.from, line.to) &&
-          (!isLinkConcealNode || rawLinksLineFrom === line.from)
-        ) {
-          return;
-        }
 
         if (node.name === 'HeaderMark') {
+          if (revealForSelection && selectionOverlapsRange(view.state, ...rangeTuple(revealConstructRange(view, node)))) return;
           const range = rangeWithFollowingSpace(view, node.from, node.to);
           const decoration = concealRange(range.from, range.to);
           if (decoration) decorations.push(decoration);
@@ -180,9 +199,14 @@ export function buildMarkdownConcealDecorations(
         }
 
         if (node.name === 'QuoteMark') {
-          const range = rangeWithFollowingSpace(view, node.from, node.to);
-          const decoration = concealRange(range.from, range.to);
-          if (decoration) decorations.push(decoration);
+          const line = view.state.doc.lineAt(node.from);
+          const construct = revealConstructRange(view, node);
+          const revealed = revealForSelection && selectionOverlapsRange(view.state, construct.from, construct.to);
+          if (!revealed) {
+            const range = rangeWithFollowingSpace(view, node.from, node.to);
+            const decoration = concealRange(range.from, range.to);
+            if (decoration) decorations.push(decoration);
+          }
 
           if (!blockquoteLineStarts.has(line.from)) {
             blockquoteLineStarts.add(line.from);
@@ -208,11 +232,15 @@ export function buildMarkdownConcealDecorations(
         }
 
         if (MARK_NODE_NAMES.has(node.name)) {
+          const construct = revealConstructRange(view, node);
+          if (revealForSelection && selectionOverlapsRange(view.state, construct.from, construct.to)) return;
           const decoration = concealRange(node.from, node.to);
           if (decoration) decorations.push(decoration);
           return;
         }
 
+        // Citation-style links (ticker-pdf): syntax stays concealed regardless of
+        // the caret; ⌥-click (revealRawLinks) is the only way to see it raw.
         if (isLinkConcealNode) {
           const range = node.name === 'URL' ? rangeWithFollowingSpaces(view, node.from, node.to) : { from: node.from, to: node.to };
           const decoration = concealRange(range.from, range.to);
@@ -223,6 +251,10 @@ export function buildMarkdownConcealDecorations(
   }
 
   return Decoration.set(decorations, true);
+}
+
+function rangeTuple(range: { from: number; to: number }): [number, number] {
+  return [range.from, range.to];
 }
 
 const concealMouseDownPlugin = ViewPlugin.fromClass(class {
@@ -253,10 +285,10 @@ const markdownConcealPlugin = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
 
   constructor(view: EditorView) {
-    this.decorations = buildMarkdownConcealDecorations(view, {
+    this.decorations = safeBuild(view, {
       ensureInitialParse: true,
       revealForSelection: !view.state.field(concealMouseDownField, false),
-    });
+    }, Decoration.none);
   }
 
   update(update: ViewUpdate): void {
@@ -272,14 +304,32 @@ const markdownConcealPlugin = ViewPlugin.fromClass(class {
       rawLinksChanged ||
       wasMouseDown !== isMouseDown
     ) {
-      this.decorations = buildMarkdownConcealDecorations(update.view, {
-        revealForSelection: !isMouseDown,
-      });
+      this.decorations = safeBuild(
+        update.view,
+        { revealForSelection: !isMouseDown },
+        this.decorations.map(update.changes)
+      );
     }
   }
 }, {
   decorations: (value) => value.decorations,
 });
+
+// A throwing decoration build would make CodeMirror remove the plugin entirely —
+// every conceal decoration vanishes at once and the document renders raw until
+// remount. Never let that happen; keep the previous (mapped) set and log.
+function safeBuild(
+  view: EditorView,
+  options: MarkdownConcealBuildOptions,
+  fallback: DecorationSet
+): DecorationSet {
+  try {
+    return buildMarkdownConcealDecorations(view, options);
+  } catch (error) {
+    console.error('[MarkdownConceal] decoration build failed', error);
+    return fallback;
+  }
+}
 
 export const markdownConcealExtension: Extension = [
   revealRawLinksField,

@@ -21,54 +21,68 @@ function stateWithSelection(doc: string, anchor: number): EditorState {
   });
 }
 
-function rangesFor(decorations: DecorationSet, docLength: number): string[] {
-  const ranges: string[] = [];
+function concealRanges(decorations: DecorationSet, docLength: number): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
   decorations.between(0, docLength, (from, to) => {
-    ranges.push(`${from}-${to}`);
+    if (to > from) ranges.push([from, to]); // skip zero-length line decorations
   });
   return ranges;
 }
 
-describe('MarkdownConceal reveal policy', () => {
-  it('reveals marks on the caret line when the mouse is up', () => {
-    const doc = '**one**\n**two**';
+describe('MarkdownConceal per-construct reveal', () => {
+  it('reveals only the construct the caret touches, not the whole line', () => {
+    const doc = '**one** middle **two**';
     const state = stateWithSelection(doc, doc.indexOf('one'));
-    const revealed = buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true });
-    const lineOneRanges = rangesFor(revealed, doc.length).filter((r) => Number(r.split('-')[0]) < 8);
-    expect(lineOneRanges).toEqual([]); // caret line: marks revealed (no conceal decorations)
+    const ranges = concealRanges(buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true }), doc.length);
+
+    // First bold span (construct containing the caret): marks revealed.
+    const firstSpanEnd = doc.indexOf('middle');
+    expect(ranges.filter(([from]) => from < firstSpanEnd)).toEqual([]);
+
+    // Second bold span on the SAME line stays concealed.
+    const secondSpanStart = doc.indexOf('**two**');
+    expect(ranges.filter(([from]) => from >= secondSpanStart).length).toBe(2);
   });
 
-  it('conceals everything while the mouse is down, even selected lines', () => {
-    const doc = '**one**\n**two**';
+  it('conceals everything while the mouse is down, even at the caret', () => {
+    const doc = '**one** middle **two**';
     const state = stateWithSelection(doc, doc.indexOf('one'));
-    const concealed = buildMarkdownConcealDecorations(viewFor(state), {
-      ensureInitialParse: true,
-      revealForSelection: false,
-    });
-    // Both lines keep their ** mark conceal decorations.
-    expect(rangesFor(concealed, doc.length).length).toBeGreaterThanOrEqual(4);
+    const ranges = concealRanges(
+      buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true, revealForSelection: false }),
+      doc.length
+    );
+    expect(ranges.length).toBe(4); // both spans' opening+closing marks concealed
   });
 
-  it('is a pure build over the current view (no frozen-set staleness)', () => {
-    const doc = '# Head\n\n**bold** text';
-    const state = stateWithSelection(doc, doc.length);
-    const a = buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true });
-    const b = buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true });
-    expect(rangesFor(a, doc.length)).toEqual(rangesFor(b, doc.length));
+  it('reveals heading marks only while the selection touches the heading', () => {
+    const doc = '# Title\n\nBody text';
+    const onHeading = stateWithSelection(doc, 2);
+    const offHeading = stateWithSelection(doc, doc.indexOf('Body'));
+
+    const revealed = concealRanges(buildMarkdownConcealDecorations(viewFor(onHeading), { ensureInitialParse: true }), doc.length);
+    expect(revealed).toEqual([]);
+
+    const concealed = concealRanges(buildMarkdownConcealDecorations(viewFor(offHeading), { ensureInitialParse: true }), doc.length);
+    expect(concealed.length).toBe(1); // '# ' concealed again
   });
 
-  it('leaves chip-eligible http links to the chip layer but still conceals ticker-pdf links', () => {
+  it('renders incomplete links fully raw (no conceal decorations)', () => {
+    for (const doc of ['See [Safari]() here', 'See []() here', 'See [](https://x.com) here']) {
+      const state = stateWithSelection(doc, 0);
+      const ranges = concealRanges(buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true }), doc.length);
+      expect(ranges).toEqual([]);
+    }
+  });
+
+  it('leaves chip-eligible http links to the chip layer but conceals complete ticker-pdf links', () => {
     const doc = '[Safari](https://apple.com) and [Book p.3](ticker-pdf://abc?page=3)';
     const state = stateWithSelection(doc, doc.length);
-    const decorations = buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true });
-    const ranges = rangesFor(decorations, doc.length).map((r) => r.split('-').map(Number));
+    const ranges = concealRanges(buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true }), doc.length);
 
     const httpLinkEnd = doc.indexOf(')') + 1;
-    const httpOverlaps = ranges.filter(([from, to]) => from < httpLinkEnd && to > 0);
-    expect(httpOverlaps).toEqual([]); // chip layer owns the http link
+    expect(ranges.filter(([from]) => from < httpLinkEnd)).toEqual([]);
 
     const tickerStart = doc.indexOf('[Book');
-    const tickerOverlaps = ranges.filter(([from]) => from >= tickerStart);
-    expect(tickerOverlaps.length).toBeGreaterThan(0); // ticker-pdf still concealed here
+    expect(ranges.filter(([from]) => from >= tickerStart).length).toBeGreaterThan(0);
   });
 });
