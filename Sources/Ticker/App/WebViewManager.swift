@@ -7,6 +7,7 @@ final class WebViewManager: NSObject {
     private let deviceKeyService: DeviceKeyService
     let bridgeService: BridgeService
     private let bridgeRouter: BridgeRouter
+    private var streamMessageHandler: StreamMessageHandler?
     let persistence: PersistenceService?
     private let sourceService: SourceService?
     private let ingestService: IngestService?
@@ -23,6 +24,7 @@ final class WebViewManager: NSObject {
     private var activePDFPaneStreamId: UUID?
     private var shouldRestoreLastOpenStream = true
     private var didConsumeLaunchStreamRestore = false
+    private var pendingLaunchOpenStreamId: UUID?
     private var pendingEditorSelectionRequests: [String: (String?) -> Void] = [:]
     private let editorSelectionTimeoutNanoseconds: UInt64 = 50_000_000
 
@@ -50,6 +52,7 @@ final class WebViewManager: NSObject {
         self.assetService = container.assetService
         super.init()
         if let streamHandler = StreamMessageHandler(container: container, delegate: self) {
+            streamMessageHandler = streamHandler
             bridgeRouter.register(streamHandler)
         }
         if let sourceHandler = SourceMessageHandler(container: container, delegate: self) {
@@ -503,6 +506,22 @@ final class WebViewManager: NSObject {
         shouldRestoreLastOpenStream = false
     }
 
+    func openStream(id: UUID) {
+        shouldRestoreLastOpenStream = false
+        if didConsumeLaunchStreamRestore {
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.streamMessageHandler?.sendStreamLoaded(id: id)
+                } catch {
+                    DebugLog.log("[WebViewManager] Failed to open stream from shell (\(DebugLog.errorSummary(error)))")
+                }
+            }
+        } else {
+            pendingLaunchOpenStreamId = id
+        }
+    }
+
     private func loadMLXClassifier() {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             DebugLog.log("MLX classifier skipped: running unit tests")
@@ -660,6 +679,10 @@ extension WebViewManager: StreamMessageHandlerDelegate {
     func consumeLastOpenStreamIdForLaunchRestore() -> UUID? {
         guard !didConsumeLaunchStreamRestore else { return nil }
         didConsumeLaunchStreamRestore = true
+        if let streamId = pendingLaunchOpenStreamId {
+            pendingLaunchOpenStreamId = nil
+            return streamId
+        }
         guard shouldRestoreLastOpenStream,
               let value = UserDefaults.standard.string(forKey: lastOpenStreamDefaultsKey) else {
             return nil

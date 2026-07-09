@@ -21,6 +21,51 @@ struct TickerApp {
     }
 }
 
+enum TickerURLCommand: Equatable {
+    enum StreamSelector: Equatable {
+        case id(UUID)
+        case title(String)
+    }
+
+    case append(stream: StreamSelector, text: String)
+    case open(streamId: UUID)
+
+    static let maxAppendTextLength = 10_000
+
+    static func parse(_ url: URL) -> TickerURLCommand? {
+        guard url.scheme?.lowercased() == "ticker",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        let action = components.host ?? components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let queryItems = components.queryItems ?? []
+        func query(_ name: String) -> String? {
+            queryItems.first { $0.name == name }?.value
+        }
+
+        switch action {
+        case "append":
+            guard let streamValue = query("stream")?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !streamValue.isEmpty,
+                  let text = query("text"),
+                  !text.isEmpty,
+                  text.count <= maxAppendTextLength else {
+                return nil
+            }
+            let selector = UUID(uuidString: streamValue).map(StreamSelector.id) ?? .title(streamValue)
+            return .append(stream: selector, text: text)
+        case "open":
+            guard let streamValue = query("stream"),
+                  let streamId = UUID(uuidString: streamValue) else {
+                return nil
+            }
+            return .open(streamId: streamId)
+        default:
+            return nil
+        }
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var mainWindow: NSWindow?
     private var serviceContainer: ServiceContainer?
@@ -186,6 +231,73 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         webViewManager?.skipLaunchStreamRestore()
         DebugLog.log("[Ticker] File-open event ignored; skipping last stream restore")
         sender.reply(toOpenOrPrint: .failure)
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        skipLastStreamRestore = true
+        webViewManager?.skipLaunchStreamRestore()
+        for url in urls {
+            handleTickerURL(url)
+        }
+    }
+
+    private func handleTickerURL(_ url: URL) {
+        guard let command = TickerURLCommand.parse(url) else {
+            DebugLog.log("[TickerURL] Ignored malformed URL: \(url.absoluteString)")
+            return
+        }
+        guard let persistence = serviceContainer?.persistence else {
+            DebugLog.log("[TickerURL] Persistence unavailable")
+            return
+        }
+
+        do {
+            switch command {
+            case .open(let streamId):
+                guard try persistence.loadStream(id: streamId) != nil else {
+                    DebugLog.log("[TickerURL] Open ignored; stream not found: \(streamId.uuidString)")
+                    return
+                }
+                webViewManager?.openStream(id: streamId)
+
+            case .append(let selector, let text):
+                guard let streamId = try resolveTickerStream(selector, persistence: persistence) else {
+                    DebugLog.log("[TickerURL] Append ignored; stream not found")
+                    return
+                }
+                let span = ProvenanceSpan(
+                    streamId: streamId,
+                    start: 0,
+                    end: UTF16Offsets.utf16Length(text),
+                    origin: "capture",
+                    meta: QuickPanelMarkdownFormatter.metadataJSON(["sourceApp": "ticker://"]),
+                    textHash: FNV1a.hash(text)
+                )
+                let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: text, spans: [span])
+                serviceContainer?.bridgeService.send(BridgeMessage(type: "streamDocumentAppended", payload: [
+                    "streamId": AnyCodable(streamId.uuidString),
+                    "fragment": AnyCodable(result.fragment),
+                    "revision": AnyCodable(result.revision),
+                    "isNewStream": AnyCodable(false),
+                    "source": AnyCodable("urlScheme"),
+                    "spans": AnyCodable(StreamCodec.encodeSpans(result.spans))
+                ]))
+            }
+        } catch {
+            DebugLog.log("[TickerURL] Failed to handle URL (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    private func resolveTickerStream(_ selector: TickerURLCommand.StreamSelector, persistence: PersistenceService) throws -> UUID? {
+        switch selector {
+        case .id(let id):
+            if try persistence.loadStream(id: id) != nil {
+                return id
+            }
+            return nil
+        case .title(let title):
+            return try persistence.loadStreamSummaries().first { $0.title == title }?.id
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

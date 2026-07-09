@@ -364,7 +364,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         }
     }
 
-    private func sendStreamLoaded(id: UUID) async throws {
+    func sendStreamLoaded(id: UUID) async throws {
         guard let stream = try persistence.loadStream(id: id) else { return }
         delegate?.setCurrentStreamIdForFileDrops(id)
         await delegate?.closePDFPaneIfShowingDifferentStream(id)

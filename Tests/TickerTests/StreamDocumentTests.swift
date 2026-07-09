@@ -7,6 +7,45 @@ import XCTest
 
 @testable import Ticker
 
+final class TickerURLCommandTests: XCTestCase {
+    func test_parseAppendURL() throws {
+        let url = try XCTUnwrap(URL(string: "ticker://append?stream=Notebook&text=hello%20world"))
+
+        XCTAssertEqual(
+            TickerURLCommand.parse(url),
+            .append(stream: .title("Notebook"), text: "hello world")
+        )
+    }
+
+    func test_parseOpenURL() throws {
+        let streamId = UUID()
+        let url = try XCTUnwrap(URL(string: "ticker://open?stream=\(streamId.uuidString)"))
+
+        XCTAssertEqual(TickerURLCommand.parse(url), .open(streamId: streamId))
+    }
+
+    func test_parseAppendURLMissingParamsReturnsNil() throws {
+        XCTAssertNil(TickerURLCommand.parse(try XCTUnwrap(URL(string: "ticker://append?stream=Notebook"))))
+        XCTAssertNil(TickerURLCommand.parse(try XCTUnwrap(URL(string: "ticker://append?text=hello"))))
+    }
+
+    func test_parseOpenURLBadUUIDReturnsNil() throws {
+        XCTAssertNil(TickerURLCommand.parse(try XCTUnwrap(URL(string: "ticker://open?stream=not-a-uuid"))))
+    }
+
+    func test_parseAppendURLOverCapReturnsNil() throws {
+        var components = URLComponents()
+        components.scheme = "ticker"
+        components.host = "append"
+        components.queryItems = [
+            URLQueryItem(name: "stream", value: "Notebook"),
+            URLQueryItem(name: "text", value: String(repeating: "a", count: TickerURLCommand.maxAppendTextLength + 1))
+        ]
+
+        XCTAssertNil(TickerURLCommand.parse(try XCTUnwrap(components.url)))
+    }
+}
+
 final class QuickPanelMarkdownFormatterTests: XCTestCase {
     func test_buildFragment_includesSelectedTextAsBlockquoteWithAttribution() throws {
         let context = QuickPanelContext(
