@@ -77,7 +77,7 @@ final class AIOrchestrator {
                 let result = try await classifier.classify(query: query)
                 intent = result.intent
                 classificationResult = result
-                DebugLog.log("AIOrchestrator: classified as \(intent) (confidence: \(result.confidence))")
+                DebugLog.log("AIOrchestrator: classified as \(intent) (confidence: \(result.confidence), raw: \"\(result.reasoning ?? "")\")")
             } catch {
                 DebugLog.log("AIOrchestrator: classification failed, defaulting to knowledge (\(DebugLog.errorSummary(error)))")
             }
