@@ -469,9 +469,10 @@ export const provenanceField: StateField<Span[]>;
 export function currentSpans(state: EditorState): Span[];
 ```
 Rules (implement exactly):
-1. On every transaction with `docChanged`: map each span's `start`/`end` through `tr.changes`
-   (`assoc` −1 for start, +1 for end so insertions AT the boundary fall OUTSIDE the span — user text at a span
-   edge is the user's).
+1. On every transaction with `docChanged`: map each span's `start`/`end` through `tr.changes` such that
+   insertions AT either boundary fall OUTSIDE the span — user text at a span edge is the user's. (Corrected
+   2026-07-08: the original text prescribed `assoc` −1/+1, which in CodeMirror semantics does the opposite;
+   the shipped implementation maps with that assoc pair and then trims edge insertions explicitly.)
 2. An insertion strictly INSIDE a span splits it: two spans, same `requestId`/origin/meta, new `spanId`s
    (`crypto.randomUUID()`), `textHash` recomputed for each half from the post-change doc.
 3. A span whose mapped length becomes `< 3` UTF-16 units is dropped (mechanical sliver rule).
