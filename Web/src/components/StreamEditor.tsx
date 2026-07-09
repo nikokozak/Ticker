@@ -7,9 +7,8 @@ import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, type Stream, type SourceReference, type DocumentAICitation, type DocumentAISourceContextMode } from '../types';
+import { bridge, type Stream, type SourceReference, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload } from '../types';
 import { SourcesModal } from './SourcesModal';
-import { SearchModal } from './SearchModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
@@ -33,7 +32,6 @@ interface StreamEditorProps {
   stream: Stream;
   onBack: () => void;
   onDelete: () => void;
-  onNavigateToStream?: (streamId: string, targetId: string, targetType?: 'cell' | 'source') => void;
   pendingCellId?: string | null;
   pendingSourceId?: string | null;
   onClearPendingCell?: () => void;
@@ -69,6 +67,7 @@ interface PDFPaneState {
   streamId?: string;
   sourceId?: string;
   sourceName?: string;
+  shortTitle?: string;
 }
 
 const SELECTION_MENU_DELAY_MS = 180;
@@ -224,7 +223,6 @@ export function StreamEditor({
   stream,
   onBack,
   onDelete,
-  onNavigateToStream,
   pendingCellId,
   pendingSourceId,
   onClearPendingCell,
@@ -235,7 +233,6 @@ export function StreamEditor({
   const [title, setTitle] = useState(stream.title);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
@@ -808,7 +805,9 @@ export function StreamEditor({
       if (!payloadStreamId || payloadStreamId !== stream.id) return;
 
       const sourceId = message.payload?.sourceId as string | undefined;
-      const sourceName = message.payload?.sourceName as string | undefined;
+      const sourcePayload = message.payload as SourceTitlePayload | undefined;
+      const sourceName = sourcePayload?.sourceName;
+      const shortTitle = sourcePayload?.shortTitle;
       const highlightId = message.payload?.highlightId as string | undefined;
       const page = message.payload?.page as number | undefined;
       const quote = message.payload?.quote as string | undefined;
@@ -819,7 +818,7 @@ export function StreamEditor({
       const linkUrl = `ticker-pdf://${sourceId}?highlight=${encodeURIComponent(highlightId)}&page=${pageNumber}`;
       const compactQuote = (quote || '').trim().replace(/\s+/g, ' ');
       const quoteLine = compactQuote ? `> ${compactQuote}\n` : '';
-      const linkLabel = `${sourceName || 'PDF'} p.${pageNumber}`;
+      const linkLabel = `${shortTitle || sourceName || 'PDF'} p.${pageNumber}`;
       const snippet = `\n${quoteLine}[${linkLabel}](${linkUrl})\n`;
 
       insertTextAtCursor(snippet);
@@ -844,7 +843,8 @@ export function StreamEditor({
           visible,
           streamId: message.payload?.streamId as string | undefined,
           sourceId: message.payload?.sourceId as string | undefined,
-          sourceName: message.payload?.sourceName as string | undefined,
+          sourceName: (message.payload as SourceTitlePayload | undefined)?.sourceName,
+          shortTitle: (message.payload as SourceTitlePayload | undefined)?.shortTitle,
         };
         setPDFPaneState(nextState);
         if (!visible || nextState.streamId !== stream.id) {
@@ -912,11 +912,13 @@ export function StreamEditor({
     const trimmedTitle = title.trim() || 'Untitled';
     setTitle(trimmedTitle);
     setIsEditingTitle(false);
+    if (trimmedTitle === stream.title) return;
+
     bridge.send({
       type: 'updateStreamTitle',
       payload: { id: stream.id, title: trimmedTitle },
     });
-  }, [title, stream.id]);
+  }, [title, stream.id, stream.title]);
 
   const handleTitleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -1302,7 +1304,7 @@ export function StreamEditor({
       return status === 'indexing' || status === 'pending';
     });
     if (indexingSource) {
-      showSourceIndexNotice(indexingSource.displayName);
+      showSourceIndexNotice(indexingSource.shortTitle || indexingSource.displayName);
     }
 
     bridge.send({
@@ -1451,11 +1453,6 @@ export function StreamEditor({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setShowSearch(true);
-        return;
-      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         if (!isEditorActive()) return;
         e.preventDefault();
@@ -1540,19 +1537,6 @@ export function StreamEditor({
       payload: { sourceId: source.id },
     });
   }, []);
-
-  const handleNavigateToCell = useCallback(() => {
-    addToast('Cell anchors are not available in document editor mode yet.', 'info');
-  }, [addToast]);
-
-  const handleNavigateToSource = useCallback((sourceId: string) => {
-    if (!sources.some((source) => source.id === sourceId)) {
-      addToast('Source is not attached to this stream.', 'info');
-      return;
-    }
-    setHighlightedSourceId(sourceId);
-    setShowSourcesModal(true);
-  }, [addToast, sources]);
 
   return (
     <div className="stream-editor">
@@ -1838,14 +1822,6 @@ export function StreamEditor({
         }}
       />
 
-      <SearchModal
-        isOpen={showSearch}
-        onClose={() => setShowSearch(false)}
-        currentStreamId={stream.id}
-        onNavigateToCell={handleNavigateToCell}
-        onNavigateToStream={onNavigateToStream || (() => {})}
-        onNavigateToSource={handleNavigateToSource}
-      />
     </div>
   );
 }

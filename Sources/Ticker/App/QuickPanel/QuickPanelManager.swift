@@ -1148,7 +1148,9 @@ enum QuickPanelMarkdownFormatter {
 
     private static func sourceAttribution(for context: QuickPanelContext) -> String? {
         let app = nonEmptyTrimmed(context.activeApp)
-        let title = nonEmptyTrimmed(context.windowTitle).map { truncate($0, maxLength: 60) }
+        let title = nonEmptyTrimmed(context.windowTitle).map {
+            SourceShortTitle.derive(displayName: $0)
+        }
 
         switch (app, title) {
         case let (app?, title?):
@@ -1160,11 +1162,6 @@ enum QuickPanelMarkdownFormatter {
         case (nil, nil):
             return nil
         }
-    }
-
-    private static func truncate(_ text: String, maxLength: Int) -> String {
-        guard text.count > maxLength else { return text }
-        return "\(text.prefix(maxLength - 3))..."
     }
 }
 

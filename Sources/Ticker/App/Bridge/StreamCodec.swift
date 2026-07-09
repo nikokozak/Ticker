@@ -11,6 +11,7 @@ enum StreamCodec {
                     "id": source.id.uuidString,
                     "streamId": source.streamId.uuidString,
                     "displayName": source.displayName,
+                    "shortTitle": source.shortTitle,
                     "fileType": source.fileType.rawValue,
                     "status": source.status.rawValue,
                     "embeddingStatus": source.embeddingStatus.rawValue,
@@ -41,6 +42,7 @@ enum StreamCodec {
             "id": source.id.uuidString,
             "streamId": source.streamId.uuidString,
             "displayName": source.displayName,
+            "shortTitle": source.shortTitle,
             "fileType": source.fileType.rawValue,
             "status": source.status.rawValue,
             "embeddingStatus": source.embeddingStatus.rawValue,
@@ -67,9 +69,14 @@ enum StreamCodec {
                     "sourceCount": summary.sourceCount,
                     "cellCount": summary.cellCount,
                     "charCount": summary.charCount,
+                    "wordCount": wordCount(from: summary.previewText ?? ""),
                     "imageCount": summary.imageCount,
+                    "previewLine": previewLine(from: summary.previewText ?? "") ?? "",
                     "updatedAt": formatter.string(from: summary.updatedAt)
                 ]
+                if let sourceShortTitle = summary.sourceShortTitle {
+                    dict["sourceShortTitle"] = sourceShortTitle
+                }
                 if let previewText = summary.previewText {
                     dict["previewText"] = previewText
                 }
@@ -109,12 +116,39 @@ enum StreamCodec {
         return name.components(separatedBy: invalidChars).joined(separator: "-")
     }
 
+    static func previewLine(from markdown: String) -> String? {
+        for line in markdown.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if trimmed.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil { continue }
+
+            let stripped = strippedPreviewMarkdown(trimmed)
+            guard !stripped.isEmpty else { continue }
+            return stripped
+        }
+        return nil
+    }
+
     private static func plainTextFromMarkdown(_ markdown: String) -> String {
         markdown
             .replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\!\[([^\]]*)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"`([^`]*)`"#, with: "$1", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func wordCount(from markdown: String) -> Int {
+        markdown.split { $0.isWhitespace }.count
+    }
+
+    private static func strippedPreviewMarkdown(_ line: String) -> String {
+        line
+            .replacingOccurrences(of: #"!\[[^\]]*\]\([^\)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"^>+\s*"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"[#*`]"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

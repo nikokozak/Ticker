@@ -4,7 +4,8 @@ import { SearchResult, HybridSearchResults, bridge } from '../types';
 interface SearchModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentStreamId: string;
+  currentStreamId: string | null;
+  isStreamOpen: boolean;
   onNavigateToCell: (cellId: string) => void;
   /** Navigate to another stream, optionally to a specific cell or source */
   onNavigateToStream: (streamId: string, targetId: string, targetType?: 'cell' | 'source') => void;
@@ -16,6 +17,7 @@ export function SearchModal({
   isOpen,
   onClose,
   currentStreamId,
+  isStreamOpen,
   onNavigateToCell,
   onNavigateToStream,
   onNavigateToSource,
@@ -67,6 +69,12 @@ export function SearchModal({
     // Increment sequence for this request
     const currentSequence = ++requestSequenceRef.current;
 
+    if (!currentStreamId) {
+      setResults({ currentStreamResults: [], otherStreamResults: [] });
+      setLoading(false);
+      return;
+    }
+
     debounceRef.current = window.setTimeout(async () => {
       try {
         const response = await bridge.sendAsync<HybridSearchResults>('hybridSearch', {
@@ -107,8 +115,17 @@ export function SearchModal({
     : [];
 
   // Handle clicking on a search result
+  const navigateToResult = useCallback((result: SearchResult) => {
+    const targetId = result.sourceType === 'chunk' && result.sourceId
+      ? result.sourceId
+      : result.id;
+    const targetType = result.sourceType === 'chunk' ? 'source' : 'cell';
+    onClose();
+    onNavigateToStream(result.streamId, targetId, targetType);
+  }, [onClose, onNavigateToStream]);
+
   const handleResultClick = useCallback((result: SearchResult) => {
-    if (result.streamId === currentStreamId) {
+    if (isStreamOpen && result.streamId === currentStreamId) {
       // Current stream
       onClose();
       if (result.sourceType === 'chunk' && result.sourceId) {
@@ -118,11 +135,13 @@ export function SearchModal({
         // Cell result: scroll to cell
         onNavigateToCell(result.id);
       }
+    } else if (!isStreamOpen) {
+      navigateToResult(result);
     } else {
       // Other stream: show expanded preview
       setExpandedResult(result);
     }
-  }, [currentStreamId, onClose, onNavigateToCell, onNavigateToSource]);
+  }, [currentStreamId, isStreamOpen, navigateToResult, onClose, onNavigateToCell, onNavigateToSource]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -150,13 +169,7 @@ export function SearchModal({
 
   const handleGoToStream = () => {
     if (expandedResult) {
-      onClose();
-      // For chunk results, navigate to the source; for cells, navigate to the cell
-      const targetId = expandedResult.sourceType === 'chunk' && expandedResult.sourceId
-        ? expandedResult.sourceId
-        : expandedResult.id;
-      const targetType = expandedResult.sourceType === 'chunk' ? 'source' : 'cell';
-      onNavigateToStream(expandedResult.streamId, targetId, targetType);
+      navigateToResult(expandedResult);
     }
   };
 
@@ -259,11 +272,18 @@ interface SearchResultItemProps {
 function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps) {
   const icon = getResultIcon(result);
   const badge = getMatchBadge(result.matchType);
+  const title = result.sourceType === 'chunk'
+    ? result.shortTitle ?? result.title
+    : result.title;
+  const fullTitle = result.sourceType === 'chunk'
+    ? result.sourceName ?? result.title
+    : result.title;
 
   return (
     <button
       className={`search-result-item ${isSelected ? 'search-result-item--selected' : ''}`}
       onClick={onClick}
+      title={fullTitle}
     >
       <span className="search-result-icon">{icon}</span>
       <div className="search-result-content">
@@ -271,7 +291,7 @@ function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps
           {result.streamTitle !== '' && result.sourceType === 'cell' && (
             <span className="search-result-stream">[{result.streamTitle}]</span>
           )}
-          {result.title}
+          {title}
         </div>
         <div className="search-result-snippet">{result.snippet}</div>
       </div>

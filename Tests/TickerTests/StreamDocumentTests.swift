@@ -428,6 +428,57 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
     }
 }
 
+private actor MockRestatementProvider: RestatementProviding {
+    private var responses: [String?]
+    private var inputs: [String] = []
+
+    init(responses: [String?]) {
+        self.responses = responses
+    }
+
+    func restate(_ s: String) async -> String? {
+        inputs.append(s)
+        return responses.isEmpty ? nil : responses.removeFirst()
+    }
+
+    func inputCount() -> Int {
+        inputs.count
+    }
+}
+
+private actor BlockingRestatementProvider: RestatementProviding {
+    private var continuation: CheckedContinuation<String?, Never>?
+    private var inputs: [String] = []
+
+    func restate(_ s: String) async -> String? {
+        inputs.append(s)
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func complete(_ value: String?) {
+        continuation?.resume(returning: value)
+        continuation = nil
+    }
+
+    func inputCount() -> Int {
+        inputs.count
+    }
+}
+
+private actor AutoTitleNotificationCounter {
+    private var count = 0
+
+    func increment() {
+        count += 1
+    }
+
+    func value() -> Int {
+        count
+    }
+}
+
 final class StreamDocumentTests: XCTestCase {
     private enum TestPDFError: Error {
         case creationFailed
@@ -602,6 +653,215 @@ final class StreamDocumentTests: XCTestCase {
             try service.saveSource(source)
             XCTAssertEqual(try service.loadSource(id: sourceId)?.aiExcluded, false)
             XCTAssertEqual(try service.loadStream(id: streamId)?.sources.first?.aiExcluded, false)
+        }
+    }
+
+    func test_v18MigrationAddsLivingAutoTitleColumnsToFreshDatabase() throws {
+        try withTempPersistenceServiceAndURL { _, dbURL, _ in
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let columns = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(streams)").map { row -> String in
+                    row["name"]
+                }
+            }
+
+            XCTAssertTrue(columns.contains("title_locked"))
+            XCTAssertTrue(columns.contains("auto_titled_at"))
+            XCTAssertTrue(columns.contains("auto_titled_length"))
+            XCTAssertTrue(columns.contains("source_scope"))
+        }
+    }
+
+    func test_v18MigrationBackfillsExistingCustomTitlesLocked() throws {
+        let customStreamId = UUID()
+        let untitledStreamId = UUID()
+
+        try withSeededV10Database { db in
+            try insertStream(db, id: customStreamId, title: "Claimed title", createdAt: 900)
+            try insertStream(db, id: untitledStreamId, title: "Untitled", createdAt: 901)
+        } body: { dbURL, fileManager in
+            let service = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+
+            let customState = try XCTUnwrap(service.loadAutoTitleState(streamId: customStreamId))
+            let untitledState = try XCTUnwrap(service.loadAutoTitleState(streamId: untitledStreamId))
+
+            XCTAssertTrue(customState.titleLocked)
+            XCTAssertFalse(untitledState.titleLocked)
+        }
+    }
+
+    func test_updateStreamTitleLocksAndUnclaimsTitle() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Untitled")
+            try service.saveStream(stream)
+
+            try service.updateStreamTitle(id: stream.id, title: "Manual title")
+            var state = try XCTUnwrap(service.loadAutoTitleState(streamId: stream.id))
+            XCTAssertEqual(state.title, "Manual title")
+            XCTAssertTrue(state.titleLocked)
+
+            try service.updateStreamTitle(id: stream.id, title: "Untitled")
+            state = try XCTUnwrap(service.loadAutoTitleState(streamId: stream.id))
+            XCTAssertEqual(state.title, "Untitled")
+            XCTAssertFalse(state.titleLocked)
+
+            try service.updateStreamTitle(id: stream.id, title: "")
+            state = try XCTUnwrap(service.loadAutoTitleState(streamId: stream.id))
+            XCTAssertEqual(state.title, "")
+            XCTAssertFalse(state.titleLocked)
+        }
+    }
+
+    func test_autoTitleServiceTitlesUntitledStreamOnFirstSave() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Untitled")
+            try service.saveStream(stream)
+
+            let provider = MockRestatementProvider(responses: ["Generated Title"])
+            let notifications = AutoTitleNotificationCounter()
+            let autoTitleService = AutoTitleService(
+                persistence: service,
+                restatementProvider: provider,
+                now: { Date(timeIntervalSince1970: 1_000) },
+                onStreamsChanged: { await notifications.increment() }
+            )
+            let markdown = "Short note"
+
+            await autoTitleService.scheduleIfNeeded(streamId: stream.id, markdown: markdown)
+
+            let updated = try XCTUnwrap(service.loadStream(id: stream.id))
+            let state = try XCTUnwrap(service.loadAutoTitleState(streamId: stream.id))
+            let inputCount = await provider.inputCount()
+            let notificationCount = await notifications.value()
+            XCTAssertEqual(updated.title, "Generated Title")
+            XCTAssertEqual(state.autoTitledLength, markdown.utf16.count)
+            XCTAssertEqual(inputCount, 1)
+            XCTAssertEqual(notificationCount, 1)
+        }
+    }
+
+    func test_autoTitleServiceSkipsUnderMinimumDelta() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Untitled")
+            try service.saveStream(stream)
+            try service.applyAutoTitle(
+                streamId: stream.id,
+                title: "Prior Title",
+                markdownLength: 200,
+                now: Date(timeIntervalSince1970: 0)
+            )
+
+            let provider = MockRestatementProvider(responses: ["Should Not Run"])
+            let autoTitleService = AutoTitleService(
+                persistence: service,
+                restatementProvider: provider,
+                now: { Date(timeIntervalSince1970: 1_000) }
+            )
+
+            await autoTitleService.scheduleIfNeeded(
+                streamId: stream.id,
+                markdown: String(repeating: "a", count: 250)
+            )
+
+            let inputCount = await provider.inputCount()
+            XCTAssertEqual(inputCount, 0)
+            XCTAssertEqual(try service.loadStream(id: stream.id)?.title, "Prior Title")
+        }
+    }
+
+    func test_autoTitleServiceSkipsRecentAutoTitle() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Untitled")
+            try service.saveStream(stream)
+            try service.applyAutoTitle(
+                streamId: stream.id,
+                title: "Recent Title",
+                markdownLength: 0,
+                now: Date(timeIntervalSince1970: 1_000)
+            )
+
+            let provider = MockRestatementProvider(responses: ["Should Not Run"])
+            let autoTitleService = AutoTitleService(
+                persistence: service,
+                restatementProvider: provider,
+                now: { Date(timeIntervalSince1970: 1_060) }
+            )
+
+            await autoTitleService.scheduleIfNeeded(
+                streamId: stream.id,
+                markdown: String(repeating: "a", count: 250)
+            )
+
+            let inputCount = await provider.inputCount()
+            XCTAssertEqual(inputCount, 0)
+            XCTAssertEqual(try service.loadStream(id: stream.id)?.title, "Recent Title")
+        }
+    }
+
+    func test_autoTitleServiceRunsWhenDeltaIsAtLeastTwoHundredUTF16Units() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Untitled")
+            try service.saveStream(stream)
+            try service.applyAutoTitle(
+                streamId: stream.id,
+                title: "Prior Title",
+                markdownLength: 0,
+                now: Date(timeIntervalSince1970: 0)
+            )
+
+            let provider = MockRestatementProvider(responses: ["Updated Title"])
+            let autoTitleService = AutoTitleService(
+                persistence: service,
+                restatementProvider: provider,
+                now: { Date(timeIntervalSince1970: 1_000) }
+            )
+
+            await autoTitleService.scheduleIfNeeded(
+                streamId: stream.id,
+                markdown: String(repeating: "🙂", count: 100)
+            )
+
+            let inputCount = await provider.inputCount()
+            XCTAssertEqual(inputCount, 1)
+            XCTAssertEqual(try service.loadStream(id: stream.id)?.title, "Updated Title")
+            XCTAssertEqual(
+                try service.loadAutoTitleState(streamId: stream.id)?.autoTitledLength,
+                String(repeating: "🙂", count: 100).utf16.count
+            )
+        }
+    }
+
+    func test_autoTitleServiceDropsDuplicateInFlightRequestForStream() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Untitled")
+            try service.saveStream(stream)
+
+            let provider = BlockingRestatementProvider()
+            let autoTitleService = AutoTitleService(
+                persistence: service,
+                restatementProvider: provider,
+                now: { Date(timeIntervalSince1970: 1_000) }
+            )
+            let markdown = String(repeating: "a", count: 250)
+            let task = Task {
+                await autoTitleService.scheduleIfNeeded(streamId: stream.id, markdown: markdown)
+            }
+
+            for _ in 0..<50 {
+                if await provider.inputCount() > 0 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            var inputCount = await provider.inputCount()
+            XCTAssertEqual(inputCount, 1)
+
+            await autoTitleService.scheduleIfNeeded(streamId: stream.id, markdown: markdown + "more")
+            inputCount = await provider.inputCount()
+            XCTAssertEqual(inputCount, 1)
+
+            await provider.complete("Generated Once")
+            await task.value
+
+            XCTAssertEqual(try service.loadStream(id: stream.id)?.title, "Generated Once")
         }
     }
 
@@ -1751,6 +2011,15 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
+    func test_sourceShortTitleFreezesCanonicalUglyFilename() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "Forth Programmer's Handbook (3rd Edition) -- Edward K_ Conklin … -- Anna's Archive.pdf"
+            ),
+            "Forth Progr...d Edition)"
+        )
+    }
+
     func test_sourceShortTitleUsesPlainFilenameStem() throws {
         XCTAssertEqual(
             SourceShortTitle.derive(displayName: "report.pdf"),
@@ -2006,12 +2275,37 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_streamCodecPreviewLineSkipsHeadingsAndImages() throws {
+        let markdown = """
+        # Heading to skip
+
+        ![diagram](ticker-asset://stream/diagram.png)
+
+        First readable line.
+        """
+
+        XCTAssertEqual(StreamCodec.previewLine(from: markdown), "First readable line.")
+    }
+
+    func test_streamCodecPreviewLineStripsMarkdownMarksAndLinks() throws {
+        let markdown = "> **# [Linked idea](https://example.com)** with `code`"
+
+        XCTAssertEqual(StreamCodec.previewLine(from: markdown), "Linked idea with code")
+    }
+
     func test_loadStreamSummariesUsesDocumentMarkdownAndUpdatedAtOrdering() throws {
         try withTempPersistenceService { service in
             let olderStream = Stream(title: "Older Stream")
             let newerStream = Stream(title: "Newer Stream")
             try service.saveStream(olderStream)
             try service.saveStream(newerStream)
+            try service.saveSource(SourceReference(
+                streamId: newerStream.id,
+                displayName: "Notebook.pdf",
+                fileType: .pdf,
+                bookmarkData: Data("bookmark".utf8),
+                status: .ready
+            ))
 
             let olderMarkdown = "# Older Notes\n\nThe older document preview comes from markdown."
             let newerMarkdown = """
@@ -2042,6 +2336,8 @@ final class StreamDocumentTests: XCTestCase {
 
             let newerSummary = try XCTUnwrap(summaries.first { $0.id == newerStream.id })
             XCTAssertEqual(newerSummary.previewText, newerMarkdown)
+            XCTAssertEqual(newerSummary.sourceCount, 1)
+            XCTAssertEqual(newerSummary.sourceShortTitle, "Notebook")
             XCTAssertEqual(newerSummary.charCount, newerMarkdown.count)
             XCTAssertEqual(newerSummary.imageCount, 2)
 
@@ -2049,6 +2345,14 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(olderSummary.previewText, olderMarkdown)
             XCTAssertEqual(olderSummary.charCount, olderMarkdown.count)
             XCTAssertEqual(olderSummary.imageCount, 0)
+
+            let payload = StreamCodec.encodeSummaries([newerSummary])
+            let encodedStreams = try XCTUnwrap(payload["streams"]?.value as? [[String: Any]])
+            let encodedSummary = try XCTUnwrap(encodedStreams.first)
+            XCTAssertEqual(encodedSummary["previewLine"] as? String, "Newer document preview")
+            XCTAssertEqual(encodedSummary["sourceShortTitle"] as? String, "Notebook")
+            XCTAssertEqual(encodedSummary["wordCount"] as? Int, newerMarkdown.split { $0.isWhitespace }.count)
+            XCTAssertEqual(encodedSummary["charCount"] as? Int, newerMarkdown.count)
         }
     }
 

@@ -22,11 +22,14 @@ export interface StreamSummary {
   id: string;
   title: string;
   sourceCount: number;
+  sourceShortTitle?: string;
   cellCount: number;
   charCount: number;
+  wordCount: number;
   imageCount: number;
   updatedAt: string;
   previewText: string | null;
+  previewLine: string | null;
 }
 
 /** A reference to an external file */
@@ -34,6 +37,7 @@ export interface SourceReference {
   id: string;
   streamId: string;
   displayName: string;
+  shortTitle: string;
   fileType: SourceFileType;
   status: SourceStatus;
   embeddingStatus: SourceEmbeddingStatus;
@@ -65,6 +69,7 @@ export interface SearchResult {
   streamTitle: string;
   sourceType: 'cell' | 'chunk';
   title: string;
+  shortTitle?: string;
   snippet: string;
   cellType?: 'text' | 'aiResponse' | 'quote';
   /** Source ID for chunk results (to navigate to source panel) */

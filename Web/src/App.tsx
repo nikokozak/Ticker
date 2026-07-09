@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge, Stream, StreamSummary } from './types';
 import { StreamEditor } from './components/StreamEditor';
+import { SearchModal } from './components/SearchModal';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
 import { useToastStore } from './store/toastStore';
@@ -75,12 +76,14 @@ export function App() {
   const [currentStream, setCurrentStream] = useState<Stream | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingStream, setIsLoadingStream] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const addToast = useToastStore((state) => state.addToast);
   const viewRef = useRef(view);
   const currentStreamIdRef = useRef<string | null>(currentStream?.id ?? null);
 
   // Proxy auth state - gates main UI until key is validated
   const [proxyAuthState, setProxyAuthState] = useState<ProxyAuthState>('validating');
+  const isAuthGated = proxyAuthState !== 'active' && proxyAuthState !== 'degradedOffline';
 
   // Load initial proxy auth state
   useEffect(() => {
@@ -103,6 +106,19 @@ export function App() {
     viewRef.current = view;
     currentStreamIdRef.current = currentStream?.id ?? null;
   }, [view, currentStream?.id]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
+      const canSearch = viewRef.current === 'list' || (viewRef.current === 'stream' && currentStreamIdRef.current);
+      if (isAuthGated || !canSearch) return;
+      event.preventDefault();
+      setShowSearch(true);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isAuthGated]);
 
   // Keep native file-drop routing in sync with the active page.
   useEffect(() => {
@@ -226,8 +242,24 @@ export function App() {
       setPendingCellId(targetId);
       setPendingSourceId(null);
     }
+
+    if (viewRef.current === 'stream' && currentStreamIdRef.current === streamId) {
+      setView('stream');
+      return;
+    }
+
     setIsLoadingStream(true);
     bridge.send({ type: 'loadStream', payload: { id: streamId } });
+  };
+
+  const handleNavigateToCell = (cellId: string) => {
+    setPendingCellId(cellId);
+    setPendingSourceId(null);
+  };
+
+  const handleNavigateToSource = (sourceId: string) => {
+    setPendingSourceId(sourceId);
+    setPendingCellId(null);
   };
 
   const handleOpenSettings = () => {
@@ -237,9 +269,6 @@ export function App() {
   const handleCloseSettings = () => {
     setView('list');
   };
-
-  // Check if auth state requires gate
-  const isAuthGated = proxyAuthState !== 'active' && proxyAuthState !== 'degradedOffline';
 
   let viewContent: JSX.Element;
 
@@ -263,7 +292,6 @@ export function App() {
         stream={currentStream}
         onBack={handleBackToList}
         onDelete={handleDeleteStream}
-        onNavigateToStream={handleNavigateToStream}
         pendingCellId={pendingCellId}
         pendingSourceId={pendingSourceId}
         onClearPendingCell={() => setPendingCellId(null)}
@@ -286,6 +314,15 @@ export function App() {
   return (
     <>
       {viewContent}
+      <SearchModal
+        isOpen={showSearch}
+        onClose={() => setShowSearch(false)}
+        currentStreamId={currentStream?.id ?? streams[0]?.id ?? null}
+        isStreamOpen={view === 'stream' && currentStream !== null}
+        onNavigateToCell={handleNavigateToCell}
+        onNavigateToStream={handleNavigateToStream}
+        onNavigateToSource={handleNavigateToSource}
+      />
       <ToastStack />
     </>
   );
@@ -325,12 +362,12 @@ function formatCompactCount(count: number): string {
 function formatStreamMetadata(stream: StreamSummary): string {
   const segments = [formatRelativeTime(stream.updatedAt)];
 
-  if (stream.sourceCount > 0) {
-    segments.push(`${stream.sourceCount} ${stream.sourceCount === 1 ? 'source' : 'sources'}`);
+  if (stream.sourceCount === 1) {
+    segments.push(stream.sourceShortTitle ?? '1 source');
+  } else if (stream.sourceCount > 1) {
+    segments.push(`${stream.sourceCount} sources`);
   }
-  if (stream.charCount > 0) {
-    segments.push(`${formatCompactCount(stream.charCount)} chars`);
-  }
+  segments.push(`${formatCompactCount(stream.wordCount)} ${stream.wordCount === 1 ? 'word' : 'words'}`);
   if (stream.imageCount > 0) {
     segments.push(`${stream.imageCount} ${stream.imageCount === 1 ? 'image' : 'images'}`);
   }
@@ -377,6 +414,9 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
               disabled={isLoadingStream}
             >
               <span className="stream-title">{stream.title}</span>
+              {stream.previewLine && (
+                <span className="stream-preview">{stream.previewLine}</span>
+              )}
               <span className="stream-meta">
                 {formatStreamMetadata(stream)}
               </span>

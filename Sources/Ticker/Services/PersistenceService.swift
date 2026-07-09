@@ -424,6 +424,20 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v18_living_auto_titles") { db in
+            try db.execute(sql: "ALTER TABLE streams ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0")
+            try db.execute(sql: "ALTER TABLE streams ADD COLUMN auto_titled_at DOUBLE")
+            try db.execute(sql: "ALTER TABLE streams ADD COLUMN auto_titled_length INTEGER")
+            try db.execute(sql: "ALTER TABLE streams ADD COLUMN source_scope TEXT NOT NULL DEFAULT 'auto'")
+            try db.execute(sql: """
+                UPDATE streams
+                SET title_locked = 1
+                WHERE title IS NOT NULL
+                  AND title != ''
+                  AND title != 'Untitled'
+            """)
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -508,6 +522,7 @@ final class PersistenceService {
                 SELECT
                     s.id, s.title, s.updated_at,
                     (SELECT COUNT(*) FROM sources WHERE stream_id = s.id) as source_count,
+                    (SELECT display_name FROM sources WHERE stream_id = s.id ORDER BY added_at LIMIT 1) as source_display_name,
                     (SELECT COUNT(*) FROM cells WHERE stream_id = s.id) as cell_count,
                     (SELECT markdown FROM stream_documents WHERE stream_id = s.id) as document_markdown,
                     COALESCE(
@@ -522,10 +537,13 @@ final class PersistenceService {
                 // ponytail: raw markdown counts are the ceiling here; upgrade to parser-backed rendered-text/image metrics if list metadata needs semantic precision.
                 let charCount = documentMarkdown.count
                 let imageCount = Self.countMarkdownImageTokens(in: documentMarkdown)
+                let sourceCount: Int = row["source_count"]
+                let sourceDisplayName: String? = row["source_display_name"]
                 return StreamSummary(
                     id: UUID(uuidString: row["id"])!,
                     title: row["title"],
-                    sourceCount: row["source_count"],
+                    sourceCount: sourceCount,
+                    sourceShortTitle: sourceCount == 1 ? sourceDisplayName.map { SourceShortTitle.derive(displayName: $0) } : nil,
                     cellCount: row["cell_count"],
                     charCount: charCount,
                     imageCount: imageCount,
@@ -600,6 +618,83 @@ final class PersistenceService {
                 sql: "UPDATE streams SET title = ?, updated_at = ? WHERE id = ?",
                 arguments: [stream.title, Date().timeIntervalSince1970, stream.id.uuidString]
             )
+        }
+    }
+
+    @discardableResult
+    func updateStreamTitle(id: UUID, title: String) throws -> Bool {
+        let now = Date().timeIntervalSince1970
+        let locked = !(title.isEmpty || title == "Untitled")
+
+        return try dbQueue.write { db in
+            guard try Row.fetchOne(db, sql: "SELECT id FROM streams WHERE id = ?", arguments: [id.uuidString]) != nil else {
+                return false
+            }
+
+            try db.execute(
+                sql: """
+                    UPDATE streams
+                    SET title = ?, title_locked = ?, updated_at = ?
+                    WHERE id = ?
+                """,
+                arguments: [title, locked ? 1 : 0, now, id.uuidString]
+            )
+            return true
+        }
+    }
+
+    func loadAutoTitleState(streamId: UUID) throws -> AutoTitleState? {
+        try dbQueue.read { db in
+            try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id, title, title_locked, auto_titled_at, auto_titled_length
+                    FROM streams
+                    WHERE id = ?
+                """,
+                arguments: [streamId.uuidString]
+            ).map { row in
+                let autoTitledAt: Double? = row["auto_titled_at"]
+                let titleLocked: Int = row["title_locked"]
+                return AutoTitleState(
+                    streamId: UUID(uuidString: row["id"]) ?? streamId,
+                    title: row["title"],
+                    titleLocked: titleLocked != 0,
+                    autoTitledAt: autoTitledAt.map(Date.init(timeIntervalSince1970:)),
+                    autoTitledLength: row["auto_titled_length"]
+                )
+            }
+        }
+    }
+
+    @discardableResult
+    func applyAutoTitle(streamId: UUID, title: String, markdownLength: Int, now: Date = Date()) throws -> Bool {
+        try dbQueue.write { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT title_locked FROM streams WHERE id = ?",
+                arguments: [streamId.uuidString]
+            ) else {
+                return false
+            }
+            let titleLocked: Int = row["title_locked"]
+            guard titleLocked == 0 else { return false }
+
+            try db.execute(
+                sql: """
+                    UPDATE streams
+                    SET title = ?, auto_titled_at = ?, auto_titled_length = ?, updated_at = ?
+                    WHERE id = ?
+                """,
+                arguments: [
+                    title,
+                    now.timeIntervalSince1970,
+                    markdownLength,
+                    now.timeIntervalSince1970,
+                    streamId.uuidString
+                ]
+            )
+            return true
         }
     }
 

@@ -12,6 +12,7 @@ struct ServiceContainer {
     let persistence: PersistenceService?
     let sourceService: SourceService?
     let ingestService: IngestService?
+    let autoTitleService: AutoTitleService?
     let retrievalService: RetrievalService?
     let searchService: SearchService?
 
@@ -41,6 +42,16 @@ struct ServiceContainer {
 
             let sourceService = SourceService(persistence: persistence)
             self.sourceService = sourceService
+
+            self.autoTitleService = AutoTitleService(
+                persistence: persistence,
+                restatementProvider: proxyService,
+                onStreamsChanged: { [bridgeService] in
+                    await MainActor.run {
+                        bridgeService.send(BridgeMessage(type: "streamsChanged", payload: [:]))
+                    }
+                }
+            )
 
             let ingestService = IngestService(
                 persistence: persistence,
@@ -77,6 +88,7 @@ struct ServiceContainer {
             self.persistence = nil
             self.sourceService = nil
             self.ingestService = nil
+            self.autoTitleService = nil
             self.retrievalService = nil
             self.searchService = nil
         }

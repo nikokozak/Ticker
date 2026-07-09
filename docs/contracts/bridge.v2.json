@@ -60,14 +60,14 @@
         "requiredPayloadKeys": ["relativePath", "assetUrl", "requestId"]
       },
       "pdfHighlightLinked": {
-        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "highlightId", "page", "quote"]
+        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page", "quote"]
       },
       "pdfPaneStateChanged": {
         "requiredPayloadKeys": ["visible"],
-        "optionalPayloadKeys": ["streamId", "sourceId", "sourceName"]
+        "optionalPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle"]
       },
       "pdfAnchorPlaced": {
-        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "highlightId", "page"]
+        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page"]
       },
       "pdfAnchorPickCancelled": {
         "requiredPayloadKeys": ["streamId"]

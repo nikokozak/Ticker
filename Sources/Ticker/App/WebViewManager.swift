@@ -196,8 +196,7 @@ final class WebViewManager: NSObject {
         }
 
         do {
-            let suggestedTitle = pdfURL.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
-            let streamTitle = suggestedTitle.isEmpty ? "Untitled" : suggestedTitle
+            let streamTitle = SourceShortTitle.derive(displayName: pdfURL.lastPathComponent)
             let createdStream = try persistence.createStream(title: streamTitle)
             currentStreamIdForFileDrops = createdStream.id
 
@@ -304,6 +303,7 @@ final class WebViewManager: NSObject {
                 "streamId": AnyCodable(payload.streamId.uuidString),
                 "sourceId": AnyCodable(payload.highlight.sourceId.uuidString),
                 "sourceName": AnyCodable(payload.sourceName),
+                "shortTitle": AnyCodable(SourceShortTitle.derive(displayName: payload.sourceName)),
                 "highlightId": AnyCodable(payload.highlight.id.uuidString),
                 "page": AnyCodable(payload.highlight.page),
                 "quote": AnyCodable(payload.highlight.quote)
@@ -326,6 +326,7 @@ final class WebViewManager: NSObject {
         }
         if let sourceName {
             payload["sourceName"] = AnyCodable(sourceName)
+            payload["shortTitle"] = AnyCodable(SourceShortTitle.derive(displayName: sourceName))
         }
         bridgeService.send(BridgeMessage(type: "pdfPaneStateChanged", payload: payload))
     }
@@ -337,6 +338,7 @@ final class WebViewManager: NSObject {
                 "streamId": AnyCodable(payload.streamId.uuidString),
                 "sourceId": AnyCodable(payload.highlight.sourceId.uuidString),
                 "sourceName": AnyCodable(payload.sourceName),
+                "shortTitle": AnyCodable(SourceShortTitle.derive(displayName: payload.sourceName)),
                 "highlightId": AnyCodable(payload.highlight.id.uuidString),
                 "page": AnyCodable(payload.highlight.page)
             ]

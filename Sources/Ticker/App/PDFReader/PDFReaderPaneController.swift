@@ -460,7 +460,7 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         pdfPanePDFView.document = document
-        pdfPaneTitleField.stringValue = makePDFPaneHeader(displayName)
+        setPDFPaneHeader(displayName: displayName)
         setPDFPaneLinkButtonEnabled(false)
         updatePDFPaneStatus()
         activePDFContext = (
@@ -1207,9 +1207,15 @@ final class PDFReaderPaneController: NSViewController {
         )
     }
 
-    private func makePDFPaneHeader(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "PDF Source" : trimmed
+    private func setPDFPaneHeader(displayName: String?) {
+        let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            pdfPaneTitleField.stringValue = "PDF Source"
+            pdfPaneTitleField.toolTip = nil
+        } else {
+            pdfPaneTitleField.stringValue = SourceShortTitle.derive(displayName: trimmed)
+            pdfPaneTitleField.toolTip = trimmed
+        }
     }
 
     private func releaseActivePDFContext() {
@@ -1220,7 +1226,7 @@ final class PDFReaderPaneController: NSViewController {
         }
         activePDFContext = nil
         pdfPanePDFView.document = nil
-        pdfPaneTitleField.stringValue = "PDF Source"
+        setPDFPaneHeader(displayName: nil)
         setPDFPaneLinkButtonEnabled(false)
         updatePDFPaneStatus()
     }
@@ -1643,9 +1649,9 @@ final class PDFReaderPaneController: NSViewController {
         isAnchorPickMode = false
         pdfPanePDFView.enclosingScrollView?.documentCursor = nil
         if let context = activePDFContext {
-            pdfPaneTitleField.stringValue = makePDFPaneHeader(context.sourceName)
+            setPDFPaneHeader(displayName: context.sourceName)
         } else {
-            pdfPaneTitleField.stringValue = "PDF Source"
+            setPDFPaneHeader(displayName: nil)
         }
         pdfPaneTitleField.textColor = PDFPaneStyle.text
         updatePDFPaneStatus()
