@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { SearchResult, HybridSearchResults, bridge } from '../types';
 import { DocumentIcon, SearchIcon, SparkleIcon, Spinner } from './icons';
+import { markdownPreviewLine } from '../utils/markdownPreview';
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -208,7 +209,7 @@ export function SearchModal({
               </button>
             </div>
             <div className="search-modal-preview-title">{expandedResult.title}</div>
-            <div className="search-modal-preview-content">{expandedResult.snippet}</div>
+            <div className="search-modal-preview-content">{markdownPreviewLine(expandedResult.snippet)}</div>
             <button
               className="search-modal-go-button"
               onClick={handleGoToStream}
@@ -294,7 +295,7 @@ function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps
           )}
           {title}
         </div>
-        <div className="search-result-snippet">{result.snippet}</div>
+        <div className="search-result-snippet">{markdownPreviewLine(result.snippet)}</div>
       </div>
       {badge && <span className="search-result-badge">{badge}</span>}
     </button>

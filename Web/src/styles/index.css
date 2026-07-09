@@ -1155,6 +1155,33 @@ body {
   color: var(--color-text-secondary);
 }
 
+.document-editor-codemirror .cm-md-inline-code {
+  background: var(--surface);
+  border-radius: var(--radius-small);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+}
+
+.document-editor-codemirror .cm-codeblock-line {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+
+.document-editor-codemirror .cm-arrived {
+  animation: arrived-fade calc(var(--duration-base) + var(--duration-base) + var(--duration-base)) ease-out;
+}
+
+@keyframes arrived-fade {
+  from {
+    background: var(--success-soft);
+  }
+
+  to {
+    background: transparent;
+  }
+}
+
 .document-editor-codemirror .cm-ai-writing-range {
   color: var(--color-text-secondary);
   background: linear-gradient(

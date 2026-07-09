@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { EditorView } from '@codemirror/view';
-import { Transaction, type Extension } from '@codemirror/state';
+import { Decoration, EditorView } from '@codemirror/view';
+import { RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
@@ -332,6 +332,64 @@ function replacementPreview(text: string): string {
   return compact.length > 60 ? `${compact.slice(0, 60)}…` : compact;
 }
 
+type ArrivalRange = {
+  id: string;
+  from: number;
+  to: number;
+};
+
+const addArrivalEffect = StateEffect.define<ArrivalRange>();
+const clearArrivalEffect = StateEffect.define<string>();
+const arrivedLineDecoration = Decoration.line({ class: 'cm-arrived' });
+
+const arrivalField = StateField.define<readonly ArrivalRange[]>({
+  create: () => [],
+  update(value, transaction) {
+    let next = value
+      .map((range) => ({
+        id: range.id,
+        from: transaction.changes.mapPos(range.from, -1),
+        to: transaction.changes.mapPos(range.to, 1),
+      }))
+      .filter((range) => range.from < range.to);
+
+    for (const effect of transaction.effects) {
+      if (effect.is(addArrivalEffect)) {
+        next = [...next, effect.value];
+      } else if (effect.is(clearArrivalEffect)) {
+        next = next.filter((range) => range.id !== effect.value);
+      }
+    }
+
+    return next;
+  },
+  provide: (field) => EditorView.decorations.compute([field], (state) => {
+    const lineStarts = new Set<number>();
+    for (const range of state.field(field)) {
+      const end = Math.min(range.to, state.doc.length);
+      let line = state.doc.lineAt(Math.min(range.from, state.doc.length));
+      while (line.from < end) {
+        lineStarts.add(line.from);
+        if (line.to >= end || line.number >= state.doc.lines) break;
+        line = state.doc.line(line.number + 1);
+      }
+    }
+
+    const builder = new RangeSetBuilder<Decoration>();
+    for (const lineFrom of [...lineStarts].sort((a, b) => a - b)) {
+      builder.add(lineFrom, lineFrom, arrivedLineDecoration);
+    }
+    return builder.finish();
+  }),
+});
+
+function durationTokenMs(element: Element, token: string, fallbackMs: number): number {
+  const value = getComputedStyle(element).getPropertyValue(token).trim();
+  if (value.endsWith('ms')) return Number.parseFloat(value);
+  if (value.endsWith('s')) return Number.parseFloat(value) * 1000;
+  return fallbackMs;
+}
+
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.heading,
@@ -370,8 +428,7 @@ const markdownHighlightStyle = HighlightStyle.define([
   },
   {
     tag: t.monospace,
-    color: 'var(--color-text-secondary)',
-    fontFamily: 'var(--font-mono)',
+    class: 'cm-md-inline-code',
   },
   {
     tag: [t.quote, t.contentSeparator, t.list],
@@ -836,13 +893,23 @@ export function StreamEditor({
         const spans = payloadSpansForDoc(message.payload?.spans, nextMarkdown);
 
         if (view) {
+          const arrivalId = crypto.randomUUID();
           view.dispatch({
             changes: { from: insertion.from, insert },
             effects: [
               EditorView.scrollIntoView(insertion.insertedEnd, { y: 'nearest' }),
               addSpans.of(spans),
+              addArrivalEffect.of({ id: arrivalId, from: insertion.from, to: insertion.insertedEnd }),
             ],
           });
+          window.setTimeout(() => {
+            if (editorViewRef.current === view) {
+              view.dispatch({
+                effects: clearArrivalEffect.of(arrivalId),
+                annotations: Transaction.addToHistory.of(false),
+              });
+            }
+          }, durationTokenMs(view.dom, '--duration-base', 200) * 3);
         }
 
         if (Number.isFinite(revision)) {
@@ -2441,6 +2508,7 @@ export function StreamEditor({
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
+                arrivalField,
                 provenanceField,
                 markdownImageWidgetExtension,
                 provenanceXray,

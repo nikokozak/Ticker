@@ -103,6 +103,7 @@ function markdownTreeForDecorations(view: EditorView, ensureInitialParse: boolea
 function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = false): DecorationSet {
   const decorations: Array<Range<Decoration>> = [];
   const blockquoteLineStarts = new Set<number>();
+  const codeblockLineStarts = new Set<number>();
   const tree = markdownTreeForDecorations(view, ensureInitialParse);
   const rawLinksLineFrom = view.state.field(revealRawLinksField, false);
 
@@ -132,6 +133,22 @@ function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = 
           if (!blockquoteLineStarts.has(line.from)) {
             blockquoteLineStarts.add(line.from);
             decorations.push(Decoration.line({ class: 'cm-blockquote-line' }).range(line.from));
+          }
+          return;
+        }
+
+        if (node.name === 'FencedCode') {
+          const from = Math.max(node.from, visibleRange.from);
+          const to = Math.min(node.to, visibleRange.to);
+          let line = view.state.doc.lineAt(from);
+
+          while (line.from < to) {
+            if (!codeblockLineStarts.has(line.from)) {
+              codeblockLineStarts.add(line.from);
+              decorations.push(Decoration.line({ class: 'cm-codeblock-line' }).range(line.from));
+            }
+            if (line.to >= to || line.number >= view.state.doc.lines) break;
+            line = view.state.doc.line(line.number + 1);
           }
           return;
         }
