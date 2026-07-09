@@ -179,6 +179,7 @@ export function App() {
             ...payloadStream,
             sourceScope,
             spans: deserializeProvenanceSpans(message.payload?.spans),
+            marginNotes: (Array.isArray(message.payload?.marginNotes) ? message.payload.marginNotes : []) as Stream['marginNotes'],
             document: {
               ...payloadStream.document,
               scrollOffset: Number.isFinite(scrollOffset) ? scrollOffset : 0,
@@ -189,6 +190,14 @@ export function App() {
           setCurrentStream(loadedStream);
           setIsLoadingStream(false);
           setView('stream');
+          break;
+        }
+        case 'marginNotesChanged': {
+          const streamId = message.payload?.streamId as string | undefined;
+          const notes = (Array.isArray(message.payload?.notes) ? message.payload.notes : []) as Stream['marginNotes'];
+          if (streamId && streamId === currentStreamIdRef.current) {
+            setCurrentStream((stream) => stream ? { ...stream, marginNotes: notes } : stream);
+          }
           break;
         }
         case 'settingsLoaded': {
@@ -432,7 +441,14 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
               onClick={() => onSelect(stream.id)}
               disabled={isLoadingStream}
             >
-              <span className="stream-title">{stream.title}</span>
+              <span className="stream-title-row">
+                <span className="stream-title">{stream.title}</span>
+                {stream.openQuestionCount > 0 && (
+                  <span className="stream-open-questions">
+                    {stream.openQuestionCount} open {stream.openQuestionCount === 1 ? 'question' : 'questions'}
+                  </span>
+                )}
+              </span>
               {stream.previewLine && (
                 <span className="stream-preview">{stream.previewLine}</span>
               )}

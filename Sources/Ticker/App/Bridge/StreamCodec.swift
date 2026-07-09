@@ -60,6 +60,28 @@ enum StreamCodec {
         }
     }
 
+    static func encodeMarginNotes(_ notes: [MarginNote]) -> [[String: Any]] {
+        let formatter = ISO8601DateFormatter()
+        return notes.map { note in
+            var dict: [String: Any] = [
+                "noteId": note.noteId,
+                "streamId": note.streamId.uuidString,
+                "anchorStart": note.anchorStart,
+                "anchorEnd": note.anchorEnd,
+                "anchorHash": note.anchorHash,
+                "kind": note.kind,
+                "body": note.body,
+                "bodyHash": note.bodyHash,
+                "status": note.status,
+                "createdAt": formatter.string(from: note.createdAt)
+            ]
+            if let requestId = note.requestId {
+                dict["requestId"] = requestId
+            }
+            return dict
+        }
+    }
+
     static func encodeExchange(_ exchange: AIExchange) -> [String: Any] {
         [
             "requestId": exchange.requestId,
@@ -108,6 +130,7 @@ enum StreamCodec {
                     "charCount": summary.charCount,
                     "wordCount": wordCount(from: summary.previewText ?? ""),
                     "imageCount": summary.imageCount,
+                    "openQuestionCount": summary.openQuestionCount,
                     "previewLine": previewLine(from: summary.previewText ?? "") ?? "",
                     "updatedAt": formatter.string(from: summary.updatedAt)
                 ]

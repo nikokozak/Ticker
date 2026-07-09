@@ -51,6 +51,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         "saveStreamDocument",
         "saveScrollPosition",
         "setSourceScope",
+        "updateMarginNote",
         "openExternalURL",
         "getExchange",
         "exportStream"
@@ -100,12 +101,14 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 if let stream = try persistence.loadStream(id: id) {
                     let document = try persistence.loadOrCreateStreamDocument(streamId: id)
                     let spans = try persistence.loadSpans(streamId: id)
+                    let marginNotes = try persistence.loadMarginNotes(streamId: id)
                     let streamPayload = StreamCodec.encodeStream(stream, document: document)
                     let payload: [String: AnyCodable] = [
                         "stream": AnyCodable(streamPayload),
                         "sourceScope": AnyCodable(stream.sourceScope.rawValue),
                         "scrollOffset": AnyCodable(document.scrollOffset),
-                        "spans": AnyCodable(StreamCodec.encodeSpans(spans))
+                        "spans": AnyCodable(StreamCodec.encodeSpans(spans)),
+                        "marginNotes": AnyCodable(StreamCodec.encodeMarginNotes(marginNotes))
                     ]
                     bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
                     ingestService?.enqueuePendingSources(for: id)
@@ -125,7 +128,8 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     "stream": AnyCodable(streamPayload),
                     "sourceScope": AnyCodable(stream.sourceScope.rawValue),
                     "scrollOffset": AnyCodable(document.scrollOffset),
-                    "spans": AnyCodable(StreamCodec.encodeSpans([]))
+                    "spans": AnyCodable(StreamCodec.encodeSpans([])),
+                    "marginNotes": AnyCodable([])
                 ]
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
             } catch {
@@ -242,6 +246,26 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 _ = try persistence.setSourceScope(streamId: streamId, scope: scope)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to set source scope (\(DebugLog.errorSummary(error)))")
+            }
+
+        case "updateMarginNote":
+            guard let payload = message.payload,
+                  let noteId = payload["noteId"]?.value as? String,
+                  let status = payload["status"]?.value as? String,
+                  ["open", "dismissed", "promoted", "unanchored"].contains(status) else {
+                DebugLog.log("[StreamMessageHandler] Invalid updateMarginNote payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid updateMarginNote payload")
+                return
+            }
+            do {
+                if let result = try persistence.updateMarginNoteStatusAndLoadVisible(noteId: noteId, status: status) {
+                    await bridgeService.send(BridgeMessage(type: "marginNotesChanged", payload: [
+                        "streamId": AnyCodable(result.streamId.uuidString),
+                        "notes": AnyCodable(StreamCodec.encodeMarginNotes(result.notes))
+                    ]))
+                }
+            } catch {
+                DebugLog.log("[StreamMessageHandler] Failed to update margin note (\(DebugLog.errorSummary(error)))")
             }
 
         case "getExchange":

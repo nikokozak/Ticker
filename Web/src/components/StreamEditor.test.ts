@@ -3,27 +3,13 @@ import { history, undo } from '@codemirror/commands';
 import { describe, expect, it } from 'vitest';
 import { addSpans, currentSpans, provenanceField } from '../extensions/ProvenanceField';
 import { fnv1a } from '../utils/fnv1a';
-import { buildDocumentAIProvenanceSpan, documentAIErrorRecovery, nextSourceScope, wrapChallengeOutput } from './StreamEditor';
+import { buildDocumentAIProvenanceSpan, documentAIErrorRecovery, nextSourceScope } from './StreamEditor';
 
 describe('nextSourceScope', () => {
   it('cycles auto to all to none to auto', () => {
     expect(nextSourceScope('auto')).toBe('all');
     expect(nextSourceScope('all')).toBe('none');
     expect(nextSourceScope('none')).toBe('auto');
-  });
-});
-
-describe('wrapChallengeOutput', () => {
-  it('quotes a single paragraph and tags the register', () => {
-    expect(wrapChallengeOutput('Weak premise. What follows?')).toBe(
-      '> Weak premise. What follows?\n\n*— Challenge*'
-    );
-  });
-
-  it('quotes multi-paragraph output line by line', () => {
-    expect(wrapChallengeOutput('First paragraph.\n\nSecond paragraph?')).toBe(
-      '> First paragraph.\n> \n> Second paragraph?\n\n*— Challenge*'
-    );
   });
 });
 
@@ -77,12 +63,12 @@ describe('buildDocumentAIProvenanceSpan', () => {
     const dispatch = (transaction: Transaction) => {
       state = transaction.state;
     };
-    const inserted = '> Better answer\n\n*— Challenge*';
+    const inserted = 'Better answer';
     const span = buildDocumentAIProvenanceSpan({
       requestId: 'request-2',
       start: 0,
       text: inserted,
-      verb: 'challenge',
+      verb: 'develop',
       model: 'provider/model',
       spanId: 'span-2',
       createdAt: 456,

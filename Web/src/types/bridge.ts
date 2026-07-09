@@ -18,6 +18,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'imageDropped',
   'imageSaveError',
   'imageSaved',
+  'marginNotesChanged',
   'proxyAuthState',
   'pdfAnchorPickCancelled',
   'pdfAnchorPlaced',
@@ -58,6 +59,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'openPdfDestination',
   'openSource',
   'refreshProxyAuth',
+  'readBack',
   'removeSource',
   'retrySourceIndexing',
   'saveImage',
@@ -70,6 +72,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'setProxyDeviceKey',
   'submitFeedback',
   'thinkDocument',
+  'updateMarginNote',
   'updateStreamTitle',
 ] as const;
 
@@ -86,6 +89,20 @@ export interface ThinkDocumentPayload extends Record<string, unknown> {
   sourceScope?: DocumentAISourceScope;
   verb?: DocumentAIVerb;
   parentRequestId?: string;
+  anchorStart?: number;
+  anchorEnd?: number;
+  anchorHash?: string;
+}
+
+export interface ReadBackPayload extends Record<string, unknown> {
+  streamId: string;
+  scopeStart: number;
+  scopeEnd: number;
+}
+
+export interface UpdateMarginNotePayload extends Record<string, unknown> {
+  noteId: string;
+  status: 'open' | 'dismissed' | 'promoted' | 'unanchored';
 }
 
 export interface BridgeMessage {
@@ -189,6 +206,27 @@ export const bridge: Bridge = {
 
 export function getExchange(requestId: string): Promise<{ exchange: AIExchangeJSON | null }> {
   return bridge.sendAsync('getExchange', { requestId });
+}
+
+export function readBack(payload: ReadBackPayload): void {
+  bridge.send({
+    type: 'readBack',
+    payload: {
+      streamId: payload.streamId,
+      scopeStart: payload.scopeStart,
+      scopeEnd: payload.scopeEnd,
+    },
+  });
+}
+
+export function updateMarginNote(payload: UpdateMarginNotePayload): void {
+  bridge.send({
+    type: 'updateMarginNote',
+    payload: {
+      noteId: payload.noteId,
+      status: payload.status,
+    },
+  });
 }
 
 // Expose bridge globally for Swift to call
