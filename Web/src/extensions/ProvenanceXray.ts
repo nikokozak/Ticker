@@ -167,7 +167,7 @@ function isAtomicPosition(view: EditorView, pos: number): boolean {
 function button(label: string, onClick?: () => void): HTMLButtonElement {
   const element = document.createElement('button');
   element.type = 'button';
-  element.className = 'cm-provenance-tooltip-button';
+  element.className = 'selection-action-button selection-action-button--text';
   element.textContent = label;
   element.disabled = !onClick;
   element.onmousedown = (event) => event.preventDefault();
@@ -196,7 +196,7 @@ function tooltipForSpan(view: EditorView, span: Span, options: ProvenanceXrayOpt
 
       const actions = document.createElement('div');
       actions.className = 'cm-provenance-tooltip-actions';
-      actions.append(button('dissolve', () => {
+      actions.append(button('Dissolve', () => {
         view.dispatch({
           effects: dissolveSpans.of([span.spanId]),
           annotations: Transaction.addToHistory.of(true),
@@ -204,16 +204,16 @@ function tooltipForSpan(view: EditorView, span: Span, options: ProvenanceXrayOpt
         view.focus();
       }));
       if (span.origin === 'ai' && span.requestId) {
-        const showExchangeButton = button('show exchange');
+        const showExchangeButton = button('Show exchange');
         actions.append(showExchangeButton);
 
         const coveredText = view.state.doc.sliceString(span.start, span.end);
-        const redevelopButton = button('re-develop');
+        const redevelopButton = button('Re-develop');
         actions.append(redevelopButton);
 
         void options.loadExchange(span.requestId).then(({ exchange }) => {
           if (!exchange) {
-            showExchangeButton.textContent = 'exchange no longer stored';
+            showExchangeButton.textContent = 'Exchange no longer stored';
             setButtonAction(showExchangeButton);
             setButtonAction(redevelopButton);
             return;
@@ -224,13 +224,13 @@ function tooltipForSpan(view: EditorView, span: Span, options: ProvenanceXrayOpt
             setButtonAction(redevelopButton, () => options.onRedevelop(span, exchange));
           }
         }).catch(() => {
-          showExchangeButton.textContent = 'exchange no longer stored';
+          showExchangeButton.textContent = 'Exchange no longer stored';
           setButtonAction(showExchangeButton);
           setButtonAction(redevelopButton);
         });
       }
       if (span.origin === 'source' && span.sourceId) {
-        actions.append(button('open source →', () => options.onOpenSource(span.sourceId!)));
+        actions.append(button('Open source →', () => options.onOpenSource(span.sourceId!)));
       }
       dom.append(actions);
 
