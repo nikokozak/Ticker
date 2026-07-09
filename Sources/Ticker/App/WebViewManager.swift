@@ -19,13 +19,18 @@ final class WebViewManager: NSObject {
     private let hostView = NSView(frame: .zero)
     private let editorPaneView = NSView(frame: .zero)
     private let pdfPaneController = PDFReaderPaneController()
+    private let lastOpenStreamDefaultsKey = "TickerLastOpenStreamId"
     private var activePDFPaneStreamId: UUID?
+    private var shouldRestoreLastOpenStream = true
+    private var didConsumeLaunchStreamRestore = false
     private var pendingEditorSelectionRequests: [String: (String?) -> Void] = [:]
     private let editorSelectionTimeoutNanoseconds: UInt64 = 50_000_000
 
     init(container: ServiceContainer) {
         let config = WKWebViewConfiguration()
+        #if DEBUG
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
 
         self.settingsService = container.settingsService
         self.deviceKeyService = container.deviceKeyService
@@ -494,6 +499,10 @@ final class WebViewManager: NSObject {
         loadMLXClassifier()
     }
 
+    func skipLaunchStreamRestore() {
+        shouldRestoreLastOpenStream = false
+    }
+
     private func loadMLXClassifier() {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             DebugLog.log("MLX classifier skipped: running unit tests")
@@ -643,6 +652,19 @@ final class WebViewManager: NSObject {
 extension WebViewManager: StreamMessageHandlerDelegate {
     func setCurrentStreamIdForFileDrops(_ streamId: UUID?) {
         currentStreamIdForFileDrops = streamId
+        if let streamId {
+            UserDefaults.standard.set(streamId.uuidString, forKey: lastOpenStreamDefaultsKey)
+        }
+    }
+
+    func consumeLastOpenStreamIdForLaunchRestore() -> UUID? {
+        guard !didConsumeLaunchStreamRestore else { return nil }
+        didConsumeLaunchStreamRestore = true
+        guard shouldRestoreLastOpenStream,
+              let value = UserDefaults.standard.string(forKey: lastOpenStreamDefaultsKey) else {
+            return nil
+        }
+        return UUID(uuidString: value)
     }
 
     func clearCurrentStreamIdForFileDrops(ifMatches streamId: UUID) {

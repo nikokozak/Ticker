@@ -27,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var webViewManager: WebViewManager?
     private var onboardingWindow: NSWindow?
     private var didCompleteStartup = false
+    private var skipLastStreamRestore = false
 
     // Menu bar (status item)
     private var statusItem: NSStatusItem?
@@ -178,6 +179,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSEvent.removeMonitor(pdfFindKeyMonitor)
             self.pdfFindKeyMonitor = nil
         }
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        skipLastStreamRestore = true
+        webViewManager?.skipLaunchStreamRestore()
+        DebugLog.log("[Ticker] File-open event ignored; skipping last stream restore")
+        sender.reply(toOpenOrPrint: .failure)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -336,16 +344,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func setupMainWindow(container: ServiceContainer) {
-        // Position window to cover right 3/8 of screen
-        let screen = NSScreen.main ?? NSScreen.screens.first!
-        let screenFrame = screen.visibleFrame
-        let windowWidth = screenFrame.width * 3 / 8
-        let windowRect = NSRect(
-            x: screenFrame.maxX - windowWidth,
-            y: screenFrame.minY,
-            width: windowWidth,
-            height: screenFrame.height
-        )
+        let autosaveName = "TickerMainWindow"
+        let hasSavedFrame = UserDefaults.standard.string(forKey: "NSWindow Frame \(autosaveName)") != nil
+        let windowRect: NSRect
+        if hasSavedFrame {
+            windowRect = NSRect(x: 0, y: 0, width: 900, height: 700)
+        } else {
+            // Position window to cover right 3/8 of screen on first launch.
+            let screen = NSScreen.main ?? NSScreen.screens.first!
+            let screenFrame = screen.visibleFrame
+            let windowWidth = screenFrame.width * 3 / 8
+            windowRect = NSRect(
+                x: screenFrame.maxX - windowWidth,
+                y: screenFrame.minY,
+                width: windowWidth,
+                height: screenFrame.height
+            )
+        }
 
         mainWindow = NSWindow(
             contentRect: windowRect,
@@ -368,8 +383,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         mainWindow?.minSize = NSSize(width: 300, height: 400)
         mainWindow?.delegate = self  // Handle close to hide instead of quit
+        _ = mainWindow?.setFrameAutosaveName(autosaveName)
+        if hasSavedFrame {
+            _ = mainWindow?.setFrameUsingName(autosaveName)
+        }
 
         webViewManager = WebViewManager(container: container)
+        if skipLastStreamRestore {
+            webViewManager?.skipLaunchStreamRestore()
+        }
         mainWindow?.contentView = webViewManager?.rootView
         webViewManager?.load()
 
