@@ -2547,68 +2547,7 @@ export function StreamEditor({
           className="selection-action-menu"
           style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
         >
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            title="Ask"
-            aria-label="Ask"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionVerb('ask')}
-            disabled={isAiThinking}
-          >
-            Ask
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            title="Challenge"
-            aria-label="Challenge"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionVerb('challenge')}
-            disabled={isAiThinking}
-          >
-            Challenge
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            title="Define"
-            aria-label="Define"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionVerb('define')}
-            disabled={isAiThinking}
-          >
-            Define
-          </button>
-          <span className="selection-action-divider" aria-hidden="true" />
-          <div className="selection-action-submenu">
-            <button
-              type="button"
-              className="selection-action-button selection-action-button--text selection-action-button--ai"
-              title="Rewrite"
-              aria-label="Rewrite"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => setShowRewriteMenu((value) => !value)}
-              disabled={isAiThinking}
-            >
-              Rewrite ▾
-            </button>
-            {showRewriteMenu && (
-              <div className="selection-action-submenu-panel">
-                <button
-                  type="button"
-                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
-                  title="Develop (replaces)"
-                  aria-label="Develop (replaces)"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => handleSelectionVerb('develop')}
-                >
-                  Develop (replaces)
-                </button>
-              </div>
-            )}
-          </div>
-          <span className="selection-action-divider" aria-hidden="true" />
+          <div className="selection-action-row">
           <button
             type="button"
             className="selection-action-button selection-action-button--format selection-action-button--bold"
@@ -2639,6 +2578,7 @@ export function StreamEditor({
           >
             &lt;/&gt;
           </button>
+          <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"
             className="selection-action-button selection-action-button--format selection-action-button--text"
@@ -2715,9 +2655,71 @@ export function StreamEditor({
               </svg>
             </button>
           )}
+          </div>
+          <div className="selection-action-row">
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
+            title="Ask"
+            aria-label="Ask"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionVerb('ask')}
+            disabled={isAiThinking}
+          >
+            Ask
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
+            title="Challenge"
+            aria-label="Challenge"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionVerb('challenge')}
+            disabled={isAiThinking}
+          >
+            Challenge
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
+            title="Define"
+            aria-label="Define"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionVerb('define')}
+            disabled={isAiThinking}
+          >
+            Define
+          </button>
+          <div className="selection-action-submenu">
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--text selection-action-button--ai"
+              title="Rewrite"
+              aria-label="Rewrite"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setShowRewriteMenu((value) => !value)}
+              disabled={isAiThinking}
+            >
+              Rewrite ▾
+            </button>
+            {showRewriteMenu && (
+              <div className="selection-action-submenu-panel">
+                <button
+                  type="button"
+                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
+                  title="Develop (replaces)"
+                  aria-label="Develop (replaces)"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => handleSelectionVerb('develop')}
+                >
+                  Develop (replaces)
+                </button>
+              </div>
+            )}
+          </div>
+          <span className="selection-action-divider" aria-hidden="true" />
           {isProvenanceXrayVisible && (
             <>
-              <span className="selection-action-divider" aria-hidden="true" />
               <button
                 type="button"
                 className="selection-action-button selection-action-button--text"
@@ -2729,9 +2731,9 @@ export function StreamEditor({
               >
                 Dissolve
               </button>
+              <span className="selection-action-divider" aria-hidden="true" />
             </>
           )}
-          <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"
             className="selection-action-button selection-action-button--text selection-action-source-scope"
@@ -2742,6 +2744,7 @@ export function StreamEditor({
           >
             Sources: {formatSourceScope(sourceScope)}
           </button>
+          </div>
         </div>
       )}
 
@@ -2899,18 +2902,19 @@ export function StreamEditor({
       </div>
 
       <footer className="stream-footer">
-        <label className="stream-footer-toggle">
-          <input
-            type="checkbox"
-            checked={showRawFormatting}
-            onChange={(event) => {
-              const next = event.target.checked;
-              setShowRawFormatting(next);
-              editorViewRef.current?.dispatch({ effects: setShowRawFormattingEffect.of(next) });
-            }}
-          />
+        <button
+          type="button"
+          className={`stream-footer-toggle ${showRawFormatting ? 'stream-footer-toggle--active' : ''}`}
+          title="Show raw markdown formatting"
+          aria-pressed={showRawFormatting}
+          onClick={() => {
+            const next = !showRawFormatting;
+            setShowRawFormatting(next);
+            editorViewRef.current?.dispatch({ effects: setShowRawFormattingEffect.of(next) });
+          }}
+        >
           Show formatting
-        </label>
+        </button>
       </footer>
 
       <SourcesModal
