@@ -147,6 +147,7 @@ final class AIMessageHandler: BridgeMessageHandler {
     private let isProxyUsable: () async -> Bool
     private let routeDocumentAI: (
         _ query: String,
+        _ retrievalQuery: String?,
         _ queryImages: [String],
         _ streamId: UUID?,
         _ sourceScope: SourceScope,
@@ -170,11 +171,12 @@ final class AIMessageHandler: BridgeMessageHandler {
         self.isProxyUsable = { [deviceKeyService = container.deviceKeyService] in
             await deviceKeyService.currentState.isUsable
         }
-        self.routeDocumentAI = { [orchestrator = container.orchestrator] query, queryImages, streamId, sourceScope, systemPromptOverride, onChunk, onComplete, onError, onModelSelected in
+        self.routeDocumentAI = { [orchestrator = container.orchestrator] query, retrievalQuery, queryImages, streamId, sourceScope, systemPromptOverride, onChunk, onComplete, onError, onModelSelected in
             await orchestrator.route(
                 query: query,
                 queryImages: queryImages,
                 streamId: streamId,
+                retrievalQuery: retrievalQuery,
                 sourceScope: sourceScope,
                 priorCells: [],
                 systemPromptOverride: systemPromptOverride,
@@ -195,6 +197,7 @@ final class AIMessageHandler: BridgeMessageHandler {
         isProxyUsable: @escaping () async -> Bool = { true },
         routeDocumentAI: @escaping (
             _ query: String,
+            _ retrievalQuery: String?,
             _ queryImages: [String],
             _ streamId: UUID?,
             _ sourceScope: SourceScope,
@@ -286,6 +289,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                             responseRaw: responseRaw,
                             model: selectedModel
                         ))
+                        DebugLog.log("[AIMessageHandler] Saved exchange \(requestId)")
                     } catch {
                         DebugLog.log("[AIMessageHandler] Failed to save exchange (\(DebugLog.errorSummary(error)))")
                     }
@@ -389,6 +393,9 @@ final class AIMessageHandler: BridgeMessageHandler {
 
                 await self.routeDocumentAI(
                     resolvedQuery,
+                    // Retrieval sees only the user's words; resolvedQuery's
+                    // "Regarding this context:" wrapper poisons BM25 scoring.
+                    cleanedContext.map { "\(query)\n\($0)" } ?? query,
                     imageDataURLs,
                     streamIdForRAG,
                     sourceScope,
@@ -499,6 +506,7 @@ final class AIMessageHandler: BridgeMessageHandler {
 
                 await self.routeDocumentAI(
                     "Passage:\n\(scopedText)",
+                    scopedText,
                     [],
                     streamId,
                     .auto,

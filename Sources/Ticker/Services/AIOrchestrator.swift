@@ -38,6 +38,9 @@ final class AIOrchestrator {
     ///   - query: The user's query
     ///   - queryImages: Image URLs attached to the current query
     ///   - streamId: Optional stream ID for local source retrieval
+    ///   - retrievalQuery: User-content-only text for source retrieval. `query` often carries
+    ///     prompt boilerplate ("Regarding this context: ...") whose words skew BM25 and inflate
+    ///     the relevance cutoff; retrieval must see only what the user wrote.
     ///   - sourceScope: User override for source-context assembly on stream-backed document AI
     ///   - priorCells: Conversation history (each has "content", "type", optionally "imageURLs")
     ///   - sourceContext: Explicit non-stream context (used by Quick Panel/document AI)
@@ -48,6 +51,7 @@ final class AIOrchestrator {
         query: String,
         queryImages: [String] = [],
         streamId: UUID? = nil,
+        retrievalQuery: String? = nil,
         sourceScope: SourceScope = .auto,
         priorCells: [[String: Any]],
         sourceContext: String? = nil,
@@ -84,7 +88,7 @@ final class AIOrchestrator {
         if let streamId, let retrievalService {
             do {
                 if let assembledContext = try retrievalService.assembleSourceContext(
-                    query: query,
+                    query: retrievalQuery ?? query,
                     streamId: streamId,
                     scope: sourceScope
                 ) {

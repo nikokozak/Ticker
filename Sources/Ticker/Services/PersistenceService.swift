@@ -1149,10 +1149,15 @@ final class PersistenceService {
     }
 
     private func deleteOrphanExchanges(streamId: UUID, db: Database) throws {
+        // Grace window: an exchange is saved when streaming completes, but its
+        // referencing span only reaches the DB with the editor's next autosave.
+        // Any save landing in that gap must not GC the brand-new exchange.
+        let graceCutoff = Date().timeIntervalSince1970 - 300
         try db.execute(
             sql: """
                 DELETE FROM ai_exchanges
                 WHERE stream_id = ?
+                  AND created_at < ?
                   AND NOT EXISTS (
                     SELECT 1
                     FROM provenance_spans
@@ -1164,7 +1169,7 @@ final class PersistenceService {
                     WHERE margin_notes.request_id = ai_exchanges.request_id
                   )
             """,
-            arguments: [streamId.uuidString]
+            arguments: [streamId.uuidString, graceCutoff]
         )
     }
 

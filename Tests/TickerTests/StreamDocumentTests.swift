@@ -1002,7 +1002,7 @@ final class StreamDocumentTests: XCTestCase {
         let provider = SlowDocumentAIProvider()
         let handler = AIMessageHandler(
             sendToWeb: { recorder.send($0) },
-            routeDocumentAI: { _, _, _, _, systemPrompt, onChunk, onComplete, _, _ in
+            routeDocumentAI: { _, _, _, _, _, systemPrompt, onChunk, onComplete, _, _ in
                 await provider.stream(
                     systemPrompt: systemPrompt,
                     onChunk: onChunk,
@@ -1056,7 +1056,7 @@ final class StreamDocumentTests: XCTestCase {
             let handler = AIMessageHandler(
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
-                routeDocumentAI: { _, _, _, _, _, onChunk, onComplete, _, onModelSelected in
+                routeDocumentAI: { _, _, _, _, _, _, onChunk, onComplete, _, onModelSelected in
                     onModelSelected?("provider/model")
                     onChunk("Raw [1]")
                     onComplete(SourceContext(
@@ -1120,7 +1120,7 @@ final class StreamDocumentTests: XCTestCase {
             let handler = AIMessageHandler(
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
-                routeDocumentAI: { _, _, _, _, _, onChunk, onComplete, _, _ in
+                routeDocumentAI: { _, _, _, _, _, _, onChunk, onComplete, _, _ in
                     onChunk("Where is the evidence?")
                     onComplete(nil)
                 }
