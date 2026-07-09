@@ -87,6 +87,22 @@ enum ReadBackMarginNoteBuilder {
 
     private static let allowedKinds: Set<String> = ["question", "tension", "connection"]
 
+    /// Models routinely wrap the requested JSON array in ```fences or prose;
+    /// fall back to the outermost bracketed slice before giving up.
+    private static func decodeItems(from output: String) -> [Item]? {
+        if let data = output.data(using: .utf8),
+           let items = try? JSONDecoder().decode([Item].self, from: data) {
+            return items
+        }
+        guard let first = output.firstIndex(of: "["),
+              let last = output.lastIndex(of: "]"),
+              first < last,
+              let data = String(output[first...last]).data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode([Item].self, from: data)
+    }
+
     static func build(
         modelOutput: String,
         scopedText: String,
@@ -95,8 +111,8 @@ enum ReadBackMarginNoteBuilder {
         requestId: String,
         createdAt: Date = Date()
     ) -> (notes: [MarginNote], droppedAnchorCount: Int) {
-        guard let data = modelOutput.data(using: .utf8),
-              let items = try? JSONDecoder().decode([Item].self, from: data) else {
+        guard let items = decodeItems(from: modelOutput) else {
+            DebugLog.log("[ReadBack] Model output was not a JSON array; no notes built")
             return ([], 0)
         }
 
@@ -480,13 +496,26 @@ final class AIMessageHandler: BridgeMessageHandler {
                         "streamId": AnyCodable(streamId.uuidString),
                         "notes": AnyCodable(StreamCodec.encodeMarginNotes(visibleNotes))
                     ]))
+                    self?.sendToWeb(BridgeMessage(type: "readBackComplete", payload: [
+                        "streamId": AnyCodable(streamId.uuidString),
+                        "added": AnyCodable(notes.count),
+                        "dropped": AnyCodable(built.droppedAnchorCount)
+                    ]))
                 } catch {
                     DebugLog.log("[AIMessageHandler] Failed to save readBack margin notes (\(DebugLog.errorSummary(error)))")
+                    self?.sendToWeb(BridgeMessage(type: "readBackComplete", payload: [
+                        "streamId": AnyCodable(streamId.uuidString),
+                        "failed": AnyCodable(true)
+                    ]))
                 }
             }
-            let onError: (Error) -> Void = { error in
+            let onError: (Error) -> Void = { [weak self] error in
                 guard !Task.isCancelled else { return }
                 DebugLog.log("[AIMessageHandler] readBack failed (\(DebugLog.errorSummary(error)))")
+                self?.sendToWeb(BridgeMessage(type: "readBackComplete", payload: [
+                    "streamId": AnyCodable(streamId.uuidString),
+                    "failed": AnyCodable(true)
+                ]))
             }
 
             let task = Task { [weak self] in

@@ -24,6 +24,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'pdfAnchorPlaced',
   'pdfHighlightLinked',
   'pdfPaneStateChanged',
+  'readBackComplete',
   'settingsLoaded',
   'sourceAdded',
   'sourceError',

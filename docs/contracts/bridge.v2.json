@@ -39,6 +39,9 @@
       "marginNotesChanged": {
         "requiredPayloadKeys": ["streamId", "notes"]
       },
+      "readBackComplete": {
+        "requiredPayloadKeys": ["streamId"]
+      },
       "exportCanceled": {
         "requiredPayloadKeys": ["streamId"]
       },

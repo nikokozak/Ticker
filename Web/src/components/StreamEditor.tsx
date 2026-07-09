@@ -74,7 +74,7 @@ type PromptIntent = {
   preview: string;
 };
 
-type ReadBackScope = 'viewport' | 'section' | 'document';
+type ReadBackScope = 'paragraph' | 'viewport' | 'section' | 'document';
 
 interface ExchangeOverlayState {
   exchange: AIExchangeJSON;
@@ -271,9 +271,21 @@ function sectionRangeForCursor(view: EditorView): { from: number; to: number } {
   return { from, to };
 }
 
+function paragraphRangeForCursor(view: EditorView): { from: number; to: number } {
+  const doc = view.state.doc;
+  const caretLine = doc.lineAt(view.state.selection.main.head);
+  if (!caretLine.text.trim()) return { from: caretLine.from, to: caretLine.to };
+  let start = caretLine;
+  let end = caretLine;
+  while (start.number > 1 && doc.line(start.number - 1).text.trim()) start = doc.line(start.number - 1);
+  while (end.number < doc.lines && doc.line(end.number + 1).text.trim()) end = doc.line(end.number + 1);
+  return { from: start.from, to: end.to };
+}
+
 function readBackRangeForScope(view: EditorView, scope: ReadBackScope): { from: number; to: number } {
   if (scope === 'document') return { from: 0, to: view.state.doc.length };
   if (scope === 'section') return sectionRangeForCursor(view);
+  if (scope === 'paragraph') return paragraphRangeForCursor(view);
 
   if (view.visibleRanges.length === 0) return { from: view.viewport.from, to: view.viewport.to };
   return {
@@ -872,6 +884,7 @@ export function StreamEditor({
       addToast('Nothing in this scope to read back.', 'info');
       return;
     }
+    addToast('Reading back…', 'info');
     readBack({
       streamId: stream.id,
       scopeStart: range.from,
@@ -1002,6 +1015,21 @@ export function StreamEditor({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
+      if (message.type === 'readBackComplete') {
+        if (message.payload?.streamId !== stream.id) return;
+        if (message.payload?.failed) {
+          addToast('Read back failed.', 'error');
+          return;
+        }
+        const added = Number(message.payload?.added ?? 0);
+        if (added > 0) {
+          addToast(`${added} margin note${added === 1 ? '' : 's'} added.`, 'success');
+        } else {
+          addToast('No new margin notes for this scope.', 'info');
+        }
+        return;
+      }
+
       if (message.type === 'streamDocumentConflict') {
         const payloadStreamId = message.payload?.streamId as string | undefined;
         const markdown = message.payload?.markdown as string | undefined;
@@ -2454,6 +2482,7 @@ export function StreamEditor({
                 aria-label="Read back scope"
                 title="Read back scope"
               >
+                <option value="paragraph">Paragraph</option>
                 <option value="viewport">Viewport</option>
                 <option value="section">Section</option>
                 <option value="document">Document</option>
