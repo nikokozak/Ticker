@@ -3,7 +3,7 @@ import { RangeSetBuilder, type Extension } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, WidgetType, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 import { bridge } from '../types';
-import { isChipEligibleLink, rawLinksAreRevealedOnLine, revealRawLinksEffect } from './MarkdownConceal';
+import { isChipEligibleLink, rawFormattingIsShown, rawLinksAreRevealedOnLine, revealRawLinksEffect } from './MarkdownConceal';
 
 export interface MarkdownLinkInfo {
   from: number;
@@ -163,6 +163,9 @@ export function buildLinkChipDecorations(
   view: EditorView,
   onEditLink: (view: EditorView, link: MarkdownLinkInfo | null) => void
 ): DecorationSet {
+  // "Show formatting" shows everything raw — chips hide markdown too.
+  if (rawFormattingIsShown(view.state)) return Decoration.none;
+
   const builder = new RangeSetBuilder<Decoration>();
   const tree = syntaxTree(view.state);
 
@@ -214,7 +217,8 @@ export function linkInteractionExtension(
     }
 
     update(update: ViewUpdate): void {
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+      const rawFormattingChanged = rawFormattingIsShown(update.startState) !== rawFormattingIsShown(update.state);
+      if (update.docChanged || update.viewportChanged || update.selectionSet || rawFormattingChanged) {
         this.decorations = safeChipBuild(update.view, this.decorations.map(update.changes));
       }
     }

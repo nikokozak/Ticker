@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Selection menu now offers heading (H1/H2/H3), quote, and bullet-list toggles, and a new stream-editor footer has a "Show formatting" switch that reveals the raw markdown document-wide.
 - `ticker://` URLs can now append text to an existing stream or open a stream by id.
 - Quick Panel ephemeral answers now use the picked stream's sources and keep citation links when saved.
 - PDF sources now reopen to the last-read page, expose document outlines when available, and describe pane failures in text.

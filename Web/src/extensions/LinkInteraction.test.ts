@@ -9,7 +9,7 @@ import {
   isAllowedExternalURL,
   linkInfoAt,
 } from './LinkInteraction';
-import { markdownConcealExtension } from './MarkdownConceal';
+import { markdownConcealExtension, setShowRawFormattingEffect } from './MarkdownConceal';
 
 function viewFor(doc: string): EditorView {
   const state = EditorState.create({ doc, extensions: [markdown(), markdownConcealExtension] });
@@ -92,5 +92,18 @@ describe('link chips', () => {
   it('skips malformed links without URLs', () => {
     const doc = 'Broken [label]() here';
     expect(chipRanges(doc)).toEqual([]);
+  });
+
+  it('renders no chips while show-formatting is on', () => {
+    const doc = 'See [Safari](https://apple.com).';
+    const view = viewFor(doc);
+    const raw = view.state.update({ effects: setShowRawFormattingEffect.of(true) }).state;
+    const rawView = { ...view, state: raw } as unknown as EditorView;
+    const decorations = buildLinkChipDecorations(rawView, noop);
+    let count = 0;
+    decorations.between(0, doc.length, () => {
+      count += 1;
+    });
+    expect(count).toBe(0);
   });
 });

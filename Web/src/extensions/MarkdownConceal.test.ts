@@ -3,7 +3,7 @@ import { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
-import { buildMarkdownConcealDecorations, revealRawLinksEffect } from './MarkdownConceal';
+import { buildMarkdownConcealDecorations, revealRawLinksEffect, setShowRawFormattingEffect } from './MarkdownConceal';
 import { markdownConcealExtension } from './MarkdownConceal';
 
 function viewFor(state: EditorState): EditorView {
@@ -58,6 +58,18 @@ describe('MarkdownConceal static concealment', () => {
       const ranges = concealRanges(buildMarkdownConcealDecorations(viewFor(state), true), doc.length);
       expect(ranges).toEqual([]);
     }
+  });
+
+  it('show-formatting toggle disables every conceal decoration document-wide', () => {
+    const doc = '# Title\n\n**bold** and [Book p.3](ticker-pdf://abc?page=3)';
+    const base = stateWithSelection(doc, 0);
+    expect(concealRanges(buildMarkdownConcealDecorations(viewFor(base), true), doc.length).length).toBeGreaterThan(0);
+
+    const raw = base.update({ effects: setShowRawFormattingEffect.of(true) }).state;
+    expect(concealRanges(buildMarkdownConcealDecorations(viewFor(raw), true), doc.length)).toEqual([]);
+
+    const back = raw.update({ effects: setShowRawFormattingEffect.of(false) }).state;
+    expect(concealRanges(buildMarkdownConcealDecorations(viewFor(back), true), doc.length).length).toBeGreaterThan(0);
   });
 
   it('leaves chip-eligible http links to the chip layer but conceals complete ticker-pdf links', () => {

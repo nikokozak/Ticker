@@ -15,7 +15,7 @@ import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
 import { editorFindExtension } from '../extensions/EditorFindPanel';
-import { markdownConcealExtension } from '../extensions/MarkdownConceal';
+import { markdownConcealExtension, setShowRawFormattingEffect } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
@@ -45,6 +45,7 @@ import {
   type PendingPDFAnchorSelection,
 } from '../utils/pdfAnchorSelection';
 import { toggleInlineMark } from '../utils/inlineMarks';
+import { toggleLineFormat, type LineFormat } from '../utils/lineFormats';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 
 interface StreamEditorProps {
@@ -526,6 +527,7 @@ export function StreamEditor({
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [isProvenanceXrayVisible, setIsProvenanceXrayVisible] = useState(false);
   const [isMarginNotesVisible, setIsMarginNotesVisible] = useState(false);
+  const [showRawFormatting, setShowRawFormatting] = useState(false);
   const [readBackScope, setReadBackScope] = useState<ReadBackScope>('viewport');
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
@@ -2069,6 +2071,26 @@ export function StreamEditor({
     view.focus();
   }, [hideSelectionMenu]);
 
+  const handleSelectionLineFormat = useCallback((format: LineFormat) => {
+    const view = editorViewRef.current;
+    if (!view) {
+      hideSelectionMenu();
+      return;
+    }
+
+    const changes = toggleLineFormat(view.state, view.state.selection.main, format);
+    if (!changes) {
+      hideSelectionMenu();
+      return;
+    }
+
+    view.dispatch({
+      changes,
+      annotations: Transaction.userEvent.of('input.format'),
+    });
+    view.focus();
+  }, [hideSelectionMenu]);
+
   const canLinkSelectionToPDF = pdfPaneState.visible && pdfPaneState.streamId === stream.id;
 
   const handleSelectionLinkToPDF = useCallback(() => {
@@ -2619,6 +2641,56 @@ export function StreamEditor({
           </button>
           <button
             type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--text"
+            title="Heading 1"
+            aria-label="Heading 1"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('h1')}
+          >
+            H1
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--text"
+            title="Heading 2"
+            aria-label="Heading 2"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('h2')}
+          >
+            H2
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--text"
+            title="Heading 3"
+            aria-label="Heading 3"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('h3')}
+          >
+            H3
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format"
+            title="Quote"
+            aria-label="Quote"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('quote')}
+          >
+            ❝
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format"
+            title="Bullet list"
+            aria-label="Bullet list"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('bullet')}
+          >
+            •
+          </button>
+          <button
+            type="button"
             className="selection-action-button"
             title="Add link"
             aria-label="Add link"
@@ -2825,6 +2897,21 @@ export function StreamEditor({
           </div>
         </div>
       </div>
+
+      <footer className="stream-footer">
+        <label className="stream-footer-toggle">
+          <input
+            type="checkbox"
+            checked={showRawFormatting}
+            onChange={(event) => {
+              const next = event.target.checked;
+              setShowRawFormatting(next);
+              editorViewRef.current?.dispatch({ effects: setShowRawFormattingEffect.of(next) });
+            }}
+          />
+          Show formatting
+        </label>
+      </footer>
 
       <SourcesModal
         isOpen={showSourcesModal}

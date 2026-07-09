@@ -16,6 +16,27 @@ const INITIAL_MARKDOWN_PARSE_TIMEOUT_MS = 20;
 /** ⌥-click reveal: holds the start of the one line currently shown raw, or null. */
 export const revealRawLinksEffect = StateEffect.define<number | null>();
 
+/**
+ * Footer "show formatting" toggle. True = the whole document renders raw:
+ * every conceal decoration AND every link chip is disabled. One boolean, no
+ * per-line choreography — the discoverable path to the markdown source.
+ */
+export const setShowRawFormattingEffect = StateEffect.define<boolean>();
+
+const showRawFormattingField = StateField.define<boolean>({
+  create: () => false,
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setShowRawFormattingEffect)) value = effect.value;
+    }
+    return value;
+  },
+});
+
+export function rawFormattingIsShown(state: EditorState): boolean {
+  return state.field(showRawFormattingField, false) ?? false;
+}
+
 function linkLabelRange(linkNode: SyntaxNode): { from: number; to: number } | null {
   const marks = linkNode.getChildren('LinkMark');
   if (marks.length < 2) return null;
@@ -117,6 +138,8 @@ function markdownTreeForDecorations(view: EditorView, ensureInitialParse: boolea
 }
 
 export function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = false): DecorationSet {
+  if (rawFormattingIsShown(view.state)) return Decoration.none;
+
   const decorations: Array<Range<Decoration>> = [];
   const blockquoteLineStarts = new Set<number>();
   const codeblockLineStarts = new Set<number>();
@@ -225,8 +248,9 @@ const markdownConcealPlugin = ViewPlugin.fromClass(class {
   update(update: ViewUpdate): void {
     const rawLineChanged = update.startState.field(revealRawLinksField, false) !==
       update.state.field(revealRawLinksField, false);
+    const rawFormattingChanged = rawFormattingIsShown(update.startState) !== rawFormattingIsShown(update.state);
 
-    if (update.docChanged || update.viewportChanged || rawLineChanged) {
+    if (update.docChanged || update.viewportChanged || rawLineChanged || rawFormattingChanged) {
       this.decorations = safeBuild(update.view, false, this.decorations.map(update.changes));
     }
   }
@@ -236,5 +260,6 @@ const markdownConcealPlugin = ViewPlugin.fromClass(class {
 
 export const markdownConcealExtension: Extension = [
   revealRawLinksField,
+  showRawFormattingField,
   markdownConcealPlugin,
 ];
