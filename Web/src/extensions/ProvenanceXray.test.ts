@@ -29,6 +29,23 @@ describe('ProvenanceXray', () => {
     ]);
   });
 
+  it('rotates AI tint variants per exchange in document order', () => {
+    const spans = [
+      { ...span(0, 5, 'ai'), requestId: 'req-b' },
+      { ...span(6, 10, 'ai'), requestId: 'req-a' },
+      { ...span(11, 15, 'ai'), requestId: 'req-b' },
+      span(16, 20, 'ai'), // no requestId → base class only
+    ];
+    const ranges = buildProvenanceDecorationRanges(spans, [{ from: 0, to: 30 }]);
+
+    expect(ranges.map(({ className }) => className)).toEqual([
+      'cm-prov-ai cm-prov-ai--v0', // req-b: first exchange in doc order
+      'cm-prov-ai cm-prov-ai--v1', // req-a: second exchange, adjacent → different variant
+      'cm-prov-ai cm-prov-ai--v0', // req-b again: same exchange, same variant
+      'cm-prov-ai',
+    ]);
+  });
+
   it('clips spans to visible ranges', () => {
     const ranges = buildProvenanceDecorationRanges(
       [span(0, 20)],

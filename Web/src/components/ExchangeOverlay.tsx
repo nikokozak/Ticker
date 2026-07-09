@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import type { AIExchangeJSON } from '../types';
+import { XIcon } from './icons';
 
 export interface ExchangeManifestEntry {
   sourceId: string;
@@ -56,7 +57,25 @@ export function ExchangeOverlay({
 
   return (
     <div className="exchange-overlay" onClick={onClose}>
-      <div className="exchange-modal" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="exchange-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="exchange-modal-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="exchange-modal-header">
+          <h2 id="exchange-modal-title">Exchange</h2>
+          <button
+            type="button"
+            className="exchange-modal-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <XIcon size={16} />
+          </button>
+        </div>
+
         <div className="exchange-block">
           <h2>You</h2>
           <pre>{exchange.userInput}</pre>
@@ -90,7 +109,6 @@ export function ExchangeOverlay({
         <div className="exchange-footer">
           <button type="button" onClick={onRedevelop}>re-develop</button>
           <button type="button" onClick={copyRaw}>copy raw</button>
-          <button type="button" onClick={onClose}>Esc</button>
         </div>
       </div>
     </div>

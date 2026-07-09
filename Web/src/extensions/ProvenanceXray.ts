@@ -43,6 +43,21 @@ function classForOrigin(origin: Span['origin']): string {
   }
 }
 
+export const AI_TINT_VARIANTS = 5;
+
+/** Round-robin tint variants over exchanges in document order, so neighboring
+ * exchanges always read as distinct. Deterministic: stable across scroll/reload. */
+function aiVariantClassByRequest(spans: Span[]): Map<string, string> {
+  const firstStart = new Map<string, number>();
+  for (const span of spans) {
+    if (span.origin !== 'ai' || !span.requestId) continue;
+    const seen = firstStart.get(span.requestId);
+    if (seen === undefined || span.start < seen) firstStart.set(span.requestId, span.start);
+  }
+  const ordered = [...firstStart.entries()].sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
+  return new Map(ordered.map(([requestId], index) => [requestId, ` cm-prov-ai--v${index % AI_TINT_VARIANTS}`]));
+}
+
 function subtractRanges(range: ProvenanceRange, skipRanges: readonly ProvenanceRange[]): ProvenanceRange[] {
   let pieces = [range];
 
@@ -68,6 +83,7 @@ export function buildProvenanceDecorationRanges(
   skipRanges: readonly ProvenanceRange[] = []
 ): ProvenanceDecorationRange[] {
   const ranges: ProvenanceDecorationRange[] = [];
+  const variantByRequest = aiVariantClassByRequest(spans);
 
   for (const visible of visibleRanges) {
     for (const span of spans) {
@@ -75,10 +91,11 @@ export function buildProvenanceDecorationRanges(
       const to = Math.min(span.end, visible.to);
       if (to <= from) continue;
 
+      const variant = span.origin === 'ai' && span.requestId ? variantByRequest.get(span.requestId) ?? '' : '';
       for (const piece of subtractRanges({ from, to }, skipRanges)) {
         ranges.push({
           ...piece,
-          className: classForOrigin(span.origin),
+          className: classForOrigin(span.origin) + variant,
           span,
         });
       }

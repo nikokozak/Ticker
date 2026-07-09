@@ -24,6 +24,14 @@
   --warning-soft: rgba(157, 106, 3, 0.14);
   --prov-ai-soft: rgba(164,80,46,0.08);
   --prov-ai-border: rgba(164,80,46,0.45);
+  --prov-ai-soft-1: rgba(121,58,128,0.08);
+  --prov-ai-border-1: rgba(121,58,128,0.45);
+  --prov-ai-soft-2: rgba(52,89,149,0.08);
+  --prov-ai-border-2: rgba(52,89,149,0.45);
+  --prov-ai-soft-3: rgba(23,113,110,0.08);
+  --prov-ai-border-3: rgba(23,113,110,0.45);
+  --prov-ai-soft-4: rgba(158,49,84,0.08);
+  --prov-ai-border-4: rgba(158,49,84,0.45);
   --prov-source-soft: var(--warning-soft);
   --prov-source-border: rgba(157, 106, 3, 0.45);
   --prov-capture-soft: var(--success-soft);
@@ -1468,6 +1476,27 @@ body {
   border-bottom: 1px dotted var(--prov-ai-border);
 }
 
+/* Per-exchange tint variants (round-robin in document order; v0 = base sienna) */
+.document-editor-codemirror .cm-prov-ai--v1 {
+  background: var(--prov-ai-soft-1);
+  border-bottom-color: var(--prov-ai-border-1);
+}
+
+.document-editor-codemirror .cm-prov-ai--v2 {
+  background: var(--prov-ai-soft-2);
+  border-bottom-color: var(--prov-ai-border-2);
+}
+
+.document-editor-codemirror .cm-prov-ai--v3 {
+  background: var(--prov-ai-soft-3);
+  border-bottom-color: var(--prov-ai-border-3);
+}
+
+.document-editor-codemirror .cm-prov-ai--v4 {
+  background: var(--prov-ai-soft-4);
+  border-bottom-color: var(--prov-ai-border-4);
+}
+
 .document-editor-codemirror .cm-prov-source {
   background: var(--prov-source-soft);
   border-bottom: 1px dotted var(--prov-source-border);
@@ -1665,7 +1694,8 @@ body {
   box-shadow: var(--overlay-shadow), 0 0 0 2px var(--focus-ring);
 }
 
-.sources-modal-header {
+.sources-modal-header,
+.exchange-modal-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1674,7 +1704,8 @@ body {
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.sources-modal-header h2 {
+.sources-modal-header h2,
+.exchange-modal-header h2 {
   margin: 0;
   font-size: var(--font-size-lg);
   font-weight: 600;
@@ -1687,7 +1718,8 @@ body {
   color: var(--color-text-tertiary);
 }
 
-.sources-modal-close {
+.sources-modal-close,
+.exchange-modal-close {
   width: 28px;
   height: 28px;
   border: none;
@@ -1702,7 +1734,8 @@ body {
   transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
 }
 
-.sources-modal-close:hover {
+.sources-modal-close:hover,
+.exchange-modal-close:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -3077,6 +3110,14 @@ body {
     --warning-soft: rgba(213, 161, 58, 0.18);
     --prov-ai-soft: rgba(217,138,99,0.08);
     --prov-ai-border: rgba(217,138,99,0.45);
+    --prov-ai-soft-1: rgba(196,138,205,0.10);
+    --prov-ai-border-1: rgba(196,138,205,0.45);
+    --prov-ai-soft-2: rgba(122,160,214,0.10);
+    --prov-ai-border-2: rgba(122,160,214,0.45);
+    --prov-ai-soft-3: rgba(94,181,178,0.10);
+    --prov-ai-border-3: rgba(94,181,178,0.45);
+    --prov-ai-soft-4: rgba(214,122,150,0.10);
+    --prov-ai-border-4: rgba(214,122,150,0.45);
     --prov-source-soft: var(--warning-soft);
     --prov-source-border: rgba(213, 161, 58, 0.45);
     --prov-capture-soft: var(--success-soft);
