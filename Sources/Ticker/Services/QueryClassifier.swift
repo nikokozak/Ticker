@@ -84,8 +84,21 @@ private enum FMQueryKind: String {
 /// classify races a deadline; on timeout the request proceeds as knowledge.
 @available(macOS 26.0, *)
 struct FoundationModelClassifier: QueryClassifier {
-    private static let instructions =
-        "Classify whether answering the query needs live, up-to-date information from the web (search) or can be answered from general knowledge (knowledge)."
+    // Date-anchored: without it the model judges from inside its training
+    // window ("Who won the Wimbledon final?" looks like general knowledge
+    // because it knows past finals).
+    private static var instructions: String {
+        let today = Date().formatted(date: .long, time: .omitted)
+        return """
+        Today is \(today). Decide whether answering the query requires live or recent \
+        information from the web (search) or timeless general knowledge (knowledge). \
+        Questions about winners, results, scores, prices, officeholders, or the latest \
+        anything refer to the most recent occurrence as of today, which is after your \
+        training data ends — those need search. \
+        Examples: "Who won the Wimbledon final?" → search. \
+        "How does a transistor amplify current?" → knowledge.
+        """
+    }
     private static let deadlineNanoseconds: UInt64 = 1_500_000_000
 
     private let keyword = KeywordClassifier()
@@ -135,7 +148,7 @@ struct KeywordClassifier: QueryClassifier {
     private static let searchKeywords = [
         "news", "weather", "today", "this morning", "yesterday", "tonight",
         "latest", "recent", "current events", "what happened", "stock price",
-        "score", "election", "breaking"
+        "score", "election", "breaking", "right now", "currently"
     ]
 
     let isReady = true
