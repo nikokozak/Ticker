@@ -1,4 +1,5 @@
 import type { ChangeDesc } from '@codemirror/state';
+import { bridge } from '../types/bridge';
 
 export interface PendingPDFAnchorSelection {
   from: number;
@@ -24,6 +25,13 @@ export function mapPendingPDFAnchorSelection(
 
 export function buildTickerPDFLinkURL(args: { sourceId: string; highlightId: string; page: number }): string {
   return `ticker-pdf://${args.sourceId}?highlight=${encodeURIComponent(args.highlightId)}&page=${args.page}`;
+}
+
+export function beginPDFAnchorPick(streamId: string): void {
+  bridge.send({
+    type: 'beginPdfAnchorPick',
+    payload: { streamId },
+  });
 }
 
 export function buildPDFAnchorLinkEdit(

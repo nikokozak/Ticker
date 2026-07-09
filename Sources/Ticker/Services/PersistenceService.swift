@@ -601,6 +601,7 @@ final class PersistenceService {
                 id: UUID(uuidString: streamRow["id"])!,
                 title: streamRow["title"],
                 sources: sources,
+                sourceScope: SourceScope(rawValue: streamRow["source_scope"]) ?? .auto,
                 createdAt: Date(timeIntervalSince1970: streamRow["created_at"]),
                 updatedAt: Date(timeIntervalSince1970: streamRow["updated_at"])
             )
@@ -611,8 +612,14 @@ final class PersistenceService {
         let stream = Stream(title: title)
         try dbQueue.write { db in
             try db.execute(
-                sql: "INSERT INTO streams (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                arguments: [stream.id.uuidString, stream.title, stream.createdAt.timeIntervalSince1970, stream.updatedAt.timeIntervalSince1970]
+                sql: "INSERT INTO streams (id, title, source_scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                arguments: [
+                    stream.id.uuidString,
+                    stream.title,
+                    stream.sourceScope.rawValue,
+                    stream.createdAt.timeIntervalSince1970,
+                    stream.updatedAt.timeIntervalSince1970
+                ]
             )
         }
         return stream
@@ -621,9 +628,23 @@ final class PersistenceService {
     func updateStream(_ stream: Stream) throws {
         try dbQueue.write { db in
             try db.execute(
-                sql: "UPDATE streams SET title = ?, updated_at = ? WHERE id = ?",
-                arguments: [stream.title, Date().timeIntervalSince1970, stream.id.uuidString]
+                sql: "UPDATE streams SET title = ?, source_scope = ?, updated_at = ? WHERE id = ?",
+                arguments: [stream.title, stream.sourceScope.rawValue, Date().timeIntervalSince1970, stream.id.uuidString]
             )
+        }
+    }
+
+    @discardableResult
+    func setSourceScope(streamId: UUID, scope: SourceScope) throws -> Bool {
+        try dbQueue.write { db in
+            guard try Row.fetchOne(db, sql: "SELECT id FROM streams WHERE id = ?", arguments: [streamId.uuidString]) != nil else {
+                return false
+            }
+            try db.execute(
+                sql: "UPDATE streams SET source_scope = ? WHERE id = ?",
+                arguments: [scope.rawValue, streamId.uuidString]
+            )
+            return true
         }
     }
 
@@ -714,11 +735,12 @@ final class PersistenceService {
     func saveStream(_ stream: Stream) throws {
         try dbQueue.write { db in
             try db.execute(sql: """
-                INSERT INTO streams (id, title, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO streams (id, title, source_scope, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
             """, arguments: [
                 stream.id.uuidString,
                 stream.title,
+                stream.sourceScope.rawValue,
                 stream.createdAt.timeIntervalSince1970,
                 stream.updatedAt.timeIntervalSince1970
             ])

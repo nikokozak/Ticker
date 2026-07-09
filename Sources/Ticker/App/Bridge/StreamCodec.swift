@@ -6,6 +6,7 @@ enum StreamCodec {
         return [
             "id": stream.id.uuidString,
             "title": stream.title,
+            "sourceScope": stream.sourceScope.rawValue,
             "sources": stream.sources.map { source -> [String: Any] in
                 var dict: [String: Any] = [
                     "id": source.id.uuidString,

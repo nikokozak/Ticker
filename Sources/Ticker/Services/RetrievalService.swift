@@ -193,7 +193,7 @@ enum SourceContextMode: Equatable {
     case retrieved
 }
 
-enum SourceScope: String {
+enum SourceScope: String, Codable {
     case auto
     case all
     case none

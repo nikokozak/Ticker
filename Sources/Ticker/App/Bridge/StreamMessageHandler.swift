@@ -50,6 +50,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         "deleteStream",
         "saveStreamDocument",
         "saveScrollPosition",
+        "setSourceScope",
         "openExternalURL",
         "exportStream"
     ]
@@ -101,6 +102,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     let streamPayload = StreamCodec.encodeStream(stream, document: document)
                     let payload: [String: AnyCodable] = [
                         "stream": AnyCodable(streamPayload),
+                        "sourceScope": AnyCodable(stream.sourceScope.rawValue),
                         "scrollOffset": AnyCodable(document.scrollOffset)
                     ]
                     bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
@@ -119,6 +121,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 let streamPayload = StreamCodec.encodeStream(stream, document: document)
                 let payload: [String: AnyCodable] = [
                     "stream": AnyCodable(streamPayload),
+                    "sourceScope": AnyCodable(stream.sourceScope.rawValue),
                     "scrollOffset": AnyCodable(document.scrollOffset)
                 ]
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
@@ -217,6 +220,22 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 try persistence.saveScrollOffset(streamId: streamId, offset: offset)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to save scroll position (\(DebugLog.errorSummary(error)))")
+            }
+
+        case "setSourceScope":
+            guard let payload = message.payload,
+                  let streamIdValue = payload["streamId"]?.value as? String,
+                  let streamId = UUID(uuidString: streamIdValue),
+                  let scopeValue = payload["scope"]?.value as? String,
+                  let scope = SourceScope(rawValue: scopeValue) else {
+                DebugLog.log("[WebViewManager] Invalid setSourceScope payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid setSourceScope payload")
+                return
+            }
+            do {
+                _ = try persistence.setSourceScope(streamId: streamId, scope: scope)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to set source scope (\(DebugLog.errorSummary(error)))")
             }
 
         case "openExternalURL":

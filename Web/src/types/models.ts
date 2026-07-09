@@ -2,11 +2,14 @@
 export interface Stream {
   id: string;
   title: string;
+  sourceScope: SourceScope;
   sources: SourceReference[];
   document: StreamDocument;
   createdAt: string;
   updatedAt: string;
 }
+
+export type SourceScope = 'auto' | 'all' | 'none';
 
 /** Canonical Markdown document for a stream */
 export interface StreamDocument {

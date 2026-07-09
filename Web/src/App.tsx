@@ -167,8 +167,15 @@ export function App() {
           const payloadStream = message.payload?.stream as Stream | undefined;
           if (!payloadStream) break;
           const scrollOffset = Number(message.payload?.scrollOffset ?? payloadStream?.document?.scrollOffset ?? 0);
+          const payloadSourceScope = message.payload?.sourceScope;
+          const sourceScope: Stream['sourceScope'] = payloadSourceScope === 'auto'
+            || payloadSourceScope === 'all'
+            || payloadSourceScope === 'none'
+            ? payloadSourceScope
+            : payloadStream.sourceScope ?? 'auto';
           const loadedStream = {
             ...payloadStream,
+            sourceScope,
             document: {
               ...payloadStream.document,
               scrollOffset: Number.isFinite(scrollOffset) ? scrollOffset : 0,
