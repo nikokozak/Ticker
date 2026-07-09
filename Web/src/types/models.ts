@@ -13,6 +13,7 @@ export interface StreamDocument {
   streamId: string;
   markdown: string;
   revision: number;
+  scrollOffset: number;
   createdAt: string;
   updatedAt: string;
 }

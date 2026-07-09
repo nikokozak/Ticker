@@ -438,6 +438,11 @@ final class PersistenceService {
             """)
         }
 
+        migrator.registerMigration("v19_scroll_restore") { db in
+            try db.execute(sql: "ALTER TABLE stream_documents ADD COLUMN scroll_offset REAL NOT NULL DEFAULT 0")
+            try db.execute(sql: "ALTER TABLE sources ADD COLUMN last_page_index INTEGER")
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -587,6 +592,7 @@ final class PersistenceService {
                     embeddingStatus: embeddingStatus,
                     indexStatus: indexStatus,
                     aiExcluded: aiExcluded != 0,
+                    lastPageIndex: row["last_page_index"],
                     addedAt: Date(timeIntervalSince1970: row["added_at"])
                 )
             }
@@ -737,7 +743,7 @@ final class PersistenceService {
         try dbQueue.read { db in
             guard let row = try Row.fetchOne(
                 db,
-                sql: "SELECT stream_id, markdown, revision, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+                sql: "SELECT stream_id, markdown, revision, scroll_offset, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
                 arguments: [streamId.uuidString]
             ) else {
                 return nil
@@ -747,6 +753,7 @@ final class PersistenceService {
                 streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
                 markdown: row["markdown"],
                 revision: row["revision"],
+                scrollOffset: row["scroll_offset"],
                 createdAt: Date(timeIntervalSince1970: row["created_at"]),
                 updatedAt: Date(timeIntervalSince1970: row["updated_at"])
             )
@@ -758,13 +765,14 @@ final class PersistenceService {
         try dbQueue.write { db in
             if let row = try Row.fetchOne(
                 db,
-                sql: "SELECT stream_id, markdown, revision, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+                sql: "SELECT stream_id, markdown, revision, scroll_offset, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
                 arguments: [streamId.uuidString]
             ) {
                 return StreamDocument(
                     streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
                     markdown: row["markdown"],
                     revision: row["revision"],
+                    scrollOffset: row["scroll_offset"],
                     createdAt: Date(timeIntervalSince1970: row["created_at"]),
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"])
                 )
@@ -788,8 +796,27 @@ final class PersistenceService {
                 streamId: streamId,
                 markdown: markdown,
                 revision: 0,
+                scrollOffset: 0,
                 createdAt: now,
                 updatedAt: now
+            )
+        }
+    }
+
+    func saveScrollOffset(streamId: UUID, offset: Double) throws {
+        let clampedOffset = max(0, offset)
+        try dbQueue.write { db in
+            guard try Row.fetchOne(
+                db,
+                sql: "SELECT 1 FROM stream_documents WHERE stream_id = ?",
+                arguments: [streamId.uuidString]
+            ) != nil else {
+                return
+            }
+
+            try db.execute(
+                sql: "UPDATE stream_documents SET scroll_offset = ? WHERE stream_id = ?",
+                arguments: [clampedOffset, streamId.uuidString]
             )
         }
     }
@@ -938,6 +965,7 @@ final class PersistenceService {
                 embeddingStatus: embeddingStatus,
                 indexStatus: indexStatus,
                 aiExcluded: aiExcluded != 0,
+                lastPageIndex: row["last_page_index"],
                 addedAt: Date(timeIntervalSince1970: row["added_at"])
             )
         }
@@ -988,6 +1016,15 @@ final class PersistenceService {
             try db.execute(
                 sql: "UPDATE sources SET ai_excluded = ? WHERE id = ?",
                 arguments: [excluded ? 1 : 0, sourceId.uuidString]
+            )
+        }
+    }
+
+    func saveSourceLastPageIndex(sourceId: UUID, pageIndex: Int) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE sources SET last_page_index = ? WHERE id = ?",
+                arguments: [max(0, pageIndex), sourceId.uuidString]
             )
         }
     }

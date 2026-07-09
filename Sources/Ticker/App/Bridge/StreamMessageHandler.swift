@@ -49,6 +49,8 @@ final class StreamMessageHandler: BridgeMessageHandler {
         "updateStreamTitle",
         "deleteStream",
         "saveStreamDocument",
+        "saveScrollPosition",
+        "openExternalURL",
         "exportStream"
     ]
 
@@ -97,7 +99,11 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     let document = try persistence.loadOrCreateStreamDocument(streamId: id)
 
                     let streamPayload = StreamCodec.encodeStream(stream, document: document)
-                    bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
+                    let payload: [String: AnyCodable] = [
+                        "stream": AnyCodable(streamPayload),
+                        "scrollOffset": AnyCodable(document.scrollOffset)
+                    ]
+                    bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
                     ingestService?.enqueuePendingSources(for: id)
                 }
             } catch {
@@ -111,7 +117,11 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 delegate?.setCurrentStreamIdForFileDrops(stream.id)
                 let document = try persistence.loadOrCreateStreamDocument(streamId: stream.id)
                 let streamPayload = StreamCodec.encodeStream(stream, document: document)
-                bridgeService.send(BridgeMessage(type: "streamLoaded", payload: ["stream": AnyCodable(streamPayload)]))
+                let payload: [String: AnyCodable] = [
+                    "stream": AnyCodable(streamPayload),
+                    "scrollOffset": AnyCodable(document.scrollOffset)
+                ]
+                bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to create stream (\(DebugLog.errorSummary(error)))")
             }
@@ -192,6 +202,38 @@ final class StreamMessageHandler: BridgeMessageHandler {
             } catch {
                 DebugLog.log("[WebViewManager] Failed to save stream document (\(DebugLog.errorSummary(error)))")
                 await bridgeService.respondWithError(to: callbackId, error: error.localizedDescription)
+            }
+
+        case "saveScrollPosition":
+            guard let payload = message.payload,
+                  let streamIdValue = payload["streamId"]?.value as? String,
+                  let streamId = UUID(uuidString: streamIdValue),
+                  let offset = payload["offset"]?.doubleValue else {
+                DebugLog.log("[WebViewManager] Invalid saveScrollPosition payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveScrollPosition payload")
+                return
+            }
+            do {
+                try persistence.saveScrollOffset(streamId: streamId, offset: offset)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save scroll position (\(DebugLog.errorSummary(error)))")
+            }
+
+        case "openExternalURL":
+            guard let payload = message.payload,
+                  let rawURL = payload["url"]?.value as? String,
+                  rawURL.range(of: #"^https?://"#, options: [.regularExpression, .caseInsensitive]) != nil,
+                  let components = URLComponents(string: rawURL),
+                  let scheme = components.scheme?.lowercased(),
+                  (scheme == "http" || scheme == "https"),
+                  components.host != nil,
+                  let url = components.url else {
+                DebugLog.log("[StreamMessageHandler] Rejected external URL")
+                return
+            }
+
+            await MainActor.run {
+                _ = NSWorkspace.shared.open(url)
             }
 
         case "exportStream":

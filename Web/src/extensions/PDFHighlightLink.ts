@@ -129,6 +129,7 @@ export function tickerPDFLinkExtension(streamId: string): Extension {
     EditorView.domEventHandlers({
       click: (event, view) => {
         if (event.button !== 0 || event.defaultPrevented) return false;
+        if (event.altKey) return false;
         const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
         if (pos == null) return false;
 

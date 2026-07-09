@@ -151,6 +151,14 @@ final class WebViewManager: NSObject {
         pdfPaneController.onAnchorPickCancelled = { [weak self] streamId in
             self?.sendPDFAnchorPickCancelled(streamId: streamId)
         }
+        pdfPaneController.onPageChanged = { [weak self] sourceId, pageIndex in
+            guard let self, let persistence = self.persistence else { return }
+            do {
+                try persistence.saveSourceLastPageIndex(sourceId: sourceId, pageIndex: pageIndex)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save PDF page position (\(DebugLog.errorSummary(error)))")
+            }
+        }
         pdfPaneController.onClose = { [weak self] in
             self?.activePDFPaneStreamId = nil
             self?.sendPDFPaneStateChanged(visible: false)
@@ -211,9 +219,11 @@ final class WebViewManager: NSObject {
 
             let document = try persistence.loadOrCreateStreamDocument(streamId: createdStream.id)
             let streamPayload = StreamCodec.encodeStream(reloadedStream, document: document)
-            bridgeService.send(BridgeMessage(type: "streamLoaded", payload: [
-                "stream": AnyCodable(streamPayload)
-            ]))
+            let streamLoadedPayload: [String: AnyCodable] = [
+                "stream": AnyCodable(streamPayload),
+                "scrollOffset": AnyCodable(document.scrollOffset)
+            ]
+            bridgeService.send(BridgeMessage(type: "streamLoaded", payload: streamLoadedPayload))
 
             let summaries = try persistence.loadStreamSummaries()
             let payload = StreamCodec.encodeSummaries(summaries)
@@ -370,7 +380,8 @@ final class WebViewManager: NSObject {
                         url: url,
                         streamId: source.streamId,
                         sourceId: source.id,
-                        displayName: source.displayName
+                        displayName: source.displayName,
+                        lastPageIndex: afterPresent == nil ? source.lastPageIndex : nil
                     )
                     self.activePDFPaneStreamId = source.streamId
                     self.sendPDFPaneStateChanged(

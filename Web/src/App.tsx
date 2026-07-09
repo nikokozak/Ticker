@@ -164,7 +164,16 @@ export function App() {
           setIsLoading(false);
           break;
         case 'streamLoaded': {
-          const loadedStream = message.payload?.stream as Stream;
+          const payloadStream = message.payload?.stream as Stream | undefined;
+          if (!payloadStream) break;
+          const scrollOffset = Number(message.payload?.scrollOffset ?? payloadStream?.document?.scrollOffset ?? 0);
+          const loadedStream = {
+            ...payloadStream,
+            document: {
+              ...payloadStream.document,
+              scrollOffset: Number.isFinite(scrollOffset) ? scrollOffset : 0,
+            },
+          };
           currentStreamIdRef.current = loadedStream?.id ?? null;
           viewRef.current = 'stream';
           setCurrentStream(loadedStream);

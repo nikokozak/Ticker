@@ -865,6 +865,71 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_v19MigrationAddsScrollRestoreColumnsToFreshDatabase() throws {
+        try withTempPersistenceServiceAndURL { _, dbURL, _ in
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let documentColumns = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(stream_documents)").map { row -> String in
+                    row["name"]
+                }
+            }
+            let sourceColumns = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(sources)").map { row -> String in
+                    row["name"]
+                }
+            }
+
+            XCTAssertTrue(documentColumns.contains("scroll_offset"))
+            XCTAssertTrue(sourceColumns.contains("last_page_index"))
+        }
+    }
+
+    func test_saveScrollOffsetRoundTripsWithoutBumpingRevision() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Scroll Restore")
+            try service.saveStream(stream)
+            let revision = try service.saveStreamDocument(streamId: stream.id, markdown: "Line one\n\nLine two")
+            let before = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+
+            try service.saveScrollOffset(streamId: stream.id, offset: 512.5)
+
+            let after = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(revision, 1)
+            XCTAssertEqual(after.markdown, before.markdown)
+            XCTAssertEqual(after.revision, before.revision)
+            XCTAssertEqual(after.updatedAt, before.updatedAt)
+            XCTAssertEqual(after.scrollOffset, 512.5)
+
+            let payload = StreamCodec.encodeStream(stream, document: after)
+            let documentPayload = try XCTUnwrap(payload["document"] as? [String: Any])
+            XCTAssertEqual(documentPayload["scrollOffset"] as? Double, 512.5)
+        }
+    }
+
+    func test_saveSourceLastPageIndexRoundTripsThroughPersistence() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "PDF Resume")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                fileType: .pdf,
+                bookmarkData: Data(),
+                status: .ready
+            )
+            try service.saveSource(source)
+
+            XCTAssertNil(try service.loadSource(id: source.id)?.lastPageIndex)
+
+            try service.saveSourceLastPageIndex(sourceId: source.id, pageIndex: 117)
+            XCTAssertEqual(try service.loadSource(id: source.id)?.lastPageIndex, 117)
+            XCTAssertEqual(try service.loadStream(id: stream.id)?.sources.first?.lastPageIndex, 117)
+
+            try service.saveSourceLastPageIndex(sourceId: source.id, pageIndex: -4)
+            XCTAssertEqual(try service.loadSource(id: source.id)?.lastPageIndex, 0)
+        }
+    }
+
     func test_chunkerUsesOutlineSectionPathsAndPageRanges() throws {
         let document = try makePDFDocument(pages: [
             "Opening receipts establish the first page.",

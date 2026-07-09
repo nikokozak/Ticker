@@ -30,6 +30,7 @@ enum StreamCodec {
                 "streamId": document.streamId.uuidString,
                 "markdown": document.markdown,
                 "revision": document.revision,
+                "scrollOffset": document.scrollOffset,
                 "createdAt": formatter.string(from: document.createdAt),
                 "updatedAt": formatter.string(from: document.updatedAt)
             ]

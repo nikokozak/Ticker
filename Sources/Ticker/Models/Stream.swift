@@ -41,6 +41,7 @@ struct StreamDocument: Codable {
     let streamId: UUID
     var markdown: String
     var revision: Int
+    var scrollOffset: Double
     let createdAt: Date
     var updatedAt: Date
 
@@ -48,12 +49,14 @@ struct StreamDocument: Codable {
         streamId: UUID,
         markdown: String = "",
         revision: Int = 0,
+        scrollOffset: Double = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.streamId = streamId
         self.markdown = markdown
         self.revision = revision
+        self.scrollOffset = scrollOffset
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
