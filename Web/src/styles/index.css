@@ -506,8 +506,7 @@ body {
 }
 
 .stream-sources-button,
-.stream-xray-button,
-.stream-margin-button {
+.stream-xray-button {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -523,16 +522,13 @@ body {
   transition: all var(--duration-fast) ease;
 }
 
-.stream-xray-button,
-.stream-margin-button {
+.stream-xray-button {
   min-width: 30px;
 }
 
 .stream-sources-button:hover,
 .stream-xray-button:hover,
-.stream-xray-button--active,
-.stream-margin-button:hover,
-.stream-margin-button--active {
+.stream-xray-button--active {
   border-color: var(--color-accent);
   color: var(--color-accent);
   background: var(--accent-soft);
@@ -1505,6 +1501,13 @@ body {
 .document-editor-codemirror .cm-prov-capture {
   background: var(--prov-capture-soft);
   border-bottom: 1px dotted var(--prov-capture-border);
+}
+
+/* CodeMirror's default tooltip wrapper draws its own gray border/background;
+   the provenance card inside is the whole visual — neutralize the wrapper. */
+.document-editor-codemirror .cm-tooltip {
+  border: none;
+  background: transparent;
 }
 
 .cm-provenance-tooltip {

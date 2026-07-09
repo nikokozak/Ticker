@@ -10,7 +10,7 @@ import { tags as t } from '@lezer/highlight';
 import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
-import { EyeIcon, NoteIcon, XIcon } from './icons';
+import { EyeIcon, XIcon } from './icons';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
@@ -482,7 +482,6 @@ export function StreamEditor({
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [isProvenanceXrayVisible, setIsProvenanceXrayVisible] = useState(false);
-  const [isMarginNotesVisible, setIsMarginNotesVisible] = useState(false);
   const [showRawFormatting, setShowRawFormatting] = useState(false);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
@@ -847,7 +846,6 @@ export function StreamEditor({
     setExchangeOverlay(null);
     setSourceScope(stream.sourceScope ?? 'auto');
     setIsProvenanceXrayVisible(false);
-    setIsMarginNotesVisible(false);
     setShowRewriteMenu(false);
     promptContextRef.current = null;
     aiRequestRef.current = null;
@@ -2318,11 +2316,13 @@ export function StreamEditor({
   ), [handleOpenSourceById, isAiThinking, isProvenanceXrayVisible, openRedevelopPrompt, sources]);
 
   const marginNotesExtensionValue = useMemo<Extension>(() => marginNotesExtension({
-    visible: isMarginNotesVisible,
+    // Margin rendering is retired from the UI; the field stays wired so
+    // existing notes keep mapping/persisting their anchors dormant.
+    visible: false,
     onPromote: handlePromoteMarginNote,
     onDismiss: handleDismissMarginNote,
     onUnanchor: (note) => persistMarginNoteStatus(note, 'unanchored'),
-  }), [handleDismissMarginNote, handlePromoteMarginNote, isMarginNotesVisible, persistMarginNoteStatus]);
+  }), [handleDismissMarginNote, handlePromoteMarginNote, persistMarginNoteStatus]);
 
   const selectionDissolveSpanIds = (() => {
     const view = editorViewRef.current;
@@ -2365,16 +2365,6 @@ export function StreamEditor({
             aria-pressed={isProvenanceXrayVisible}
           >
             <EyeIcon size={16} />
-          </button>
-          <button
-            onClick={() => setIsMarginNotesVisible((value) => !value)}
-            className={`stream-margin-button ${isMarginNotesVisible ? 'stream-margin-button--active' : ''}`}
-            title="Toggle margin notes"
-            type="button"
-            aria-label="Toggle margin notes"
-            aria-pressed={isMarginNotesVisible}
-          >
-            <NoteIcon size={16} />
           </button>
           <button
             onClick={() => setShowSourcesModal(true)}
