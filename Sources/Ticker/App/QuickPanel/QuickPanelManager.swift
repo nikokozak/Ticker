@@ -13,6 +13,31 @@ struct ConversationTurn: Equatable {
     let role: Role
     let content: String
     let contextIncluded: Bool  // True if this turn included captured context
+    let saveContent: String?
+    let aiReceipt: QuickPanelAIReceipt?
+
+    init(
+        role: Role,
+        content: String,
+        contextIncluded: Bool,
+        saveContent: String? = nil,
+        aiReceipt: QuickPanelAIReceipt? = nil
+    ) {
+        self.role = role
+        self.content = content
+        self.contextIncluded = contextIncluded
+        self.saveContent = saveContent
+        self.aiReceipt = aiReceipt
+    }
+}
+
+struct QuickPanelAIReceipt: Equatable {
+    let streamId: UUID
+    let requestId: String
+    let model: String?
+    let userInput: String
+    let sourceManifest: String
+    let responseRaw: String
 }
 
 /// In-memory ephemeral conversation state (not persisted)
@@ -517,6 +542,13 @@ final class QuickPanelManager: ObservableObject {
         // Build context for first turn only
         let isFirstTurn = ephemeralConversation.turns.isEmpty
         let contextForAI: String? = isFirstTurn ? context?.contextText : nil
+        let pickedStream = try? pickedStreamForAI()
+        let streamIdForAI = pickedStream?.id
+        let sourceScopeForAI = pickedStream?.sourceScope ?? .auto
+        let requestId = UUID().uuidString
+        let userInput = "Selection:\n\(contextForAI ?? "")\n\nPrompt:\n\(query)"
+        var responseRaw = ""
+        var selectedModel: String?
 
         // Record user turn
         ephemeralConversation.turns.append(ConversationTurn(
@@ -544,24 +576,41 @@ final class QuickPanelManager: ObservableObject {
         streamingTask = Task { [weak self] in
             await orchestrator.route(
                 query: query,
-                streamId: nil,  // Ephemeral - not tied to real stream
+                streamId: streamIdForAI,
+                sourceScope: sourceScopeForAI,
                 priorCells: priorCells,
                 sourceContext: contextForAI,
                 systemPromptOverride: Prompts.quickPanelChat,
                 onChunk: { [weak self] chunk in
+                    responseRaw += chunk
                     Task { @MainActor in
                         guard let self = self, !self.isStreamingCancelled else { return }
                         self.ephemeralConversation.currentResponse += chunk
                     }
                 },
-                onComplete: { [weak self] _ in
+                onComplete: { [weak self] sourceContext in
                     Task { @MainActor in
                         guard let self = self, !self.isStreamingCancelled else { return }
                         // Record assistant turn with completed response
+                        let manifest = DocumentAICitationManifest.entries(from: sourceContext) ?? []
+                        let displayContent = CitationMarkerSwap.swap(responseRaw, manifest: manifest, mode: .plainLabel)
+                        let saveContent = CitationMarkerSwap.swap(responseRaw, manifest: manifest, mode: .markdownLink)
+                        let receipt = streamIdForAI.map {
+                            QuickPanelAIReceipt(
+                                streamId: $0,
+                                requestId: requestId,
+                                model: selectedModel,
+                                userInput: userInput,
+                                sourceManifest: DocumentAICitationManifest.jsonString(from: sourceContext),
+                                responseRaw: responseRaw
+                            )
+                        }
                         self.ephemeralConversation.turns.append(ConversationTurn(
                             role: .assistant,
-                            content: self.ephemeralConversation.currentResponse,
-                            contextIncluded: false
+                            content: displayContent,
+                            contextIncluded: false,
+                            saveContent: saveContent,
+                            aiReceipt: receipt
                         ))
                         self.ephemeralConversation.isStreaming = false
                         self.ephemeralConversation.currentResponse = ""
@@ -573,6 +622,9 @@ final class QuickPanelManager: ObservableObject {
                         self.error = err.localizedDescription
                         self.ephemeralConversation.isStreaming = false
                     }
+                },
+                onModelSelected: { model in
+                    selectedModel = model
                 }
             )
         }
@@ -792,15 +844,31 @@ final class QuickPanelManager: ObservableObject {
         isLoading = false
     }
 
-    func saveConversationMessage(_ message: String) {
+    func saveConversationMessage(_ turn: ConversationTurn) {
         guard let persistence = persistence else {
             error = "Persistence not configured"
             return
         }
 
+        let message = turn.saveContent ?? turn.content
         guard let fragment = nonEmptyTrimmed(message) else { return }
 
         do {
+            if let receipt = turn.aiReceipt {
+                appendQuickPanelAIFragment(
+                    streamId: receipt.streamId,
+                    fragment: fragment,
+                    persistence: persistence,
+                    requestId: receipt.requestId,
+                    model: receipt.model,
+                    userInput: receipt.userInput,
+                    sourceManifest: receipt.sourceManifest,
+                    responseRaw: receipt.responseRaw
+                )
+                flashStreamPickerSaveFeedback()
+                return
+            }
+
             let (streamId, isNewStream) = try getTargetStreamId()
             let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
             notifyFrontend(
@@ -815,6 +883,22 @@ final class QuickPanelManager: ObservableObject {
             self.error = error.localizedDescription
             DebugLog.log("[QuickPanel] Error saving conversation message (\(DebugLog.errorSummary(error)))")
         }
+    }
+
+    private func pickedStreamForAI() throws -> Stream? {
+        guard let persistence = persistence else {
+            throw QuickPanelError.persistenceNotConfigured
+        }
+
+        if let selectedStreamId, let stream = try persistence.loadStream(id: selectedStreamId) {
+            return stream
+        }
+
+        if let recentStreamId = try persistence.getRecentlyModifiedStreamId() {
+            return try persistence.loadStream(id: recentStreamId)
+        }
+
+        return nil
     }
 
     /// Load available streams for the picker
@@ -967,7 +1051,10 @@ final class QuickPanelManager: ObservableObject {
         requestId: String? = nil,
         model: String? = nil,
         prompt: String? = nil,
-        documentMarkdown: String? = nil
+        documentMarkdown: String? = nil,
+        userInput: String? = nil,
+        sourceManifest: String = "[]",
+        responseRaw: String? = nil
     ) {
         do {
             let spans = requestId.map { id in
@@ -993,8 +1080,9 @@ final class QuickPanelManager: ObservableObject {
                         requestId: requestId,
                         streamId: streamId,
                         verb: "develop",
-                        userInput: "Selection:\n\(documentMarkdown ?? "")\n\nPrompt:\n\(prompt ?? "")",
-                        responseRaw: fragment,
+                        userInput: userInput ?? "Selection:\n\(documentMarkdown ?? "")\n\nPrompt:\n\(prompt ?? "")",
+                        sourceManifest: sourceManifest,
+                        responseRaw: responseRaw ?? fragment,
                         model: model
                     ))
                 } catch {

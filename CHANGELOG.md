@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Quick Panel ephemeral answers now use the picked stream's sources and keep citation links when saved.
 - PDF sources now reopen to the last-read page, expose document outlines when available, and describe pane failures in text.
 - Markdown links now open on click and can be edited from a compact popover without exposing raw URL markup.
 - Streams now restore editor scroll position and hide the first frame until markdown concealment is ready.

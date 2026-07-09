@@ -2570,6 +2570,30 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(payload[1]["shortTitle"] as? String, "Guide")
     }
 
+    func test_citationMarkerSwapRendersPanelLabelAndMarkdownLinkFromSameManifest() throws {
+        let sourceId = try XCTUnwrap(UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+        let chunkId = try XCTUnwrap(UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
+        let manifest = [
+            DocumentAICitationManifestEntry(
+                n: 1,
+                chunkId: chunkId,
+                sourceId: sourceId,
+                page: 4,
+                shortTitle: "Manual"
+            )
+        ]
+        let text = #"Use the stack carefully.【1|"stack words"】"#
+
+        XCTAssertEqual(
+            CitationMarkerSwap.swap(text, manifest: manifest, mode: .plainLabel),
+            "Use the stack carefully. (Manual p.4)"
+        )
+        XCTAssertEqual(
+            CitationMarkerSwap.swap(text, manifest: manifest, mode: .markdownLink),
+            "Use the stack carefully. [Manual p.4](ticker-pdf://11111111-1111-1111-1111-111111111111?page=4&chunk=22222222-2222-2222-2222-222222222222&q=stack%20words)"
+        )
+    }
+
     func test_appendToStreamDocument_createsDocumentWithExactlyFragmentWhenMissing() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "New Document")
@@ -2786,6 +2810,46 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(exchange.userInput, "Selection:\nCaptured context\n\nPrompt:\nSummarize")
             XCTAssertEqual(exchange.responseRaw, "AI answer")
             XCTAssertEqual(exchange.model, "provider/model")
+        }
+    }
+
+    @MainActor
+    func test_saveConversationMessageKeepsAIReceiptWithMarkdownLinksAndExchange() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Kept AI")
+            try service.saveStream(stream)
+            let manager = QuickPanelManager(persistence: service)
+            let savedMarkdown = "Answer [Manual p.4](ticker-pdf://source?page=4)"
+            let rawResponse = "Answer 【1】"
+            let manifest = #"[{"n":1,"shortTitle":"Manual"}]"#
+            let turn = ConversationTurn(
+                role: .assistant,
+                content: "Answer (Manual p.4)",
+                contextIncluded: false,
+                saveContent: savedMarkdown,
+                aiReceipt: QuickPanelAIReceipt(
+                    streamId: stream.id,
+                    requestId: "kept-panel-ai",
+                    model: "provider/model",
+                    userInput: "Selection:\n\nPrompt:\nQuestion",
+                    sourceManifest: manifest,
+                    responseRaw: rawResponse
+                )
+            )
+
+            manager.saveConversationMessage(turn)
+
+            let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(document.markdown, savedMarkdown)
+            let spans = try service.loadSpans(streamId: stream.id)
+            XCTAssertEqual(spans.count, 1)
+            XCTAssertEqual(spans[0].origin, "ai")
+            XCTAssertEqual(spans[0].requestId, "kept-panel-ai")
+            XCTAssertEqual(spans[0].textHash, FNV1a.hash(savedMarkdown))
+            let exchange = try XCTUnwrap(service.loadExchange(requestId: "kept-panel-ai"))
+            XCTAssertEqual(exchange.sourceManifest, manifest)
+            XCTAssertEqual(exchange.responseRaw, rawResponse)
+            XCTAssertEqual(exchange.userInput, "Selection:\n\nPrompt:\nQuestion")
         }
     }
 
