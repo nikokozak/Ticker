@@ -7,6 +7,7 @@ final class WebViewManager: NSObject {
     private let deviceKeyService: DeviceKeyService
     let bridgeService: BridgeService
     private let bridgeRouter: BridgeRouter
+    private var streamMessageHandler: StreamMessageHandler?
     let persistence: PersistenceService?
     private let sourceService: SourceService?
     private let ingestService: IngestService?
@@ -19,13 +20,19 @@ final class WebViewManager: NSObject {
     private let hostView = NSView(frame: .zero)
     private let editorPaneView = NSView(frame: .zero)
     private let pdfPaneController = PDFReaderPaneController()
+    private let lastOpenStreamDefaultsKey = "TickerLastOpenStreamId"
     private var activePDFPaneStreamId: UUID?
+    private var shouldRestoreLastOpenStream = true
+    private var didConsumeLaunchStreamRestore = false
+    private var pendingLaunchOpenStreamId: UUID?
     private var pendingEditorSelectionRequests: [String: (String?) -> Void] = [:]
     private let editorSelectionTimeoutNanoseconds: UInt64 = 50_000_000
 
     init(container: ServiceContainer) {
         let config = WKWebViewConfiguration()
+        #if DEBUG
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
 
         self.settingsService = container.settingsService
         self.deviceKeyService = container.deviceKeyService
@@ -45,6 +52,7 @@ final class WebViewManager: NSObject {
         self.assetService = container.assetService
         super.init()
         if let streamHandler = StreamMessageHandler(container: container, delegate: self) {
+            streamMessageHandler = streamHandler
             bridgeRouter.register(streamHandler)
         }
         if let sourceHandler = SourceMessageHandler(container: container, delegate: self) {
@@ -63,6 +71,11 @@ final class WebViewManager: NSObject {
         configurePDFPaneCallbacks()
 
         webView.navigationDelegate = self
+        #if DEBUG
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
+        #endif
         bridgeService.webView = webView
         bridgeService.onMessage = { [weak self] message in
             self?.handleMessage(message)
@@ -494,6 +507,26 @@ final class WebViewManager: NSObject {
         loadMLXClassifier()
     }
 
+    func skipLaunchStreamRestore() {
+        shouldRestoreLastOpenStream = false
+    }
+
+    func openStream(id: UUID) {
+        shouldRestoreLastOpenStream = false
+        if didConsumeLaunchStreamRestore {
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.streamMessageHandler?.sendStreamLoaded(id: id)
+                } catch {
+                    DebugLog.log("[WebViewManager] Failed to open stream from shell (\(DebugLog.errorSummary(error)))")
+                }
+            }
+        } else {
+            pendingLaunchOpenStreamId = id
+        }
+    }
+
     private func loadMLXClassifier() {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             DebugLog.log("MLX classifier skipped: running unit tests")
@@ -643,6 +676,23 @@ final class WebViewManager: NSObject {
 extension WebViewManager: StreamMessageHandlerDelegate {
     func setCurrentStreamIdForFileDrops(_ streamId: UUID?) {
         currentStreamIdForFileDrops = streamId
+        if let streamId {
+            UserDefaults.standard.set(streamId.uuidString, forKey: lastOpenStreamDefaultsKey)
+        }
+    }
+
+    func consumeLastOpenStreamIdForLaunchRestore() -> UUID? {
+        guard !didConsumeLaunchStreamRestore else { return nil }
+        didConsumeLaunchStreamRestore = true
+        if let streamId = pendingLaunchOpenStreamId {
+            pendingLaunchOpenStreamId = nil
+            return streamId
+        }
+        guard shouldRestoreLastOpenStream,
+              let value = UserDefaults.standard.string(forKey: lastOpenStreamDefaultsKey) else {
+            return nil
+        }
+        return UUID(uuidString: value)
     }
 
     func clearCurrentStreamIdForFileDrops(ifMatches streamId: UUID) {
@@ -694,5 +744,10 @@ extension WebViewManager: WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         DebugLog.log("[WebViewManager] WebView provisional navigation failed (\(DebugLog.errorSummary(error)))")
+    }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // Without this, a dead web content process leaves a permanent white window.
+        DebugLog.log("[WebViewManager] Web content process terminated; reloading")
+        webView.reload()
     }
 }

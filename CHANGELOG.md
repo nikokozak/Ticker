@@ -5,6 +5,9 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Provenance x-ray now tints each AI exchange with its own color variant so neighboring exchanges read as distinct, and the exchange overlay gained a proper title bar with a close button.
+- Selection menu now offers heading (H1/H2/H3), quote, and bullet-list toggles, and a new stream-editor footer has a "Show formatting" switch that reveals the raw markdown document-wide.
+- `ticker://` URLs can now append text to an existing stream or open a stream by id.
 - Quick Panel ephemeral answers now use the picked stream's sources and keep citation links when saved.
 - PDF sources now reopen to the last-read page, expose document outlines when available, and describe pane failures in text.
 - Markdown links now open on click and can be edited from a compact popover without exposing raw URL markup.
@@ -69,6 +72,7 @@ All notable user-facing changes to Ticker are documented here.
 - Made Quick Panel dismissal consistent, stabilized stream picking, and added visible save feedback.
 
 ### Removed
+- Removed AI-generated margin notes (read-back and Challenge tension notes) and the margin-notes header toggle; margin rendering can no longer be enabled from the app.
 - Removed dead TipTap/cell-era editor paths, legacy bridge messages, cell write/read paths, and unused LLM providers from active runtime.
 
 ## Versioning

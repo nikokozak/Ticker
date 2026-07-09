@@ -680,7 +680,7 @@
 				isa = XCBuildConfiguration;
 				buildSettings = {
 					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-					APP_DISPLAY_NAME = "Ticker Debug";
+					APP_DISPLAY_NAME = TickerNextDebug;
 					CODE_SIGN_ENTITLEMENTS = Sources/Ticker/Ticker.entitlements;
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
@@ -708,7 +708,7 @@
 					isa = XCBuildConfiguration;
 					buildSettings = {
 					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-					APP_DISPLAY_NAME = "Ticker Next";
+					APP_DISPLAY_NAME = TickerNext;
 					CODE_SIGN_ENTITLEMENTS = Sources/Ticker/Ticker.entitlements;
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;

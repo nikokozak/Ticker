@@ -661,6 +661,12 @@ All in `Web/src/styles/index.css` unless noted.
 
 ## Phase P7 — Invited marginalia (migration v21)
 
+> **RETIRED (2026-07-09).** Read-back and Challenge tension notes were built, smoke-tested, and removed:
+> free-form AI critique in the margins has no working precedent (closest analogues — AI code-review bots —
+> are noisy even with hard gating), the verbatim-anchor scheme races the live editor, and the output wasn't
+> useful. The substrate survives (v21 schema, margin rendering, promote/dismiss). If marginalia returns, it
+> returns as retrieval-grounded pointers ("Related: <source> p.N") after R3 embeddings — generation-free.
+
 Read artifact §7.5 first. Depends on P4 (spans/anchoring machinery, hover/tooltip patterns).
 
 ### Task 7.1: Schema + Read back pipeline

@@ -63,7 +63,7 @@ sequenceDiagram
 | `Sources/Ticker/App/QuickPanel/` | ⌘L capture panel (manager/view/window) |
 | `Sources/Ticker/App/PDFReader/PDFReaderPaneController.swift` | In-window PDF pane, highlight → stream linking |
 | `Web/src/components/StreamEditor.tsx` | The editor: CM setup, autosave/revision, document AI, selection menu |
-| `Web/src/extensions/` | CM extensions: `MarkdownConceal.ts` (iA-style live preview), `MarkdownImageWidget.ts` |
+| `Web/src/extensions/` | CM extensions: `MarkdownConceal.ts` (static concealment), `MarkdownImageWidget.ts` |
 | `Web/src/types/bridge.ts` | Message allow-list + send/sendAsync |
 | `Web/src/styles/index.css` | Design tokens on `:root` (colors/type/spacing/radius/shadow, light+dark) — use tokens, never raw values |
 | `tools/contracts/check_bridge_contract.mjs` | Statically validates BOTH bridge directions against `bridge.v2.json` — CI-enforced |
@@ -74,7 +74,7 @@ sequenceDiagram
 1. **One data model.** Stream content is `stream_documents.markdown` (+ `revision`). The `cells` table is frozen migration history — never write to it, never render from it.
 2. **One write primitive.** Anything outside the open editor writes via `appendToStreamDocument` and announces with `streamDocumentAppended`. Never UPSERT a whole document from outside the editor; never bypass the revision check.
 3. **A feature = CM extension (web) + BridgeMessageHandler (Swift) + contract entry.** Register the handler in WebViewManager's router setup, add the message to `bridge.v2.json` and `bridge.ts` — the contract checker fails CI otherwise. This is the plugin pattern; don't invent another.
-4. **Product guardrails:** no cell model, no native editor, no persistent split panes (PDF pane is the sanctioned on-demand exception), autosave always on, AI apply = one undo step, iA-style calm rendering (conceal marks off the selection line).
+4. **Product guardrails:** no cell model, no native editor, no persistent split panes (PDF pane is the sanctioned on-demand exception), autosave always on, AI apply = one undo step, **static concealment** — conceal decorations depend only on document + viewport + explicit reveal (⌥-click line, footer "Show formatting" toggle), never on selection or mouse; selection-keyed reveal reintroduces a geometry feedback loop. Markdown is an invisible substrate (storage/AI/export) — users format via the selection menu, never by knowing syntax.
 5. **Migrations are append-only.** New schema = new `vN` migration; never edit v1–v13. Backup-before-migrate must keep working.
 6. Editor perf: CM plugins must only walk `view.visibleRanges`; never scan the whole doc per update.
 

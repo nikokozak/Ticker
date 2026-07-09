@@ -53,18 +53,6 @@ enum Prompts {
     Define or explain the selected term or phrase concisely, in the context of the surrounding document. Two to four sentences. Output only the explanation.
     """
 
-    static let readBack = """
-    You are reading a draft back to its author. Identify at most 5 notes about the passage below.
-    Each note is one of: "question" (a gap or unexamined assumption), "tension" (a contradiction
-    with the text itself or the provided source passages), "connection" (a directly relevant
-    passage from the provided sources).
-    Return ONLY a JSON array: [{"kind":"question|tension|connection","anchor":"<exact verbatim
-    quote of 5-15 consecutive words from the passage>","body":"<the note, 1-3 sentences, plain
-    prose, no lists>"}]
-    The anchor MUST be copied character-for-character from the passage. Do not comment on style
-    or formatting. Do not praise. If nothing is worth noting, return [].
-    """
-
     static let restatement = """
     Convert input to a brief heading. Return ONLY the heading, no quotes or explanation.
 

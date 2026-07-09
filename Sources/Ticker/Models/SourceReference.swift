@@ -55,7 +55,7 @@ struct SourceReference: Identifiable, Codable {
 }
 
 enum SourceShortTitle {
-    private static let maxLength = 24
+    private static let maxLength = 40
 
     static func derive(displayName: String, metadataTitle: String? = nil) -> String {
         let metadataCandidate = metadataTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -75,7 +75,7 @@ enum SourceShortTitle {
         }
 
         let title = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-        return middleTruncate(title.isEmpty ? "Source" : title)
+        return compact(title.isEmpty ? "Source" : title)
     }
 
     private static func isSaneMetadataTitle(_ title: String) -> Bool {
@@ -98,16 +98,38 @@ enum SourceShortTitle {
         return displayName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func middleTruncate(_ title: String) -> String {
-        guard title.count > maxLength else {
-            return title
+    /// Titles compress by shedding structure, not by chopping characters:
+    /// a trailing parenthetical goes first ("(3rd Edition)"), then a subtitle
+    /// after ": ", and only then the head is cut at a word boundary with an
+    /// ellipsis. Middle truncation is for filenames, not titles.
+    private static func compact(_ title: String) -> String {
+        var result = title
+
+        if result.count > maxLength {
+            let withoutParenthetical = result
+                .replacingOccurrences(of: #"\s*[(\[][^()\[\]]*[)\]]$"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !withoutParenthetical.isEmpty {
+                result = withoutParenthetical
+            }
         }
 
-        let ellipsis = "..."
-        let available = maxLength - ellipsis.count
-        let prefixCount = Int(ceil(Double(available) / 2.0))
-        let suffixCount = available - prefixCount
-        return "\(title.prefix(prefixCount))\(ellipsis)\(title.suffix(suffixCount))"
+        if result.count > maxLength,
+           let head = result.components(separatedBy: ": ").first?.trimmingCharacters(in: .whitespacesAndNewlines),
+           head.count >= 8 {
+            result = head
+        }
+
+        if result.count > maxLength {
+            let prefix = result.prefix(maxLength - 1)
+            if let lastSpace = prefix.lastIndex(of: " ") {
+                result = String(prefix[..<lastSpace]) + "…"
+            } else {
+                result = String(prefix) + "…"
+            }
+        }
+
+        return result
     }
 }
 

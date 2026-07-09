@@ -38,6 +38,9 @@ final class AIOrchestrator {
     ///   - query: The user's query
     ///   - queryImages: Image URLs attached to the current query
     ///   - streamId: Optional stream ID for local source retrieval
+    ///   - retrievalQuery: User-content-only text for source retrieval. `query` often carries
+    ///     prompt boilerplate ("Regarding this context: ...") whose words skew BM25 and inflate
+    ///     the relevance cutoff; retrieval must see only what the user wrote.
     ///   - sourceScope: User override for source-context assembly on stream-backed document AI
     ///   - priorCells: Conversation history (each has "content", "type", optionally "imageURLs")
     ///   - sourceContext: Explicit non-stream context (used by Quick Panel/document AI)
@@ -48,6 +51,7 @@ final class AIOrchestrator {
         query: String,
         queryImages: [String] = [],
         streamId: UUID? = nil,
+        retrievalQuery: String? = nil,
         sourceScope: SourceScope = .auto,
         priorCells: [[String: Any]],
         sourceContext: String? = nil,
@@ -61,10 +65,14 @@ final class AIOrchestrator {
         // Proxy-only mode: all LLM traffic goes through the proxy.
         // If device key is not active, the proxy will return an auth error.
 
-        // Classify if we have a classifier and smart routing is enabled
+        // Classify if we have a classifier and smart routing is enabled.
+        // Fixed-prompt flows (document AI verbs, read-back, ephemeral ask)
+        // must not be re-routed by content sniffing: a passage that "looks
+        // like a search" would go to a web-search model that ignores the
+        // structured system prompt entirely.
         var intent: QueryIntent = .knowledge
         var classificationResult: ClassificationResult?
-        if settings.smartRoutingEnabled, let classifier {
+        if settings.smartRoutingEnabled, let classifier, systemPromptOverride == nil {
             do {
                 let result = try await classifier.classify(query: query)
                 intent = result.intent
@@ -84,7 +92,7 @@ final class AIOrchestrator {
         if let streamId, let retrievalService {
             do {
                 if let assembledContext = try retrievalService.assembleSourceContext(
-                    query: query,
+                    query: retrievalQuery ?? query,
                     streamId: streamId,
                     scope: sourceScope
                 ) {

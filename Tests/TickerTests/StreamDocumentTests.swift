@@ -7,6 +7,45 @@ import XCTest
 
 @testable import Ticker
 
+final class TickerURLCommandTests: XCTestCase {
+    func test_parseAppendURL() throws {
+        let url = try XCTUnwrap(URL(string: "ticker://append?stream=Notebook&text=hello%20world"))
+
+        XCTAssertEqual(
+            TickerURLCommand.parse(url),
+            .append(stream: .title("Notebook"), text: "hello world")
+        )
+    }
+
+    func test_parseOpenURL() throws {
+        let streamId = UUID()
+        let url = try XCTUnwrap(URL(string: "ticker://open?stream=\(streamId.uuidString)"))
+
+        XCTAssertEqual(TickerURLCommand.parse(url), .open(streamId: streamId))
+    }
+
+    func test_parseAppendURLMissingParamsReturnsNil() throws {
+        XCTAssertNil(TickerURLCommand.parse(try XCTUnwrap(URL(string: "ticker://append?stream=Notebook"))))
+        XCTAssertNil(TickerURLCommand.parse(try XCTUnwrap(URL(string: "ticker://append?text=hello"))))
+    }
+
+    func test_parseOpenURLBadUUIDReturnsNil() throws {
+        XCTAssertNil(TickerURLCommand.parse(try XCTUnwrap(URL(string: "ticker://open?stream=not-a-uuid"))))
+    }
+
+    func test_parseAppendURLOverCapReturnsNil() throws {
+        var components = URLComponents()
+        components.scheme = "ticker"
+        components.host = "append"
+        components.queryItems = [
+            URLQueryItem(name: "stream", value: "Notebook"),
+            URLQueryItem(name: "text", value: String(repeating: "a", count: TickerURLCommand.maxAppendTextLength + 1))
+        ]
+
+        XCTAssertNil(TickerURLCommand.parse(try XCTUnwrap(components.url)))
+    }
+}
+
 final class QuickPanelMarkdownFormatterTests: XCTestCase {
     func test_buildFragment_includesSelectedTextAsBlockquoteWithAttribution() throws {
         let context = QuickPanelContext(
@@ -963,7 +1002,7 @@ final class StreamDocumentTests: XCTestCase {
         let provider = SlowDocumentAIProvider()
         let handler = AIMessageHandler(
             sendToWeb: { recorder.send($0) },
-            routeDocumentAI: { _, _, _, _, systemPrompt, onChunk, onComplete, _, _ in
+            routeDocumentAI: { _, _, _, _, _, systemPrompt, onChunk, onComplete, _, _ in
                 await provider.stream(
                     systemPrompt: systemPrompt,
                     onChunk: onChunk,
@@ -1017,7 +1056,7 @@ final class StreamDocumentTests: XCTestCase {
             let handler = AIMessageHandler(
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
-                routeDocumentAI: { _, _, _, _, _, onChunk, onComplete, _, onModelSelected in
+                routeDocumentAI: { _, _, _, _, _, _, onChunk, onComplete, _, onModelSelected in
                     onModelSelected?("provider/model")
                     onChunk("Raw [1]")
                     onComplete(SourceContext(
@@ -1066,51 +1105,6 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(manifest[0]["chunkId"] as? String, chunkId.uuidString)
             XCTAssertEqual(manifest[0]["sourceId"] as? String, sourceId.uuidString)
             XCTAssertEqual(manifest[0]["shortTitle"] as? String, "Source PDF")
-            XCTAssertFalse(recorder.messages(ofType: "documentAIComplete").isEmpty)
-        }
-    }
-
-    func test_documentAIChallengeCompletionCreatesMarginNote() async throws {
-        try await withTempPersistenceService { service in
-            let stream = Stream(title: "Challenge Note")
-            try service.saveStream(stream)
-            let recorder = BridgeMessageRecorder()
-            let requestId = "request-challenge"
-            let anchorText = "This claim needs pressure"
-            let anchorStart = 4
-            let handler = AIMessageHandler(
-                persistence: service,
-                sendToWeb: { recorder.send($0) },
-                routeDocumentAI: { _, _, _, _, _, onChunk, onComplete, _, _ in
-                    onChunk("Where is the evidence?")
-                    onComplete(nil)
-                }
-            )
-
-            await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
-                "requestId": AnyCodable(requestId),
-                "streamId": AnyCodable(stream.id.uuidString),
-                "query": AnyCodable("Challenge this"),
-                "context": AnyCodable(anchorText),
-                "imageURLs": AnyCodable([]),
-                "verb": AnyCodable("challenge"),
-                "anchorStart": AnyCodable(anchorStart),
-                "anchorEnd": AnyCodable(anchorStart + anchorText.utf16.count),
-                "anchorHash": AnyCodable(FNV1a.hash(anchorText))
-            ]))
-
-            try await waitUntil {
-                (try? service.loadMarginNotes(streamId: stream.id).count) == 1
-            }
-
-            let note = try XCTUnwrap(try service.loadMarginNotes(streamId: stream.id).first)
-            XCTAssertEqual(note.kind, "tension")
-            XCTAssertEqual(note.body, "Where is the evidence?")
-            XCTAssertEqual(note.requestId, requestId)
-            XCTAssertEqual(note.anchorStart, anchorStart)
-            XCTAssertEqual(note.anchorEnd, anchorStart + anchorText.utf16.count)
-            XCTAssertEqual(note.anchorHash, FNV1a.hash(anchorText))
-            XCTAssertFalse(recorder.messages(ofType: "marginNotesChanged").isEmpty)
             XCTAssertFalse(recorder.messages(ofType: "documentAIComplete").isEmpty)
         }
     }
@@ -1429,19 +1423,6 @@ final class StreamDocumentTests: XCTestCase {
 
     func test_normalizedTextSearchNoMatchReturnsNil() {
         XCTAssertNil(NormalizedTextSearch.utf16Range(of: "missing phrase", in: "present phrase"))
-    }
-
-    func test_readBackParserGarbageOutputReturnsEmpty() {
-        let result = ReadBackMarginNoteBuilder.build(
-            modelOutput: "not json",
-            scopedText: "This passage has enough words for an anchor to exist.",
-            streamId: UUID(),
-            scopeStart: 0,
-            requestId: "request-1"
-        )
-
-        XCTAssertEqual(result.notes, [])
-        XCTAssertEqual(result.droppedAnchorCount, 0)
     }
 
     func test_getExchangePayloadRoundTripAndSavePrunesOrphans() throws {
@@ -2721,12 +2702,27 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
-    func test_sourceShortTitleFreezesCanonicalUglyFilename() throws {
+    func test_sourceShortTitleShedsTrailingParentheticalWhenLong() throws {
         XCTAssertEqual(
             SourceShortTitle.derive(
                 displayName: "Forth Programmer's Handbook (3rd Edition) -- Edward K_ Conklin … -- Anna's Archive.pdf"
             ),
-            "Forth Progr...d Edition)"
+            "Forth Programmer's Handbook"
+        )
+    }
+
+    func test_sourceShortTitleShedsSubtitleThenEndTruncatesAtWordBoundary() throws {
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "Structure and Interpretation of Computer Programs: Second Edition.pdf"
+            ),
+            "Structure and Interpretation of…"
+        )
+        XCTAssertEqual(
+            SourceShortTitle.derive(
+                displayName: "A Very Long Title Without Any Structural Separators To Shed Gracefully.pdf"
+            ),
+            "A Very Long Title Without Any…"
         )
     }
 
@@ -2788,7 +2784,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(payload[0]["chunkId"] as? String, firstChunkId.uuidString)
         XCTAssertEqual(payload[0]["sourceId"] as? String, firstSourceId.uuidString)
         XCTAssertEqual(payload[0]["page"] as? Int, 12)
-        XCTAssertEqual(payload[0]["shortTitle"] as? String, "abcdefghijk...vwxyzABCDE")
+        XCTAssertEqual(payload[0]["shortTitle"] as? String, "abcdefghijklmnopqrstuvwxyzABCDE")
         XCTAssertEqual(payload[1]["n"] as? Int, 2)
         XCTAssertEqual(payload[1]["chunkId"] as? String, secondChunkId.uuidString)
         XCTAssertEqual(payload[1]["sourceId"] as? String, secondSourceId.uuidString)

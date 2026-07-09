@@ -43,6 +43,21 @@ function classForOrigin(origin: Span['origin']): string {
   }
 }
 
+export const AI_TINT_VARIANTS = 5;
+
+/** Round-robin tint variants over exchanges in document order, so neighboring
+ * exchanges always read as distinct. Deterministic: stable across scroll/reload. */
+function aiVariantClassByRequest(spans: Span[]): Map<string, string> {
+  const firstStart = new Map<string, number>();
+  for (const span of spans) {
+    if (span.origin !== 'ai' || !span.requestId) continue;
+    const seen = firstStart.get(span.requestId);
+    if (seen === undefined || span.start < seen) firstStart.set(span.requestId, span.start);
+  }
+  const ordered = [...firstStart.entries()].sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
+  return new Map(ordered.map(([requestId], index) => [requestId, ` cm-prov-ai--v${index % AI_TINT_VARIANTS}`]));
+}
+
 function subtractRanges(range: ProvenanceRange, skipRanges: readonly ProvenanceRange[]): ProvenanceRange[] {
   let pieces = [range];
 
@@ -68,6 +83,7 @@ export function buildProvenanceDecorationRanges(
   skipRanges: readonly ProvenanceRange[] = []
 ): ProvenanceDecorationRange[] {
   const ranges: ProvenanceDecorationRange[] = [];
+  const variantByRequest = aiVariantClassByRequest(spans);
 
   for (const visible of visibleRanges) {
     for (const span of spans) {
@@ -75,10 +91,11 @@ export function buildProvenanceDecorationRanges(
       const to = Math.min(span.end, visible.to);
       if (to <= from) continue;
 
+      const variant = span.origin === 'ai' && span.requestId ? variantByRequest.get(span.requestId) ?? '' : '';
       for (const piece of subtractRanges({ from, to }, skipRanges)) {
         ranges.push({
           ...piece,
-          className: classForOrigin(span.origin),
+          className: classForOrigin(span.origin) + variant,
           span,
         });
       }
@@ -150,7 +167,7 @@ function isAtomicPosition(view: EditorView, pos: number): boolean {
 function button(label: string, onClick?: () => void): HTMLButtonElement {
   const element = document.createElement('button');
   element.type = 'button';
-  element.className = 'cm-provenance-tooltip-button';
+  element.className = 'selection-action-button selection-action-button--text';
   element.textContent = label;
   element.disabled = !onClick;
   element.onmousedown = (event) => event.preventDefault();
@@ -179,7 +196,7 @@ function tooltipForSpan(view: EditorView, span: Span, options: ProvenanceXrayOpt
 
       const actions = document.createElement('div');
       actions.className = 'cm-provenance-tooltip-actions';
-      actions.append(button('dissolve', () => {
+      actions.append(button('Dissolve', () => {
         view.dispatch({
           effects: dissolveSpans.of([span.spanId]),
           annotations: Transaction.addToHistory.of(true),
@@ -187,16 +204,16 @@ function tooltipForSpan(view: EditorView, span: Span, options: ProvenanceXrayOpt
         view.focus();
       }));
       if (span.origin === 'ai' && span.requestId) {
-        const showExchangeButton = button('show exchange');
+        const showExchangeButton = button('Show exchange');
         actions.append(showExchangeButton);
 
         const coveredText = view.state.doc.sliceString(span.start, span.end);
-        const redevelopButton = button('re-develop');
+        const redevelopButton = button('Re-develop');
         actions.append(redevelopButton);
 
         void options.loadExchange(span.requestId).then(({ exchange }) => {
           if (!exchange) {
-            showExchangeButton.textContent = 'exchange no longer stored';
+            showExchangeButton.textContent = 'Exchange no longer stored';
             setButtonAction(showExchangeButton);
             setButtonAction(redevelopButton);
             return;
@@ -207,13 +224,13 @@ function tooltipForSpan(view: EditorView, span: Span, options: ProvenanceXrayOpt
             setButtonAction(redevelopButton, () => options.onRedevelop(span, exchange));
           }
         }).catch(() => {
-          showExchangeButton.textContent = 'exchange no longer stored';
+          showExchangeButton.textContent = 'Exchange no longer stored';
           setButtonAction(showExchangeButton);
           setButtonAction(redevelopButton);
         });
       }
       if (span.origin === 'source' && span.sourceId) {
-        actions.append(button('open source →', () => options.onOpenSource(span.sourceId!)));
+        actions.append(button('Open source →', () => options.onOpenSource(span.sourceId!)));
       }
       dom.append(actions);
 

@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { markdown, markdownKeymap, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { Decoration, EditorView } from '@codemirror/view';
-import { RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
+import { Decoration, EditorView, keymap } from '@codemirror/view';
+import { Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
-import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting, syntaxTree } from '@codemirror/language';
+import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, getExchange, readBack, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
+import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
-import { EyeIcon, NoteIcon, XIcon } from './icons';
+import { EyeIcon, XIcon } from './icons';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
 import { editorFindExtension } from '../extensions/EditorFindPanel';
-import { markdownConcealExtension } from '../extensions/MarkdownConceal';
+import { markdownConcealExtension, setShowRawFormattingEffect } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
@@ -45,6 +45,7 @@ import {
   type PendingPDFAnchorSelection,
 } from '../utils/pdfAnchorSelection';
 import { toggleInlineMark } from '../utils/inlineMarks';
+import { continueBulletListOnEnter, toggleLineFormat, type LineFormat } from '../utils/lineFormats';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 
 interface StreamEditorProps {
@@ -72,8 +73,6 @@ type PromptIntent = {
   parentRequestId?: string;
   preview: string;
 };
-
-type ReadBackScope = 'viewport' | 'section' | 'document';
 
 interface ExchangeOverlayState {
   exchange: AIExchangeJSON;
@@ -217,61 +216,24 @@ function focusEditorAtDocumentEnd(view: EditorView) {
   view.focus();
 }
 
+// The editor auto-grows to its content; the page container (.stream-content) is the
+// element that actually scrolls. scrollDOM is the fallback for layouts without it.
+function editorScroller(view: EditorView): HTMLElement {
+  return (view.scrollDOM.closest('.stream-content') as HTMLElement | null) ?? view.scrollDOM;
+}
+
 function restoreViewportEnd(view: EditorView, scrollOffset: number): number {
   const docLength = view.state.doc.length;
   if (docLength === 0 || scrollOffset <= 0) return view.viewport.to;
 
-  const scrollHeight = view.scrollDOM.scrollHeight;
-  const clientHeight = view.scrollDOM.clientHeight;
+  const scroller = editorScroller(view);
+  const scrollHeight = scroller.scrollHeight;
+  const clientHeight = scroller.clientHeight;
   if (scrollHeight <= clientHeight) return view.viewport.to;
 
   // ponytail: pixel-to-doc estimate; upgrade to measured CodeMirror mapping if deep restores ever flash.
   const ratio = Math.min(1, (scrollOffset + clientHeight) / scrollHeight);
   return Math.max(view.viewport.to, Math.min(docLength, Math.ceil(docLength * ratio)));
-}
-
-function isHeadingNode(name: string): boolean {
-  return /^ATXHeading\d+$/.test(name) || /^SetextHeading\d*$/.test(name);
-}
-
-function sectionRangeForCursor(view: EditorView): { from: number; to: number } {
-  const doc = view.state.doc;
-  const cursor = view.state.selection.main.head;
-  const tree = ensureSyntaxTree(view.state, doc.length, 50) ?? syntaxTree(view.state);
-  const headings: number[] = [];
-
-  tree.iterate({
-    enter: (node) => {
-      if (isHeadingNode(node.name)) {
-        headings.push(doc.lineAt(node.from).from);
-      }
-    },
-  });
-
-  if (headings.length === 0) return { from: 0, to: doc.length };
-
-  let from = 0;
-  let to = doc.length;
-  for (const heading of headings) {
-    if (heading <= cursor) {
-      from = heading;
-    } else {
-      to = heading;
-      break;
-    }
-  }
-  return { from, to };
-}
-
-function readBackRangeForScope(view: EditorView, scope: ReadBackScope): { from: number; to: number } {
-  if (scope === 'document') return { from: 0, to: view.state.doc.length };
-  if (scope === 'section') return sectionRangeForCursor(view);
-
-  if (view.visibleRanges.length === 0) return { from: view.viewport.from, to: view.viewport.to };
-  return {
-    from: Math.min(...view.visibleRanges.map((range) => range.from)),
-    to: Math.max(...view.visibleRanges.map((range) => range.to)),
-  };
 }
 
 const clickToDocumentEndExtension: Extension = EditorView.domEventHandlers({
@@ -491,7 +453,9 @@ const markdownHighlightStyle = HighlightStyle.define([
     class: 'cm-md-inline-code',
   },
   {
-    tag: [t.quote, t.contentSeparator, t.list],
+    // NOT t.list: list content must read as normal text, and markdown's lazy
+    // continuation makes t.list cover every following line until a blank one.
+    tag: [t.quote, t.contentSeparator],
     color: 'var(--color-text-secondary)',
   },
   {
@@ -518,8 +482,7 @@ export function StreamEditor({
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [isProvenanceXrayVisible, setIsProvenanceXrayVisible] = useState(false);
-  const [isMarginNotesVisible, setIsMarginNotesVisible] = useState(false);
-  const [readBackScope, setReadBackScope] = useState<ReadBackScope>('viewport');
+  const [showRawFormatting, setShowRawFormatting] = useState(false);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
@@ -771,7 +734,7 @@ export function StreamEditor({
       scrollSaveTimerRef.current = null;
       const view = editorViewRef.current;
       if (view) {
-        sendScrollPosition(view.scrollDOM.scrollTop);
+        sendScrollPosition(editorScroller(view).scrollTop);
       }
     }, 1000);
   }, [clearScrollSaveTimer, sendScrollPosition]);
@@ -780,7 +743,7 @@ export function StreamEditor({
     clearScrollSaveTimer();
     const view = editorViewRef.current;
     if (view) {
-      sendScrollPosition(view.scrollDOM.scrollTop);
+      sendScrollPosition(editorScroller(view).scrollTop);
     }
   }, [clearScrollSaveTimer, sendScrollPosition]);
 
@@ -853,21 +816,6 @@ export function StreamEditor({
     persistMarginNoteStatus(note, 'promoted');
   }, [persistMarginNoteStatus]);
 
-  const handleReadBack = useCallback(() => {
-    const view = editorViewRef.current;
-    if (!view) return;
-    const range = readBackRangeForScope(view, readBackScope);
-    if (range.to <= range.from || !view.state.doc.sliceString(range.from, range.to).trim()) {
-      addToast('Nothing in this scope to read back.', 'info');
-      return;
-    }
-    readBack({
-      streamId: stream.id,
-      scopeStart: range.from,
-      scopeEnd: range.to,
-    });
-  }, [addToast, readBackScope, stream.id]);
-
   useEffect(() => {
     setMarkdownContent(stream.document?.markdown ?? '');
     lastSavedContentRef.current = stream.document?.markdown ?? '';
@@ -898,17 +846,23 @@ export function StreamEditor({
     setExchangeOverlay(null);
     setSourceScope(stream.sourceScope ?? 'auto');
     setIsProvenanceXrayVisible(false);
-    setIsMarginNotesVisible(false);
-    setReadBackScope('viewport');
     setShowRewriteMenu(false);
     promptContextRef.current = null;
     aiRequestRef.current = null;
     const view = editorViewRef.current;
     if (view) {
-      const notes = payloadMarginNotesForDoc(stream.marginNotes, stream.document?.markdown ?? '');
+      const nextMarkdown = stream.document?.markdown ?? '';
+      const notes = payloadMarginNotesForDoc(stream.marginNotes, nextMarkdown);
+      // Replace the document and set its spans in ONE dispatch. Setting
+      // new-doc spans while the view still holds the old doc leaves the
+      // provenance field with out-of-range positions; the wrapper's later
+      // value-sync transaction then maps them and mapPos throws (white
+      // window via React unmount).
+      const docChanged = view.state.doc.toString() !== nextMarkdown;
       view.dispatch({
+        ...(docChanged ? { changes: { from: 0, to: view.state.doc.length, insert: nextMarkdown } } : {}),
         effects: [
-          setSpans.of(payloadSpansForDoc(stream.spans, stream.document?.markdown ?? '')),
+          setSpans.of(payloadSpansForDoc(stream.spans, nextMarkdown)),
           setMarginNotes.of(notes),
         ],
         annotations: Transaction.addToHistory.of(false),
@@ -1020,6 +974,20 @@ export function StreamEditor({
         const revision = Number(message.payload?.revision);
 
         if (!payloadStreamId || payloadStreamId !== stream.id || typeof fragment !== 'string' || fragment.length === 0) {
+          return;
+        }
+
+        // Revision gap = this editor missed an earlier append (it wasn't
+        // listening when it broadcast). Patching the fragment in and adopting
+        // the payload revision would make the next autosave pass the revision
+        // check and silently erase the missed content. Reload instead.
+        if (Number.isFinite(revision) && revision !== revisionRef.current + 1) {
+          debugWarn('[StreamEditor] Append revision gap; reloading document', {
+            streamId: stream.id,
+            localRevision: revisionRef.current,
+            appendRevision: revision,
+          });
+          bridge.send({ type: 'loadStream', payload: { id: stream.id } });
           return;
         }
 
@@ -1561,7 +1529,19 @@ export function StreamEditor({
     if (!shell) return null;
 
     const selection = view.state.selection.main;
-    const coords = view.coordsAtPos(selection.head) ?? view.coordsAtPos(selection.anchor);
+    // Anchor to the whole selection, not the head: "above" must clear the top
+    // of the highlight regardless of drag direction (top-down drags put the
+    // head at the bottom).
+    const fromCoords = view.coordsAtPos(selection.from);
+    const toCoords = view.coordsAtPos(selection.to);
+    const coords = fromCoords && toCoords
+      ? {
+          left: Math.min(fromCoords.left, toCoords.left),
+          right: Math.max(fromCoords.right, toCoords.right),
+          top: Math.min(fromCoords.top, toCoords.top),
+          bottom: Math.max(fromCoords.bottom, toCoords.bottom),
+        }
+      : (fromCoords ?? toCoords);
     if (!coords) return null;
 
     const shellRect = shell.getBoundingClientRect();
@@ -1769,6 +1749,27 @@ export function StreamEditor({
     [openLinkPopover]
   );
 
+  const handleSelectionCreateLink = useCallback(() => {
+    const view = editorViewRef.current;
+    const context = getSelectionContext(false);
+    if (!view || !context || !context.text.trim()) {
+      hideSelectionMenu();
+      return;
+    }
+
+    // Open the popover in create mode over the selection; commit replaces the
+    // selection with [label](url). No malformed markdown ever enters the doc.
+    openLinkPopover(view, {
+      from: context.from,
+      to: context.to,
+      labelFrom: context.from,
+      labelTo: context.to,
+      label: context.text,
+      url: '',
+      lineFrom: view.state.doc.lineAt(context.from).from,
+    });
+  }, [getSelectionContext, hideSelectionMenu, openLinkPopover]);
+
   const commitLinkPopover = useCallback(() => {
     if (!linkPopover.visible) return;
 
@@ -1903,7 +1904,6 @@ export function StreamEditor({
     const docLength = view.state.doc.length;
     const from = Math.max(0, Math.min(options.from, docLength));
     const to = Math.max(from, Math.min(options.to, docLength));
-    const selectedText = view.state.doc.sliceString(from, to);
     const originalText = options.mode === 'replace' ? view.state.doc.sliceString(from, to) : '';
     let rangeFrom = from;
     let rangeTo = from;
@@ -1972,11 +1972,6 @@ export function StreamEditor({
         verb: options.verb ?? 'develop',
         imageURLs: options.imageUrls ?? [],
         ...(options.parentRequestId ? { parentRequestId: options.parentRequestId } : {}),
-        ...(options.verb === 'challenge' ? {
-          anchorStart: from,
-          anchorEnd: to,
-          anchorHash: fnv1a(selectedText),
-        } : {}),
       },
     });
   }, [addToast, isAiThinking, showAiWritingFeedback, showSourceIndexNotice, sourceScope, stream.id]);
@@ -2036,6 +2031,26 @@ export function StreamEditor({
     view.dispatch({
       changes: edit.changes,
       selection: edit.newSelection,
+      annotations: Transaction.userEvent.of('input.format'),
+    });
+    view.focus();
+  }, [hideSelectionMenu]);
+
+  const handleSelectionLineFormat = useCallback((format: LineFormat) => {
+    const view = editorViewRef.current;
+    if (!view) {
+      hideSelectionMenu();
+      return;
+    }
+
+    const changes = toggleLineFormat(view.state, view.state.selection.main, format);
+    if (!changes) {
+      hideSelectionMenu();
+      return;
+    }
+
+    view.dispatch({
+      changes,
       annotations: Transaction.userEvent.of('input.format'),
     });
     view.focus();
@@ -2301,11 +2316,13 @@ export function StreamEditor({
   ), [handleOpenSourceById, isAiThinking, isProvenanceXrayVisible, openRedevelopPrompt, sources]);
 
   const marginNotesExtensionValue = useMemo<Extension>(() => marginNotesExtension({
-    visible: isMarginNotesVisible,
+    // Margin rendering is retired from the UI; the field stays wired so
+    // existing notes keep mapping/persisting their anchors dormant.
+    visible: false,
     onPromote: handlePromoteMarginNote,
     onDismiss: handleDismissMarginNote,
     onUnanchor: (note) => persistMarginNoteStatus(note, 'unanchored'),
-  }), [handleDismissMarginNote, handlePromoteMarginNote, isMarginNotesVisible, persistMarginNoteStatus]);
+  }), [handleDismissMarginNote, handlePromoteMarginNote, persistMarginNoteStatus]);
 
   const selectionDissolveSpanIds = (() => {
     const view = editorViewRef.current;
@@ -2349,38 +2366,6 @@ export function StreamEditor({
           >
             <EyeIcon size={16} />
           </button>
-          <button
-            onClick={() => setIsMarginNotesVisible((value) => !value)}
-            className={`stream-margin-button ${isMarginNotesVisible ? 'stream-margin-button--active' : ''}`}
-            title="Toggle margin notes"
-            type="button"
-            aria-label="Toggle margin notes"
-            aria-pressed={isMarginNotesVisible}
-          >
-            <NoteIcon size={16} />
-          </button>
-          {isMarginNotesVisible && (
-            <div className="stream-readback-controls">
-              <select
-                className="stream-readback-scope"
-                value={readBackScope}
-                onChange={(event) => setReadBackScope(event.target.value as ReadBackScope)}
-                aria-label="Read back scope"
-                title="Read back scope"
-              >
-                <option value="viewport">Viewport</option>
-                <option value="section">Section</option>
-                <option value="document">Document</option>
-              </select>
-              <button
-                type="button"
-                className="stream-readback-button"
-                onClick={handleReadBack}
-              >
-                Read back
-              </button>
-            </div>
-          )}
           <button
             onClick={() => setShowSourcesModal(true)}
             className="stream-sources-button"
@@ -2497,6 +2482,116 @@ export function StreamEditor({
           className="selection-action-menu"
           style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
         >
+          <div className="selection-action-row">
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--bold"
+            title="Bold"
+            aria-label="Bold"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat('**')}
+          >
+            B
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--italic"
+            title="Italic"
+            aria-label="Italic"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat('*')}
+          >
+            I
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--code"
+            title="Code"
+            aria-label="Code"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat('`')}
+          >
+            &lt;/&gt;
+          </button>
+          <span className="selection-action-divider" aria-hidden="true" />
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--text"
+            title="Heading 1"
+            aria-label="Heading 1"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('h1')}
+          >
+            H1
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--text"
+            title="Heading 2"
+            aria-label="Heading 2"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('h2')}
+          >
+            H2
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--text"
+            title="Heading 3"
+            aria-label="Heading 3"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('h3')}
+          >
+            H3
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format"
+            title="Quote"
+            aria-label="Quote"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('quote')}
+          >
+            ❝
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format"
+            title="Bullet list"
+            aria-label="Bullet list"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionLineFormat('bullet')}
+          >
+            •
+          </button>
+          <button
+            type="button"
+            className="selection-action-button"
+            title="Add link"
+            aria-label="Add link"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={handleSelectionCreateLink}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M10.6 13.4a1 1 0 010-1.4l2.8-2.8a1 1 0 011.4 1.4l-2.8 2.8a1 1 0 01-1.4 0zm-3.5 3.5a3.5 3.5 0 010-5l1.8-1.8 1.4 1.4-1.8 1.8a1.5 1.5 0 002.2 2.2l1.8-1.8 1.4 1.4-1.8 1.8a3.5 3.5 0 01-5 0zm9.8-4.8l-1.4-1.4 1.8-1.8a1.5 1.5 0 00-2.2-2.2l-1.8 1.8-1.4-1.4 1.8-1.8a3.5 3.5 0 015 5z" />
+            </svg>
+          </button>
+          {canLinkSelectionToPDF && (
+            <button
+              type="button"
+              className="selection-action-button"
+              title="Link to PDF"
+              aria-label="Link to PDF"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleSelectionLinkToPDF}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M8.8 12.9a1 1 0 010-1.4l3.7-3.7a3.4 3.4 0 114.8 4.8l-1.5 1.5-.7-.7 1.5-1.5a2.4 2.4 0 10-3.4-3.4l-3.7 3.7a1 1 0 001.4 1.4l2.5-2.5.7.7-2.5 2.5a2 2 0 01-2.8 0zm-2.1 7a3.4 3.4 0 010-4.8l1.5-1.5.7.7-1.5 1.5a2.4 2.4 0 103.4 3.4l3.7-3.7a1 1 0 00-1.4-1.4l-2.5 2.5-.7-.7 2.5-2.5a2 2 0 112.8 2.8l-3.7 3.7a3.4 3.4 0 01-4.8 0z" />
+              </svg>
+            </button>
+          )}
+          </div>
+          <div className="selection-action-row">
           <button
             type="button"
             className="selection-action-button selection-action-button--text selection-action-button--ai"
@@ -2530,7 +2625,6 @@ export function StreamEditor({
           >
             Define
           </button>
-          <span className="selection-action-divider" aria-hidden="true" />
           <div className="selection-action-submenu">
             <button
               type="button"
@@ -2559,53 +2653,8 @@ export function StreamEditor({
             )}
           </div>
           <span className="selection-action-divider" aria-hidden="true" />
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--bold"
-            title="Bold"
-            aria-label="Bold"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat('**')}
-          >
-            B
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--italic"
-            title="Italic"
-            aria-label="Italic"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat('*')}
-          >
-            I
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--code"
-            title="Code"
-            aria-label="Code"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat('`')}
-          >
-            &lt;/&gt;
-          </button>
-          {canLinkSelectionToPDF && (
-            <button
-              type="button"
-              className="selection-action-button"
-              title="Link to PDF"
-              aria-label="Link to PDF"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={handleSelectionLinkToPDF}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                <path d="M8.8 12.9a1 1 0 010-1.4l3.7-3.7a3.4 3.4 0 114.8 4.8l-1.5 1.5-.7-.7 1.5-1.5a2.4 2.4 0 10-3.4-3.4l-3.7 3.7a1 1 0 001.4 1.4l2.5-2.5.7.7-2.5 2.5a2 2 0 01-2.8 0zm-2.1 7a3.4 3.4 0 010-4.8l1.5-1.5.7.7-1.5 1.5a2.4 2.4 0 103.4 3.4l3.7-3.7a1 1 0 00-1.4-1.4l-2.5 2.5-.7-.7 2.5-2.5a2 2 0 112.8 2.8l-3.7 3.7a3.4 3.4 0 01-4.8 0z" />
-              </svg>
-            </button>
-          )}
           {isProvenanceXrayVisible && (
             <>
-              <span className="selection-action-divider" aria-hidden="true" />
               <button
                 type="button"
                 className="selection-action-button selection-action-button--text"
@@ -2617,9 +2666,9 @@ export function StreamEditor({
               >
                 Dissolve
               </button>
+              <span className="selection-action-divider" aria-hidden="true" />
             </>
           )}
-          <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"
             className="selection-action-button selection-action-button--text selection-action-source-scope"
@@ -2630,6 +2679,7 @@ export function StreamEditor({
           >
             Sources: {formatSourceScope(sourceScope)}
           </button>
+          </div>
         </div>
       )}
 
@@ -2651,6 +2701,8 @@ export function StreamEditor({
             className="link-edit-input link-edit-input--url"
             value={linkPopover.url}
             aria-label="Link URL"
+            placeholder="https://…"
+            autoFocus={linkPopover.url === ''}
             onChange={(event) => setLinkPopover((previous) => ({ ...previous, url: event.target.value }))}
             onKeyDown={handleLinkPopoverKeyDown}
           />
@@ -2702,6 +2754,11 @@ export function StreamEditor({
                 aiWritingExtension,
                 editorFindExtension,
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
+                // basicSetup's default Enter shadows the markdown bindings.
+                // Bullet lines get our always-tight continuation; everything
+                // else falls through to markdownKeymap (quote continuation,
+                // Backspace marker deletion).
+                Prec.high(keymap.of([{ key: 'Enter', run: continueBulletListOnEnter }, ...markdownKeymap])),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
                 arrivalField,
@@ -2722,14 +2779,25 @@ export function StreamEditor({
                 applyMarginNotesToEditor(stream.marginNotes);
 
                 scrollCleanupRef.current?.();
+                const scroller = editorScroller(view);
                 const handleScroll = () => scheduleScrollPositionSave();
-                view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true });
-                scrollCleanupRef.current = () => view.scrollDOM.removeEventListener('scroll', handleScroll);
+                scroller.addEventListener('scroll', handleScroll, { passive: true });
 
                 clearRevealFrame();
                 const scrollOffset = Math.max(0, Number(stream.document?.scrollOffset ?? 0));
                 ensureSyntaxTree(view.state, restoreViewportEnd(view, scrollOffset), 50);
-                view.scrollDOM.scrollTop = scrollOffset;
+                scroller.scrollTop = scrollOffset;
+                // Content height settles as CodeMirror measures; if the first set was
+                // clamped (scroller not yet tall enough), re-assert once.
+                const reassertTimer = window.setTimeout(() => {
+                  if (editorViewRef.current === view && scrollOffset > 0 && Math.abs(scroller.scrollTop - scrollOffset) > 4 && scroller.scrollTop < scrollOffset) {
+                    scroller.scrollTop = scrollOffset;
+                  }
+                }, 250);
+                scrollCleanupRef.current = () => {
+                  window.clearTimeout(reassertTimer);
+                  scroller.removeEventListener('scroll', handleScroll);
+                };
                 revealFrameRef.current = window.requestAnimationFrame(() => {
                   revealFrameRef.current = window.requestAnimationFrame(() => {
                     revealFrameRef.current = null;
@@ -2772,6 +2840,22 @@ export function StreamEditor({
           </div>
         </div>
       </div>
+
+      <footer className="stream-footer">
+        <button
+          type="button"
+          className={`stream-footer-toggle ${showRawFormatting ? 'stream-footer-toggle--active' : ''}`}
+          title="Show raw markdown formatting"
+          aria-pressed={showRawFormatting}
+          onClick={() => {
+            const next = !showRawFormatting;
+            setShowRawFormatting(next);
+            editorViewRef.current?.dispatch({ effects: setShowRawFormattingEffect.of(next) });
+          }}
+        >
+          Show formatting
+        </button>
+      </footer>
 
       <SourcesModal
         isOpen={showSourcesModal}

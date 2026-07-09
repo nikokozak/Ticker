@@ -38,3 +38,4 @@ tools/sparkle/
 
 # Local release config (do not commit)
 tickerctl.local.sh
+.playwright-mcp/

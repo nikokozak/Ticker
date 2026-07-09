@@ -59,7 +59,6 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'openPdfDestination',
   'openSource',
   'refreshProxyAuth',
-  'readBack',
   'removeSource',
   'retrySourceIndexing',
   'saveImage',
@@ -89,15 +88,6 @@ export interface ThinkDocumentPayload extends Record<string, unknown> {
   sourceScope?: DocumentAISourceScope;
   verb?: DocumentAIVerb;
   parentRequestId?: string;
-  anchorStart?: number;
-  anchorEnd?: number;
-  anchorHash?: string;
-}
-
-export interface ReadBackPayload extends Record<string, unknown> {
-  streamId: string;
-  scopeStart: number;
-  scopeEnd: number;
 }
 
 export interface UpdateMarginNotePayload extends Record<string, unknown> {
@@ -206,17 +196,6 @@ export const bridge: Bridge = {
 
 export function getExchange(requestId: string): Promise<{ exchange: AIExchangeJSON | null }> {
   return bridge.sendAsync('getExchange', { requestId });
-}
-
-export function readBack(payload: ReadBackPayload): void {
-  bridge.send({
-    type: 'readBack',
-    payload: {
-      streamId: payload.streamId,
-      scopeStart: payload.scopeStart,
-      scopeEnd: payload.scopeEnd,
-    },
-  });
 }
 
 export function updateMarginNote(payload: UpdateMarginNotePayload): void {
