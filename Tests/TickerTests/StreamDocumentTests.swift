@@ -2608,6 +2608,103 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_saveStreamDocumentWithSpansRejectsStaleRevisionAndLeavesSpansUnchanged() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Span Conflict Guard")
+            try service.saveStream(stream)
+            let initialDocument = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            let originalSpan = ProvenanceSpan(
+                spanId: "span-original",
+                streamId: stream.id,
+                start: 0,
+                end: 5,
+                origin: "ai",
+                requestId: "request-1",
+                textHash: FNV1a.hash("Hello"),
+                createdAt: Date(timeIntervalSince1970: 2_000)
+            )
+            let savedRevision = try service.saveStreamDocument(
+                streamId: stream.id,
+                markdown: "Hello world",
+                baseRevision: initialDocument.revision,
+                spans: [originalSpan]
+            )
+
+            let append = try service.appendToStreamDocument(streamId: stream.id, fragment: "External append")
+            let staleSpan = ProvenanceSpan(
+                spanId: "span-stale",
+                streamId: stream.id,
+                start: 0,
+                end: 5,
+                origin: "ai",
+                requestId: "request-2",
+                textHash: FNV1a.hash("Stale"),
+                createdAt: Date(timeIntervalSince1970: 2_001)
+            )
+
+            do {
+                _ = try service.saveStreamDocument(
+                    streamId: stream.id,
+                    markdown: "Stale overwrite",
+                    baseRevision: savedRevision,
+                    spans: [staleSpan]
+                )
+                XCTFail("Expected stale revision save to throw")
+            } catch let conflict as StreamDocumentRevisionConflict {
+                XCTAssertEqual(conflict.streamId, stream.id)
+                XCTAssertEqual(conflict.revision, append.revision)
+                XCTAssertEqual(conflict.markdown, "Hello world\n\nExternal append")
+                XCTAssertEqual(conflict.spans, [originalSpan])
+            }
+
+            XCTAssertEqual(try service.loadSpans(streamId: stream.id), [originalSpan])
+        }
+    }
+
+    func test_saveStreamDocumentWithSpansDropsInvalidRows() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Span Validation")
+            try service.saveStream(stream)
+            let initialDocument = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            let validSpan = ProvenanceSpan(
+                spanId: "span-valid",
+                streamId: stream.id,
+                start: 0,
+                end: 5,
+                origin: "ai",
+                textHash: FNV1a.hash("Hello"),
+                createdAt: Date(timeIntervalSince1970: 2_010)
+            )
+            let badHash = ProvenanceSpan(
+                spanId: "span-bad-hash",
+                streamId: stream.id,
+                start: 6,
+                end: 11,
+                origin: "ai",
+                textHash: FNV1a.hash("wrong"),
+                createdAt: Date(timeIntervalSince1970: 2_011)
+            )
+            let outOfBounds = ProvenanceSpan(
+                spanId: "span-bounds",
+                streamId: stream.id,
+                start: 12,
+                end: 20,
+                origin: "ai",
+                textHash: FNV1a.hash("missing"),
+                createdAt: Date(timeIntervalSince1970: 2_012)
+            )
+
+            _ = try service.saveStreamDocument(
+                streamId: stream.id,
+                markdown: "Hello world",
+                baseRevision: initialDocument.revision,
+                spans: [validSpan, badHash, outOfBounds]
+            )
+
+            XCTAssertEqual(try service.loadSpans(streamId: stream.id), [validSpan])
+        }
+    }
+
     func test_streamCodecPreviewLineSkipsHeadingsAndImages() throws {
         let markdown = """
         # Heading to skip

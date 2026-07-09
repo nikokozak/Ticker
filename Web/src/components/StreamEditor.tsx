@@ -7,7 +7,7 @@ import { Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload } from '../types';
+import { bridge, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
@@ -20,6 +20,7 @@ import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
+import { deserializeProvenanceSpans, serializeProvenanceSpans } from '../utils/provenanceSpans';
 import {
   beginPDFAnchorPick,
   buildPDFAnchorLinkEdit,
@@ -314,6 +315,7 @@ export function StreamEditor({
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
   const markdownContentRef = useRef(stream.document?.markdown ?? '');
   const revisionRef = useRef(stream.document?.revision ?? 0);
+  const provenanceSpansRef = useRef<ProvenanceSpanJSON[]>(stream.spans ?? []);
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
   const aiFeedbackTimerRef = useRef<number | null>(null);
@@ -555,6 +557,7 @@ export function StreamEditor({
     lastSavedContentRef.current = stream.document?.markdown ?? '';
     markdownContentRef.current = stream.document?.markdown ?? '';
     revisionRef.current = stream.document?.revision ?? 0;
+    provenanceSpansRef.current = stream.spans ?? [];
     sourcesRef.current = stream.sources;
     sourceIndexStatusesRef.current = new Map(
       stream.sources.map((source) => [source.id, source.indexStatus])
@@ -584,7 +587,7 @@ export function StreamEditor({
     if (view) {
       dispatchAiRangeClear(view);
     }
-  }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.title]);
+  }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
 
   useEffect(() => {
     markdownContentRef.current = markdownContent;
@@ -623,6 +626,7 @@ export function StreamEditor({
         streamId: stream.id,
         markdown: contentToSave,
         baseRevision,
+        spans: serializeProvenanceSpans(provenanceSpansRef.current),
       }).then((response) => {
         if (Number.isFinite(response.revision)) {
           revisionRef.current = response.revision;
@@ -649,6 +653,7 @@ export function StreamEditor({
         const payloadStreamId = message.payload?.streamId as string | undefined;
         const markdown = message.payload?.markdown as string | undefined;
         const revision = Number(message.payload?.revision);
+        const spans = deserializeProvenanceSpans(message.payload?.spans);
 
         if (!payloadStreamId || payloadStreamId !== stream.id || typeof markdown !== 'string' || !Number.isFinite(revision)) {
           return;
@@ -662,6 +667,7 @@ export function StreamEditor({
         }
 
         revisionRef.current = revision;
+        provenanceSpansRef.current = spans;
         markdownContentRef.current = markdown;
         lastSavedContentRef.current = markdown;
         setMarkdownContent(markdown);
@@ -678,6 +684,7 @@ export function StreamEditor({
         const payloadStreamId = message.payload?.streamId as string | undefined;
         const fragment = message.payload?.fragment as string | undefined;
         const revision = Number(message.payload?.revision);
+        const spans = deserializeProvenanceSpans(message.payload?.spans);
 
         if (!payloadStreamId || payloadStreamId !== stream.id || typeof fragment !== 'string' || fragment.length === 0) {
           return;
@@ -701,6 +708,7 @@ export function StreamEditor({
         if (Number.isFinite(revision)) {
           revisionRef.current = revision;
         }
+        provenanceSpansRef.current = [...provenanceSpansRef.current, ...spans];
         markdownContentRef.current = nextMarkdown;
         if (!hadUnsavedChanges) {
           lastSavedContentRef.current = nextMarkdown;

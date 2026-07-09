@@ -1,4 +1,5 @@
 import { debugLog } from '../utils/debug';
+import type { AIExchangeJSON } from './models';
 
 /** Message structure for Swift ↔ JS communication */
 export const SWIFT_TO_WEB_MESSAGE_TYPES = [
@@ -52,6 +53,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'loadSettings',
   'loadStream',
   'loadStreams',
+  'getExchange',
   'openExternalURL',
   'openPdfDestination',
   'openSource',
@@ -172,6 +174,10 @@ export const bridge: Bridge = {
     return () => messageHandlers.delete(handler);
   },
 };
+
+export function getExchange(requestId: string): Promise<{ exchange: AIExchangeJSON | null }> {
+  return bridge.sendAsync('getExchange', { requestId });
+}
 
 // Expose bridge globally for Swift to call
 declare global {

@@ -38,6 +38,41 @@ enum StreamCodec {
         ]
     }
 
+    static func encodeSpans(_ spans: [ProvenanceSpan]) -> [[String: Any]] {
+        let formatter = ISO8601DateFormatter()
+        return spans.map { span in
+            var dict: [String: Any] = [
+                "spanId": span.spanId,
+                "start": span.start,
+                "end": span.end,
+                "origin": span.origin,
+                "meta": span.meta,
+                "textHash": span.textHash,
+                "createdAt": formatter.string(from: span.createdAt)
+            ]
+            if let requestId = span.requestId {
+                dict["requestId"] = requestId
+            }
+            if let sourceId = span.sourceId {
+                dict["sourceId"] = sourceId
+            }
+            return dict
+        }
+    }
+
+    static func encodeExchange(_ exchange: AIExchange) -> [String: Any] {
+        [
+            "requestId": exchange.requestId,
+            "streamId": exchange.streamId.uuidString,
+            "verb": exchange.verb,
+            "userInput": exchange.userInput,
+            "sourceManifest": exchange.sourceManifest,
+            "responseRaw": exchange.responseRaw,
+            "model": exchange.model as Any,
+            "createdAt": ISO8601DateFormatter().string(from: exchange.createdAt)
+        ]
+    }
+
     static func encodeSource(_ source: SourceReference) -> [String: Any] {
         let formatter = ISO8601DateFormatter()
         var dict: [String: Any] = [

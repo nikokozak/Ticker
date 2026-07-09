@@ -731,7 +731,13 @@ final class QuickPanelManager: ObservableObject {
             let (streamId, isNewStream) = try getTargetStreamId()
             let fragment = try buildMarkdownFragment(streamId: streamId)
             let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
-            notifyFrontend(streamId: streamId, fragment: result.fragment, revision: result.revision, isNewStream: isNewStream)
+            notifyFrontend(
+                streamId: streamId,
+                fragment: result.fragment,
+                revision: result.revision,
+                spans: result.spans,
+                isNewStream: isNewStream
+            )
 
             let aiPrompt = triggerDocumentAI ? prompt : nil
             let orchestratorForAI = orchestrator
@@ -796,6 +802,7 @@ final class QuickPanelManager: ObservableObject {
                 streamId: streamId,
                 fragment: result.fragment,
                 revision: result.revision,
+                spans: result.spans,
                 isNewStream: isNewStream
             )
             flashStreamPickerSaveFeedback()
@@ -942,7 +949,13 @@ final class QuickPanelManager: ObservableObject {
     private func appendQuickPanelAIFragment(streamId: UUID, fragment: String, persistence: PersistenceService) {
         do {
             let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
-            notifyFrontend(streamId: streamId, fragment: result.fragment, revision: result.revision, source: "quickPanelAI")
+            notifyFrontend(
+                streamId: streamId,
+                fragment: result.fragment,
+                revision: result.revision,
+                spans: result.spans,
+                source: "quickPanelAI"
+            )
         } catch {
             DebugLog.log("[QuickPanel] Failed to append AI response (\(DebugLog.errorSummary(error)))")
         }
@@ -970,6 +983,7 @@ final class QuickPanelManager: ObservableObject {
         streamId: UUID,
         fragment: String,
         revision: Int,
+        spans: [ProvenanceSpan] = [],
         isNewStream: Bool = false,
         source: String = "quickPanel"
     ) {
@@ -980,7 +994,8 @@ final class QuickPanelManager: ObservableObject {
             "fragment": AnyCodable(fragment),
             "revision": AnyCodable(revision),
             "isNewStream": AnyCodable(isNewStream),
-            "source": AnyCodable(source)
+            "source": AnyCodable(source),
+            "spans": AnyCodable(StreamCodec.encodeSpans(spans))
         ]
 
         bridgeService.send(BridgeMessage(type: "streamDocumentAppended", payload: payload))

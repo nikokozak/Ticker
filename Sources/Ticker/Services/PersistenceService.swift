@@ -5,12 +5,21 @@ struct AppendResult {
     let fragment: String
     let isNewDocument: Bool
     let revision: Int
+    let spans: [ProvenanceSpan]
 }
 
 struct StreamDocumentRevisionConflict: Error {
     let streamId: UUID
     let markdown: String
     let revision: Int
+    let spans: [ProvenanceSpan]
+
+    init(streamId: UUID, markdown: String, revision: Int, spans: [ProvenanceSpan] = []) {
+        self.streamId = streamId
+        self.markdown = markdown
+        self.revision = revision
+        self.spans = spans
+    }
 }
 
 enum PersistenceError: LocalizedError {
@@ -881,6 +890,21 @@ final class PersistenceService {
 
     @discardableResult
     func saveStreamDocument(streamId: UUID, markdown: String, baseRevision: Int) throws -> Int {
+        try saveStreamDocument(streamId: streamId, markdown: markdown, baseRevision: baseRevision, spans: nil)
+    }
+
+    @discardableResult
+    func saveStreamDocument(streamId: UUID, markdown: String, baseRevision: Int, spans: [ProvenanceSpan]) throws -> Int {
+        try saveStreamDocument(streamId: streamId, markdown: markdown, baseRevision: baseRevision, spans: Optional(spans))
+    }
+
+    @discardableResult
+    private func saveStreamDocument(
+        streamId: UUID,
+        markdown: String,
+        baseRevision: Int,
+        spans: [ProvenanceSpan]?
+    ) throws -> Int {
         let now = Date().timeIntervalSince1970
         return try dbQueue.write { db in
             if let row = try Row.fetchOne(
@@ -895,7 +919,8 @@ final class PersistenceService {
                     throw StreamDocumentRevisionConflict(
                         streamId: streamId,
                         markdown: currentMarkdown,
-                        revision: currentRevision
+                        revision: currentRevision,
+                        spans: try fetchSpans(streamId: streamId, db: db)
                     )
                 }
 
@@ -914,6 +939,12 @@ final class PersistenceService {
                     arguments: [now, streamId.uuidString]
                 )
 
+                if let spans {
+                    let validSpans = validatedSpans(spans, markdown: markdown, streamId: streamId)
+                    logDroppedSpans(total: spans.count, kept: validSpans.count, context: "saveStreamDocument")
+                    try replaceSpans(streamId: streamId, spans: validSpans, db: db)
+                }
+
                 return newRevision
             }
 
@@ -921,7 +952,8 @@ final class PersistenceService {
                 throw StreamDocumentRevisionConflict(
                     streamId: streamId,
                     markdown: "",
-                    revision: 0
+                    revision: 0,
+                    spans: []
                 )
             }
 
@@ -939,11 +971,17 @@ final class PersistenceService {
                 arguments: [now, streamId.uuidString]
             )
 
+            if let spans {
+                let validSpans = validatedSpans(spans, markdown: markdown, streamId: streamId)
+                logDroppedSpans(total: spans.count, kept: validSpans.count, context: "saveStreamDocument")
+                try replaceSpans(streamId: streamId, spans: validSpans, db: db)
+            }
+
             return newRevision
         }
     }
 
-    func appendToStreamDocument(streamId: UUID, fragment: String) throws -> AppendResult {
+    func appendToStreamDocument(streamId: UUID, fragment: String, spans: [ProvenanceSpan] = []) throws -> AppendResult {
         try dbQueue.write { db in
             let now = Date().timeIntervalSince1970
             let existingMarkdown: String
@@ -964,10 +1002,28 @@ final class PersistenceService {
                 isNewDocument = true
             }
 
+            let separator = existingMarkdown.isEmpty ? "" : "\n\n"
             let markdown = existingMarkdown.isEmpty
                 ? fragment
-                : "\(existingMarkdown)\n\n\(fragment)"
+                : "\(existingMarkdown)\(separator)\(fragment)"
             let newRevision = existingRevision + 1
+            let spanOffset = UTF16Offsets.utf16Length(existingMarkdown) + UTF16Offsets.utf16Length(separator)
+            let absoluteSpans = spans.map { span in
+                ProvenanceSpan(
+                    spanId: span.spanId,
+                    streamId: streamId,
+                    start: span.start + spanOffset,
+                    end: span.end + spanOffset,
+                    origin: span.origin,
+                    requestId: span.requestId,
+                    sourceId: span.sourceId,
+                    meta: span.meta,
+                    textHash: span.textHash,
+                    createdAt: span.createdAt
+                )
+            }
+            let validSpans = validatedSpans(absoluteSpans, markdown: markdown, streamId: streamId)
+            logDroppedSpans(total: absoluteSpans.count, kept: validSpans.count, context: "appendToStreamDocument")
 
             try db.execute(
                 sql: """
@@ -986,7 +1042,9 @@ final class PersistenceService {
                 arguments: [now, streamId.uuidString]
             )
 
-            return AppendResult(fragment: fragment, isNewDocument: isNewDocument, revision: newRevision)
+            try insertSpans(streamId: streamId, spans: validSpans, db: db)
+
+            return AppendResult(fragment: fragment, isNewDocument: isNewDocument, revision: newRevision, spans: validSpans)
         }
     }
 
@@ -994,59 +1052,13 @@ final class PersistenceService {
 
     func loadSpans(streamId: UUID) throws -> [ProvenanceSpan] {
         try dbQueue.read { db in
-            try Row.fetchAll(
-                db,
-                sql: """
-                    SELECT span_id, stream_id, start, end, origin, request_id, source_id, meta, text_hash, created_at
-                    FROM provenance_spans
-                    WHERE stream_id = ?
-                    ORDER BY start, end, span_id
-                """,
-                arguments: [streamId.uuidString]
-            ).map { row in
-                ProvenanceSpan(
-                    spanId: row["span_id"],
-                    streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
-                    start: row["start"],
-                    end: row["end"],
-                    origin: row["origin"],
-                    requestId: row["request_id"],
-                    sourceId: row["source_id"],
-                    meta: row["meta"],
-                    textHash: row["text_hash"],
-                    createdAt: Date(timeIntervalSince1970: row["created_at"])
-                )
-            }
+            try fetchSpans(streamId: streamId, db: db)
         }
     }
 
     func replaceSpans(streamId: UUID, spans: [ProvenanceSpan]) throws {
         try dbQueue.write { db in
-            try db.execute(
-                sql: "DELETE FROM provenance_spans WHERE stream_id = ?",
-                arguments: [streamId.uuidString]
-            )
-            for span in spans {
-                try db.execute(
-                    sql: """
-                        INSERT INTO provenance_spans
-                            (span_id, stream_id, start, end, origin, request_id, source_id, meta, text_hash, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    arguments: [
-                        span.spanId,
-                        streamId.uuidString,
-                        span.start,
-                        span.end,
-                        span.origin,
-                        span.requestId,
-                        span.sourceId,
-                        span.meta,
-                        span.textHash,
-                        span.createdAt.timeIntervalSince1970
-                    ]
-                )
-            }
+            try replaceSpans(streamId: streamId, spans: spans, db: db)
         }
     }
 
@@ -1120,6 +1132,95 @@ final class PersistenceService {
                 arguments: [streamId.uuidString]
             )
         }
+    }
+
+    private func fetchSpans(streamId: UUID, db: Database) throws -> [ProvenanceSpan] {
+        try Row.fetchAll(
+            db,
+            sql: """
+                SELECT span_id, stream_id, start, end, origin, request_id, source_id, meta, text_hash, created_at
+                FROM provenance_spans
+                WHERE stream_id = ?
+                ORDER BY start, end, span_id
+            """,
+            arguments: [streamId.uuidString]
+        ).map { row in
+            ProvenanceSpan(
+                spanId: row["span_id"],
+                streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
+                start: row["start"],
+                end: row["end"],
+                origin: row["origin"],
+                requestId: row["request_id"],
+                sourceId: row["source_id"],
+                meta: row["meta"],
+                textHash: row["text_hash"],
+                createdAt: Date(timeIntervalSince1970: row["created_at"])
+            )
+        }
+    }
+
+    private func replaceSpans(streamId: UUID, spans: [ProvenanceSpan], db: Database) throws {
+        try db.execute(
+            sql: "DELETE FROM provenance_spans WHERE stream_id = ?",
+            arguments: [streamId.uuidString]
+        )
+        try insertSpans(streamId: streamId, spans: spans, db: db)
+    }
+
+    private func insertSpans(streamId: UUID, spans: [ProvenanceSpan], db: Database) throws {
+        for span in spans {
+            try db.execute(
+                sql: """
+                    INSERT INTO provenance_spans
+                        (span_id, stream_id, start, end, origin, request_id, source_id, meta, text_hash, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    span.spanId,
+                    streamId.uuidString,
+                    span.start,
+                    span.end,
+                    span.origin,
+                    span.requestId,
+                    span.sourceId,
+                    span.meta,
+                    span.textHash,
+                    span.createdAt.timeIntervalSince1970
+                ]
+            )
+        }
+    }
+
+    private func validatedSpans(_ spans: [ProvenanceSpan], markdown: String, streamId: UUID) -> [ProvenanceSpan] {
+        spans.compactMap { span in
+            guard span.start >= 0,
+                  span.start < span.end,
+                  span.end <= UTF16Offsets.utf16Length(markdown),
+                  let coveredText = UTF16Offsets.substring(markdown, start: span.start, end: span.end),
+                  FNV1a.hash(coveredText) == span.textHash else {
+                return nil
+            }
+
+            return ProvenanceSpan(
+                spanId: span.spanId,
+                streamId: streamId,
+                start: span.start,
+                end: span.end,
+                origin: span.origin,
+                requestId: span.requestId,
+                sourceId: span.sourceId,
+                meta: span.meta,
+                textHash: span.textHash,
+                createdAt: span.createdAt
+            )
+        }
+    }
+
+    private func logDroppedSpans(total: Int, kept: Int, context: String) {
+        let dropped = total - kept
+        guard dropped > 0 else { return }
+        DebugLog.log("[Persistence] Dropped \(dropped) invalid provenance span(s) during \(context)")
     }
 
     // MARK: - Source Operations

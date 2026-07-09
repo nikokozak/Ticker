@@ -96,13 +96,13 @@
         "requiredPayloadKeys": ["id"]
       },
       "streamDocumentAppended": {
-        "requiredPayloadKeys": ["streamId", "fragment", "revision", "isNewStream", "source"]
+        "requiredPayloadKeys": ["streamId", "fragment", "revision", "isNewStream", "source", "spans"]
       },
       "streamDocumentConflict": {
-        "requiredPayloadKeys": ["streamId", "markdown", "revision"]
+        "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans"]
       },
       "streamLoaded": {
-        "requiredPayloadKeys": ["stream"],
+        "requiredPayloadKeys": ["stream", "spans"],
         "optionalPayloadKeys": ["scrollOffset", "sourceScope"]
       },
       "streamTitleUpdated": {
@@ -161,6 +161,10 @@
       "loadStreams": {
         "requiredPayloadKeys": []
       },
+      "getExchange": {
+        "requiredPayloadKeys": ["requestId"],
+        "requiredCallbackId": true
+      },
       "openExternalURL": {
         "requiredPayloadKeys": ["url"]
       },
@@ -203,7 +207,7 @@
         ]
       },
       "saveStreamDocument": {
-        "requiredPayloadKeys": ["streamId", "markdown", "baseRevision"],
+        "requiredPayloadKeys": ["streamId", "markdown", "baseRevision", "spans"],
         "requiredCallbackId": true
       },
       "saveScrollPosition": {
