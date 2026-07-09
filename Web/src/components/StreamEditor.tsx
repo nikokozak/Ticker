@@ -217,12 +217,19 @@ function focusEditorAtDocumentEnd(view: EditorView) {
   view.focus();
 }
 
+// The editor auto-grows to its content; the page container (.stream-content) is the
+// element that actually scrolls. scrollDOM is the fallback for layouts without it.
+function editorScroller(view: EditorView): HTMLElement {
+  return (view.scrollDOM.closest('.stream-content') as HTMLElement | null) ?? view.scrollDOM;
+}
+
 function restoreViewportEnd(view: EditorView, scrollOffset: number): number {
   const docLength = view.state.doc.length;
   if (docLength === 0 || scrollOffset <= 0) return view.viewport.to;
 
-  const scrollHeight = view.scrollDOM.scrollHeight;
-  const clientHeight = view.scrollDOM.clientHeight;
+  const scroller = editorScroller(view);
+  const scrollHeight = scroller.scrollHeight;
+  const clientHeight = scroller.clientHeight;
   if (scrollHeight <= clientHeight) return view.viewport.to;
 
   // ponytail: pixel-to-doc estimate; upgrade to measured CodeMirror mapping if deep restores ever flash.
@@ -771,7 +778,7 @@ export function StreamEditor({
       scrollSaveTimerRef.current = null;
       const view = editorViewRef.current;
       if (view) {
-        sendScrollPosition(view.scrollDOM.scrollTop);
+        sendScrollPosition(editorScroller(view).scrollTop);
       }
     }, 1000);
   }, [clearScrollSaveTimer, sendScrollPosition]);
@@ -780,7 +787,7 @@ export function StreamEditor({
     clearScrollSaveTimer();
     const view = editorViewRef.current;
     if (view) {
-      sendScrollPosition(view.scrollDOM.scrollTop);
+      sendScrollPosition(editorScroller(view).scrollTop);
     }
   }, [clearScrollSaveTimer, sendScrollPosition]);
 
@@ -2722,14 +2729,25 @@ export function StreamEditor({
                 applyMarginNotesToEditor(stream.marginNotes);
 
                 scrollCleanupRef.current?.();
+                const scroller = editorScroller(view);
                 const handleScroll = () => scheduleScrollPositionSave();
-                view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true });
-                scrollCleanupRef.current = () => view.scrollDOM.removeEventListener('scroll', handleScroll);
+                scroller.addEventListener('scroll', handleScroll, { passive: true });
 
                 clearRevealFrame();
                 const scrollOffset = Math.max(0, Number(stream.document?.scrollOffset ?? 0));
                 ensureSyntaxTree(view.state, restoreViewportEnd(view, scrollOffset), 50);
-                view.scrollDOM.scrollTop = scrollOffset;
+                scroller.scrollTop = scrollOffset;
+                // Content height settles as CodeMirror measures; if the first set was
+                // clamped (scroller not yet tall enough), re-assert once.
+                const reassertTimer = window.setTimeout(() => {
+                  if (editorViewRef.current === view && scrollOffset > 0 && Math.abs(scroller.scrollTop - scrollOffset) > 4 && scroller.scrollTop < scrollOffset) {
+                    scroller.scrollTop = scrollOffset;
+                  }
+                }, 250);
+                scrollCleanupRef.current = () => {
+                  window.clearTimeout(reassertTimer);
+                  scroller.removeEventListener('scroll', handleScroll);
+                };
                 revealFrameRef.current = window.requestAnimationFrame(() => {
                   revealFrameRef.current = window.requestAnimationFrame(() => {
                     revealFrameRef.current = null;
