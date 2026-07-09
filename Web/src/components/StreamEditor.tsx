@@ -21,6 +21,7 @@ import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
 import {
+  beginPDFAnchorPick,
   buildPDFAnchorLinkEdit,
   buildTickerPDFLinkURL,
   mapPendingPDFAnchorSelection,
@@ -1652,6 +1653,26 @@ export function StreamEditor({
     view.focus();
   }, [hideSelectionMenu]);
 
+  const canLinkSelectionToPDF = pdfPaneState.visible && pdfPaneState.streamId === stream.id;
+
+  const handleSelectionLinkToPDF = useCallback(() => {
+    const context = getSelectionContext(false);
+    if (!context || !context.text.trim()) {
+      hideSelectionMenu();
+      return;
+    }
+    if (!canLinkSelectionToPDF) {
+      pendingPDFAnchorSelectionRef.current = null;
+      hideSelectionMenu();
+      addToast('Open a PDF source before linking to PDF.', 'info');
+      return;
+    }
+
+    pendingPDFAnchorSelectionRef.current = { from: context.from, to: context.to };
+    hideSelectionMenu();
+    beginPDFAnchorPick(stream.id);
+  }, [addToast, canLinkSelectionToPDF, getSelectionContext, hideSelectionMenu, stream.id]);
+
   const handleSelectionVerb = useCallback((verb: DocumentAIVerb) => {
     const context = getSelectionContext(false);
     if (!context || !context.text.trim()) {
@@ -2021,6 +2042,20 @@ export function StreamEditor({
           >
             &lt;/&gt;
           </button>
+          {canLinkSelectionToPDF && (
+            <button
+              type="button"
+              className="selection-action-button"
+              title="Link to PDF"
+              aria-label="Link to PDF"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleSelectionLinkToPDF}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M8.8 12.9a1 1 0 010-1.4l3.7-3.7a3.4 3.4 0 114.8 4.8l-1.5 1.5-.7-.7 1.5-1.5a2.4 2.4 0 10-3.4-3.4l-3.7 3.7a1 1 0 001.4 1.4l2.5-2.5.7.7-2.5 2.5a2 2 0 01-2.8 0zm-2.1 7a3.4 3.4 0 010-4.8l1.5-1.5.7.7-1.5 1.5a2.4 2.4 0 103.4 3.4l3.7-3.7a1 1 0 00-1.4-1.4l-2.5 2.5-.7-.7 2.5-2.5a2 2 0 112.8 2.8l-3.7 3.7a3.4 3.4 0 01-4.8 0z" />
+              </svg>
+            </button>
+          )}
           <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"

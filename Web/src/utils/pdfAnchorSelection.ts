@@ -28,7 +28,6 @@ export function buildTickerPDFLinkURL(args: { sourceId: string; highlightId: str
 }
 
 export function beginPDFAnchorPick(streamId: string): void {
-  // ponytail: contract-retained sender while Task 3.2 removes the PDF action from the verb menu; wire to a new visible PDF command if anchoring returns there.
   bridge.send({
     type: 'beginPdfAnchorPick',
     payload: { streamId },
