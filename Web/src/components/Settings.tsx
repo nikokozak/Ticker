@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { bridge } from '../types';
+import { Spinner } from './icons';
+import { useToastStore } from '../store/toastStore';
 import { debugError } from '../utils/debug';
 
 type Appearance = 'light' | 'dark' | 'system';
@@ -98,6 +100,7 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS);
+  const addToast = useToastStore((state) => state.addToast);
 
   // Proxy auth state
   const [proxyAuth, setProxyAuth] = useState<ProxyAuthStatus | null>(null);
@@ -238,11 +241,10 @@ export function Settings({ onClose }: SettingsProps) {
       const result = await bridge.sendAsync<{ bundle: Record<string, unknown> }>('getSupportBundle');
       const bundleJson = JSON.stringify(result.bundle, null, 2);
       await navigator.clipboard.writeText(bundleJson);
-      // Could show a toast here, but for simplicity just alert
-      alert('Support bundle copied to clipboard');
+      addToast('Support bundle copied to clipboard', 'success');
     } catch (err) {
       debugError('Failed to copy support bundle');
-      alert('Failed to copy support bundle');
+      addToast('Failed to copy support bundle', 'error');
     }
   };
 
@@ -353,7 +355,7 @@ export function Settings({ onClose }: SettingsProps) {
                 <p className="settings-hint settings-hint--flush">
                   Validating device key...
                 </p>
-                <div className="loading-spinner" />
+                <Spinner className="loading-spinner" />
               </div>
             ) : (
               <div className="settings-device-key-entry">
