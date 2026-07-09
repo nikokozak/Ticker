@@ -990,6 +990,168 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_v20MigrationAddsProvenanceTablesToFreshDatabase() throws {
+        try withTempPersistenceServiceAndURL { _, dbURL, _ in
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let tables = try dbQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).map { row -> String in row["name"] }
+            }
+            let indexes = try dbQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: "SELECT name FROM sqlite_master WHERE type = 'index'"
+                ).map { row -> String in row["name"] }
+            }
+            let spanColumns = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(provenance_spans)").map { row -> String in
+                    row["name"]
+                }
+            }
+            let exchangeColumns = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(ai_exchanges)").map { row -> String in
+                    row["name"]
+                }
+            }
+
+            XCTAssertTrue(tables.contains("provenance_spans"))
+            XCTAssertTrue(tables.contains("ai_exchanges"))
+            XCTAssertTrue(indexes.contains("idx_prov_stream"))
+            XCTAssertEqual(
+                spanColumns,
+                ["span_id", "stream_id", "start", "end", "origin", "request_id", "source_id", "meta", "text_hash", "created_at"]
+            )
+            XCTAssertEqual(
+                exchangeColumns,
+                ["request_id", "stream_id", "verb", "user_input", "source_manifest", "response_raw", "model", "created_at"]
+            )
+        }
+    }
+
+    func test_fnv1aMatchesSharedVector() {
+        XCTAssertEqual(FNV1a.hash("The quick brown fox"), "048fff90")
+    }
+
+    func test_utf16OffsetsHandleEmojiRegression() {
+        let text = "a🙂b"
+
+        XCTAssertEqual(UTF16Offsets.utf16Length(text), 4)
+        XCTAssertEqual(UTF16Offsets.substring(text, start: 3, end: 4), "b")
+    }
+
+    func test_provenanceSpansRoundTrip() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Provenance")
+            try service.saveStream(stream)
+            let spans = [
+                ProvenanceSpan(
+                    spanId: "span-1",
+                    streamId: stream.id,
+                    start: 0,
+                    end: 5,
+                    origin: "ai",
+                    requestId: "request-1",
+                    sourceId: nil,
+                    meta: #"{"model":"test"}"#,
+                    textHash: FNV1a.hash("hello"),
+                    createdAt: Date(timeIntervalSince1970: 1_234)
+                ),
+                ProvenanceSpan(
+                    spanId: "span-2",
+                    streamId: stream.id,
+                    start: 8,
+                    end: 12,
+                    origin: "source",
+                    requestId: nil,
+                    sourceId: "source-1",
+                    meta: #"{"page":2}"#,
+                    textHash: FNV1a.hash("note"),
+                    createdAt: Date(timeIntervalSince1970: 1_235)
+                )
+            ]
+
+            try service.replaceSpans(streamId: stream.id, spans: spans)
+            XCTAssertEqual(try service.loadSpans(streamId: stream.id), spans)
+
+            try service.replaceSpans(streamId: stream.id, spans: [spans[1]])
+            XCTAssertEqual(try service.loadSpans(streamId: stream.id), [spans[1]])
+        }
+    }
+
+    func test_aiExchangesRoundTripAndDeleteOrphans() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Exchange")
+            try service.saveStream(stream)
+            let exchange = AIExchange(
+                requestId: "request-1",
+                streamId: stream.id,
+                verb: "develop",
+                userInput: "Selection: hello",
+                sourceManifest: #"[{"title":"Source"}]"#,
+                responseRaw: "Developed response",
+                model: "test-model",
+                createdAt: Date(timeIntervalSince1970: 1_236)
+            )
+
+            try service.saveExchange(exchange)
+            XCTAssertEqual(try service.loadExchange(requestId: exchange.requestId), exchange)
+
+            try service.replaceSpans(streamId: stream.id, spans: [
+                ProvenanceSpan(
+                    spanId: "span-1",
+                    streamId: stream.id,
+                    start: 0,
+                    end: 5,
+                    origin: "ai",
+                    requestId: exchange.requestId,
+                    textHash: FNV1a.hash("hello"),
+                    createdAt: Date(timeIntervalSince1970: 1_237)
+                )
+            ])
+            try service.deleteOrphanExchanges(streamId: stream.id)
+            XCTAssertEqual(try service.loadExchange(requestId: exchange.requestId), exchange)
+
+            try service.replaceSpans(streamId: stream.id, spans: [])
+            try service.deleteOrphanExchanges(streamId: stream.id)
+            XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
+        }
+    }
+
+    func test_provenanceRowsCascadeWhenStreamIsDeleted() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Cascade")
+            try service.saveStream(stream)
+            let exchange = AIExchange(
+                requestId: "request-1",
+                streamId: stream.id,
+                verb: "ask",
+                userInput: "Question",
+                responseRaw: "Answer",
+                createdAt: Date(timeIntervalSince1970: 1_238)
+            )
+            try service.saveExchange(exchange)
+            try service.replaceSpans(streamId: stream.id, spans: [
+                ProvenanceSpan(
+                    spanId: "span-1",
+                    streamId: stream.id,
+                    start: 0,
+                    end: 6,
+                    origin: "ai",
+                    requestId: exchange.requestId,
+                    textHash: FNV1a.hash("Answer"),
+                    createdAt: Date(timeIntervalSince1970: 1_239)
+                )
+            ])
+
+            try service.deleteStream(id: stream.id)
+
+            XCTAssertEqual(try service.loadSpans(streamId: stream.id), [])
+            XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
+        }
+    }
+
     func test_saveScrollOffsetRoundTripsWithoutBumpingRevision() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Scroll Restore")
