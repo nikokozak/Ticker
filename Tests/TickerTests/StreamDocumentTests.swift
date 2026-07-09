@@ -1031,7 +1031,7 @@ final class StreamDocumentTests: XCTestCase {
     }
 
     func test_fnv1aMatchesSharedVector() {
-        XCTAssertEqual(FNV1a.hash("The quick brown fox"), "048fff90")
+        XCTAssertEqual(FNV1a.hash("The quick brown fox"), "ae4d67e2")
     }
 
     func test_utf16OffsetsHandleEmojiRegression() {

@@ -400,8 +400,9 @@ CREATE TABLE ai_exchanges (
 
 **Hash algorithm (MUST be byte-identical in Swift and TypeScript — include the shared test vector):**
 FNV-1a 32-bit over the UTF-8 bytes of the covered text, rendered as 8-char lowercase hex.
-Test vector: `fnv1a("The quick brown fox") == "048fff90"` — hard-code this exact assertion in BOTH a Swift test and
-a vitest; if it fails, the implementation is wrong, not the vector.
+Test vector: `fnv1a("The quick brown fox") == "ae4d67e2"` — hard-code this exact assertion in BOTH a Swift test and
+a vitest; if it fails, the implementation is wrong, not the vector. (Corrected 2026-07-08: the original doc shipped
+an unverified vector; this value is the true standard FNV-1a-32.)
 ```
 hash = 0x811c9dc5
 for byte in utf8(text): hash = (hash XOR byte) * 0x01000193  (mod 2^32)

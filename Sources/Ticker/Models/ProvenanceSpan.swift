@@ -70,8 +70,7 @@ struct AIExchange: Codable, Equatable {
 
 enum FNV1a {
     static func hash(_ text: String) -> String {
-        // ponytail: vector-compat ceiling; use the standard 0x811c9dc5 offset if the P4 vector is corrected.
-        var hash: UInt32 = 0x33202bdb
+        var hash: UInt32 = 0x811c9dc5
         for byte in text.utf8 {
             hash ^= UInt32(byte)
             hash = hash &* 0x01000193
