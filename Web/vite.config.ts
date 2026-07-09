@@ -16,7 +16,7 @@ function removeCrossorigin(): Plugin {
 export default defineConfig(({ command }) => ({
   plugins: [react(), ...(command === 'build' ? [removeCrossorigin()] : [])],
   server: {
-    port: 5173,
+    port: 6660,
     strictPort: true,
   },
   // Release builds are loaded from a local file URL inside the app bundle, so

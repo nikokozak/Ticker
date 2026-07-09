@@ -8,7 +8,7 @@ description: Build, launch, and drive Ticker-Next end-to-end on this Mac (GUI ap
 ## Build & launch
 - Build gate: `./tickerctl.sh build-dev` (xcodebuild). Plain `swift build` is broken (mlx-swift-lm/sandbox) — don't fight it.
 - Stale Sparkle artifact error → `./tickerctl.sh clean-derived-data -y` then rebuild.
-- Run: `./tickerctl.sh run-dev` in background (starts Vite on :5173 + launches `~/Applications/TickerNextDebug.app`). Wait ~20s; check `curl localhost:5173` and `pgrep -x TickerNext`.
+- Run: `./tickerctl.sh run-dev` in background (starts Vite on :6660 + launches `~/Applications/TickerNextDebug.app`). Wait ~20s; check `curl localhost:6660` and `pgrep -x TickerNext`.
 - **Check for stale instances first**: `pgrep -x TickerNext` (executable name is TickerNext in every lane) — kill old PIDs (`kill -TERM`) or two processes share one SQLite DB and the old code confounds results.
 - A Sparkle "Check for updates?" dialog may block on launch. Dismiss: `osascript -e 'tell application "System Events" to tell process "TickerNext" to click button "Don’t Check" of window 2'` (note curly apostrophe; the AX process name is `TickerNext` in all lanes; the dev app/menu-bar name is `TickerNextDebug`).
 

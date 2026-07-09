@@ -526,7 +526,7 @@ final class WebViewManager: NSObject {
 
     private func loadWebContent() {
         #if DEBUG
-        if let url = URL(string: "http://localhost:5173") {
+        if let url = URL(string: "http://localhost:6660") {
             webView.load(URLRequest(url: url))
         }
         #else
