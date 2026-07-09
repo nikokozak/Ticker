@@ -197,16 +197,25 @@ export function buildLinkChipDecorations(
 export function linkInteractionExtension(
   onEditLink: (view: EditorView, link: MarkdownLinkInfo | null) => void
 ): Extension {
+  const safeChipBuild = (view: EditorView, fallback: DecorationSet): DecorationSet => {
+    try {
+      return buildLinkChipDecorations(view, onEditLink);
+    } catch (error) {
+      console.error('[LinkChip] decoration build failed', error);
+      return fallback;
+    }
+  };
+
   const chipPlugin = ViewPlugin.fromClass(class {
     decorations: DecorationSet;
 
     constructor(view: EditorView) {
-      this.decorations = buildLinkChipDecorations(view, onEditLink);
+      this.decorations = safeChipBuild(view, Decoration.none);
     }
 
     update(update: ViewUpdate): void {
       if (update.docChanged || update.viewportChanged || update.selectionSet) {
-        this.decorations = buildLinkChipDecorations(update.view, onEditLink);
+        this.decorations = safeChipBuild(update.view, this.decorations.map(update.changes));
       }
     }
   }, {
@@ -223,21 +232,20 @@ export function linkInteractionExtension(
         onEditLink(update.view, null);
       }
     }),
-    // ⌥-click on a non-chip link (ticker-pdf citations) reveals its raw markdown;
-    // chips handle their own ⌥-click in the widget.
+    // ⌥-click reveals the clicked line's raw markdown — the ONE way to see or
+    // edit raw syntax (headings, bold, citations alike). Chips handle their own
+    // ⌥-click in the widget.
     EditorView.domEventHandlers({
       click: (event, view) => {
         if (event.button !== 0 || !event.altKey || event.defaultPrevented) return false;
         const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
         if (pos == null) return false;
-        const link = linkInfoAt(view, pos);
-        if (!link) return false;
 
         event.preventDefault();
         onEditLink(view, null);
         view.dispatch({
           selection: { anchor: pos },
-          effects: revealRawLinksEffect.of(link.lineFrom),
+          effects: revealRawLinksEffect.of(view.state.doc.lineAt(pos).from),
         });
         return true;
       },
