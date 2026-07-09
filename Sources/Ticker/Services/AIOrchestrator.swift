@@ -65,10 +65,14 @@ final class AIOrchestrator {
         // Proxy-only mode: all LLM traffic goes through the proxy.
         // If device key is not active, the proxy will return an auth error.
 
-        // Classify if we have a classifier and smart routing is enabled
+        // Classify if we have a classifier and smart routing is enabled.
+        // Fixed-prompt flows (document AI verbs, read-back, ephemeral ask)
+        // must not be re-routed by content sniffing: a passage that "looks
+        // like a search" would go to a web-search model that ignores the
+        // structured system prompt entirely.
         var intent: QueryIntent = .knowledge
         var classificationResult: ClassificationResult?
-        if settings.smartRoutingEnabled, let classifier {
+        if settings.smartRoutingEnabled, let classifier, systemPromptOverride == nil {
             do {
                 let result = try await classifier.classify(query: query)
                 intent = result.intent
