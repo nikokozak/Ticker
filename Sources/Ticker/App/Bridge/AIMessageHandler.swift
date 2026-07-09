@@ -72,87 +72,9 @@ private enum DocumentAIVerb: String {
     }
 }
 
-private struct DocumentAIChallengeAnchor {
-    let start: Int
-    let end: Int
-    let hash: String
-}
-
-enum ReadBackMarginNoteBuilder {
-    private struct Item: Decodable {
-        let kind: String
-        let anchor: String
-        let body: String
-    }
-
-    private static let allowedKinds: Set<String> = ["question", "tension", "connection"]
-
-    /// Models routinely wrap the requested JSON array in ```fences or prose;
-    /// fall back to the outermost bracketed slice before giving up.
-    private static func decodeItems(from output: String) -> [Item]? {
-        if let data = output.data(using: .utf8),
-           let items = try? JSONDecoder().decode([Item].self, from: data) {
-            return items
-        }
-        guard let first = output.firstIndex(of: "["),
-              let last = output.lastIndex(of: "]"),
-              first < last,
-              let data = String(output[first...last]).data(using: .utf8) else {
-            return nil
-        }
-        return try? JSONDecoder().decode([Item].self, from: data)
-    }
-
-    static func build(
-        modelOutput: String,
-        scopedText: String,
-        streamId: UUID,
-        scopeStart: Int,
-        requestId: String,
-        createdAt: Date = Date()
-    ) -> (notes: [MarginNote], droppedAnchorCount: Int) {
-        guard let items = decodeItems(from: modelOutput) else {
-            DebugLog.log("[ReadBack] Model output was not a JSON array; no notes built")
-            return ([], 0)
-        }
-
-        var droppedAnchorCount = 0
-        let notes = items.compactMap { item -> MarginNote? in
-            let kind = item.kind.trimmingCharacters(in: .whitespacesAndNewlines)
-            let anchor = item.anchor.trimmingCharacters(in: .whitespacesAndNewlines)
-            let body = item.body.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard allowedKinds.contains(kind), !body.isEmpty else {
-                return nil
-            }
-            let anchorWordCount = anchor.split { $0.isWhitespace }.count
-            guard (5...15).contains(anchorWordCount),
-                  let range = NormalizedTextSearch.utf16Range(of: anchor, in: scopedText),
-                  let anchoredText = UTF16Offsets.substring(scopedText, start: range.lowerBound, end: range.upperBound) else {
-                droppedAnchorCount += 1
-                return nil
-            }
-
-            return MarginNote(
-                streamId: streamId,
-                anchorStart: scopeStart + range.lowerBound,
-                anchorEnd: scopeStart + range.upperBound,
-                anchorHash: FNV1a.hash(anchoredText),
-                kind: kind,
-                body: body,
-                bodyHash: FNV1a.hash(body),
-                requestId: requestId,
-                createdAt: createdAt
-            )
-        }
-
-        return (Array(notes.prefix(5)), droppedAnchorCount)
-    }
-}
-
 final class AIMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
         "thinkDocument",
-        "readBack",
         "cancelDocumentAI"
     ]
 
@@ -252,18 +174,6 @@ final class AIMessageHandler: BridgeMessageHandler {
             let sourceScope = SourceScope(rawValue: sourceScopeRaw ?? "") ?? .auto
             let verbRaw = payload["verb"]?.value as? String
             let verb = DocumentAIVerb(rawValue: verbRaw ?? "") ?? .develop
-            let challengeAnchor: DocumentAIChallengeAnchor? = {
-                guard verb == .challenge,
-                      let start = payload["anchorStart"]?.intValue,
-                      let end = payload["anchorEnd"]?.intValue,
-                      let hash = payload["anchorHash"]?.value as? String,
-                      start >= 0,
-                      start < end,
-                      !hash.isEmpty else {
-                    return nil
-                }
-                return DocumentAIChallengeAnchor(start: start, end: end, hash: hash)
-            }()
 
             var streamIdForRAG: UUID? = nil
 
@@ -310,37 +220,6 @@ final class AIMessageHandler: BridgeMessageHandler {
                         DebugLog.log("[AIMessageHandler] Failed to save exchange (\(DebugLog.errorSummary(error)))")
                     }
                 }
-                if verb == .challenge, let streamId = streamIdForRAG, let persistence = self?.persistence {
-                    if let challengeAnchor {
-                        let body = responseRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !body.isEmpty {
-                            do {
-                                try persistence.insertMarginNotes([
-                                    MarginNote(
-                                        streamId: streamId,
-                                        anchorStart: challengeAnchor.start,
-                                        anchorEnd: challengeAnchor.end,
-                                        anchorHash: challengeAnchor.hash,
-                                        kind: "tension",
-                                        body: body,
-                                        bodyHash: FNV1a.hash(body),
-                                        requestId: requestId
-                                    )
-                                ])
-                                let visibleNotes = try persistence.loadMarginNotes(streamId: streamId)
-                                self?.sendToWeb(BridgeMessage(type: "marginNotesChanged", payload: [
-                                    "streamId": AnyCodable(streamId.uuidString),
-                                    "notes": AnyCodable(StreamCodec.encodeMarginNotes(visibleNotes))
-                                ]))
-                            } catch {
-                                DebugLog.log("[AIMessageHandler] Failed to save challenge margin note (\(DebugLog.errorSummary(error)))")
-                            }
-                        }
-                    } else {
-                        DebugLog.log("[AIMessageHandler] Challenge completed without anchor; margin note skipped")
-                    }
-                }
-
                 var payload: [String: AnyCodable] = ["requestId": AnyCodable(requestId)]
                 if let citations = DocumentAICitationManifest.bridgePayload(from: sourceContext) {
                     payload["citations"] = AnyCodable(citations)
@@ -427,123 +306,6 @@ final class AIMessageHandler: BridgeMessageHandler {
                             payload: ["requestId": AnyCodable(requestId), "modelId": AnyCodable(modelId)]
                         ))
                     }
-                )
-            }
-            inFlightRequests[requestId] = task
-
-        case "readBack":
-            guard let payload = message.payload,
-                  let streamIdValue = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdValue),
-                  let scopeStart = payload["scopeStart"]?.intValue,
-                  let scopeEnd = payload["scopeEnd"]?.intValue,
-                  let persistence else {
-                DebugLog.log("[AIMessageHandler] Invalid readBack payload")
-                await sendBridgeErrorMessage(message.type, "Invalid readBack payload")
-                return
-            }
-
-            let document: StreamDocument
-            do {
-                document = try persistence.loadOrCreateStreamDocument(streamId: streamId)
-            } catch {
-                DebugLog.log("[AIMessageHandler] Failed to load stream document for readBack (\(DebugLog.errorSummary(error)))")
-                return
-            }
-
-            guard scopeStart >= 0,
-                  scopeStart < scopeEnd,
-                  scopeEnd <= UTF16Offsets.utf16Length(document.markdown),
-                  let scopedText = UTF16Offsets.substring(document.markdown, start: scopeStart, end: scopeEnd) else {
-                DebugLog.log("[AIMessageHandler] Invalid readBack UTF-16 scope")
-                await sendBridgeErrorMessage(message.type, "Invalid readBack scope")
-                return
-            }
-
-            let requestId = UUID().uuidString
-            var responseRaw = ""
-            let onChunk: (String) -> Void = { chunk in
-                guard !Task.isCancelled else { return }
-                responseRaw += chunk
-            }
-            let onComplete: (SourceContext?) -> Void = { [weak self] _ in
-                guard !Task.isCancelled else { return }
-                let built = ReadBackMarginNoteBuilder.build(
-                    modelOutput: responseRaw,
-                    scopedText: scopedText,
-                    streamId: streamId,
-                    scopeStart: scopeStart,
-                    requestId: requestId
-                )
-                if built.droppedAnchorCount > 0 {
-                    DebugLog.log("[AIMessageHandler] Dropped \(built.droppedAnchorCount) readBack note(s) with unverifiable anchors")
-                }
-
-                do {
-                    let suppressed = try persistence.marginSuppressionHashes(streamId: streamId)
-                    var seen = try persistence.nonDismissedMarginNoteBodyHashes(streamId: streamId)
-                    let notes = built.notes.filter { note in
-                        guard !suppressed.contains(note.bodyHash), !seen.contains(note.bodyHash) else {
-                            return false
-                        }
-                        seen.insert(note.bodyHash)
-                        return true
-                    }.prefix(5)
-
-                    try persistence.insertMarginNotes(Array(notes))
-                    let visibleNotes = try persistence.loadMarginNotes(streamId: streamId)
-                    self?.sendToWeb(BridgeMessage(type: "marginNotesChanged", payload: [
-                        "streamId": AnyCodable(streamId.uuidString),
-                        "notes": AnyCodable(StreamCodec.encodeMarginNotes(visibleNotes))
-                    ]))
-                    self?.sendToWeb(BridgeMessage(type: "readBackComplete", payload: [
-                        "streamId": AnyCodable(streamId.uuidString),
-                        "added": AnyCodable(notes.count),
-                        "dropped": AnyCodable(built.droppedAnchorCount)
-                    ]))
-                } catch {
-                    DebugLog.log("[AIMessageHandler] Failed to save readBack margin notes (\(DebugLog.errorSummary(error)))")
-                    self?.sendToWeb(BridgeMessage(type: "readBackComplete", payload: [
-                        "streamId": AnyCodable(streamId.uuidString),
-                        "failed": AnyCodable(true)
-                    ]))
-                }
-            }
-            let onError: (Error) -> Void = { [weak self] error in
-                guard !Task.isCancelled else { return }
-                DebugLog.log("[AIMessageHandler] readBack failed (\(DebugLog.errorSummary(error)))")
-                self?.sendToWeb(BridgeMessage(type: "readBackComplete", payload: [
-                    "streamId": AnyCodable(streamId.uuidString),
-                    "failed": AnyCodable(true)
-                ]))
-            }
-
-            let task = Task { [weak self] in
-                guard let self else { return }
-                defer {
-                    self.inFlightRequests[requestId] = nil
-                }
-
-                guard await self.isProxyUsable() else {
-                    onError(OrchestratorError.noProviderAvailable)
-                    return
-                }
-
-                if Task.isCancelled {
-                    return
-                }
-
-                await self.routeDocumentAI(
-                    "Passage:\n\(scopedText)",
-                    scopedText,
-                    [],
-                    streamId,
-                    .auto,
-                    Prompts.readBack,
-                    onChunk,
-                    onComplete,
-                    onError,
-                    nil
                 )
             }
             inFlightRequests[requestId] = task

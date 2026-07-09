@@ -1109,51 +1109,6 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_documentAIChallengeCompletionCreatesMarginNote() async throws {
-        try await withTempPersistenceService { service in
-            let stream = Stream(title: "Challenge Note")
-            try service.saveStream(stream)
-            let recorder = BridgeMessageRecorder()
-            let requestId = "request-challenge"
-            let anchorText = "This claim needs pressure"
-            let anchorStart = 4
-            let handler = AIMessageHandler(
-                persistence: service,
-                sendToWeb: { recorder.send($0) },
-                routeDocumentAI: { _, _, _, _, _, _, onChunk, onComplete, _, _ in
-                    onChunk("Where is the evidence?")
-                    onComplete(nil)
-                }
-            )
-
-            await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
-                "requestId": AnyCodable(requestId),
-                "streamId": AnyCodable(stream.id.uuidString),
-                "query": AnyCodable("Challenge this"),
-                "context": AnyCodable(anchorText),
-                "imageURLs": AnyCodable([]),
-                "verb": AnyCodable("challenge"),
-                "anchorStart": AnyCodable(anchorStart),
-                "anchorEnd": AnyCodable(anchorStart + anchorText.utf16.count),
-                "anchorHash": AnyCodable(FNV1a.hash(anchorText))
-            ]))
-
-            try await waitUntil {
-                (try? service.loadMarginNotes(streamId: stream.id).count) == 1
-            }
-
-            let note = try XCTUnwrap(try service.loadMarginNotes(streamId: stream.id).first)
-            XCTAssertEqual(note.kind, "tension")
-            XCTAssertEqual(note.body, "Where is the evidence?")
-            XCTAssertEqual(note.requestId, requestId)
-            XCTAssertEqual(note.anchorStart, anchorStart)
-            XCTAssertEqual(note.anchorEnd, anchorStart + anchorText.utf16.count)
-            XCTAssertEqual(note.anchorHash, FNV1a.hash(anchorText))
-            XCTAssertFalse(recorder.messages(ofType: "marginNotesChanged").isEmpty)
-            XCTAssertFalse(recorder.messages(ofType: "documentAIComplete").isEmpty)
-        }
-    }
-
     func test_v19MigrationAddsScrollRestoreColumnsToFreshDatabase() throws {
         try withTempPersistenceServiceAndURL { _, dbURL, _ in
             let dbQueue = try DatabaseQueue(path: dbURL.path)
@@ -1468,19 +1423,6 @@ final class StreamDocumentTests: XCTestCase {
 
     func test_normalizedTextSearchNoMatchReturnsNil() {
         XCTAssertNil(NormalizedTextSearch.utf16Range(of: "missing phrase", in: "present phrase"))
-    }
-
-    func test_readBackParserGarbageOutputReturnsEmpty() {
-        let result = ReadBackMarginNoteBuilder.build(
-            modelOutput: "not json",
-            scopedText: "This passage has enough words for an anchor to exist.",
-            streamId: UUID(),
-            scopeStart: 0,
-            requestId: "request-1"
-        )
-
-        XCTAssertEqual(result.notes, [])
-        XCTAssertEqual(result.droppedAnchorCount, 0)
     }
 
     func test_getExchangePayloadRoundTripAndSavePrunesOrphans() throws {

@@ -5,9 +5,9 @@ import { languages } from '@codemirror/language-data';
 import { Decoration, EditorView, keymap } from '@codemirror/view';
 import { Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
-import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting, syntaxTree } from '@codemirror/language';
+import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, getExchange, readBack, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
+import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { EyeIcon, NoteIcon, XIcon } from './icons';
@@ -73,8 +73,6 @@ type PromptIntent = {
   parentRequestId?: string;
   preview: string;
 };
-
-type ReadBackScope = 'paragraph' | 'viewport' | 'section' | 'document';
 
 interface ExchangeOverlayState {
   exchange: AIExchangeJSON;
@@ -236,62 +234,6 @@ function restoreViewportEnd(view: EditorView, scrollOffset: number): number {
   // ponytail: pixel-to-doc estimate; upgrade to measured CodeMirror mapping if deep restores ever flash.
   const ratio = Math.min(1, (scrollOffset + clientHeight) / scrollHeight);
   return Math.max(view.viewport.to, Math.min(docLength, Math.ceil(docLength * ratio)));
-}
-
-function isHeadingNode(name: string): boolean {
-  return /^ATXHeading\d+$/.test(name) || /^SetextHeading\d*$/.test(name);
-}
-
-function sectionRangeForCursor(view: EditorView): { from: number; to: number } {
-  const doc = view.state.doc;
-  const cursor = view.state.selection.main.head;
-  const tree = ensureSyntaxTree(view.state, doc.length, 50) ?? syntaxTree(view.state);
-  const headings: number[] = [];
-
-  tree.iterate({
-    enter: (node) => {
-      if (isHeadingNode(node.name)) {
-        headings.push(doc.lineAt(node.from).from);
-      }
-    },
-  });
-
-  if (headings.length === 0) return { from: 0, to: doc.length };
-
-  let from = 0;
-  let to = doc.length;
-  for (const heading of headings) {
-    if (heading <= cursor) {
-      from = heading;
-    } else {
-      to = heading;
-      break;
-    }
-  }
-  return { from, to };
-}
-
-function paragraphRangeForCursor(view: EditorView): { from: number; to: number } {
-  const doc = view.state.doc;
-  const caretLine = doc.lineAt(view.state.selection.main.head);
-  if (!caretLine.text.trim()) return { from: caretLine.from, to: caretLine.to };
-  let start = caretLine;
-  let end = caretLine;
-  while (start.number > 1 && doc.line(start.number - 1).text.trim()) start = doc.line(start.number - 1);
-  while (end.number < doc.lines && doc.line(end.number + 1).text.trim()) end = doc.line(end.number + 1);
-  return { from: start.from, to: end.to };
-}
-
-function readBackRangeForScope(view: EditorView, scope: ReadBackScope): { from: number; to: number } {
-  if (scope === 'document') return { from: 0, to: view.state.doc.length };
-  if (scope === 'section') return sectionRangeForCursor(view);
-  if (scope === 'paragraph') return paragraphRangeForCursor(view);
-
-  if (view.visibleRanges.length === 0) return { from: view.viewport.from, to: view.viewport.to };
-  return {
-    from: Math.min(...view.visibleRanges.map((range) => range.from)),
-    to: Math.max(...view.visibleRanges.map((range) => range.to)),
-  };
 }
 
 const clickToDocumentEndExtension: Extension = EditorView.domEventHandlers({
@@ -542,7 +484,6 @@ export function StreamEditor({
   const [isProvenanceXrayVisible, setIsProvenanceXrayVisible] = useState(false);
   const [isMarginNotesVisible, setIsMarginNotesVisible] = useState(false);
   const [showRawFormatting, setShowRawFormatting] = useState(false);
-  const [readBackScope, setReadBackScope] = useState<ReadBackScope>('viewport');
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
@@ -876,22 +817,6 @@ export function StreamEditor({
     persistMarginNoteStatus(note, 'promoted');
   }, [persistMarginNoteStatus]);
 
-  const handleReadBack = useCallback(() => {
-    const view = editorViewRef.current;
-    if (!view) return;
-    const range = readBackRangeForScope(view, readBackScope);
-    if (range.to <= range.from || !view.state.doc.sliceString(range.from, range.to).trim()) {
-      addToast('Nothing in this scope to read back.', 'info');
-      return;
-    }
-    addToast('Reading back…', 'info');
-    readBack({
-      streamId: stream.id,
-      scopeStart: range.from,
-      scopeEnd: range.to,
-    });
-  }, [addToast, readBackScope, stream.id]);
-
   useEffect(() => {
     setMarkdownContent(stream.document?.markdown ?? '');
     lastSavedContentRef.current = stream.document?.markdown ?? '';
@@ -923,7 +848,6 @@ export function StreamEditor({
     setSourceScope(stream.sourceScope ?? 'auto');
     setIsProvenanceXrayVisible(false);
     setIsMarginNotesVisible(false);
-    setReadBackScope('viewport');
     setShowRewriteMenu(false);
     promptContextRef.current = null;
     aiRequestRef.current = null;
@@ -1015,21 +939,6 @@ export function StreamEditor({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
-      if (message.type === 'readBackComplete') {
-        if (message.payload?.streamId !== stream.id) return;
-        if (message.payload?.failed) {
-          addToast('Read back failed.', 'error');
-          return;
-        }
-        const added = Number(message.payload?.added ?? 0);
-        if (added > 0) {
-          addToast(`${added} margin note${added === 1 ? '' : 's'} added.`, 'success');
-        } else {
-          addToast('No new margin notes for this scope.', 'info');
-        }
-        return;
-      }
-
       if (message.type === 'streamDocumentConflict') {
         const payloadStreamId = message.payload?.streamId as string | undefined;
         const markdown = message.payload?.markdown as string | undefined;
@@ -1997,7 +1906,6 @@ export function StreamEditor({
     const docLength = view.state.doc.length;
     const from = Math.max(0, Math.min(options.from, docLength));
     const to = Math.max(from, Math.min(options.to, docLength));
-    const selectedText = view.state.doc.sliceString(from, to);
     const originalText = options.mode === 'replace' ? view.state.doc.sliceString(from, to) : '';
     let rangeFrom = from;
     let rangeTo = from;
@@ -2066,11 +1974,6 @@ export function StreamEditor({
         verb: options.verb ?? 'develop',
         imageURLs: options.imageUrls ?? [],
         ...(options.parentRequestId ? { parentRequestId: options.parentRequestId } : {}),
-        ...(options.verb === 'challenge' ? {
-          anchorStart: from,
-          anchorEnd: to,
-          anchorHash: fnv1a(selectedText),
-        } : {}),
       },
     });
   }, [addToast, isAiThinking, showAiWritingFeedback, showSourceIndexNotice, sourceScope, stream.id]);
@@ -2473,29 +2376,6 @@ export function StreamEditor({
           >
             <NoteIcon size={16} />
           </button>
-          {isMarginNotesVisible && (
-            <div className="stream-readback-controls">
-              <select
-                className="stream-readback-scope"
-                value={readBackScope}
-                onChange={(event) => setReadBackScope(event.target.value as ReadBackScope)}
-                aria-label="Read back scope"
-                title="Read back scope"
-              >
-                <option value="paragraph">Paragraph</option>
-                <option value="viewport">Viewport</option>
-                <option value="section">Section</option>
-                <option value="document">Document</option>
-              </select>
-              <button
-                type="button"
-                className="stream-readback-button"
-                onClick={handleReadBack}
-              >
-                Read back
-              </button>
-            </div>
-          )}
           <button
             onClick={() => setShowSourcesModal(true)}
             className="stream-sources-button"

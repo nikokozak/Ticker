@@ -39,9 +39,6 @@
       "marginNotesChanged": {
         "requiredPayloadKeys": ["streamId", "notes"]
       },
-      "readBackComplete": {
-        "requiredPayloadKeys": ["streamId"]
-      },
       "exportCanceled": {
         "requiredPayloadKeys": ["streamId"]
       },
@@ -185,9 +182,6 @@
         "requiredPayloadKeys": [],
         "requiredCallbackId": true
       },
-      "readBack": {
-        "requiredPayloadKeys": ["streamId", "scopeStart", "scopeEnd"]
-      },
       "removeSource": {
         "requiredPayloadKeys": ["id"]
       },
@@ -240,7 +234,7 @@
       },
       "thinkDocument": {
         "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
-        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId", "anchorStart", "anchorEnd", "anchorHash"]
+        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId"]
       },
       "updateMarginNote": {
         "requiredPayloadKeys": ["noteId", "status"]

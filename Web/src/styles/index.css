@@ -530,39 +530,6 @@ body {
   background: var(--accent-soft);
 }
 
-.stream-readback-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.stream-readback-scope,
-.stream-readback-button {
-  height: 30px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-small);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: var(--type-ui-small);
-}
-
-.stream-readback-scope {
-  padding: 0 var(--space-2);
-}
-
-.stream-readback-button {
-  padding: 0 var(--space-2);
-  cursor: pointer;
-}
-
-.stream-readback-button:hover,
-.stream-readback-scope:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
 /* Export menu */
 .export-menu-container {
   position: relative;

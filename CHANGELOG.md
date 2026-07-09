@@ -71,6 +71,7 @@ All notable user-facing changes to Ticker are documented here.
 - Made Quick Panel dismissal consistent, stabilized stream picking, and added visible save feedback.
 
 ### Removed
+- Removed AI-generated margin notes (read-back and Challenge tension notes); margin rendering and promote/dismiss remain for existing notes.
 - Removed dead TipTap/cell-era editor paths, legacy bridge messages, cell write/read paths, and unused LLM providers from active runtime.
 
 ## Versioning
