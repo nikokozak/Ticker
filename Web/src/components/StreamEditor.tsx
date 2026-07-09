@@ -334,24 +334,19 @@ function replacementPreview(text: string): string {
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.heading,
-    color: 'var(--text)',
-    textDecoration: 'none',
-    fontWeight: '620',
+    class: 'cm-md-heading',
   },
   {
     tag: t.heading1,
-    fontSize: 'var(--editor-heading-1)',
-    fontWeight: '650',
+    class: 'cm-md-heading-1',
   },
   {
     tag: t.heading2,
-    fontSize: 'var(--editor-heading-2)',
-    fontWeight: '640',
+    class: 'cm-md-heading-2',
   },
   {
     tag: t.heading3,
-    fontSize: 'var(--editor-heading-3)',
-    fontWeight: '630',
+    class: 'cm-md-heading-3',
   },
   {
     tag: [t.link, t.url],
@@ -370,7 +365,7 @@ const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.strong,
     color: 'var(--text)',
-    fontWeight: '640',
+    fontWeight: '600',
   },
   {
     tag: t.monospace,

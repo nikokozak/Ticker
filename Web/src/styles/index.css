@@ -62,9 +62,9 @@
   --type-ui-title: 17px;
   --type-ui-display: 28px;
   --editor-body: 16px;
-  --editor-heading-1: 1.26em;
-  --editor-heading-2: 1.16em;
-  --editor-heading-3: 1.08em;
+  --editor-heading-1: 1.6em;
+  --editor-heading-2: 1.35em;
+  --editor-heading-3: 1.15em;
   --editor-line-height: 1.58;
 
   /* Compatibility aliases for existing component CSS */
@@ -1103,6 +1103,35 @@ body {
   padding: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.document-editor-codemirror .cm-md-heading,
+.document-editor-codemirror .cm-md-heading-1,
+.document-editor-codemirror .cm-md-heading-2,
+.document-editor-codemirror .cm-md-heading-3 {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.document-editor-codemirror .cm-md-heading {
+  font-weight: 600;
+}
+
+.document-editor-codemirror .cm-md-heading-1 {
+  font-size: var(--editor-heading-1);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.document-editor-codemirror .cm-md-heading-2 {
+  font-size: var(--editor-heading-2);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.document-editor-codemirror .cm-md-heading-3 {
+  font-size: var(--editor-heading-3);
+  font-weight: 600;
 }
 
 .document-editor-codemirror .cm-blockquote-line {
