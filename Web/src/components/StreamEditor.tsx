@@ -147,12 +147,6 @@ function formatSourceScope(scope: SourceScope): string {
   }
 }
 
-export function wrapChallengeOutput(text: string): string {
-  // Challenge renders inline-quoted until margin notes ship (Roadmap 4 P7); then it becomes a margin note. ponytail: inline placement is the ceiling here.
-  const quoted = text.trim().split(/\r?\n/).map((line) => `> ${line}`).join('\n');
-  return `${quoted}\n\n*— Challenge*`;
-}
-
 export function documentAIErrorRecovery(originalText: string, errorCode: string | undefined) {
   return {
     restoreText: originalText,
@@ -588,6 +582,7 @@ export function StreamEditor({
     verb: DocumentAIVerb;
     originalText: string;
     prefix: string;
+    anchorTo: number;
     model?: string;
     parentRequestId?: string;
   } | null>(null);
@@ -1218,7 +1213,17 @@ export function StreamEditor({
         }
 
         if (active.verb === 'challenge') {
-          finalOutput = wrapChallengeOutput(finalOutput);
+          view.dispatch({
+            changes: { from: range.from, to: range.to, insert: active.originalText },
+            selection: { anchor: active.anchorTo },
+            effects: setAiWritingRangeEffect.of(null),
+            annotations: Transaction.addToHistory.of(false),
+          });
+          view.focus();
+          setAiStatus('idle');
+          aiRequestRef.current = null;
+          hideAiFeedback();
+          return;
         }
 
         const suffix = active.mode === 'after' && !finalOutput.endsWith('\n') ? '\n' : '';
@@ -1898,6 +1903,7 @@ export function StreamEditor({
     const docLength = view.state.doc.length;
     const from = Math.max(0, Math.min(options.from, docLength));
     const to = Math.max(from, Math.min(options.to, docLength));
+    const selectedText = view.state.doc.sliceString(from, to);
     const originalText = options.mode === 'replace' ? view.state.doc.sliceString(from, to) : '';
     let rangeFrom = from;
     let rangeTo = from;
@@ -1941,6 +1947,7 @@ export function StreamEditor({
       verb: options.verb ?? 'develop',
       originalText,
       prefix,
+      anchorTo: to,
       parentRequestId: options.parentRequestId,
     };
     setAiStatus('thinking');
@@ -1965,6 +1972,11 @@ export function StreamEditor({
         verb: options.verb ?? 'develop',
         imageURLs: options.imageUrls ?? [],
         ...(options.parentRequestId ? { parentRequestId: options.parentRequestId } : {}),
+        ...(options.verb === 'challenge' ? {
+          anchorStart: from,
+          anchorEnd: to,
+          anchorHash: fnv1a(selectedText),
+        } : {}),
       },
     });
   }, [addToast, isAiThinking, showAiWritingFeedback, showSourceIndexNotice, sourceScope, stream.id]);

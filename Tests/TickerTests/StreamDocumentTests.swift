@@ -1070,6 +1070,51 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_documentAIChallengeCompletionCreatesMarginNote() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Challenge Note")
+            try service.saveStream(stream)
+            let recorder = BridgeMessageRecorder()
+            let requestId = "request-challenge"
+            let anchorText = "This claim needs pressure"
+            let anchorStart = 4
+            let handler = AIMessageHandler(
+                persistence: service,
+                sendToWeb: { recorder.send($0) },
+                routeDocumentAI: { _, _, _, _, _, onChunk, onComplete, _, _ in
+                    onChunk("Where is the evidence?")
+                    onComplete(nil)
+                }
+            )
+
+            await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
+                "requestId": AnyCodable(requestId),
+                "streamId": AnyCodable(stream.id.uuidString),
+                "query": AnyCodable("Challenge this"),
+                "context": AnyCodable(anchorText),
+                "imageURLs": AnyCodable([]),
+                "verb": AnyCodable("challenge"),
+                "anchorStart": AnyCodable(anchorStart),
+                "anchorEnd": AnyCodable(anchorStart + anchorText.utf16.count),
+                "anchorHash": AnyCodable(FNV1a.hash(anchorText))
+            ]))
+
+            try await waitUntil {
+                (try? service.loadMarginNotes(streamId: stream.id).count) == 1
+            }
+
+            let note = try XCTUnwrap(try service.loadMarginNotes(streamId: stream.id).first)
+            XCTAssertEqual(note.kind, "tension")
+            XCTAssertEqual(note.body, "Where is the evidence?")
+            XCTAssertEqual(note.requestId, requestId)
+            XCTAssertEqual(note.anchorStart, anchorStart)
+            XCTAssertEqual(note.anchorEnd, anchorStart + anchorText.utf16.count)
+            XCTAssertEqual(note.anchorHash, FNV1a.hash(anchorText))
+            XCTAssertFalse(recorder.messages(ofType: "marginNotesChanged").isEmpty)
+            XCTAssertFalse(recorder.messages(ofType: "documentAIComplete").isEmpty)
+        }
+    }
+
     func test_v19MigrationAddsScrollRestoreColumnsToFreshDatabase() throws {
         try withTempPersistenceServiceAndURL { _, dbURL, _ in
             let dbQueue = try DatabaseQueue(path: dbURL.path)
@@ -1246,6 +1291,37 @@ final class StreamDocumentTests: XCTestCase {
             try service.replaceSpans(streamId: stream.id, spans: [])
             try service.deleteOrphanExchanges(streamId: stream.id)
             XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
+
+            let noteExchange = AIExchange(
+                requestId: "request-note",
+                streamId: stream.id,
+                verb: "challenge",
+                userInput: "Selection: premise",
+                sourceManifest: "[]",
+                responseRaw: "Where is the evidence?",
+                model: "test-model",
+                createdAt: Date(timeIntervalSince1970: 1_238)
+            )
+            let note = MarginNote(
+                noteId: "note-exchange",
+                streamId: stream.id,
+                anchorStart: 0,
+                anchorEnd: 7,
+                anchorHash: FNV1a.hash("premise"),
+                kind: "tension",
+                body: "Where is the evidence?",
+                bodyHash: FNV1a.hash("Where is the evidence?"),
+                requestId: noteExchange.requestId,
+                createdAt: Date(timeIntervalSince1970: 1_239)
+            )
+            try service.saveExchange(noteExchange)
+            try service.insertMarginNotes([note])
+            try service.deleteOrphanExchanges(streamId: stream.id)
+            XCTAssertEqual(try service.loadExchange(requestId: noteExchange.requestId), noteExchange)
+
+            try service.deleteMarginNote(noteId: note.noteId)
+            try service.deleteOrphanExchanges(streamId: stream.id)
+            XCTAssertNil(try service.loadExchange(requestId: noteExchange.requestId))
         }
     }
 
@@ -1279,6 +1355,62 @@ final class StreamDocumentTests: XCTestCase {
 
             try service.deleteMarginNote(noteId: note.noteId)
             XCTAssertEqual(try service.loadMarginNotes(streamId: stream.id, statuses: nil), [])
+        }
+    }
+
+    func test_loadStreamSummariesCountsOnlyOpenQuestions() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Questions")
+            let otherStream = Stream(title: "Other Questions")
+            try service.saveStream(stream)
+            try service.saveStream(otherStream)
+            try service.insertMarginNotes([
+                MarginNote(
+                    streamId: stream.id,
+                    anchorStart: 0,
+                    anchorEnd: 10,
+                    anchorHash: FNV1a.hash("first note"),
+                    kind: "question",
+                    body: "Open question?",
+                    bodyHash: FNV1a.hash("Open question?")
+                ),
+                MarginNote(
+                    streamId: stream.id,
+                    anchorStart: 11,
+                    anchorEnd: 21,
+                    anchorHash: FNV1a.hash("second note"),
+                    kind: "tension",
+                    body: "Open tension.",
+                    bodyHash: FNV1a.hash("Open tension.")
+                ),
+                MarginNote(
+                    streamId: stream.id,
+                    anchorStart: 22,
+                    anchorEnd: 32,
+                    anchorHash: FNV1a.hash("third note"),
+                    kind: "question",
+                    body: "Dismissed question?",
+                    bodyHash: FNV1a.hash("Dismissed question?"),
+                    status: "dismissed"
+                ),
+                MarginNote(
+                    streamId: otherStream.id,
+                    anchorStart: 0,
+                    anchorEnd: 10,
+                    anchorHash: FNV1a.hash("other note"),
+                    kind: "question",
+                    body: "Other stream?",
+                    bodyHash: FNV1a.hash("Other stream?")
+                )
+            ])
+
+            let summary = try XCTUnwrap(try service.loadStreamSummaries().first { $0.id == stream.id })
+            XCTAssertEqual(summary.openQuestionCount, 1)
+
+            let payload = StreamCodec.encodeSummaries([summary])
+            let encodedStreams = try XCTUnwrap(payload["streams"]?.value as? [[String: Any]])
+            let encodedSummary = try XCTUnwrap(encodedStreams.first)
+            XCTAssertEqual(encodedSummary["openQuestionCount"] as? Int, 1)
         }
     }
 

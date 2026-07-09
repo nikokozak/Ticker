@@ -589,6 +589,7 @@ final class PersistenceService {
                     (SELECT COUNT(*) FROM sources WHERE stream_id = s.id) as source_count,
                     (SELECT display_name FROM sources WHERE stream_id = s.id ORDER BY added_at LIMIT 1) as source_display_name,
                     (SELECT COUNT(*) FROM cells WHERE stream_id = s.id) as cell_count,
+                    (SELECT COUNT(*) FROM margin_notes WHERE stream_id = s.id AND status = 'open' AND kind = 'question') as open_question_count,
                     (SELECT markdown FROM stream_documents WHERE stream_id = s.id) as document_markdown,
                     COALESCE(
                         (SELECT markdown FROM stream_documents WHERE stream_id = s.id),
@@ -612,6 +613,7 @@ final class PersistenceService {
                     cellCount: row["cell_count"],
                     charCount: charCount,
                     imageCount: imageCount,
+                    openQuestionCount: row["open_question_count"],
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
                     previewText: row["preview_text"]
                 )
@@ -1155,6 +1157,11 @@ final class PersistenceService {
                     SELECT 1
                     FROM provenance_spans
                     WHERE provenance_spans.request_id = ai_exchanges.request_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM margin_notes
+                    WHERE margin_notes.request_id = ai_exchanges.request_id
                   )
             """,
             arguments: [streamId.uuidString]

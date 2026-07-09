@@ -72,6 +72,12 @@ private enum DocumentAIVerb: String {
     }
 }
 
+private struct DocumentAIChallengeAnchor {
+    let start: Int
+    let end: Int
+    let hash: String
+}
+
 enum ReadBackMarginNoteBuilder {
     private struct Item: Decodable {
         let kind: String
@@ -227,6 +233,18 @@ final class AIMessageHandler: BridgeMessageHandler {
             let sourceScope = SourceScope(rawValue: sourceScopeRaw ?? "") ?? .auto
             let verbRaw = payload["verb"]?.value as? String
             let verb = DocumentAIVerb(rawValue: verbRaw ?? "") ?? .develop
+            let challengeAnchor: DocumentAIChallengeAnchor? = {
+                guard verb == .challenge,
+                      let start = payload["anchorStart"]?.intValue,
+                      let end = payload["anchorEnd"]?.intValue,
+                      let hash = payload["anchorHash"]?.value as? String,
+                      start >= 0,
+                      start < end,
+                      !hash.isEmpty else {
+                    return nil
+                }
+                return DocumentAIChallengeAnchor(start: start, end: end, hash: hash)
+            }()
 
             var streamIdForRAG: UUID? = nil
 
@@ -270,6 +288,36 @@ final class AIMessageHandler: BridgeMessageHandler {
                         ))
                     } catch {
                         DebugLog.log("[AIMessageHandler] Failed to save exchange (\(DebugLog.errorSummary(error)))")
+                    }
+                }
+                if verb == .challenge, let streamId = streamIdForRAG, let persistence = self?.persistence {
+                    if let challengeAnchor {
+                        let body = responseRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !body.isEmpty {
+                            do {
+                                try persistence.insertMarginNotes([
+                                    MarginNote(
+                                        streamId: streamId,
+                                        anchorStart: challengeAnchor.start,
+                                        anchorEnd: challengeAnchor.end,
+                                        anchorHash: challengeAnchor.hash,
+                                        kind: "tension",
+                                        body: body,
+                                        bodyHash: FNV1a.hash(body),
+                                        requestId: requestId
+                                    )
+                                ])
+                                let visibleNotes = try persistence.loadMarginNotes(streamId: streamId)
+                                self?.sendToWeb(BridgeMessage(type: "marginNotesChanged", payload: [
+                                    "streamId": AnyCodable(streamId.uuidString),
+                                    "notes": AnyCodable(StreamCodec.encodeMarginNotes(visibleNotes))
+                                ]))
+                            } catch {
+                                DebugLog.log("[AIMessageHandler] Failed to save challenge margin note (\(DebugLog.errorSummary(error)))")
+                            }
+                        }
+                    } else {
+                        DebugLog.log("[AIMessageHandler] Challenge completed without anchor; margin note skipped")
                     }
                 }
 

@@ -89,6 +89,9 @@ export interface ThinkDocumentPayload extends Record<string, unknown> {
   sourceScope?: DocumentAISourceScope;
   verb?: DocumentAIVerb;
   parentRequestId?: string;
+  anchorStart?: number;
+  anchorEnd?: number;
+  anchorHash?: string;
 }
 
 export interface ReadBackPayload extends Record<string, unknown> {

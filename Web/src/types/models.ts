@@ -70,6 +70,7 @@ export interface StreamSummary {
   charCount: number;
   wordCount: number;
   imageCount: number;
+  openQuestionCount: number;
   updatedAt: string;
   previewText: string | null;
   previewLine: string | null;

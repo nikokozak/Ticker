@@ -130,6 +130,7 @@ enum StreamCodec {
                     "charCount": summary.charCount,
                     "wordCount": wordCount(from: summary.previewText ?? ""),
                     "imageCount": summary.imageCount,
+                    "openQuestionCount": summary.openQuestionCount,
                     "previewLine": previewLine(from: summary.previewText ?? "") ?? "",
                     "updatedAt": formatter.string(from: summary.updatedAt)
                 ]

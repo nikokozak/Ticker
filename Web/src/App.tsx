@@ -441,7 +441,14 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
               onClick={() => onSelect(stream.id)}
               disabled={isLoadingStream}
             >
-              <span className="stream-title">{stream.title}</span>
+              <span className="stream-title-row">
+                <span className="stream-title">{stream.title}</span>
+                {stream.openQuestionCount > 0 && (
+                  <span className="stream-open-questions">
+                    {stream.openQuestionCount} open {stream.openQuestionCount === 1 ? 'question' : 'questions'}
+                  </span>
+                )}
+              </span>
               {stream.previewLine && (
                 <span className="stream-preview">{stream.previewLine}</span>
               )}

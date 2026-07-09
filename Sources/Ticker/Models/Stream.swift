@@ -35,6 +35,7 @@ struct StreamSummary: Identifiable, Codable {
     let cellCount: Int
     let charCount: Int
     let imageCount: Int
+    let openQuestionCount: Int
     let updatedAt: Date
     let previewText: String?
 }
