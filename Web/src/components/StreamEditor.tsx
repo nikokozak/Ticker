@@ -1570,7 +1570,19 @@ export function StreamEditor({
     if (!shell) return null;
 
     const selection = view.state.selection.main;
-    const coords = view.coordsAtPos(selection.head) ?? view.coordsAtPos(selection.anchor);
+    // Anchor to the whole selection, not the head: "above" must clear the top
+    // of the highlight regardless of drag direction (top-down drags put the
+    // head at the bottom).
+    const fromCoords = view.coordsAtPos(selection.from);
+    const toCoords = view.coordsAtPos(selection.to);
+    const coords = fromCoords && toCoords
+      ? {
+          left: Math.min(fromCoords.left, toCoords.left),
+          right: Math.max(fromCoords.right, toCoords.right),
+          top: Math.min(fromCoords.top, toCoords.top),
+          bottom: Math.max(fromCoords.bottom, toCoords.bottom),
+        }
+      : (fromCoords ?? toCoords);
     if (!coords) return null;
 
     const shellRect = shell.getBoundingClientRect();
