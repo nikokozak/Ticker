@@ -100,12 +100,14 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 if let stream = try persistence.loadStream(id: id) {
                     let document = try persistence.loadOrCreateStreamDocument(streamId: id)
                     let spans = try persistence.loadSpans(streamId: id)
+                    let marginNotes = try persistence.loadMarginNotes(streamId: id)
                     let streamPayload = StreamCodec.encodeStream(stream, document: document)
                     let payload: [String: AnyCodable] = [
                         "stream": AnyCodable(streamPayload),
                         "sourceScope": AnyCodable(stream.sourceScope.rawValue),
                         "scrollOffset": AnyCodable(document.scrollOffset),
-                        "spans": AnyCodable(StreamCodec.encodeSpans(spans))
+                        "spans": AnyCodable(StreamCodec.encodeSpans(spans)),
+                        "marginNotes": AnyCodable(StreamCodec.encodeMarginNotes(marginNotes))
                     ]
                     bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
                     ingestService?.enqueuePendingSources(for: id)
@@ -125,7 +127,8 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     "stream": AnyCodable(streamPayload),
                     "sourceScope": AnyCodable(stream.sourceScope.rawValue),
                     "scrollOffset": AnyCodable(document.scrollOffset),
-                    "spans": AnyCodable(StreamCodec.encodeSpans([]))
+                    "spans": AnyCodable(StreamCodec.encodeSpans([])),
+                    "marginNotes": AnyCodable([])
                 ]
                 bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
             } catch {

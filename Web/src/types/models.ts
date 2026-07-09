@@ -6,6 +6,7 @@ export interface Stream {
   sources: SourceReference[];
   document: StreamDocument;
   spans: ProvenanceSpanJSON[];
+  marginNotes: MarginNoteJSON[];
   createdAt: string;
   updatedAt: string;
 }
@@ -31,6 +32,20 @@ export interface ProvenanceSpanJSON {
   sourceId?: string;
   meta: string;
   textHash: string;
+  createdAt: string;
+}
+
+export interface MarginNoteJSON {
+  noteId: string;
+  streamId: string;
+  anchorStart: number;
+  anchorEnd: number;
+  anchorHash: string;
+  kind: 'question' | 'tension' | 'connection';
+  body: string;
+  bodyHash: string;
+  requestId?: string;
+  status: 'open' | 'dismissed' | 'promoted' | 'unanchored';
   createdAt: string;
 }
 

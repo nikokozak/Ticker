@@ -36,6 +36,9 @@
       "documentModelSelected": {
         "requiredPayloadKeys": ["requestId", "modelId"]
       },
+      "marginNotesChanged": {
+        "requiredPayloadKeys": ["streamId", "notes"]
+      },
       "exportCanceled": {
         "requiredPayloadKeys": ["streamId"]
       },
@@ -102,7 +105,7 @@
         "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans"]
       },
       "streamLoaded": {
-        "requiredPayloadKeys": ["stream", "spans"],
+        "requiredPayloadKeys": ["stream", "spans", "marginNotes"],
         "optionalPayloadKeys": ["scrollOffset", "sourceScope"]
       },
       "streamTitleUpdated": {
@@ -178,6 +181,9 @@
       "refreshProxyAuth": {
         "requiredPayloadKeys": [],
         "requiredCallbackId": true
+      },
+      "readBack": {
+        "requiredPayloadKeys": ["streamId", "scopeStart", "scopeEnd"]
       },
       "removeSource": {
         "requiredPayloadKeys": ["id"]

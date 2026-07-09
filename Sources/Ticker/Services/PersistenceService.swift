@@ -482,6 +482,27 @@ final class PersistenceService {
                 """)
         }
 
+        migrator.registerMigration("v21_margin_notes") { db in
+            try db.execute(sql: """
+                CREATE TABLE margin_notes (
+                  note_id     TEXT PRIMARY KEY,
+                  stream_id   TEXT NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+                  anchor_start INTEGER NOT NULL,         -- UTF-16, mapped like spans
+                  anchor_end   INTEGER NOT NULL,
+                  anchor_hash  TEXT NOT NULL,            -- FNV-1a of anchored text
+                  kind        TEXT NOT NULL,             -- 'question' | 'tension' | 'connection'
+                  body        TEXT NOT NULL,
+                  body_hash   TEXT NOT NULL,             -- dedupe/suppression key
+                  request_id  TEXT,
+                  status      TEXT NOT NULL DEFAULT 'open',  -- open|dismissed|promoted|unanchored
+                  created_at  DOUBLE NOT NULL
+                );
+                CREATE INDEX idx_margin_stream ON margin_notes(stream_id);
+                CREATE TABLE margin_suppressions ( stream_id TEXT NOT NULL, body_hash TEXT NOT NULL,
+                  PRIMARY KEY (stream_id, body_hash) );
+                """)
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -1227,6 +1248,134 @@ final class PersistenceService {
         let dropped = total - kept
         guard dropped > 0 else { return }
         DebugLog.log("[Persistence] Dropped \(dropped) invalid provenance span(s) during \(context)")
+    }
+
+    // MARK: - Margin Note Operations
+
+    func loadMarginNotes(streamId: UUID, statuses: [String]? = ["open", "unanchored"]) throws -> [MarginNote] {
+        try dbQueue.read { db in
+            try fetchMarginNotes(streamId: streamId, statuses: statuses, db: db)
+        }
+    }
+
+    func insertMarginNotes(_ notes: [MarginNote]) throws {
+        try dbQueue.write { db in
+            try insertMarginNotes(notes, db: db)
+        }
+    }
+
+    @discardableResult
+    func updateMarginNoteStatus(noteId: String, status: String) throws -> Bool {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE margin_notes SET status = ? WHERE note_id = ?",
+                arguments: [status, noteId]
+            )
+            return db.changesCount > 0
+        }
+    }
+
+    func deleteMarginNote(noteId: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "DELETE FROM margin_notes WHERE note_id = ?",
+                arguments: [noteId]
+            )
+        }
+    }
+
+    func insertMarginSuppression(streamId: UUID, bodyHash: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT OR IGNORE INTO margin_suppressions (stream_id, body_hash)
+                    VALUES (?, ?)
+                """,
+                arguments: [streamId.uuidString, bodyHash]
+            )
+        }
+    }
+
+    func marginSuppressionHashes(streamId: UUID) throws -> Set<String> {
+        try dbQueue.read { db in
+            try Set(Row.fetchAll(
+                db,
+                sql: "SELECT body_hash FROM margin_suppressions WHERE stream_id = ?",
+                arguments: [streamId.uuidString]
+            ).map { row in row["body_hash"] as String })
+        }
+    }
+
+    func nonDismissedMarginNoteBodyHashes(streamId: UUID) throws -> Set<String> {
+        try dbQueue.read { db in
+            try Set(Row.fetchAll(
+                db,
+                sql: """
+                    SELECT body_hash
+                    FROM margin_notes
+                    WHERE stream_id = ? AND status != 'dismissed'
+                """,
+                arguments: [streamId.uuidString]
+            ).map { row in row["body_hash"] as String })
+        }
+    }
+
+    private func fetchMarginNotes(streamId: UUID, statuses: [String]?, db: Database) throws -> [MarginNote] {
+        var sql = """
+            SELECT note_id, stream_id, anchor_start, anchor_end, anchor_hash, kind, body, body_hash, request_id, status, created_at
+            FROM margin_notes
+            WHERE stream_id = ?
+        """
+        var arguments: StatementArguments = [streamId.uuidString]
+        if let statuses {
+            guard !statuses.isEmpty else { return [] }
+            sql += " AND status IN (\(Array(repeating: "?", count: statuses.count).joined(separator: ",")))"
+            for status in statuses {
+                arguments += [status]
+            }
+        }
+        sql += " ORDER BY anchor_start, created_at, note_id"
+
+        return try Row.fetchAll(db, sql: sql, arguments: arguments).map { row in
+            MarginNote(
+                noteId: row["note_id"],
+                streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
+                anchorStart: row["anchor_start"],
+                anchorEnd: row["anchor_end"],
+                anchorHash: row["anchor_hash"],
+                kind: row["kind"],
+                body: row["body"],
+                bodyHash: row["body_hash"],
+                requestId: row["request_id"],
+                status: row["status"],
+                createdAt: Date(timeIntervalSince1970: row["created_at"])
+            )
+        }
+    }
+
+    private func insertMarginNotes(_ notes: [MarginNote], db: Database) throws {
+        for note in notes {
+            try db.execute(
+                sql: """
+                    INSERT INTO margin_notes
+                        (note_id, stream_id, anchor_start, anchor_end, anchor_hash, kind, body, body_hash, request_id, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    note.noteId,
+                    note.streamId.uuidString,
+                    note.anchorStart,
+                    note.anchorEnd,
+                    note.anchorHash,
+                    note.kind,
+                    note.body,
+                    note.bodyHash,
+                    note.requestId,
+                    note.status,
+                    note.createdAt.timeIntervalSince1970
+                ]
+            )
+        }
     }
 
     // MARK: - Source Operations
