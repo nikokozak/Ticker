@@ -6,7 +6,7 @@ usage() {
   cat <<'EOF'
 Usage: ./run.sh [--dev|-d] [--prod|-p] [--qa|--stable] [-h]
 
-  -d, --dev   (default) Build Debug + run Vite dev server (app loads http://localhost:5173)
+  -d, --dev   (default) Build Debug + run Vite dev server (app loads http://localhost:6660)
   -p, --prod  Build Release + run bundled web UI (no dev server)
       --qa    Run in QA lane (separate bundle ID / install path for TCC isolation)
       --stable  Run in stable lane (default)
@@ -277,8 +277,8 @@ run_dev() {
   install_lane_app "$built_app_path" "$launch_app_path"
   codesign_app_if_configured "$launch_app_path"
 
-  echo "Cleaning up port 5173..."
-  lsof -ti:5173 | xargs kill -9 2>/dev/null || true
+  echo "Cleaning up port 6660..."
+  lsof -ti:6660 | xargs kill -9 2>/dev/null || true
 
   echo "Starting Vite dev server..."
   (cd "$ROOT_DIR/Web" && npm run dev) &

@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Search-vs-knowledge routing now uses Apple's on-device foundation model when available (macOS 26 + Apple Intelligence), with the keyword gate as fallback.
 - Provenance x-ray now tints each AI exchange with its own color variant so neighboring exchanges read as distinct, and the exchange overlay gained a proper title bar with a close button.
 - Selection menu now offers heading (H1/H2/H3), quote, and bullet-list toggles, and a new stream-editor footer has a "Show formatting" switch that reveals the raw markdown document-wide.
 - `ticker://` URLs can now append text to an existing stream or open a stream by id.
@@ -72,6 +73,7 @@ All notable user-facing changes to Ticker are documented here.
 - Made Quick Panel dismissal consistent, stabilized stream picking, and added visible save feedback.
 
 ### Removed
+- Smart routing no longer downloads a local MLX model; a deterministic keyword gate decides search vs. knowledge (the 0.5B classifier misclassified in live testing).
 - Removed AI-generated margin notes (read-back and Challenge tension notes) and the margin-notes header toggle; margin rendering can no longer be enabled from the app.
 - Removed dead TipTap/cell-era editor paths, legacy bridge messages, cell write/read paths, and unused LLM providers from active runtime.
 

@@ -47,6 +47,7 @@ export function ToastStack() {
           data-kind={toast.kind}
           role={toast.kind === 'error' ? 'alert' : 'status'}
         >
+          <span className="toast-dot" aria-hidden="true" />
           <div className="toast-message">{toast.message}</div>
           <div className="toast-actions">
             {(toast.kind === 'error' || toast.kind === 'warning') && (

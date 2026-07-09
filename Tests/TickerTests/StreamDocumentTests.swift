@@ -1425,6 +1425,15 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertNil(NormalizedTextSearch.utf16Range(of: "missing phrase", in: "present phrase"))
     }
 
+    func test_keywordClassifierGatesSearchVsKnowledge() async throws {
+        let classifier = KeywordClassifier()
+        let search = try await classifier.classify(query: "What happened in the markets this morning?")
+        XCTAssertEqual(search.intent, .search)
+        // "amplify current" must not read as current events.
+        let knowledge = try await classifier.classify(query: "How does a transistor amplify current?")
+        XCTAssertEqual(knowledge.intent, .knowledge)
+    }
+
     func test_getExchangePayloadRoundTripAndSavePrunesOrphans() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Exchange Save")

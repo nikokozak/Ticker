@@ -236,6 +236,10 @@ function restoreViewportEnd(view: EditorView, scrollOffset: number): number {
   return Math.max(view.viewport.to, Math.min(docLength, Math.ceil(docLength * ratio)));
 }
 
+// ponytail: session-only per-stream memory for the footer "Show formatting"
+// toggle; move to a stream_documents column if it should survive relaunch.
+const rawFormattingByStream = new Map<string, boolean>();
+
 const clickToDocumentEndExtension: Extension = EditorView.domEventHandlers({
   mousedown: (event, view) => {
     if (event.button !== 0 || event.defaultPrevented) return false;
@@ -453,9 +457,10 @@ const markdownHighlightStyle = HighlightStyle.define([
     class: 'cm-md-inline-code',
   },
   {
-    // NOT t.list: list content must read as normal text, and markdown's lazy
-    // continuation makes t.list cover every following line until a blank one.
-    tag: [t.quote, t.contentSeparator],
+    // NOT t.list or t.quote: markdown's lazy continuation makes both cover
+    // every following line until a blank one. Quote styling comes from the
+    // cm-blockquote-line decoration, which only lands on real "> " lines.
+    tag: t.contentSeparator,
     color: 'var(--color-text-secondary)',
   },
   {
@@ -847,6 +852,8 @@ export function StreamEditor({
     setSourceScope(stream.sourceScope ?? 'auto');
     setIsProvenanceXrayVisible(false);
     setShowRewriteMenu(false);
+    const rawFormatting = rawFormattingByStream.get(stream.id) ?? false;
+    setShowRawFormatting(rawFormatting);
     promptContextRef.current = null;
     aiRequestRef.current = null;
     const view = editorViewRef.current;
@@ -864,6 +871,7 @@ export function StreamEditor({
         effects: [
           setSpans.of(payloadSpansForDoc(stream.spans, nextMarkdown)),
           setMarginNotes.of(notes),
+          setShowRawFormattingEffect.of(rawFormatting),
         ],
         annotations: Transaction.addToHistory.of(false),
       });
@@ -2773,7 +2781,10 @@ export function StreamEditor({
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
                 view.dispatch({
-                  effects: setSpans.of(payloadSpansForDoc(stream.spans, view.state.doc.toString())),
+                  effects: [
+                    setSpans.of(payloadSpansForDoc(stream.spans, view.state.doc.toString())),
+                    setShowRawFormattingEffect.of(rawFormattingByStream.get(stream.id) ?? false),
+                  ],
                   annotations: Transaction.addToHistory.of(false),
                 });
                 applyMarginNotesToEditor(stream.marginNotes);
@@ -2850,6 +2861,7 @@ export function StreamEditor({
           onClick={() => {
             const next = !showRawFormatting;
             setShowRawFormatting(next);
+            rawFormattingByStream.set(stream.id, next);
             editorViewRef.current?.dispatch({ effects: setShowRawFormattingEffect.of(next) });
           }}
         >

@@ -54,3 +54,114 @@ protocol QueryClassifier {
     /// Load/initialize the classifier if needed
     func prepare() async throws
 }
+
+/// Deterministic search-vs-knowledge gate.
+///
+/// This replaced an MLX Qwen2.5-0.5B classifier: live testing showed the model
+/// answering queries instead of classifying, drifting off-vocabulary
+/// ("explore", "apply"), confidently misclassifying ("rewrite" for a markets
+/// question), and getting the keyword-less cases wrong anyway. Transform verbs
+/// pass fixed prompts and skip classification, so the only live decision is
+/// search vs knowledge — which keywords answer deterministically, with no
+/// model download, RAM, or parse brittleness. The protocol seam stays for a
+/// stronger local model later.
+#if canImport(FoundationModels)
+import FoundationModels
+
+@available(macOS 26.0, *)
+@Generable
+private enum FMQueryKind: String {
+    case search
+    case knowledge
+}
+
+/// Apple Intelligence classifier: guided generation constrains decoding to the
+/// enum above, so off-vocabulary drift is structurally impossible. Keyword
+/// pre-pass keeps the obvious search queries deterministic and free.
+///
+/// Classification sits in front of every quick-panel AI request, and a cold
+/// model takes ~4s — so the model is prewarmed at construction and each
+/// classify races a deadline; on timeout the request proceeds as knowledge.
+@available(macOS 26.0, *)
+struct FoundationModelClassifier: QueryClassifier {
+    // Date-anchored: without it the model judges from inside its training
+    // window ("Who won the Wimbledon final?" looks like general knowledge
+    // because it knows past finals).
+    private static var instructions: String {
+        let today = Date().formatted(date: .long, time: .omitted)
+        return """
+        Today is \(today). Decide whether answering the query requires live or recent \
+        information from the web (search) or timeless general knowledge (knowledge). \
+        Questions about winners, results, scores, prices, officeholders, or the latest \
+        anything refer to the most recent occurrence as of today, which is after your \
+        training data ends — those need search. \
+        Examples: "Who won the Wimbledon final?" → search. \
+        "How does a transistor amplify current?" → knowledge.
+        """
+    }
+    private static let deadlineNanoseconds: UInt64 = 1_500_000_000
+
+    private let keyword = KeywordClassifier()
+
+    let isLoading = false
+    let loadError: Error? = nil
+    var isReady: Bool {
+        if case .available = SystemLanguageModel.default.availability { return true }
+        return false
+    }
+
+    init() {
+        // Hints the OS to load model assets now, not on the first request.
+        LanguageModelSession(instructions: Self.instructions).prewarm()
+    }
+
+    func prepare() async throws {}
+
+    func classify(query: String) async throws -> ClassificationResult {
+        let keywordResult = try await keyword.classify(query: query)
+        if keywordResult.intent == .search { return keywordResult }
+
+        return await withTaskGroup(of: ClassificationResult?.self) { group in
+            group.addTask {
+                let session = LanguageModelSession(instructions: Self.instructions)
+                guard let response = try? await session.respond(to: "Query: \(query)", generating: FMQueryKind.self) else {
+                    return nil
+                }
+                let intent: QueryIntent = response.content == .search ? .search : .knowledge
+                return ClassificationResult(intent: intent, confidence: 0.8, reasoning: "foundation-model")
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: Self.deadlineNanoseconds)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? ClassificationResult(intent: .knowledge, confidence: 0.6, reasoning: "fm-deadline")
+        }
+    }
+}
+#endif
+
+struct KeywordClassifier: QueryClassifier {
+    // No bare "current": it misfires on physics/engineering queries
+    // ("amplify current" is not current events).
+    private static let searchKeywords = [
+        "news", "weather", "today", "this morning", "yesterday", "tonight",
+        "latest", "recent", "current events", "what happened", "stock price",
+        "score", "election", "breaking", "right now", "currently"
+    ]
+
+    let isReady = true
+    let isLoading = false
+    let loadError: Error? = nil
+
+    func prepare() async throws {}
+
+    func classify(query: String) async throws -> ClassificationResult {
+        let queryLower = query.lowercased()
+        if Self.searchKeywords.contains(where: queryLower.contains) {
+            return ClassificationResult(intent: .search, confidence: 0.9, reasoning: "keyword")
+        }
+        return ClassificationResult(intent: .knowledge, confidence: 0.6, reasoning: "default")
+    }
+}

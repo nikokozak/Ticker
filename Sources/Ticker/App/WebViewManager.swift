@@ -12,8 +12,6 @@ final class WebViewManager: NSObject {
     private let sourceService: SourceService?
     private let ingestService: IngestService?
     let orchestrator: AIOrchestrator
-    private var mlxClassifier: MLXClassifier?
-    private var classifierSkipped = false
     private let assetService: AssetService
     private var currentStreamIdForFileDrops: UUID?
     private var allowsListFileDrops = false
@@ -62,8 +60,8 @@ final class WebViewManager: NSObject {
             bridgeRouter.register(aiHandler)
         }
         bridgeRouter.register(ProxyAuthHandler(container: container))
-        bridgeRouter.register(SettingsMessageHandler(container: container) { [weak self] in
-            self?.settingsWithClassifierState() ?? container.settingsService.allSettings()
+        bridgeRouter.register(SettingsMessageHandler(container: container) {
+            container.settingsService.allSettings()
         })
         bridgeRouter.register(SearchMessageHandler(container: container))
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -504,7 +502,6 @@ final class WebViewManager: NSObject {
 
     func load() {
         loadWebContent()
-        loadMLXClassifier()
     }
 
     func skipLaunchStreamRestore() {
@@ -527,43 +524,9 @@ final class WebViewManager: NSObject {
         }
     }
 
-    private func loadMLXClassifier() {
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
-            DebugLog.log("MLX classifier skipped: running unit tests")
-            classifierSkipped = true
-            return
-        }
-
-        guard settingsService.smartRoutingEnabled else {
-            DebugLog.log("MLX classifier skipped: smart routing disabled")
-            classifierSkipped = true
-            return
-        }
-
-        classifierSkipped = false
-        Task {
-            let classifier = MLXClassifier()
-            self.mlxClassifier = classifier  // Store immediately so loading state is visible
-
-            do {
-                try await classifier.prepare()
-                orchestrator.setClassifier(classifier)
-                DebugLog.log("MLX classifier loaded and ready")
-            } catch {
-                DebugLog.log("Failed to load MLX classifier (\(DebugLog.errorSummary(error)))")
-            }
-
-            let settings = settingsWithClassifierState()
-            bridgeService.send(BridgeMessage(
-                type: "settingsLoaded",
-                payload: ["settings": AnyCodable(settings)]
-            ))
-        }
-    }
-
     private func loadWebContent() {
         #if DEBUG
-        if let url = URL(string: "http://localhost:5173") {
+        if let url = URL(string: "http://localhost:6660") {
             webView.load(URLRequest(url: url))
         }
         #else
@@ -651,24 +614,6 @@ final class WebViewManager: NSObject {
             return nil
         }
         return trimmed
-    }
-
-    private func settingsWithClassifierState() -> [String: Any] {
-        var settings = settingsService.allSettings()
-        if let classifier = mlxClassifier {
-            settings["classifierReady"] = classifier.isReady
-            settings["classifierLoading"] = classifier.isLoading
-            if let error = classifier.loadError {
-                settings["classifierError"] = error.localizedDescription
-            }
-        } else if classifierSkipped {
-            settings["classifierReady"] = false
-            settings["classifierLoading"] = false
-        } else {
-            settings["classifierReady"] = false
-            settings["classifierLoading"] = true
-        }
-        return settings
     }
 
 }

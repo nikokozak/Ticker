@@ -112,18 +112,6 @@ enum Prompts {
 
     // MARK: - MLX Classifier
 
-    static let classifier = """
-    Classify queries. Reply with ONE word only.
-
-    SEARCH = needs real-time/current info: news, weather, prices, events, "what happened", "today", "this morning", "latest", "recent", "current"
-    KNOWLEDGE = facts, explanations, how things work, definitions
-    EXPAND = elaborate, add detail
-    SUMMARIZE = condense, shorten
-    REWRITE = rephrase, reword
-    EXTRACT = pull out key points
-
-    Answer: search, knowledge, expand, summarize, rewrite, or extract
-    """
 
     // MARK: - Transform
 
