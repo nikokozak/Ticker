@@ -5,7 +5,7 @@
   --surface-raised: #ffffff;
   --text: #1f1f1d;
   --text-muted: #6f6f68;
-  --accent: #2563eb;
+  --accent: #a4502e;
   --border: rgba(31, 31, 29, 0.1);
   --border-subtle: rgba(31, 31, 29, 0.06);
   --on-accent: #ffffff;
@@ -14,16 +14,16 @@
   --surface-active: #e2e1de;
   --text-subtle: #9b9a91;
   --text-faint: #c8c7bf;
-  --accent-soft: rgba(37, 99, 235, 0.1);
-  --accent-hover: #1d4ed8;
+  --accent-soft: rgba(164,80,46,0.10);
+  --accent-hover: #8a3f22;
   --success: #16813d;
   --warning: #9d6a03;
   --danger: #c73a32;
   --success-soft: rgba(22, 129, 61, 0.1);
   --success-border: rgba(22, 129, 61, 0.22);
   --warning-soft: rgba(157, 106, 3, 0.14);
-  --prov-ai-soft: rgba(37, 99, 235, 0.08);
-  --prov-ai-border: rgba(37, 99, 235, 0.45);
+  --prov-ai-soft: rgba(164,80,46,0.08);
+  --prov-ai-border: rgba(164,80,46,0.45);
   --prov-source-soft: var(--warning-soft);
   --prov-source-border: rgba(157, 106, 3, 0.45);
   --prov-capture-soft: var(--success-soft);
@@ -31,8 +31,8 @@
   --danger-soft: rgba(199, 58, 50, 0.1);
   --danger-hover: rgba(199, 58, 50, 0.18);
   --danger-border: rgba(199, 58, 50, 0.3);
-  --overlay-scrim: rgba(31, 31, 29, 0.34);
-  --focus-ring: rgba(37, 99, 235, 0.18);
+  --overlay-scrim: rgba(31,31,29,0.45);
+  --focus-ring: rgba(164,80,46,0.18);
   --control-shadow: 0 4px 12px rgba(31, 31, 29, 0.12);
   --window-chrome-safe-left: 84px;
   --window-chrome-safe-top: 36px;
@@ -49,8 +49,11 @@
 
   /* One shared surface radius and overlay shadow */
   --radius: 8px;
+  --radius-small: 4px;
   --overlay-shadow: 0 16px 44px rgba(31, 31, 29, 0.16);
   --overlay-backdrop: blur(10px);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
 
   /* Type scale */
   --type-ui-caption: 11px;
@@ -214,7 +217,7 @@ body {
   cursor: pointer;
   font-size: var(--font-size-sm);
   font-weight: 500;
-  transition: all 0.2s ease;
+  transition: all var(--duration-base) ease;
 }
 
 .stream-list-header button:hover {
@@ -255,7 +258,7 @@ body {
   width: 100%;
   color: inherit;
   font: inherit;
-  transition: all 0.2s ease;
+  transition: all var(--duration-base) ease;
 }
 
 .stream-item:hover {
@@ -355,7 +358,7 @@ body {
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all var(--duration-base) ease;
 }
 
 .primary-button:hover {
@@ -412,7 +415,7 @@ body {
   border-radius: var(--radius-sm);
   padding: var(--spacing-xs) var(--spacing-sm);
   margin: 0;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .stream-title-editable:hover {
@@ -458,7 +461,7 @@ body {
   font-size: var(--font-size-sm);
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .delete-stream-button:hover {
@@ -478,7 +481,7 @@ body {
   font-size: var(--font-size-sm);
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .stream-xray-button {
@@ -506,7 +509,7 @@ body {
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .export-stream-button:hover {
@@ -539,7 +542,7 @@ body {
   font-size: var(--font-size-sm);
   text-align: left;
   cursor: pointer;
-  transition: background 0.1s ease;
+  transition: background var(--duration-fast) ease;
 }
 
 .export-menu-item:hover {
@@ -559,7 +562,7 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  animation: overlay-enter 0.15s ease;
+  animation: overlay-enter var(--duration-fast) ease;
 }
 
 @keyframes overlay-enter {
@@ -576,7 +579,7 @@ body {
   width: 90%;
   box-shadow: var(--overlay-shadow);
   backdrop-filter: var(--overlay-backdrop);
-  animation: dialog-enter 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: dialog-enter var(--duration-base) cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes dialog-enter {
@@ -623,7 +626,7 @@ body {
   padding: var(--spacing-lg);
   box-shadow: var(--overlay-shadow);
   backdrop-filter: var(--overlay-backdrop);
-  animation: dialog-enter 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: dialog-enter var(--duration-base) cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .ai-prompt-dialog h2 {
@@ -732,7 +735,7 @@ body {
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .delete-confirm-cancel:hover {
@@ -749,7 +752,7 @@ body {
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .delete-confirm-delete:hover {
@@ -770,7 +773,7 @@ body {
   padding: var(--spacing-xs) var(--spacing-sm);
   border-radius: var(--radius-sm);
   white-space: nowrap;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .back-button:hover {
@@ -829,7 +832,7 @@ body {
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition: color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 
 .selection-action-button--text {
@@ -952,7 +955,7 @@ body {
   font: inherit;
   font-size: var(--font-size-sm);
   padding: 0 var(--space-2);
-  transition: color 0.12s ease, background 0.12s ease;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
 }
 
 .link-edit-button:hover {
@@ -1151,7 +1154,7 @@ body {
   line-height: 1;
   pointer-events: auto;
   backdrop-filter: var(--overlay-backdrop);
-  animation: ai-status-enter 0.12s ease-out;
+  animation: ai-status-enter var(--duration-fast) ease-out;
 }
 
 .document-ai-status-pill--error {
@@ -1206,7 +1209,7 @@ body {
   line-height: var(--line-height-tight);
   pointer-events: none;
   backdrop-filter: var(--overlay-backdrop);
-  animation: ai-status-enter 0.12s ease-out;
+  animation: ai-status-enter var(--duration-fast) ease-out;
 }
 
 @keyframes ai-status-enter {
@@ -1270,7 +1273,7 @@ body {
   padding: 0;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.14s ease, background 0.14s ease, color 0.14s ease;
+  transition: opacity var(--duration-fast) ease, background var(--duration-fast) ease, color var(--duration-fast) ease;
 }
 
 .document-editor-codemirror .cm-md-image-resize-handle::before {
@@ -1370,7 +1373,7 @@ body {
   box-shadow: var(--overlay-shadow);
   backdrop-filter: var(--overlay-backdrop);
   overflow: hidden;
-  animation: dialog-enter 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: dialog-enter var(--duration-base) cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .sources-modal--drag-over {
@@ -1404,7 +1407,7 @@ body {
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   background: transparent;
   color: var(--color-text-tertiary);
   cursor: pointer;
@@ -1413,7 +1416,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.15s ease, background 0.15s ease;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
 }
 
 .sources-modal-close:hover {
@@ -1426,7 +1429,7 @@ body {
   color: var(--color-error);
   font-size: var(--font-size-xs);
   padding: var(--spacing-sm) var(--spacing-md);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   background: var(--danger-soft);
 }
 
@@ -1439,7 +1442,7 @@ body {
   border-radius: var(--radius);
   cursor: pointer;
   font-size: var(--font-size-sm);
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .sources-modal-add:hover {
@@ -1493,7 +1496,7 @@ body {
   padding: var(--spacing-xs) var(--spacing-sm);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--duration-fast) ease;
 }
 
 .sources-modal-item:hover {
@@ -1528,7 +1531,7 @@ body {
   justify-content: center;
   color: var(--color-text-tertiary);
   background: var(--color-surface-elevated);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
 }
 
 .sources-modal-item-info {
@@ -1590,10 +1593,10 @@ body {
   color: var(--color-text-muted);
   cursor: pointer;
   padding: calc(var(--space-1) / 2) var(--space-1);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   font: inherit;
   line-height: inherit;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .sources-modal-private-toggle:hover,
@@ -1623,9 +1626,9 @@ body {
   padding: calc(var(--space-1) / 2) var(--space-1);
   font-size: var(--font-size-sm);
   line-height: 1;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   opacity: 0;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .sources-modal-item:hover .sources-modal-remove,
@@ -1755,7 +1758,7 @@ body {
   text-align: left;
   cursor: pointer;
   font-family: inherit;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--duration-fast) ease;
 }
 
 .search-result-item:hover,
@@ -1772,7 +1775,7 @@ body {
   justify-content: center;
   color: var(--color-text-tertiary);
   background: var(--color-surface-elevated);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   flex-shrink: 0;
   margin-top: 2px;
 }
@@ -1808,6 +1811,7 @@ body {
 .search-result-badge {
   font-size: var(--font-size-xs);
   flex-shrink: 0;
+  border-radius: var(--radius-small);
 }
 
 /* Preview for cross-stream results */
@@ -1834,7 +1838,7 @@ body {
   cursor: pointer;
   font-size: var(--font-size-sm);
   padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
 }
 
 .search-modal-preview-close:hover {
@@ -1866,7 +1870,7 @@ body {
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--duration-fast) ease;
 }
 
 .search-modal-go-button:hover {
@@ -1984,7 +1988,7 @@ body {
   cursor: pointer;
   font-size: var(--font-size-sm);
   font-weight: 500;
-  transition: all 0.2s ease;
+  transition: all var(--duration-base) ease;
 }
 
 .settings-close:hover {
@@ -2039,7 +2043,7 @@ body {
   font-family: 'SF Mono', monospace;
   background: var(--color-bg);
   color: var(--color-text);
-  transition: border-color 0.15s ease;
+  transition: border-color var(--duration-fast) ease;
 }
 
 .settings-key-input input:focus {
@@ -2056,7 +2060,7 @@ body {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .settings-toggle-visibility:hover,
@@ -2090,7 +2094,7 @@ body {
   color: var(--color-error);
   font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .settings-delete-key:hover {
@@ -2137,7 +2141,7 @@ body {
   color: var(--color-success);
   font-size: var(--font-size-sm);
   font-weight: 500;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   border: 1px solid var(--success-border);
 }
 
@@ -2150,7 +2154,7 @@ body {
   font-family: 'SF Mono', monospace;
   background: var(--color-surface);
   padding: calc(var(--space-1) / 2) var(--space-2);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   color: var(--color-text);
 }
 
@@ -2162,7 +2166,7 @@ body {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
   align-self: flex-start;
 }
 
@@ -2252,7 +2256,7 @@ body {
   font-size: var(--font-size-xs);
   font-weight: 600;
   padding: calc(var(--space-1) / 2) var(--space-2);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
 }
 
 .usage-badge--warning {
@@ -2277,7 +2281,7 @@ body {
   height: 100%;
   background: var(--color-accent);
   border-radius: var(--radius);
-  transition: width 0.3s ease;
+  transition: width var(--duration-base) ease;
 }
 
 .usage-bar--warning .usage-bar-fill {
@@ -2366,7 +2370,7 @@ body {
   min-width: 100px;
   background: var(--color-surface);
   padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
 }
 
 .shortcut-desc {
@@ -2402,7 +2406,7 @@ body {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .settings-editor-font-btn:hover {
@@ -2441,7 +2445,7 @@ body {
   color: var(--color-text-secondary);
   background: var(--color-surface);
   padding: calc(var(--space-1) / 2) var(--space-2);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
 }
 
 .settings-editor-slider {
@@ -2518,7 +2522,7 @@ body {
   cursor: pointer;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .settings-appearance-btn:hover {
@@ -2553,7 +2557,7 @@ body {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .settings-model-btn:hover:not(:disabled) {
@@ -2614,7 +2618,7 @@ body {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .settings-feedback-type button:hover {
@@ -2675,7 +2679,7 @@ body {
   font-size: var(--font-size-sm);
   margin-bottom: var(--spacing-md);
   cursor: pointer;
-  transition: border-color 0.15s ease;
+  transition: border-color var(--duration-fast) ease;
 }
 
 .settings-screenshot-drop:hover,
@@ -2703,7 +2707,7 @@ body {
   background: var(--color-error);
   color: var(--on-accent);
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-small);
   font-size: var(--font-size-xs);
   cursor: pointer;
 }
@@ -2721,7 +2725,7 @@ body {
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--duration-fast) ease;
 }
 
 .settings-feedback-submit:hover:not(:disabled) {
@@ -2742,7 +2746,7 @@ body {
 .settings-success code {
   background: var(--color-surface);
   padding: calc(var(--space-1) / 2) var(--space-2);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-small);
   font-family: var(--font-mono);
 }
 
@@ -2754,7 +2758,7 @@ body {
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .settings-support-bundle-btn:hover {
@@ -2771,7 +2775,7 @@ body {
     --surface-raised: #2b2b29;
     --text: #f3f2ed;
     --text-muted: #aaa79d;
-    --accent: #8aa8ff;
+    --accent: #d98a63;
     --border: rgba(243, 242, 237, 0.12);
     --border-subtle: rgba(243, 242, 237, 0.07);
     --on-accent: #111110;
@@ -2780,16 +2784,16 @@ body {
     --surface-active: #393936;
     --text-subtle: #77746c;
     --text-faint: #56534e;
-    --accent-soft: rgba(138, 168, 255, 0.16);
-    --accent-hover: #a8bdff;
+    --accent-soft: rgba(217,138,99,0.16);
+    --accent-hover: #e3a07e;
     --success: #68b982;
     --warning: #d5a13a;
     --danger: #ee7f76;
     --success-soft: rgba(104, 185, 130, 0.14);
     --success-border: rgba(104, 185, 130, 0.3);
     --warning-soft: rgba(213, 161, 58, 0.18);
-    --prov-ai-soft: rgba(138, 168, 255, 0.08);
-    --prov-ai-border: rgba(138, 168, 255, 0.45);
+    --prov-ai-soft: rgba(217,138,99,0.08);
+    --prov-ai-border: rgba(217,138,99,0.45);
     --prov-source-soft: var(--warning-soft);
     --prov-source-border: rgba(213, 161, 58, 0.45);
     --prov-capture-soft: var(--success-soft);
@@ -2797,8 +2801,8 @@ body {
     --danger-soft: rgba(238, 127, 118, 0.14);
     --danger-hover: rgba(238, 127, 118, 0.22);
     --danger-border: rgba(238, 127, 118, 0.32);
-    --overlay-scrim: rgba(0, 0, 0, 0.42);
-    --focus-ring: rgba(138, 168, 255, 0.24);
+    --overlay-scrim: rgba(31,31,29,0.45);
+    --focus-ring: rgba(217,138,99,0.24);
     --control-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
     --overlay-shadow: 0 16px 44px rgba(0, 0, 0, 0.32);
   }
@@ -2867,7 +2871,7 @@ body {
   border: 1px solid var(--color-border);
   background: var(--color-surface-hover);
   color: var(--color-text-secondary);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   padding: 0 var(--spacing-sm);
   height: 24px;
   cursor: pointer;
@@ -2883,7 +2887,7 @@ body {
   border: 1px solid var(--color-border);
   background: var(--color-surface-hover);
   color: var(--color-text-secondary);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   width: 24px;
   height: 24px;
   cursor: pointer;
@@ -2900,7 +2904,7 @@ body {
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   color: var(--color-text-secondary);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-small);
   padding: var(--spacing-xs) var(--spacing-sm);
   font-size: var(--font-size-xs);
   cursor: pointer;
