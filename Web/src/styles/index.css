@@ -22,6 +22,12 @@
   --success-soft: rgba(22, 129, 61, 0.1);
   --success-border: rgba(22, 129, 61, 0.22);
   --warning-soft: rgba(157, 106, 3, 0.14);
+  --prov-ai-soft: rgba(37, 99, 235, 0.08);
+  --prov-ai-border: rgba(37, 99, 235, 0.45);
+  --prov-source-soft: var(--warning-soft);
+  --prov-source-border: rgba(157, 106, 3, 0.45);
+  --prov-capture-soft: var(--success-soft);
+  --prov-capture-border: rgba(22, 129, 61, 0.45);
   --danger-soft: rgba(199, 58, 50, 0.1);
   --danger-hover: rgba(199, 58, 50, 0.18);
   --danger-border: rgba(199, 58, 50, 0.3);
@@ -461,7 +467,8 @@ body {
   background: var(--danger-soft);
 }
 
-.stream-sources-button {
+.stream-sources-button,
+.stream-xray-button {
   flex: 0 0 auto;
   background: transparent;
   border: 1px solid var(--color-border);
@@ -474,7 +481,13 @@ body {
   transition: all 0.15s ease;
 }
 
-.stream-sources-button:hover {
+.stream-xray-button {
+  min-width: 30px;
+}
+
+.stream-sources-button:hover,
+.stream-xray-button:hover,
+.stream-xray-button--active {
   border-color: var(--color-accent);
   color: var(--color-accent);
   background: var(--accent-soft);
@@ -1278,6 +1291,59 @@ body {
 .document-editor-codemirror .cm-md-image-widget:focus-within .cm-md-image-resize-handle {
   opacity: 1;
   pointer-events: auto;
+}
+
+.document-editor-codemirror .cm-prov-ai {
+  background: var(--prov-ai-soft);
+  border-bottom: 1px dotted var(--prov-ai-border);
+}
+
+.document-editor-codemirror .cm-prov-source {
+  background: var(--prov-source-soft);
+  border-bottom: 1px dotted var(--prov-source-border);
+}
+
+.document-editor-codemirror .cm-prov-capture {
+  background: var(--prov-capture-soft);
+  border-bottom: 1px dotted var(--prov-capture-border);
+}
+
+.cm-provenance-tooltip {
+  max-width: 320px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--control-shadow);
+  color: var(--text-muted);
+  font-size: var(--type-ui-small);
+  line-height: var(--line-height-tight);
+}
+
+.cm-provenance-tooltip-line {
+  color: var(--text-muted);
+}
+
+.cm-provenance-tooltip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.cm-provenance-tooltip-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.cm-provenance-tooltip-button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 /* ==================== Sources Modal ==================== */
@@ -2644,6 +2710,12 @@ body {
     --success-soft: rgba(104, 185, 130, 0.14);
     --success-border: rgba(104, 185, 130, 0.3);
     --warning-soft: rgba(213, 161, 58, 0.18);
+    --prov-ai-soft: rgba(138, 168, 255, 0.08);
+    --prov-ai-border: rgba(138, 168, 255, 0.45);
+    --prov-source-soft: var(--warning-soft);
+    --prov-source-border: rgba(213, 161, 58, 0.45);
+    --prov-capture-soft: var(--success-soft);
+    --prov-capture-border: rgba(104, 185, 130, 0.45);
     --danger-soft: rgba(238, 127, 118, 0.14);
     --danger-hover: rgba(238, 127, 118, 0.22);
     --danger-border: rgba(238, 127, 118, 0.32);

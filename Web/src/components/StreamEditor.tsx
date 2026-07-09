@@ -17,7 +17,8 @@ import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
-import { addSpans, currentSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
+import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
+import { provenanceXrayExtension } from '../extensions/ProvenanceXray';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
@@ -292,6 +293,12 @@ function serializeFieldSpans(spans: Span[], doc: string): ProvenanceSpanJSON[] {
   return serializeProvenanceSpans(normalizeSpans(spans, doc).map(fieldSpanToPayload));
 }
 
+function spanIdsIntersectingRange(spans: Span[], from: number, to: number): string[] {
+  return spans
+    .filter((span) => span.start < to && span.end > from)
+    .map((span) => span.spanId);
+}
+
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.heading,
@@ -365,6 +372,7 @@ export function StreamEditor({
   const [isPrepaintHidden, setIsPrepaintHidden] = useState(true);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
+  const [isProvenanceXrayVisible, setIsProvenanceXrayVisible] = useState(false);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
@@ -671,6 +679,7 @@ export function StreamEditor({
     setShowPrompt(false);
     setPromptValue('');
     setSourceScope(stream.sourceScope ?? 'auto');
+    setIsProvenanceXrayVisible(false);
     setShowRewriteMenu(false);
     promptContextRef.current = null;
     aiRequestRef.current = null;
@@ -1795,6 +1804,25 @@ export function StreamEditor({
     beginPDFAnchorPick(stream.id);
   }, [addToast, canLinkSelectionToPDF, getSelectionContext, hideSelectionMenu, stream.id]);
 
+  const handleSelectionDissolve = useCallback(() => {
+    const view = editorViewRef.current;
+    if (!view) {
+      hideSelectionMenu();
+      return;
+    }
+
+    const selection = view.state.selection.main;
+    const spanIds = spanIdsIntersectingRange(currentSpans(view.state), selection.from, selection.to);
+    if (spanIds.length > 0) {
+      view.dispatch({
+        effects: dissolveSpans.of(spanIds),
+        annotations: Transaction.addToHistory.of(true),
+      });
+      view.focus();
+    }
+    hideSelectionMenu();
+  }, [hideSelectionMenu]);
+
   const handleSelectionVerb = useCallback((verb: DocumentAIVerb) => {
     const context = getSelectionContext(false);
     if (!context || !context.text.trim()) {
@@ -1943,6 +1971,23 @@ export function StreamEditor({
     });
   }, []);
 
+  const handleOpenSourceById = useCallback((sourceId: string) => {
+    const source = sourcesRef.current.find((candidate) => candidate.id === sourceId);
+    if (source) handleOpenSource(source);
+  }, [handleOpenSource]);
+
+  const provenanceXray = useMemo<Extension>(() => (
+    isProvenanceXrayVisible
+      ? provenanceXrayExtension({ sources, onOpenSource: handleOpenSourceById })
+      : []
+  ), [handleOpenSourceById, isProvenanceXrayVisible, sources]);
+
+  const selectionDissolveSpanIds = (() => {
+    const view = editorViewRef.current;
+    if (!isProvenanceXrayVisible || !floatingMenu.visible || !view) return [];
+    return spanIdsIntersectingRange(currentSpans(view.state), floatingMenu.selectionFrom, floatingMenu.selectionTo);
+  })();
+
   return (
     <div className="stream-editor">
       <header className="stream-header">
@@ -1969,6 +2014,16 @@ export function StreamEditor({
           <span className={`stream-save-status stream-save-status--${saveState}`}>
             {saveState === 'saving' ? 'Saving…' : 'Saved'}
           </span>
+          <button
+            onClick={() => setIsProvenanceXrayVisible((value) => !value)}
+            className={`stream-xray-button ${isProvenanceXrayVisible ? 'stream-xray-button--active' : ''}`}
+            title="Toggle provenance x-ray"
+            type="button"
+            aria-label="Toggle provenance x-ray"
+            aria-pressed={isProvenanceXrayVisible}
+          >
+            👁
+          </button>
           <button
             onClick={() => setShowSourcesModal(true)}
             className="stream-sources-button"
@@ -2178,6 +2233,22 @@ export function StreamEditor({
               </svg>
             </button>
           )}
+          {isProvenanceXrayVisible && (
+            <>
+              <span className="selection-action-divider" aria-hidden="true" />
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                title="Dissolve provenance in selection"
+                aria-label="Dissolve provenance in selection"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={handleSelectionDissolve}
+                disabled={selectionDissolveSpanIds.length === 0}
+              >
+                Dissolve
+              </button>
+            </>
+          )}
           <span className="selection-action-divider" aria-hidden="true" />
           <button
             type="button"
@@ -2265,6 +2336,7 @@ export function StreamEditor({
                 markdownConcealExtension,
                 provenanceField,
                 markdownImageWidgetExtension,
+                provenanceXray,
                 tickerPDFLinkExtension(stream.id),
                 linkInteraction,
               ]}
