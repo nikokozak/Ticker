@@ -1296,6 +1296,36 @@ final class PersistenceService {
         }
     }
 
+    func updateMarginNoteStatusAndLoadVisible(noteId: String, status: String) throws -> (streamId: UUID, notes: [MarginNote])? {
+        try dbQueue.write { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT stream_id, body_hash FROM margin_notes WHERE note_id = ?",
+                arguments: [noteId]
+            ),
+                  let streamId = UUID(uuidString: row["stream_id"] as String) else {
+                return nil
+            }
+
+            try db.execute(
+                sql: "UPDATE margin_notes SET status = ? WHERE note_id = ?",
+                arguments: [status, noteId]
+            )
+
+            if status == "dismissed" {
+                try db.execute(
+                    sql: """
+                        INSERT OR IGNORE INTO margin_suppressions (stream_id, body_hash)
+                        VALUES (?, ?)
+                    """,
+                    arguments: [streamId.uuidString, row["body_hash"] as String]
+                )
+            }
+
+            return (streamId, try fetchMarginNotes(streamId: streamId, statuses: ["open", "unanchored"], db: db))
+        }
+    }
+
     func marginSuppressionHashes(streamId: UUID) throws -> Set<String> {
         try dbQueue.read { db in
             try Set(Row.fetchAll(

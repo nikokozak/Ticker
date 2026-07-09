@@ -72,6 +72,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'setProxyDeviceKey',
   'submitFeedback',
   'thinkDocument',
+  'updateMarginNote',
   'updateStreamTitle',
 ] as const;
 
@@ -94,6 +95,11 @@ export interface ReadBackPayload extends Record<string, unknown> {
   streamId: string;
   scopeStart: number;
   scopeEnd: number;
+}
+
+export interface UpdateMarginNotePayload extends Record<string, unknown> {
+  noteId: string;
+  status: 'open' | 'dismissed' | 'promoted' | 'unanchored';
 }
 
 export interface BridgeMessage {
@@ -206,6 +212,16 @@ export function readBack(payload: ReadBackPayload): void {
       streamId: payload.streamId,
       scopeStart: payload.scopeStart,
       scopeEnd: payload.scopeEnd,
+    },
+  });
+}
+
+export function updateMarginNote(payload: UpdateMarginNotePayload): void {
+  bridge.send({
+    type: 'updateMarginNote',
+    payload: {
+      noteId: payload.noteId,
+      status: payload.status,
     },
   });
 }

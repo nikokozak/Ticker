@@ -239,6 +239,9 @@
         "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
         "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId"]
       },
+      "updateMarginNote": {
+        "requiredPayloadKeys": ["noteId", "status"]
+      },
       "updateStreamTitle": {
         "requiredPayloadKeys": ["id", "title"]
       }

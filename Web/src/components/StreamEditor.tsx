@@ -5,12 +5,12 @@ import { languages } from '@codemirror/language-data';
 import { Decoration, EditorView } from '@codemirror/view';
 import { RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
-import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
+import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, getExchange, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
+import { bridge, getExchange, readBack, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
-import { EyeIcon, XIcon } from './icons';
+import { EyeIcon, NoteIcon, XIcon } from './icons';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import { AI_HISTORY_USER_EVENT, aiWritingExtension, getAiWritingRange, setAiWritingRangeEffect } from '../extensions/AIWritingState';
@@ -21,6 +21,17 @@ import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } 
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
 import { canRedevelopSpan, provenanceXrayExtension } from '../extensions/ProvenanceXray';
+import {
+  buildPromoteMarginNoteEdit,
+  currentMarginNotes,
+  marginNotesExtension,
+  marginNotesField,
+  payloadMarginNotesForDoc,
+  setMarginNotes,
+  updateMarginNoteStatusEffect,
+  type MarginNote,
+  type MarginNoteStatus,
+} from '../extensions/MarginNotes';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
@@ -61,6 +72,8 @@ type PromptIntent = {
   parentRequestId?: string;
   preview: string;
 };
+
+type ReadBackScope = 'viewport' | 'section' | 'document';
 
 interface ExchangeOverlayState {
   exchange: AIExchangeJSON;
@@ -223,6 +236,50 @@ function restoreViewportEnd(view: EditorView, scrollOffset: number): number {
   return Math.max(view.viewport.to, Math.min(docLength, Math.ceil(docLength * ratio)));
 }
 
+function isHeadingNode(name: string): boolean {
+  return /^ATXHeading\d+$/.test(name) || /^SetextHeading\d*$/.test(name);
+}
+
+function sectionRangeForCursor(view: EditorView): { from: number; to: number } {
+  const doc = view.state.doc;
+  const cursor = view.state.selection.main.head;
+  const tree = ensureSyntaxTree(view.state, doc.length, 50) ?? syntaxTree(view.state);
+  const headings: number[] = [];
+
+  tree.iterate({
+    enter: (node) => {
+      if (isHeadingNode(node.name)) {
+        headings.push(doc.lineAt(node.from).from);
+      }
+    },
+  });
+
+  if (headings.length === 0) return { from: 0, to: doc.length };
+
+  let from = 0;
+  let to = doc.length;
+  for (const heading of headings) {
+    if (heading <= cursor) {
+      from = heading;
+    } else {
+      to = heading;
+      break;
+    }
+  }
+  return { from, to };
+}
+
+function readBackRangeForScope(view: EditorView, scope: ReadBackScope): { from: number; to: number } {
+  if (scope === 'document') return { from: 0, to: view.state.doc.length };
+  if (scope === 'section') return sectionRangeForCursor(view);
+
+  if (view.visibleRanges.length === 0) return { from: view.viewport.from, to: view.viewport.to };
+  return {
+    from: Math.min(...view.visibleRanges.map((range) => range.from)),
+    to: Math.max(...view.visibleRanges.map((range) => range.to)),
+  };
+}
+
 const clickToDocumentEndExtension: Extension = EditorView.domEventHandlers({
   mousedown: (event, view) => {
     if (event.button !== 0 || event.defaultPrevented) return false;
@@ -307,6 +364,15 @@ function fieldSpanToPayload(span: Span): ProvenanceSpanJSON {
 
 function serializeFieldSpans(spans: Span[], doc: string): ProvenanceSpanJSON[] {
   return serializeProvenanceSpans(normalizeSpans(spans, doc).map(fieldSpanToPayload));
+}
+
+function persistNewUnanchoredMarginNotes(rawNotes: Stream['marginNotes'], notes: MarginNote[]): void {
+  const rawStatusById = new Map(rawNotes.map((note) => [note.noteId, note.status]));
+  for (const note of notes) {
+    if (note.status === 'unanchored' && rawStatusById.get(note.noteId) === 'open') {
+      updateMarginNote({ noteId: note.noteId, status: 'unanchored' });
+    }
+  }
 }
 
 function spanIdsIntersectingRange(spans: Span[], from: number, to: number): string[] {
@@ -458,6 +524,8 @@ export function StreamEditor({
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [isProvenanceXrayVisible, setIsProvenanceXrayVisible] = useState(false);
+  const [isMarginNotesVisible, setIsMarginNotesVisible] = useState(false);
+  const [readBackScope, setReadBackScope] = useState<ReadBackScope>('viewport');
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
@@ -739,6 +807,72 @@ export function StreamEditor({
     });
   }, [stream.id]);
 
+  const applyMarginNotesToEditor = useCallback((rawNotes: Stream['marginNotes']) => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    const notes = payloadMarginNotesForDoc(rawNotes, view.state.doc);
+    view.dispatch({
+      effects: setMarginNotes.of(notes),
+      annotations: Transaction.addToHistory.of(false),
+    });
+    persistNewUnanchoredMarginNotes(rawNotes, notes);
+  }, []);
+
+  const persistMarginNoteStatus = useCallback((note: Pick<MarginNote, 'noteId'>, status: MarginNoteStatus) => {
+    updateMarginNote({ noteId: note.noteId, status });
+  }, []);
+
+  const handleDismissMarginNote = useCallback((note: MarginNote) => {
+    const view = editorViewRef.current;
+    if (view) {
+      view.dispatch({
+        effects: updateMarginNoteStatusEffect.of({ noteId: note.noteId, status: 'dismissed' }),
+        annotations: Transaction.addToHistory.of(false),
+      });
+      view.focus();
+    }
+    persistMarginNoteStatus(note, 'dismissed');
+  }, [persistMarginNoteStatus]);
+
+  const handlePromoteMarginNote = useCallback((note: MarginNote) => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    const currentNote = currentMarginNotes(view.state).find((candidate) => candidate.noteId === note.noteId) ?? note;
+    const edit = buildPromoteMarginNoteEdit(currentNote, view.state.doc.toString());
+    if (!edit) return;
+
+    view.dispatch({
+      changes: { from: edit.from, insert: edit.insert },
+      selection: { anchor: edit.from + edit.insert.length },
+      effects: [
+        addSpans.of([edit.span]),
+        updateMarginNoteStatusEffect.of({ noteId: note.noteId, status: 'promoted' }),
+      ],
+      annotations: [
+        Transaction.addToHistory.of(true),
+        Transaction.userEvent.of('input'),
+        isolateHistory.of('full'),
+      ],
+    });
+    view.focus();
+    persistMarginNoteStatus(note, 'promoted');
+  }, [persistMarginNoteStatus]);
+
+  const handleReadBack = useCallback(() => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    const range = readBackRangeForScope(view, readBackScope);
+    if (range.to <= range.from || !view.state.doc.sliceString(range.from, range.to).trim()) {
+      addToast('Nothing in this scope to read back.', 'info');
+      return;
+    }
+    readBack({
+      streamId: stream.id,
+      scopeStart: range.from,
+      scopeEnd: range.to,
+    });
+  }, [addToast, readBackScope, stream.id]);
+
   useEffect(() => {
     setMarkdownContent(stream.document?.markdown ?? '');
     lastSavedContentRef.current = stream.document?.markdown ?? '';
@@ -769,18 +903,29 @@ export function StreamEditor({
     setExchangeOverlay(null);
     setSourceScope(stream.sourceScope ?? 'auto');
     setIsProvenanceXrayVisible(false);
+    setIsMarginNotesVisible(false);
+    setReadBackScope('viewport');
     setShowRewriteMenu(false);
     promptContextRef.current = null;
     aiRequestRef.current = null;
     const view = editorViewRef.current;
     if (view) {
+      const notes = payloadMarginNotesForDoc(stream.marginNotes, stream.document?.markdown ?? '');
       view.dispatch({
-        effects: setSpans.of(payloadSpansForDoc(stream.spans, stream.document?.markdown ?? '')),
+        effects: [
+          setSpans.of(payloadSpansForDoc(stream.spans, stream.document?.markdown ?? '')),
+          setMarginNotes.of(notes),
+        ],
         annotations: Transaction.addToHistory.of(false),
       });
+      persistNewUnanchoredMarginNotes(stream.marginNotes, notes);
       dispatchAiRangeClear(view);
     }
   }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
+
+  useEffect(() => {
+    applyMarginNotesToEditor(stream.marginNotes);
+  }, [applyMarginNotesToEditor, stream.id, stream.marginNotes]);
 
   useEffect(() => {
     markdownContentRef.current = markdownContent;
@@ -2143,6 +2288,13 @@ export function StreamEditor({
       : []
   ), [handleOpenSourceById, isAiThinking, isProvenanceXrayVisible, openRedevelopPrompt, sources]);
 
+  const marginNotesExtensionValue = useMemo<Extension>(() => marginNotesExtension({
+    visible: isMarginNotesVisible,
+    onPromote: handlePromoteMarginNote,
+    onDismiss: handleDismissMarginNote,
+    onUnanchor: (note) => persistMarginNoteStatus(note, 'unanchored'),
+  }), [handleDismissMarginNote, handlePromoteMarginNote, isMarginNotesVisible, persistMarginNoteStatus]);
+
   const selectionDissolveSpanIds = (() => {
     const view = editorViewRef.current;
     if (!isProvenanceXrayVisible || !floatingMenu.visible || !view) return [];
@@ -2185,6 +2337,38 @@ export function StreamEditor({
           >
             <EyeIcon size={16} />
           </button>
+          <button
+            onClick={() => setIsMarginNotesVisible((value) => !value)}
+            className={`stream-margin-button ${isMarginNotesVisible ? 'stream-margin-button--active' : ''}`}
+            title="Toggle margin notes"
+            type="button"
+            aria-label="Toggle margin notes"
+            aria-pressed={isMarginNotesVisible}
+          >
+            <NoteIcon size={16} />
+          </button>
+          {isMarginNotesVisible && (
+            <div className="stream-readback-controls">
+              <select
+                className="stream-readback-scope"
+                value={readBackScope}
+                onChange={(event) => setReadBackScope(event.target.value as ReadBackScope)}
+                aria-label="Read back scope"
+                title="Read back scope"
+              >
+                <option value="viewport">Viewport</option>
+                <option value="section">Section</option>
+                <option value="document">Document</option>
+              </select>
+              <button
+                type="button"
+                className="stream-readback-button"
+                onClick={handleReadBack}
+              >
+                Read back
+              </button>
+            </div>
+          )}
           <button
             onClick={() => setShowSourcesModal(true)}
             className="stream-sources-button"
@@ -2510,8 +2694,10 @@ export function StreamEditor({
                 markdownConcealExtension,
                 arrivalField,
                 provenanceField,
+                marginNotesField,
                 markdownImageWidgetExtension,
                 provenanceXray,
+                marginNotesExtensionValue,
                 tickerPDFLinkExtension(stream.id),
                 linkInteraction,
               ]}
@@ -2521,6 +2707,7 @@ export function StreamEditor({
                   effects: setSpans.of(payloadSpansForDoc(stream.spans, view.state.doc.toString())),
                   annotations: Transaction.addToHistory.of(false),
                 });
+                applyMarginNotesToEditor(stream.marginNotes);
 
                 scrollCleanupRef.current?.();
                 const handleScroll = () => scheduleScrollPositionSave();
