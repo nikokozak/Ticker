@@ -3,7 +3,7 @@ import { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
-import { buildMarkdownConcealDecorations, nextMarkdownConcealDecorations } from './MarkdownConceal';
+import { buildMarkdownConcealDecorations } from './MarkdownConceal';
 
 function viewFor(state: EditorState): EditorView {
   return {
@@ -29,35 +29,46 @@ function rangesFor(decorations: DecorationSet, docLength: number): string[] {
   return ranges;
 }
 
-describe('MarkdownConceal drag stability', () => {
-  it('freezes reveal decorations while the mouse is down and recomputes on mouseup', () => {
+describe('MarkdownConceal reveal policy', () => {
+  it('reveals marks on the caret line when the mouse is up', () => {
     const doc = '**one**\n**two**';
-    const firstState = stateWithSelection(doc, doc.indexOf('one'));
-    const secondSelection = doc.indexOf('two');
-    const firstDecorations = buildMarkdownConcealDecorations(viewFor(firstState), true);
-    const selectionTransaction = firstState.update({ selection: { anchor: secondSelection } });
-    const secondView = viewFor(selectionTransaction.state);
-    const expectedAfterMouseup = buildMarkdownConcealDecorations(secondView);
+    const state = stateWithSelection(doc, doc.indexOf('one'));
+    const revealed = buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true });
+    const lineOneRanges = rangesFor(revealed, doc.length).filter((r) => Number(r.split('-')[0]) < 8);
+    expect(lineOneRanges).toEqual([]); // caret line: marks revealed (no conceal decorations)
+  });
 
-    const frozen = nextMarkdownConcealDecorations(firstDecorations, secondView, selectionTransaction.changes, {
-      docChanged: selectionTransaction.docChanged,
-      viewportChanged: false,
-      selectionSet: true,
-      rawLinksChanged: false,
-      wasMouseDown: true,
-      isMouseDown: true,
+  it('conceals everything while the mouse is down, even selected lines', () => {
+    const doc = '**one**\n**two**';
+    const state = stateWithSelection(doc, doc.indexOf('one'));
+    const concealed = buildMarkdownConcealDecorations(viewFor(state), {
+      ensureInitialParse: true,
+      revealForSelection: false,
     });
-    expect(rangesFor(frozen, doc.length)).toEqual(rangesFor(firstDecorations, doc.length));
+    // Both lines keep their ** mark conceal decorations.
+    expect(rangesFor(concealed, doc.length).length).toBeGreaterThanOrEqual(4);
+  });
 
-    const recomputed = nextMarkdownConcealDecorations(frozen, secondView, selectionTransaction.changes, {
-      docChanged: false,
-      viewportChanged: false,
-      selectionSet: false,
-      rawLinksChanged: false,
-      wasMouseDown: true,
-      isMouseDown: false,
-    });
-    expect(rangesFor(recomputed, doc.length)).toEqual(rangesFor(expectedAfterMouseup, doc.length));
-    expect(rangesFor(recomputed, doc.length)).not.toEqual(rangesFor(firstDecorations, doc.length));
+  it('is a pure build over the current view (no frozen-set staleness)', () => {
+    const doc = '# Head\n\n**bold** text';
+    const state = stateWithSelection(doc, doc.length);
+    const a = buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true });
+    const b = buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true });
+    expect(rangesFor(a, doc.length)).toEqual(rangesFor(b, doc.length));
+  });
+
+  it('leaves chip-eligible http links to the chip layer but still conceals ticker-pdf links', () => {
+    const doc = '[Safari](https://apple.com) and [Book p.3](ticker-pdf://abc?page=3)';
+    const state = stateWithSelection(doc, doc.length);
+    const decorations = buildMarkdownConcealDecorations(viewFor(state), { ensureInitialParse: true });
+    const ranges = rangesFor(decorations, doc.length).map((r) => r.split('-').map(Number));
+
+    const httpLinkEnd = doc.indexOf(')') + 1;
+    const httpOverlaps = ranges.filter(([from, to]) => from < httpLinkEnd && to > 0);
+    expect(httpOverlaps).toEqual([]); // chip layer owns the http link
+
+    const tickerStart = doc.indexOf('[Book');
+    const tickerOverlaps = ranges.filter(([from]) => from >= tickerStart);
+    expect(tickerOverlaps.length).toBeGreaterThan(0); // ticker-pdf still concealed here
   });
 });

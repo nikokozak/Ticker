@@ -981,6 +981,20 @@ body {
   opacity: 0.5;
 }
 
+.cm-link-chip {
+  color: var(--color-accent);
+  cursor: pointer;
+  border-radius: var(--radius-small);
+  transition: background var(--duration-fast) ease;
+}
+
+.cm-link-chip:hover {
+  background: var(--accent-soft);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
 .link-edit-popover {
   position: fixed;
   z-index: 930;

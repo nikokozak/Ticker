@@ -1,15 +1,9 @@
 import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, type Extension } from '@codemirror/state';
-import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import { Decoration, type DecorationSet, EditorView, ViewPlugin, WidgetType, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 import { bridge } from '../types';
-import { rawLinksAreRevealedOnLine, revealRawLinksEffect } from './MarkdownConceal';
-
-const RENDERED_LINK_CLASS = 'cm-rendered-link';
-const RENDERED_LINK_SELECTOR = `.${RENDERED_LINK_CLASS}`;
-const LINK_X_TOLERANCE_PX = 4;
-
-export const LINK_NAVIGATION_MAX_POINTER_MOVEMENT_PX = 5;
+import { isChipEligibleLink, rawLinksAreRevealedOnLine, revealRawLinksEffect } from './MarkdownConceal';
 
 export interface MarkdownLinkInfo {
   from: number;
@@ -52,24 +46,6 @@ export function buildLinkEditChange(oldRange: LinkEditRange, label: string, url:
   };
 }
 
-interface Point {
-  x: number;
-  y: number;
-}
-
-export function pointerMovementAllowsNavigation(start: Point | null, end: Point): boolean {
-  if (!start) return false;
-  return Math.hypot(end.x - start.x, end.y - start.y) < LINK_NAVIGATION_MAX_POINTER_MOVEMENT_PX;
-}
-
-export function positionTouchesLinkRange(pos: number, link: Pick<MarkdownLinkInfo, 'from' | 'to'>): boolean {
-  return pos >= link.from && pos <= link.to;
-}
-
-export function xWithinLinkExtent(x: number, left: number, right: number, tolerance = LINK_X_TOLERANCE_PX): boolean {
-  return x >= Math.min(left, right) - tolerance && x <= Math.max(left, right) + tolerance;
-}
-
 function linkInfoFromNode(view: EditorView, linkNode: SyntaxNode): MarkdownLinkInfo | null {
   const marks: Array<{ from: number; to: number }> = [];
   let urlFrom = -1;
@@ -102,49 +78,91 @@ function linkInfoFromNode(view: EditorView, linkNode: SyntaxNode): MarkdownLinkI
   };
 }
 
-function linkNodeAt(view: EditorView, pos: number): SyntaxNode | null {
+export function linkInfoAt(view: EditorView, pos: number): MarkdownLinkInfo | null {
   const tree = syntaxTree(view.state);
   for (const side of [-1, 1] as const) {
     for (let node: SyntaxNode | null = tree.resolveInner(pos, side); node; node = node.parent) {
-      if (node.name === 'Link' && positionTouchesLinkRange(pos, node)) return node;
+      if (node.name === 'Link' && pos >= node.from && pos <= node.to) {
+        return linkInfoFromNode(view, node);
+      }
     }
   }
   return null;
 }
 
-export function linkInfoAt(view: EditorView, pos: number): MarkdownLinkInfo | null {
-  const node = linkNodeAt(view, pos);
-  return node ? linkInfoFromNode(view, node) : null;
-}
-
-function linkKey(link: MarkdownLinkInfo): string {
-  return `${link.from}:${link.to}`;
-}
-
-function hasRenderedLinkTarget(target: EventTarget | null): boolean {
-  if (typeof Element !== 'undefined' && target instanceof Element) {
-    return Boolean(target.closest(RENDERED_LINK_SELECTOR));
+/**
+ * Concealed http(s) links render as atomic chips (same architecture as image
+ * widgets). The caret can never enter the hidden markdown, so typing can never
+ * silently edit a concealed URL. Editing happens through the chip's popover or
+ * via the ⌥-click raw reveal; ⌘-click opens the URL.
+ */
+class LinkChipWidget extends WidgetType {
+  constructor(
+    private readonly label: string,
+    private readonly url: string,
+    private readonly onEditLink: (view: EditorView, link: MarkdownLinkInfo | null) => void
+  ) {
+    super();
   }
 
-  if (typeof Node !== 'undefined' && target instanceof Node) {
-    return Boolean(target.parentElement?.closest(RENDERED_LINK_SELECTOR));
+  override eq(other: LinkChipWidget): boolean {
+    return other.label === this.label && other.url === this.url;
   }
 
-  return false;
+  override toDOM(view: EditorView): HTMLElement {
+    const chip = document.createElement('span');
+    chip.className = 'cm-link-chip';
+    chip.textContent = this.label;
+    chip.title = this.url;
+
+    chip.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      // Keep the caret where it is: no selection change, no multi-cursor.
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    chip.addEventListener('click', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      const pos = view.posAtDOM(chip);
+      const link = linkInfoAt(view, Math.min(pos + 1, view.state.doc.length));
+
+      if (event.altKey) {
+        const lineFrom = view.state.doc.lineAt(pos).from;
+        this.onEditLink(view, null);
+        view.dispatch({
+          selection: { anchor: pos },
+          effects: revealRawLinksEffect.of(lineFrom),
+        });
+        return;
+      }
+
+      if (event.metaKey) {
+        if (isAllowedExternalURL(this.url)) {
+          bridge.send({ type: 'openExternalURL', payload: { url: this.url } });
+        }
+        return;
+      }
+
+      this.onEditLink(view, link);
+    });
+
+    return chip;
+  }
+
+  override ignoreEvent(): boolean {
+    // The chip handles its own mouse events; everything else falls through to CM.
+    return true;
+  }
 }
 
-function linkHorizontalHitTest(view: EditorView, link: MarkdownLinkInfo, pos: number, clientX: number): boolean {
-  if (!view.coordsAtPos(pos)) return false;
-
-  const line = view.state.doc.lineAt(Math.min(pos, view.state.doc.length));
-  const startRect = view.coordsAtPos(Math.max(link.from, line.from));
-  const endRect = view.coordsAtPos(Math.min(link.to, line.to));
-  if (!startRect || !endRect) return false;
-
-  return xWithinLinkExtent(clientX, startRect.left, endRect.right);
-}
-
-function buildRenderedLinkDecorations(view: EditorView): DecorationSet {
+export function buildLinkChipDecorations(
+  view: EditorView,
+  onEditLink: (view: EditorView, link: MarkdownLinkInfo | null) => void
+): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const tree = syntaxTree(view.state);
 
@@ -153,9 +171,22 @@ function buildRenderedLinkDecorations(view: EditorView): DecorationSet {
       from: range.from,
       to: range.to,
       enter: (node) => {
-        if (node.name === 'Link') {
-          builder.add(node.from, node.to, Decoration.mark({ class: RENDERED_LINK_CLASS }));
-        }
+        if (node.name !== 'Link') return;
+
+        const lineFrom = view.state.doc.lineAt(node.from).from;
+        if (rawLinksAreRevealedOnLine(view.state, lineFrom)) return;
+        if (!isChipEligibleLink(view.state, node.node)) return;
+
+        const info = linkInfoFromNode(view, node.node);
+        if (!info) return;
+
+        builder.add(
+          node.from,
+          node.to,
+          Decoration.replace({
+            widget: new LinkChipWidget(info.label, info.url, onEditLink),
+          })
+        );
       },
     });
   }
@@ -166,144 +197,47 @@ function buildRenderedLinkDecorations(view: EditorView): DecorationSet {
 export function linkInteractionExtension(
   onEditLink: (view: EditorView, link: MarkdownLinkInfo | null) => void
 ): Extension {
-  let pointerStart: Point | null = null;
-  let suppressSelectionPopover = false;
-  let activePopoverLinkKey: string | null = null;
+  const chipPlugin = ViewPlugin.fromClass(class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildLinkChipDecorations(view, onEditLink);
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+        this.decorations = buildLinkChipDecorations(update.view, onEditLink);
+      }
+    }
+  }, {
+    decorations: (value) => value.decorations,
+    provide: (plugin) => EditorView.atomicRanges.of((view) => view.plugin(plugin)?.decorations ?? Decoration.none),
+  });
 
   return [
-    ViewPlugin.fromClass(class {
-      decorations: DecorationSet;
-
-      constructor(view: EditorView) {
-        this.decorations = buildRenderedLinkDecorations(view);
-      }
-
-      update(update: ViewUpdate): void {
-        if (update.docChanged || update.viewportChanged) {
-          this.decorations = buildRenderedLinkDecorations(update.view);
-        }
-      }
-    }, {
-      decorations: (value) => value.decorations,
-    }),
-    ViewPlugin.fromClass(class {
-      private readonly window: Window;
-      private readonly onKeyDown = (event: KeyboardEvent) => {
-        if (event.key === 'Meta') this.view.dom.classList.add('cm-link-meta-down');
-      };
-      private readonly onKeyUp = (event: KeyboardEvent) => {
-        if (event.key === 'Meta') this.view.dom.classList.remove('cm-link-meta-down');
-      };
-      private readonly onBlur = () => {
-        this.view.dom.classList.remove('cm-link-meta-down');
-      };
-
-      constructor(private readonly view: EditorView) {
-        this.window = view.dom.ownerDocument.defaultView ?? window;
-        this.window.addEventListener('keydown', this.onKeyDown);
-        this.window.addEventListener('keyup', this.onKeyUp);
-        this.window.addEventListener('blur', this.onBlur);
-      }
-
-      destroy(): void {
-        this.window.removeEventListener('keydown', this.onKeyDown);
-        this.window.removeEventListener('keyup', this.onKeyUp);
-        this.window.removeEventListener('blur', this.onBlur);
-        this.view.dom.classList.remove('cm-link-meta-down');
-      }
-    }),
-    EditorView.theme({
-      '&.cm-link-meta-down .cm-rendered-link': {
-        cursor: 'pointer',
-      },
-    }),
+    chipPlugin,
+    // Any cursor move or edit dismisses an open popover; chip clicks preventDefault,
+    // so they never trip this.
     EditorView.updateListener.of((update) => {
-      if (!update.selectionSet && !update.docChanged) return;
-
-      const selection = update.state.selection.main;
-      if (!selection.empty) {
-        activePopoverLinkKey = null;
+      if (update.selectionSet || update.docChanged) {
         onEditLink(update.view, null);
-        return;
       }
-
-      const link = linkInfoAt(update.view, selection.head);
-      if (!link || rawLinksAreRevealedOnLine(update.state, link.lineFrom) || suppressSelectionPopover) {
-        activePopoverLinkKey = null;
-        onEditLink(update.view, null);
-        return;
-      }
-
-      const nextKey = linkKey(link);
-      if (activePopoverLinkKey === nextKey) return;
-      activePopoverLinkKey = nextKey;
-      onEditLink(update.view, link);
     }),
+    // ⌥-click on a non-chip link (ticker-pdf citations) reveals its raw markdown;
+    // chips handle their own ⌥-click in the widget.
     EditorView.domEventHandlers({
-      mousedown: (event) => {
-        suppressSelectionPopover = false;
-        if (event.button !== 0 || event.defaultPrevented) return false;
-        pointerStart = { x: event.clientX, y: event.clientY };
-        return false;
-      },
       click: (event, view) => {
-        if (event.button !== 0 || event.defaultPrevented) return false;
-
-        if (event.altKey) {
-          const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-          const link = pos == null ? null : linkInfoAt(view, pos);
-          if (!link) {
-            suppressSelectionPopover = false;
-            onEditLink(view, null);
-            return false;
-          }
-
-          event.preventDefault();
-          event.stopPropagation();
-          suppressSelectionPopover = true;
-          onEditLink(view, null);
-          view.dispatch({
-            selection: { anchor: Math.min(pos ?? link.from, view.state.doc.length) },
-            effects: revealRawLinksEffect.of(link.lineFrom),
-          });
-          window.setTimeout(() => {
-            suppressSelectionPopover = false;
-          }, 0);
-          return true;
-        }
-
-        if (!event.metaKey) return false;
-
-        if (!pointerMovementAllowsNavigation(pointerStart, { x: event.clientX, y: event.clientY })) {
-          suppressSelectionPopover = false;
-          return false;
-        }
-
-        if (!hasRenderedLinkTarget(event.target)) {
-          suppressSelectionPopover = false;
-          return false;
-        }
-
+        if (event.button !== 0 || !event.altKey || event.defaultPrevented) return false;
         const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-        if (pos == null) {
-          suppressSelectionPopover = false;
-          return false;
-        }
-
+        if (pos == null) return false;
         const link = linkInfoAt(view, pos);
-        if (!link || link.url.startsWith('ticker-pdf://') || !positionTouchesLinkRange(pos, link)) {
-          suppressSelectionPopover = false;
-          return false;
-        }
-
-        suppressSelectionPopover = false;
-        if (!isAllowedExternalURL(link.url) || !linkHorizontalHitTest(view, link, pos, event.clientX)) return false;
+        if (!link) return false;
 
         event.preventDefault();
-        event.stopPropagation();
-        bridge.send({
-          type: 'openExternalURL',
-          payload: { url: link.url },
+        onEditLink(view, null);
+        view.dispatch({
+          selection: { anchor: pos },
+          effects: revealRawLinksEffect.of(link.lineFrom),
         });
         return true;
       },

@@ -4,18 +4,21 @@ import { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
 import {
+  buildLinkChipDecorations,
   buildLinkEditChange,
   isAllowedExternalURL,
   linkInfoAt,
-  pointerMovementAllowsNavigation,
-  positionTouchesLinkRange,
-  xWithinLinkExtent,
 } from './LinkInteraction';
+import { markdownConcealExtension } from './MarkdownConceal';
 
 function viewFor(doc: string): EditorView {
-  const state = EditorState.create({ doc, extensions: [markdown()] });
+  const state = EditorState.create({ doc, extensions: [markdown(), markdownConcealExtension] });
   ensureSyntaxTree(state, state.doc.length, 1000);
-  return { state } as EditorView;
+  return {
+    state,
+    visibleRanges: [{ from: 0, to: state.doc.length }],
+    viewport: { from: 0, to: state.doc.length },
+  } as unknown as EditorView;
 }
 
 describe('link interaction helpers', () => {
@@ -49,19 +52,6 @@ describe('link interaction helpers', () => {
     expect(isAllowedExternalURL('https:example.com')).toBe(false);
   });
 
-  it('requires less than five pixels of pointer movement for navigation', () => {
-    expect(pointerMovementAllowsNavigation({ x: 10, y: 10 }, { x: 13, y: 13 })).toBe(true);
-    expect(pointerMovementAllowsNavigation({ x: 10, y: 10 }, { x: 13, y: 14 })).toBe(false);
-    expect(pointerMovementAllowsNavigation(null, { x: 10, y: 10 })).toBe(false);
-  });
-
-  it('treats both link boundaries symmetrically', () => {
-    expect(positionTouchesLinkRange(4, { from: 5, to: 20 })).toBe(false);
-    expect(positionTouchesLinkRange(5, { from: 5, to: 20 })).toBe(true);
-    expect(positionTouchesLinkRange(20, { from: 5, to: 20 })).toBe(true);
-    expect(positionTouchesLinkRange(21, { from: 5, to: 20 })).toBe(false);
-  });
-
   it('resolves markdown links at either boundary', () => {
     const doc = 'Go [Example](https://example.com) now';
     const from = doc.indexOf('[');
@@ -73,11 +63,34 @@ describe('link interaction helpers', () => {
     expect(linkInfoAt(view, from - 1)).toBeNull();
     expect(linkInfoAt(view, to + 1)).toBeNull();
   });
+});
 
-  it('accepts click x-coordinates only inside the rendered link extent', () => {
-    expect(xWithinLinkExtent(20, 10, 30)).toBe(true);
-    expect(xWithinLinkExtent(6, 10, 30)).toBe(true);
-    expect(xWithinLinkExtent(5, 10, 30)).toBe(false);
-    expect(xWithinLinkExtent(35, 10, 30)).toBe(false);
+describe('link chips', () => {
+  const noop = () => {};
+
+  function chipRanges(doc: string): Array<[number, number]> {
+    const decorations = buildLinkChipDecorations(viewFor(doc), noop);
+    const ranges: Array<[number, number]> = [];
+    decorations.between(0, doc.length, (from, to) => {
+      ranges.push([from, to]);
+    });
+    return ranges;
+  }
+
+  it('replaces each http(s) link with one atomic chip covering the whole link', () => {
+    const doc = 'See [Safari](https://apple.com) and [Docs](http://example.org).';
+    const first: [number, number] = [doc.indexOf('[Safari'), doc.indexOf('apple.com)') + 'apple.com)'.length];
+    const second: [number, number] = [doc.indexOf('[Docs'), doc.indexOf('example.org)') + 'example.org)'.length];
+    expect(chipRanges(doc)).toEqual([first, second]);
+  });
+
+  it('leaves ticker-pdf links and non-links alone', () => {
+    const doc = 'A [Book p.3](ticker-pdf://abc?page=3) citation and plain text.';
+    expect(chipRanges(doc)).toEqual([]);
+  });
+
+  it('skips malformed links without URLs', () => {
+    const doc = 'Broken [label]() here';
+    expect(chipRanges(doc)).toEqual([]);
   });
 });

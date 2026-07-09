@@ -1,6 +1,7 @@
-import { EditorState, StateEffect, StateField, type ChangeDesc, type Extension, type Range } from '@codemirror/state';
+import { EditorState, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common';
 
 const MARK_NODE_NAMES = new Set(['EmphasisMark', 'StrongEmphasisMark', 'CodeMark', 'CodeInfo']);
 const LINK_CONCEAL_NODE_NAMES = new Set(['LinkMark', 'URL', 'LinkTitle']);
@@ -8,6 +9,14 @@ const INITIAL_MARKDOWN_PARSE_TIMEOUT_MS = 20;
 
 export const revealRawLinksEffect = StateEffect.define<number | null>();
 const setConcealMouseDownEffect = StateEffect.define<boolean>();
+
+/** True when an http(s) link that the chip layer replaces wholesale — conceal leaves it alone. */
+export function isChipEligibleLink(state: EditorState, linkNode: SyntaxNode): boolean {
+  const urlNode = linkNode.getChild('URL');
+  if (!urlNode) return false;
+  const url = state.doc.sliceString(urlNode.from, urlNode.to);
+  return /^https?:\/\//i.test(url);
+}
 
 function isLineSelected(view: EditorView, lineFrom: number, lineTo: number): boolean {
   const doc = view.state.doc;
@@ -112,21 +121,54 @@ function markdownTreeForDecorations(view: EditorView, ensureInitialParse: boolea
   return ensureSyntaxTree(view.state, visibleRangeEnd(view), INITIAL_MARKDOWN_PARSE_TIMEOUT_MS) ?? syntaxTree(view.state);
 }
 
-export function buildMarkdownConcealDecorations(view: EditorView, ensureInitialParse = false): DecorationSet {
+export interface MarkdownConcealBuildOptions {
+  ensureInitialParse?: boolean;
+  /**
+   * When false (mouse held down), selection-based reveal is disabled: everything
+   * stays concealed so layout cannot shift under an in-progress drag. The set is
+   * still rebuilt on every relevant update — freezing the DecorationSet itself
+   * desyncs viewport coverage (regions scrolled into view would render raw).
+   */
+  revealForSelection?: boolean;
+}
+
+export function buildMarkdownConcealDecorations(
+  view: EditorView,
+  options: MarkdownConcealBuildOptions = {}
+): DecorationSet {
+  const { ensureInitialParse = false, revealForSelection = true } = options;
   const decorations: Array<Range<Decoration>> = [];
   const blockquoteLineStarts = new Set<number>();
   const codeblockLineStarts = new Set<number>();
   const tree = markdownTreeForDecorations(view, ensureInitialParse);
   const rawLinksLineFrom = view.state.field(revealRawLinksField, false);
+  let activeChipLink: { from: number; to: number } | null = null;
 
   for (const visibleRange of view.visibleRanges) {
     tree.iterate({
       from: visibleRange.from,
       to: visibleRange.to,
-      enter: (node) => {
+      enter: (node: SyntaxNodeRef) => {
+        if (node.name === 'Link') {
+          const line = view.state.doc.lineAt(node.from);
+          if (rawLinksLineFrom !== line.from && isChipEligibleLink(view.state, node.node)) {
+            activeChipLink = { from: node.from, to: node.to };
+          }
+          return;
+        }
+
+        // Chip layer replaces the whole eligible link; conceal must not double-decorate inside it.
+        if (activeChipLink && node.from >= activeChipLink.from && node.to <= activeChipLink.to) {
+          return;
+        }
+
         const line = view.state.doc.lineAt(node.from);
         const isLinkConcealNode = LINK_CONCEAL_NODE_NAMES.has(node.name) && node.matchContext(['Link']);
-        if (isLineSelected(view, line.from, line.to) && (!isLinkConcealNode || rawLinksLineFrom === line.from)) {
+        if (
+          revealForSelection &&
+          isLineSelected(view, line.from, line.to) &&
+          (!isLinkConcealNode || rawLinksLineFrom === line.from)
+        ) {
           return;
         }
 
@@ -152,15 +194,15 @@ export function buildMarkdownConcealDecorations(view: EditorView, ensureInitialP
         if (node.name === 'FencedCode') {
           const from = Math.max(node.from, visibleRange.from);
           const to = Math.min(node.to, visibleRange.to);
-          let line = view.state.doc.lineAt(from);
+          let codeLine = view.state.doc.lineAt(from);
 
-          while (line.from < to) {
-            if (!codeblockLineStarts.has(line.from)) {
-              codeblockLineStarts.add(line.from);
-              decorations.push(Decoration.line({ class: 'cm-codeblock-line' }).range(line.from));
+          while (codeLine.from < to) {
+            if (!codeblockLineStarts.has(codeLine.from)) {
+              codeblockLineStarts.add(codeLine.from);
+              decorations.push(Decoration.line({ class: 'cm-codeblock-line' }).range(codeLine.from));
             }
-            if (line.to >= to || line.number >= view.state.doc.lines) break;
-            line = view.state.doc.line(line.number + 1);
+            if (codeLine.to >= to || codeLine.number >= view.state.doc.lines) break;
+            codeLine = view.state.doc.line(codeLine.number + 1);
           }
           return;
         }
@@ -181,38 +223,6 @@ export function buildMarkdownConcealDecorations(view: EditorView, ensureInitialP
   }
 
   return Decoration.set(decorations, true);
-}
-
-export interface MarkdownConcealUpdateFlags {
-  docChanged: boolean;
-  viewportChanged: boolean;
-  selectionSet: boolean;
-  rawLinksChanged: boolean;
-  wasMouseDown: boolean;
-  isMouseDown: boolean;
-}
-
-export function nextMarkdownConcealDecorations(
-  current: DecorationSet,
-  view: EditorView,
-  changes: ChangeDesc,
-  flags: MarkdownConcealUpdateFlags
-): DecorationSet {
-  if (flags.isMouseDown) {
-    return flags.docChanged ? current.map(changes) : current;
-  }
-
-  if (
-    flags.docChanged ||
-    flags.viewportChanged ||
-    flags.selectionSet ||
-    flags.rawLinksChanged ||
-    (flags.wasMouseDown && !flags.isMouseDown)
-  ) {
-    return buildMarkdownConcealDecorations(view);
-  }
-
-  return current;
 }
 
 const concealMouseDownPlugin = ViewPlugin.fromClass(class {
@@ -243,20 +253,29 @@ const markdownConcealPlugin = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
 
   constructor(view: EditorView) {
-    this.decorations = buildMarkdownConcealDecorations(view, true);
+    this.decorations = buildMarkdownConcealDecorations(view, {
+      ensureInitialParse: true,
+      revealForSelection: !view.state.field(concealMouseDownField, false),
+    });
   }
 
   update(update: ViewUpdate): void {
     const rawLinksChanged = update.startState.field(revealRawLinksField, false) !==
       update.state.field(revealRawLinksField, false);
-    this.decorations = nextMarkdownConcealDecorations(this.decorations, update.view, update.changes, {
-      docChanged: update.docChanged,
-      viewportChanged: update.viewportChanged,
-      selectionSet: update.selectionSet,
-      rawLinksChanged,
-      wasMouseDown: update.startState.field(concealMouseDownField, false) === true,
-      isMouseDown: update.state.field(concealMouseDownField, false) === true,
-    });
+    const wasMouseDown = update.startState.field(concealMouseDownField, false) === true;
+    const isMouseDown = update.state.field(concealMouseDownField, false) === true;
+
+    if (
+      update.docChanged ||
+      update.viewportChanged ||
+      update.selectionSet ||
+      rawLinksChanged ||
+      wasMouseDown !== isMouseDown
+    ) {
+      this.decorations = buildMarkdownConcealDecorations(update.view, {
+        revealForSelection: !isMouseDown,
+      });
+    }
   }
 }, {
   decorations: (value) => value.decorations,
