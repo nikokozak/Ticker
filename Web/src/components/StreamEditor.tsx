@@ -17,9 +17,11 @@ import { markdownConcealExtension } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
+import { addSpans, currentSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
+import { fnv1a } from '../utils/fnv1a';
 import { deserializeProvenanceSpans, serializeProvenanceSpans } from '../utils/provenanceSpans';
 import {
   beginPDFAnchorPick,
@@ -201,6 +203,67 @@ function dispatchAiRangeClear(view: EditorView) {
   });
 }
 
+function parseSpanMeta(meta: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(meta);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function payloadSpanToFieldSpan(span: ProvenanceSpanJSON, doc: string): Span | null {
+  if (span.start < 0 || span.end <= span.start || span.end > doc.length) return null;
+  const coveredText = doc.slice(span.start, span.end);
+  if (fnv1a(coveredText) !== span.textHash) return null;
+  const createdAt = Date.parse(span.createdAt);
+  if (!Number.isFinite(createdAt)) return null;
+  const origin = span.origin === 'ai' || span.origin === 'source' || span.origin === 'capture'
+    ? span.origin
+    : null;
+  if (!origin) return null;
+
+  return {
+    spanId: span.spanId,
+    start: span.start,
+    end: span.end,
+    origin,
+    requestId: span.requestId,
+    sourceId: span.sourceId,
+    meta: parseSpanMeta(span.meta),
+    textHash: span.textHash,
+    createdAt,
+  };
+}
+
+function payloadSpansForDoc(value: unknown, doc: string): Span[] {
+  return deserializeProvenanceSpans(value).flatMap((span) => {
+    const fieldSpan = payloadSpanToFieldSpan(span, doc);
+    return fieldSpan ? [fieldSpan] : [];
+  });
+}
+
+function fieldSpanToPayload(span: Span): ProvenanceSpanJSON {
+  const createdAtSeconds = Math.floor(span.createdAt / 1000) * 1000;
+  return {
+    spanId: span.spanId,
+    start: span.start,
+    end: span.end,
+    origin: span.origin,
+    requestId: span.requestId,
+    sourceId: span.sourceId,
+    meta: JSON.stringify(span.meta),
+    textHash: span.textHash,
+    createdAt: new Date(createdAtSeconds).toISOString().replace('.000Z', 'Z'),
+  };
+}
+
+function serializeFieldSpans(spans: Span[], doc: string): ProvenanceSpanJSON[] {
+  return serializeProvenanceSpans(normalizeSpans(spans, doc).map(fieldSpanToPayload));
+}
+
 const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: t.heading,
@@ -315,7 +378,6 @@ export function StreamEditor({
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
   const markdownContentRef = useRef(stream.document?.markdown ?? '');
   const revisionRef = useRef(stream.document?.revision ?? 0);
-  const provenanceSpansRef = useRef<ProvenanceSpanJSON[]>(stream.spans ?? []);
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
   const aiFeedbackTimerRef = useRef<number | null>(null);
@@ -557,7 +619,6 @@ export function StreamEditor({
     lastSavedContentRef.current = stream.document?.markdown ?? '';
     markdownContentRef.current = stream.document?.markdown ?? '';
     revisionRef.current = stream.document?.revision ?? 0;
-    provenanceSpansRef.current = stream.spans ?? [];
     sourcesRef.current = stream.sources;
     sourceIndexStatusesRef.current = new Map(
       stream.sources.map((source) => [source.id, source.indexStatus])
@@ -585,6 +646,10 @@ export function StreamEditor({
     aiRequestRef.current = null;
     const view = editorViewRef.current;
     if (view) {
+      view.dispatch({
+        effects: setSpans.of(payloadSpansForDoc(stream.spans, stream.document?.markdown ?? '')),
+        annotations: Transaction.addToHistory.of(false),
+      });
       dispatchAiRangeClear(view);
     }
   }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
@@ -621,12 +686,13 @@ export function StreamEditor({
     const timer = window.setTimeout(() => {
       const contentToSave = markdownContent;
       const baseRevision = revisionRef.current;
+      const view = editorViewRef.current;
 
       void bridge.sendAsync<{ revision: number }>('saveStreamDocument', {
         streamId: stream.id,
         markdown: contentToSave,
         baseRevision,
-        spans: serializeProvenanceSpans(provenanceSpansRef.current),
+        spans: view ? serializeFieldSpans(currentSpans(view.state), contentToSave) : [],
       }).then((response) => {
         if (Number.isFinite(response.revision)) {
           revisionRef.current = response.revision;
@@ -653,21 +719,21 @@ export function StreamEditor({
         const payloadStreamId = message.payload?.streamId as string | undefined;
         const markdown = message.payload?.markdown as string | undefined;
         const revision = Number(message.payload?.revision);
-        const spans = deserializeProvenanceSpans(message.payload?.spans);
 
         if (!payloadStreamId || payloadStreamId !== stream.id || typeof markdown !== 'string' || !Number.isFinite(revision)) {
           return;
         }
 
         const view = editorViewRef.current;
+        const spans = payloadSpansForDoc(message.payload?.spans, markdown);
         if (view) {
           view.dispatch({
             changes: { from: 0, to: view.state.doc.length, insert: markdown },
+            effects: setSpans.of(spans),
           });
         }
 
         revisionRef.current = revision;
-        provenanceSpansRef.current = spans;
         markdownContentRef.current = markdown;
         lastSavedContentRef.current = markdown;
         setMarkdownContent(markdown);
@@ -684,7 +750,6 @@ export function StreamEditor({
         const payloadStreamId = message.payload?.streamId as string | undefined;
         const fragment = message.payload?.fragment as string | undefined;
         const revision = Number(message.payload?.revision);
-        const spans = deserializeProvenanceSpans(message.payload?.spans);
 
         if (!payloadStreamId || payloadStreamId !== stream.id || typeof fragment !== 'string' || fragment.length === 0) {
           return;
@@ -697,18 +762,21 @@ export function StreamEditor({
         const insertion = computeAppendInsertion(currentMarkdown.length, fragment);
         const insert = insertion.insert;
         const nextMarkdown = `${currentMarkdown}${insert}`;
+        const spans = payloadSpansForDoc(message.payload?.spans, nextMarkdown);
 
         if (view) {
           view.dispatch({
             changes: { from: insertion.from, insert },
-            effects: EditorView.scrollIntoView(insertion.insertedEnd, { y: 'nearest' }),
+            effects: [
+              EditorView.scrollIntoView(insertion.insertedEnd, { y: 'nearest' }),
+              addSpans.of(spans),
+            ],
           });
         }
 
         if (Number.isFinite(revision)) {
           revisionRef.current = revision;
         }
-        provenanceSpansRef.current = [...provenanceSpansRef.current, ...spans];
         markdownContentRef.current = nextMarkdown;
         if (!hadUnsavedChanges) {
           lastSavedContentRef.current = nextMarkdown;
@@ -2149,12 +2217,17 @@ export function StreamEditor({
                 markdown({ base: markdownLanguage, codeLanguages: languages }),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
+                provenanceField,
                 markdownImageWidgetExtension,
                 tickerPDFLinkExtension(stream.id),
                 linkInteraction,
               ]}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
+                view.dispatch({
+                  effects: setSpans.of(payloadSpansForDoc(stream.spans, view.state.doc.toString())),
+                  annotations: Transaction.addToHistory.of(false),
+                });
 
                 scrollCleanupRef.current?.();
                 const handleScroll = () => scheduleScrollPositionSave();
