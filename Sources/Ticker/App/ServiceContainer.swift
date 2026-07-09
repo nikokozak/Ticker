@@ -34,6 +34,7 @@ struct ServiceContainer {
             proxyService: proxyService,
             settings: settingsService
         )
+        orchestrator.setClassifier(KeywordClassifier())
         self.orchestrator = orchestrator
 
         do {
