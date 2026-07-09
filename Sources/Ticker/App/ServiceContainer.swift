@@ -34,7 +34,7 @@ struct ServiceContainer {
             proxyService: proxyService,
             settings: settingsService
         )
-        orchestrator.setClassifier(KeywordClassifier())
+        orchestrator.setClassifier(Self.makeClassifier())
         self.orchestrator = orchestrator
 
         do {
@@ -93,5 +93,19 @@ struct ServiceContainer {
             self.retrievalService = nil
             self.searchService = nil
         }
+    }
+
+    private static func makeClassifier() -> QueryClassifier {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *) {
+            let classifier = FoundationModelClassifier()
+            if classifier.isReady {
+                DebugLog.log("Classifier: Apple foundation model")
+                return classifier
+            }
+        }
+        #endif
+        DebugLog.log("Classifier: keyword gate")
+        return KeywordClassifier()
     }
 }

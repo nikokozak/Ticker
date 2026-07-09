@@ -65,6 +65,46 @@ protocol QueryClassifier {
 /// search vs knowledge — which keywords answer deterministically, with no
 /// model download, RAM, or parse brittleness. The protocol seam stays for a
 /// stronger local model later.
+#if canImport(FoundationModels)
+import FoundationModels
+
+@available(macOS 26.0, *)
+@Generable
+private enum FMQueryKind: String {
+    case search
+    case knowledge
+}
+
+/// Apple Intelligence classifier: guided generation constrains decoding to the
+/// enum above, so off-vocabulary drift is structurally impossible. Keyword
+/// pre-pass keeps the obvious search queries deterministic and free.
+@available(macOS 26.0, *)
+struct FoundationModelClassifier: QueryClassifier {
+    private let keyword = KeywordClassifier()
+
+    let isLoading = false
+    let loadError: Error? = nil
+    var isReady: Bool {
+        if case .available = SystemLanguageModel.default.availability { return true }
+        return false
+    }
+
+    func prepare() async throws {}
+
+    func classify(query: String) async throws -> ClassificationResult {
+        let keywordResult = try await keyword.classify(query: query)
+        if keywordResult.intent == .search { return keywordResult }
+
+        let session = LanguageModelSession(
+            instructions: "Classify whether answering the query needs live, up-to-date information from the web (search) or can be answered from general knowledge (knowledge)."
+        )
+        let response = try await session.respond(to: "Query: \(query)", generating: FMQueryKind.self)
+        let intent: QueryIntent = response.content == .search ? .search : .knowledge
+        return ClassificationResult(intent: intent, confidence: 0.8, reasoning: "foundation-model")
+    }
+}
+#endif
+
 struct KeywordClassifier: QueryClassifier {
     // No bare "current": it misfires on physics/engineering queries
     // ("amplify current" is not current events).
