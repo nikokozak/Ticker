@@ -78,8 +78,16 @@ private enum FMQueryKind: String {
 /// Apple Intelligence classifier: guided generation constrains decoding to the
 /// enum above, so off-vocabulary drift is structurally impossible. Keyword
 /// pre-pass keeps the obvious search queries deterministic and free.
+///
+/// Classification sits in front of every quick-panel AI request, and a cold
+/// model takes ~4s — so the model is prewarmed at construction and each
+/// classify races a deadline; on timeout the request proceeds as knowledge.
 @available(macOS 26.0, *)
 struct FoundationModelClassifier: QueryClassifier {
+    private static let instructions =
+        "Classify whether answering the query needs live, up-to-date information from the web (search) or can be answered from general knowledge (knowledge)."
+    private static let deadlineNanoseconds: UInt64 = 1_500_000_000
+
     private let keyword = KeywordClassifier()
 
     let isLoading = false
@@ -89,18 +97,34 @@ struct FoundationModelClassifier: QueryClassifier {
         return false
     }
 
+    init() {
+        // Hints the OS to load model assets now, not on the first request.
+        LanguageModelSession(instructions: Self.instructions).prewarm()
+    }
+
     func prepare() async throws {}
 
     func classify(query: String) async throws -> ClassificationResult {
         let keywordResult = try await keyword.classify(query: query)
         if keywordResult.intent == .search { return keywordResult }
 
-        let session = LanguageModelSession(
-            instructions: "Classify whether answering the query needs live, up-to-date information from the web (search) or can be answered from general knowledge (knowledge)."
-        )
-        let response = try await session.respond(to: "Query: \(query)", generating: FMQueryKind.self)
-        let intent: QueryIntent = response.content == .search ? .search : .knowledge
-        return ClassificationResult(intent: intent, confidence: 0.8, reasoning: "foundation-model")
+        return await withTaskGroup(of: ClassificationResult?.self) { group in
+            group.addTask {
+                let session = LanguageModelSession(instructions: Self.instructions)
+                guard let response = try? await session.respond(to: "Query: \(query)", generating: FMQueryKind.self) else {
+                    return nil
+                }
+                let intent: QueryIntent = response.content == .search ? .search : .knowledge
+                return ClassificationResult(intent: intent, confidence: 0.8, reasoning: "foundation-model")
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: Self.deadlineNanoseconds)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? ClassificationResult(intent: .knowledge, confidence: 0.6, reasoning: "fm-deadline")
+        }
     }
 }
 #endif

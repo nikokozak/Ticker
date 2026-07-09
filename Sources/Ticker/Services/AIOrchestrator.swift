@@ -74,6 +74,7 @@ final class AIOrchestrator {
         var classificationResult: ClassificationResult?
         if settings.smartRoutingEnabled, let classifier, systemPromptOverride == nil {
             do {
+                DebugLog.log("AIOrchestrator: classifying query…")
                 let result = try await classifier.classify(query: query)
                 intent = result.intent
                 classificationResult = result
