@@ -58,6 +58,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Device-key changes now report disk-write failures in Settings and leave the durable key and in-memory auth state unchanged.
 - Source indexing can no longer remain stuck after terminal status-write failures, and refreshed file bookmarks now persist after stale recovery.
 - Source-required AI requests now fail when local retrieval fails, while Auto answers clearly disclose retrieval degradation.
 - Bridge callback failures now return immediately instead of timing out, and production surfaces a safe error when native actions fail.

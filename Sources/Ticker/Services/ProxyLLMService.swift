@@ -183,7 +183,7 @@ final class ProxyLLMService {
 
                 // Invalidate key on auth errors
                 if error.shouldInvalidateKey {
-                    await deviceKeyService.clearProxyDeviceKey()
+                    try? await deviceKeyService.clearProxyDeviceKey()
                 }
 
                 await MainActor.run { onError(error) }

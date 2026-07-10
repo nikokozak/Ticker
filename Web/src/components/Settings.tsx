@@ -189,11 +189,12 @@ export function Settings({ onClose }: SettingsProps) {
 
   // Clear device key
   const handleClearDeviceKey = async () => {
+    setDeviceKeyError(null);
     try {
       const result = await bridge.sendAsync<{ success: boolean; state: ProxyAuthState }>('clearProxyDeviceKey');
       setProxyAuth((prev) => (prev ? { ...prev, state: result.state, supportId: null, limits: null, usage: null } : null));
     } catch (err) {
-      debugError('Failed to clear device key');
+      setDeviceKeyError(err instanceof Error ? err.message : 'Failed to clear device key');
     }
   };
 
@@ -384,10 +385,10 @@ export function Settings({ onClose }: SettingsProps) {
                     {deviceKeyValidating ? 'Validating...' : 'Validate'}
                   </button>
                 </div>
-                {deviceKeyError && (
-                  <p className="settings-error">{deviceKeyError}</p>
-                )}
               </div>
+            )}
+            {deviceKeyError && (
+              <p className="settings-error">{deviceKeyError}</p>
             )}
           </div>
         </section>

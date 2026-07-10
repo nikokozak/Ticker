@@ -117,13 +117,19 @@ final class ProxyAuthHandler: BridgeMessageHandler {
                 return
             }
             Task {
-                await self.deviceKeyService.clearProxyDeviceKey()
-                let newAuth = await self.deviceKeyService.loadProxyAuth()
-                await MainActor.run {
-                    bridgeService.respond(to: callbackId, with: [
-                        "success": AnyCodable(true),
-                        "state": AnyCodable(newAuth.state.rawValue)
-                    ])
+                do {
+                    try await self.deviceKeyService.clearProxyDeviceKey()
+                    let newAuth = await self.deviceKeyService.loadProxyAuth()
+                    await MainActor.run {
+                        bridgeService.respond(to: callbackId, with: [
+                            "success": AnyCodable(true),
+                            "state": AnyCodable(newAuth.state.rawValue)
+                        ])
+                    }
+                } catch {
+                    await MainActor.run {
+                        bridgeService.respondWithError(to: callbackId, error: error.localizedDescription)
+                    }
                 }
             }
 
