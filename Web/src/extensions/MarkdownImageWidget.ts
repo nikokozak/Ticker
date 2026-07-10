@@ -191,6 +191,10 @@ class MarkdownImageBlockWidget extends WidgetType {
     }
 
     image.onload = () => this.scheduleRenderedSizeMeasure(view, wrapper, image);
+    // Failed loads must also record their rendered (collapsed) size, or the
+    // height estimate for this URL stays a guess forever and drifts CM's
+    // heightmap against the real layout.
+    image.onerror = () => this.scheduleRenderedSizeMeasure(view, wrapper, image);
     if (image.complete && image.naturalWidth > 0) {
       this.scheduleRenderedSizeMeasure(view, wrapper, image);
     }

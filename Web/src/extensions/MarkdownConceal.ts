@@ -108,6 +108,11 @@ export function rawLinksAreRevealedOnLine(state: EditorState, lineFrom: number):
   return state.field(revealRawLinksField, false) === lineFrom;
 }
 
+/** Current ⌥-click reveal line, for extensions that need to diff reveal state across updates. */
+export function rawLinkRevealLine(state: EditorState): number | null {
+  return state.field(revealRawLinksField, false) ?? null;
+}
+
 function rangeWithFollowingSpace(view: EditorView, from: number, to: number): { from: number; to: number } {
   if (to >= view.state.doc.length) return { from, to };
   const nextCharacter = view.state.doc.sliceString(to, to + 1);

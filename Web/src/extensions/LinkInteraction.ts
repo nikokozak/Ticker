@@ -3,7 +3,7 @@ import { RangeSetBuilder, type Extension } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, WidgetType, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 import { bridge } from '../types';
-import { isChipEligibleLink, rawFormattingIsShown, rawLinksAreRevealedOnLine, revealRawLinksEffect } from './MarkdownConceal';
+import { isChipEligibleLink, rawFormattingIsShown, rawLinkRevealLine, rawLinksAreRevealedOnLine, revealRawLinksEffect } from './MarkdownConceal';
 
 export interface MarkdownLinkInfo {
   from: number;
@@ -218,7 +218,12 @@ export function linkInteractionExtension(
 
     update(update: ViewUpdate): void {
       const rawFormattingChanged = rawFormattingIsShown(update.startState) !== rawFormattingIsShown(update.state);
-      if (update.docChanged || update.viewportChanged || update.selectionSet || rawFormattingChanged) {
+      const revealLineChanged = rawLinkRevealLine(update.startState) !== rawLinkRevealLine(update.state);
+      // Never rebuild on selectionSet: these replace decorations feed atomicRanges,
+      // which CM re-queries on every pointer-drag tick — a selection-keyed rebuild
+      // creates a geometry feedback loop that breaks drag selection (invariant:
+      // conceal depends only on document + viewport + explicit reveal).
+      if (update.docChanged || update.viewportChanged || revealLineChanged || rawFormattingChanged) {
         this.decorations = safeChipBuild(update.view, this.decorations.map(update.changes));
       }
     }
