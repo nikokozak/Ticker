@@ -3417,6 +3417,27 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
+    func test_migrationBackupFailurePreventsMigration() throws {
+        try withSeededV10Database { _ in
+            // v10 is intentionally behind the service's registered migrations.
+        } body: { dbURL, fileManager in
+            let backupsDirectory = dbURL.deletingLastPathComponent().appendingPathComponent("backups", isDirectory: true)
+            try fileManager.createDirectory(at: backupsDirectory, withIntermediateDirectories: true)
+            try fileManager.setAttributes([.posixPermissions: 0o444], ofItemAtPath: backupsDirectory.path)
+            defer {
+                try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: backupsDirectory.path)
+            }
+
+            XCTAssertThrowsError(try PersistenceService(databaseURL: dbURL, fileManager: fileManager))
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let migrationCount = try dbQueue.read { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM grdb_migrations")
+            }
+            XCTAssertEqual(migrationCount, 10)
+        }
+    }
+
     func test_v11MigrationRecoversPostDocumentQuickPanelCellsInOrder() throws {
         let streamId = UUID()
         let documentCreatedAt = 1_000.0

@@ -508,11 +508,7 @@ final class PersistenceService {
                 try !migrator.hasCompletedMigrations(db)
             }
             if hasPendingMigrations {
-                do {
-                    try backupDatabaseBeforeMigration(retainingLast: Self.databaseBackupRetentionCount)
-                } catch {
-                    Self.debugLog("PersistenceService: Failed to create pre-migration DB backup (continuing): \(error)")
-                }
+                try backupDatabaseBeforeMigration(retainingLast: Self.databaseBackupRetentionCount)
             }
         }
 
@@ -533,7 +529,11 @@ final class PersistenceService {
         let backupQueue = try DatabaseQueue(path: backupURL.path)
         try dbQueue.backup(to: backupQueue)
 
-        try rotateBackups(in: backupsDirectory, retainingLast: retentionCount)
+        do {
+            try rotateBackups(in: backupsDirectory, retainingLast: retentionCount)
+        } catch {
+            Self.debugLog("PersistenceService: Failed to rotate old DB backups: \(error)")
+        }
     }
 
     private func rotateBackups(in directory: URL, retainingLast retentionCount: Int) throws {
