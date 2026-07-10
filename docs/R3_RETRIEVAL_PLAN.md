@@ -31,9 +31,7 @@ downloads users didn't ask for, indexing that never finishes, memory bloat).
 4. **Embeddings are a disposable cache.** Rebuildable from `source_chunks` at any time;
    destructive rebuild is always safe (pre-release posture). They are never the source
    of truth for anything.
-5. **Shadow before live.** The hybrid picker runs in log-only mode on real usage before
-   it influences a single answer.
-6. **Platform first.** Candidate ladder: `NLContextualEmbedding` (OS-managed, zero
+5. **Platform first.** Candidate ladder: `NLContextualEmbedding` (OS-managed, zero
    dependency) → Core ML-converted small embedding model bundled in the app (no
    download, no dependency) → stop. MLX is not a candidate.
 
@@ -111,26 +109,22 @@ changes, no web changes.
   AND negatives unchanged AND p95 query embed within budget on Niko's machine. Neither
   candidate passes ⇒ R3 stops; doc records the numbers and BM25 remains.
 
-### R3.2 — Product integration (behind shadow flag)
+### R3.2 — Product integration (live on merge)
 - Migration vN: `chunk_embeddings` per D5.
 - `EmbeddingIndexer` on IngestService: embed after FTS commit, batched, throttled;
   lazy backfill for existing sources piggybacking the existing stream-open backfill
   path. Terminal-status semantics untouched (D6).
-- Semantic leg + fusion in `RetrievalService` behind an internal mode:
-  `off | shadow | on` (UserDefaults, no UI), default **shadow**.
+- Semantic leg + fusion in `RetrievalService`, ON by default. A one-line UserDefaults
+  kill switch (no UI) survives exactly one release, then dies.
+- Retrieval-mode DebugLog lines note when the semantic leg contributed (existing
+  telemetry style: "Using retrieved source context (n chunks, m semantic)").
 - Tests: hermetic fusion/floor tests with canned vectors (CI); indexer failure-path
   tests (embed error ⇒ FTS untouched, no status change); migration test.
-- Gates: the standard six + `eval-retrieval` run locally.
-
-### R3.3 — Shadow → live
-- Shadow mode logs, per real query: BM25 pick set vs hybrid pick set, divergence count,
-  and whether the semantic leg ran (DebugLog + a counter in the support bundle).
-- Niko uses the app normally for a few days; governor reviews divergence logs — looking
-  specifically for *bad adds* (semantic chunks that would have polluted context).
-- Flip default to `on`; keep the flag one release as a kill switch; then delete it.
+- Gates: the standard six + `eval-retrieval`; live verification by Niko on the real
+  corpus (paraphrase case retrieves, pasta case still gates) before merge.
 - Release ritual per D8 begins here.
 
-### R3.4 — Follow-ons (explicitly not R3)
+### R3.3 — Follow-ons (explicitly not R3)
 - ⌘K semantic stream search (separate table, separate plan).
 - Re-examine H1.1's single-source floor — likely subsumed by the semantic leg; remove
   only with golden-set proof.
@@ -139,7 +133,7 @@ changes, no web changes.
 
 ## Execution protocol
 
-Governed Codex per the established rules: one session for R3.0–R3.3, resumed by explicit
+Governed Codex per the established rules: one session for R3.0–R3.2, resumed by explicit
 id, compacted when heavy; Sol medium default, Sol high only if a phase turns
 design-ambiguous; no sub-agents; ponytail in every prompt; all six gates per round plus
 `eval-retrieval` where it exists. The golden set and all thresholds live in

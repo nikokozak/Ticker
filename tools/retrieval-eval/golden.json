@@ -1,0 +1,391 @@
+{
+ "version": 1,
+ "notes": "Seed set (governor-curated 2026-07-10). Corpus chunks extracted verbatim from real indexed sources except the synthetic lease class. Expected labels are judgments — refine alongside R3.1, never to make a failing metric pass.",
+ "corpus": [
+  {
+   "id": "forth-8",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 18,
+   "pageEnd": 19,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.2 Dictionary",
+   "text": "Forth Programmer’s Handbook 1.1 FORTH LANGUAGE FEATURES This section highlights special considerations arising from the actual implementation of a system. More detailed technical discussions of subjects covered here will be found in later sections of this book, espe- cially Section 2. Appendix B, Glossary & Notation provides supplemen- tary definitions of many of the terms used in this manual, as well as a detailed description of the notation conventions. 1.1.1 Definitions of Terms Forth allows any kind of ASCII string (except one containing spaces) to be a valid name, and this introduces some ambiguities in references. For instance, Forth calls subroutines words, but word could also mean an addressable unit of memory. To resolve this, we use the following conventions: • A Forth execution procedure is called a definition. A word is the name of such a definition. • The word length of the processor is always referred to as a cell. This is also the size of an address and the size of a single item on Forth’s stacks. • Eight bits is called a byte. On a 32-bit or larger processor, a 16-bit item may be called a 16-bit cell or half-cell. A more extensive glossary of terms may be found in Appendix B.1. 1.1.2 Dictionary The dictionary contains all the executable routines (or words) that make up a Forth system. System routines are entries predefined in the dictionary that become available when the system is booted. Electives are optionally compiled after booting. User-defined words are entries the user adds. The basic form of the most common type of word definition is: : <name> <words to be executed> ; 18 Introduction ...where : constructs a new definition called name, which is termi- nated by ;. When name is referenced, the words in the body of the def- inition name will be executed. There are other kinds of words in Forth: words defined in assembler code, words that function as data objects, etc. All have dictionary entries with a similar structure and are man- aged by the same internal rules. The various kinds of definitions are discussed in Section 6.2. Regardless of the kind of definition it is, each word is basically the same: an executable function with a defined behavior. This is true even of things that seem analogous to data objects in other languages and things that look like punctuation. There is no punctuation in Forth, and no syntax, just executable words. The dictionary is the fundamental mechanism by which Forth allo- cates memory and performs symbol table operations. Because the dic- tionary serves so many purposes, it’s important that you understand how to use it. The dictionary is a linked list of variable-length entries, each of which is a Forth word and its definition. In most implementations, the dic- tionary grows toward high memory; the discussion in this section will assume it does. Each dictionary entry points to the entry that logically precedes it (see Figure 1). Figure 1. Dictionary entry links Dictionary entries are not necessarily contiguous."
+  },
+  {
+   "id": "forth-9",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 19,
+   "pageEnd": 21,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.2 Dictionary",
+   "text": "In most implementations, the dic- tionary grows toward high memory; the discussion in this section will assume it does. Each dictionary entry points to the entry that logically precedes it (see Figure 1). Figure 1. Dictionary entry links Dictionary entries are not necessarily contiguous. For example, in cross-compilers used to construct programs for embedded systems, the searchable portion of the dictionary (name, link, and a pointer to the content—see Figure 2) may reside in a host computer, and the actual content may reside in a target image being constructed in the host computer’s memory for later downloading or for burning into flash or PROM. The dictionary is searched by sequentially matching names in source text against names compiled in the dictionary. On some systems, the search is speeded by providing more than one chain of definitions, Forth Programmer’s Handbook HERE previous definition previous definition latest definition unused dictionary space Introduction 19 Forth Programmer’s Handbook with entries linked in logical sequences that do not necessarily reflect their physical locations. The Forth text interpreter selects one of these chains to search; the selection mechanism is implementation depen- dent and may include two or more chains in a programmer-controlled order (see Section 6.6). The search follows the selected chain until a match is found or the end of the chain is reached. Because the latest definition will be found first, this organization permits words to be redefined, a technique that is frequently useful. pointer to top entry latest definition previous definition ... m ore definitions... earliest definition lin k name content lin k name content lin k name content Figure 2. Logical structure of the Forth dictionary The Standard Forth term for one of these chains is word list. A word list is a subset of the dictionary containing words for some special purpose. Several word lists usually are present in a system and they are normally available to all users on a re-entrant basis. The essential structure of dictionary entries is the same for all words and is diagrammed in Figure 2. The link cell contains the location of the preceding entry. Searches start at the recent end of the dictionary and work backwards to the older end. By this process, the most recent definition of a word is always found. In a developed application, where the user is dealing with the highest level of the program, this process optimizes search time. The name field in a dictionary entry contains the count of characters in the full name, followed by some number of characters in the name. The count (and, thus, the longest allowable name length) usually is limited to 31 characters. On most systems, any characters other than space, backspace (BS or DEL), and carriage return (CR) can be used as 20 Introduction part of a name field. However, Standard Forth advises that you can only depend on being able to use displayable graphic characters. Some systems are case sensitive and others are not; see your product documentation for details."
+  },
+  {
+   "id": "forth-11",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 22,
+   "pageEnd": 23,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.3 Data Stack",
+   "text": "Forth Programmer’s Handbook set by the word IMMEDIATE. The precedence bit is used for a few special words, such as compiler directives, but it is zero for most words. Another common control bit is the smudge bit. A word whose smudge bit is set is invisible to a dictionary search. This bit is set by the com- piler when starting to compile a high-level : (colon) definition, to pre- vent unintentional recursive references. It is reset by the word ; (semicolon) that ends the definition. The body will usually include a code field. The code field will contain either a pointer to the run-time code to be executed when this defini- tion is invoked, or in some implementations the code itself. There is often a parameter field of variable length, containing references to data needed when this definition executes. Data objects such as vari- ables keep their data in their parameter fields. On cross-compilers used for developing programs for embedded sys- tems, the head may exist only on the host, with a pointer to the actual executable portion being constructed in the target image. The data space portion of the body need not be contiguous with the code field; on Harvard architecture parts, for example, code space may be in ROM or flash, and data space in RAM. References Code field addresses, Section 6.2.2 Creating dictionary entries, Section 6.2.1 Word lists, Section 6.6 1.1.3 Data Stack Every Forth system contains at least one data stack. In a multitasked system, each task may have its own data stack. The stack is a cell-wide, push-down LIFO (last-in, first-out) list; its purpose is to contain numeric operands for Forth commands. Commands commonly expect their input parameters on this stack and leave their output results there. The stack’s size is indefinite. Usually it is located at a relatively high memory address and grows downward towards areas allocated for other purposes; see your product documentation for your system’s particular layout. The data stack rarely grows deeper than just a few entries in a well-written application. 22 Introduction When numbers are pushed onto or popped off the stack, the remaining numbers are not moved. Instead, a pointer is adjusted to indicate the last used cell in a static memory array. On most implementations, the top-of-stack pointer is kept in a register. Stacks typically extend toward low memory for reasons of implemen- tation efficiency, but this is by no means required or universally true. On implementations in which the stack grows toward low memory, a push operation involves decrementing the stack pointer, while a pop involves incrementing it. Forth Programmer’s Handbook 0 “bottom” of stack “top” of stack 12 2400 most stacks grow towards low memory Figure 4. Items on the data stack A number encountered by the text interpreter will be converted to binary and pushed onto the stack. Forth data objects (such as those defined by VARIABLE and CONSTANT) push their addresses or values onto the stack. Thus, the stack provides a medium of communication not only between routines but between a person and the computer."
+  },
+  {
+   "id": "forth-12",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 23,
+   "pageEnd": 23,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.3 Data Stack",
+   "text": "Figure 4. Items on the data stack A number encountered by the text interpreter will be converted to binary and pushed onto the stack. Forth data objects (such as those defined by VARIABLE and CONSTANT) push their addresses or values onto the stack. Thus, the stack provides a medium of communication not only between routines but between a person and the computer. You may, for example, place numbers or addresses on the stack and then type words which act on them to produce a desired result. For example, typing: 12 2400 * 45 / . ...(a) pushes the number 12 on the stack; (b) pushes 2400 above it (see Figure 4); (c) executes the multiply routine * which replaces both num- bers by their product; (d) pushes 45 on the stack; (e) executes the divide routine / which replaces the product and the 45 withs the quo- tient; and (f) executes the output routine . (“dot”), which removes and displays the top stack item (the quotient). All numbers put on the stack have been removed, leaving the stack as it was before typing 12. Introduction 23"
+  },
+  {
+   "id": "forth-13",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 24,
+   "pageEnd": 24,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.4 Return Stack",
+   "text": "Forth Programmer’s Handbook The standard Forth dictionary provides words for simple manipula- tion of single- and double-length operands on the stack: SWAP, DUP, DROP, 2SWAP, etc. (covered in detail in Section 2.1). The push-down stack simplifies the internal structure of Forth and produces naturally re-entrant routines. Passing parameters via the stack means fewer variables must be named, reducing the amount of memory required for named variables (as well as reducing the pro- grammer’s associated housekeeping). A pointer to the top (i.e., the latest entry) of the user’s stack is main- tained by the system. There is also a pointer to the “bottom” of the stack, so that stack-empty or underflow conditions can be detected, and to aid in clearing the stack if an abort condition is detected. Most Forth systems check for stack underflow only after executing (or attempting to execute) a word from the input stream (see Figure 5). Underflows that occur in the process of execution will not be detected immediately when they occur, but only when the text interpreter is ready to parse the input stream again. The usual result of a detected stack underflow is the message: Stack empty ...followed by a system abort. References Stack manipulation, Section 2.1 System abort routines, Section 5.3 Data types in stack notation, Section B.2 Stack operations, Section 2.1 1.1.4 Return Stack Every Forth system also has a return stack. In a multitasked system, each task has its own return stack. Like the data stack, the return stack is a cell-wide LIFO list. It is used for system functions, but may also be accessed directly by an application program. It commonly serves the following purposes: 24 Introduction"
+  },
+  {
+   "id": "forth-14",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 25,
+   "pageEnd": 26,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.5 Text Interpreter",
+   "text": "• It holds return addresses for nested definitions. • It holds loop parameters. • It may be used by the system for other temporary purposes; con- sult your system documentation. Because the return stack has multiple uses, care must be exercised to avoid conflicts when accessing it directly. There are no commands for directly manipulating the return stack, except those for moving one or two parameters between the data stack and the return stack. The maximum size of the return stack for each task is specified at the time the task is defined, and remains fixed during operation; a typical size is 128 cells. References Loading, Sections 5.5.1, C.2 Loop parameters, Section 4.5 Data stack, Section 1.1.3 Transfers between stacks, Section 2.1.3 1.1.5 Text Interpreter The text interpreter processes the input stream, which may contain: • the commands users type (often called the command line); • source code stored on disk; • a string whose address and length are supplied to the word EVALUATE. The operator’s keyboard is the default input stream source. The key- board handler will accept characters into a text buffer called the termi- nal input buffer until a user event occurs, such as a Return or Enter keypress, function keypress, etc. Most implementations provide key- board editing of the line before the Return or Enter keypress. When the Return or Enter keypress is detected, the text interpreter will pro- cess the text in the buffer. Interpretation from source code on disk is buffered separately in an implementation-dependent fashion. Forth Programmer’s Handbook Introduction 25 Forth Programmer’s Handbook Another name for the place text resides while the text interpreter pro- cesses it is the parse area, because the process involves parsing the text in the input stream looking for words separated by spaces. The text interpreter repeats the following steps until the parse area is exhausted or an error has occurred: 1. Starting at the beginning of the parse area, skip leading spaces and extract a word from the input string using the space charac- ter (ASCII 32) as a delimiter. Set the interpreter pointer to point to the first character beyond the delimiter. If there was no delimiter (end of input buffer was reached), set the interpreter pointer to the end of the parse area, to complete the operation. If the text is coming from a text file, the interpreter will treat any non-graphic characters as “whitespace” (equivalent to a space character). 2. Search the dictionary for a definition name matching the input word (including case sensitivity, if applicable). If a matching defi- nition is found, perform its interpretation behavior (if currently in interpretation mode) or compilation behavior (if currently in compiling mode). Then check for stack underflow and, if there has been no error, return to step (1); if there was a stack under- flow, abort. 3. If a definition name matching the input word is not found, attempt to convert the word to a binary number (see next sec- tion)."
+  },
+  {
+   "id": "forth-15",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 26,
+   "pageEnd": 28,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.5 Text Interpreter",
+   "text": "Then check for stack underflow and, if there has been no error, return to step (1); if there was a stack under- flow, abort. 3. If a definition name matching the input word is not found, attempt to convert the word to a binary number (see next sec- tion). If this is successful, place the number on the data stack (if currently in interpretation mode); or, if in compilation mode, compile code that, when executed, will place this number on the data stack (see the definition of LITERAL). Then return to step 1. 4. If neither the dictionary search nor the number conversion is suc- cessful, abort. For example, typing: PAD 100 DUMP ...causes the word PAD to be interpreted from the text input buffer. It will be found in the dictionary and executed, returning the address of a scratch area (described in Section 3.1.2) to be pushed on the stack. Then the string 100 is converted to a number that is pushed on the stack, and DUMP is found in the dictionary and executed. The result is to display 100 bytes of memory starting at the location given by PAD. 26 Introduction INCLUDE and INCLUDE-FILE temporarily re-direct the interpreter to pro- cess source code from text files (Section 5.5). For this, the prior posi- tion in the input stream is saved, and is restored after the file is completely processed. If an INCLUDE command is found in a file being processed, the pointers to that input stream are saved and restored, so the INCLUDEs are nested. When the text interpreter executes a defining word (e.g., CREATE, VARIABLE, or :), a definition is compiled into the dictionary. A flow diagram for the interpreting process is shown in Figure 5. The commands SAVE-INPUT and RESTORE-INPUT are available if you wish to manually direct the text interpreter to a different area. These are not required around standard words that redirect the interpreter, such as INCLUDE-FILE, and EVALUATE. References Text files for program source, Section 5.5 System abort routines, Section 5.3 Text interpreter words, Section 6.1 Disk blocks, Appendix C Forth Programmer’s Handbook Introduction 27 Forth Programmer’s Handbook INTERPRET Get next string of characters, delimited by blanks, and try to look it up in the dictionary. Try to convert the string to a number. Execute the word (interpretation or compilation behavior). Push the number onto the stack (interpreting), or compile literal. Issue \"unknown word\" message. Issue \"stack empty\" message. Reset the stacks and interpreter. yes no Success? no BEGIN Found? yes Stack no underflow? yes ABORT Endless loop back to BEGIN 28 Introduction AGAIN Figure 5. Flow diagram of the text interpreter"
+  },
+  {
+   "id": "forth-16",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 29,
+   "pageEnd": 30,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.6 Numeric Input",
+   "text": "1.1.6 Numeric Input If the text interpreter fails to find a word in the dictionary, it will attempt to convert it into a binary integer that will be pushed onto the stack. If there is no punctuation (except for an optional leading minus sign), a string of valid numerals is converted to a single-cell number, regardless of length. If a string of valid numerals is terminated by a decimal point, the text interpreter will convert it to a double-cell (dou- ble-precision) number regardless of length. A double-precision num- ber will occupy two data stack cells, with the high order part on top. On eight-bit and 16-bit systems, a single-precision integer is 16 bits wide and a double-precision integer is 32 bits wide. On 32-bit systems, these widths are 32 and 64 bits, respectively. On systems with optional floating-point routines, valid numeric strings containing an E or e (for exponent) will be converted as floating-point numbers occupy- ing one floating-point stack location (see Section 5.8 in this book and your product documentation for details). Table 1: Integer precision and CPU data width Forth Programmer’s Handbook CPU Data Width Forth Single-Precision Integer Forth Double-Precision Integer 8 bits 16 bits 32 bits 16 bits 16 bits 32 bits 32 bits 32 bits 64 bits All Standard Forth systems will interpret a number with a trailing period as a double-precision integer, but some, including those from FORTH, Inc., will interpret any number containing embedded punctua- tion (see below) in any position as a double-precision integer. Single- precision numbers are recognized by their lack of special punctuation. Conversions operate on character strings of the following format: [ - ] dddd [ punctuation ] dddd ... delimiter ...where dddd is one or more valid digits according to the current base or radix in effect for the user. The content of the user variable BASE is always used as the radix. All numeric strings must be ended by a blank or the end of the input stream. If another character is encountered— i.e., a character which is neither a valid digit in the current base, nor Introduction 29 Forth Programmer’s Handbook punctuation, nor a whitespace character (see glossary)—an abort will occur. There must be no spaces within a number, because a space is a delimiter. On systems allowing embedded punctuation, the characters shown in Table 2 may appear in a number. A leading minus sign, if present, must immediately precede the first digit or punctuation character. Table 2: Valid numeric punctuation characters Character Description , comma . period + plus - hyphen, may appear anywhere except to the immediate left of the most-significant digit / slash : colon All punctuation characters are functionally equivalent, including the period (decimal point). The punctuation performs no function other than to set a flag that indicates its presence. Multiple punctuation characters may be contained in a single number; the following charac- ter strings both convert to the same double-precision integer 123456: 1234.56 12,345.6"
+  },
+  {
+   "id": "forth-17",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 30,
+   "pageEnd": 30,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.6 Numeric Input",
+   "text": "/ slash : colon All punctuation characters are functionally equivalent, including the period (decimal point). The punctuation performs no function other than to set a flag that indicates its presence. Multiple punctuation characters may be contained in a single number; the following charac- ter strings both convert to the same double-precision integer 123456: 1234.56 12,345.6 On some systems, a punctuation character also causes the digits that follow it to be counted, with the count available to subsequent num- ber-conversion words. Immediately after a number conversion, on many systems, the count of digits to the right of the rightmost punctu- ation is found in the address given by DPL. Glossary BASE ( — a-addr ) Core Return a-addr, the address of a cell containing the current number conversion radix. The radix is a value between 2 and 36, inclusive. It is used for both input and output conversion. 30 Introduction"
+  },
+  {
+   "id": "forth-18",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 31,
+   "pageEnd": 32,
+   "sectionPath": "1. Introduction > 1.1 Forth Language Features > 1.1.7 Two-stack Virtual Machine",
+   "text": "DECIMAL ( — ) Core Sets BASE such that numbers will be converted using a radix of 10. HEX ( — ) Core Ext Sets BASE such that numbers will be converted using a radix of 16. References Use of the text interpreter for number input, Section 3.6.1 Floating point input, Section 5.8.2 1.1.7 Two-stack Virtual Machine A running Forth system presents to the programmer a virtual machine (VM), like a processor. It has two push-down stacks, code and data space, an Arithmetic Logic Unit (ALU) that executes instructions, and several registers. Previous sections briefly discuss the stacks and some aspects of memory use in Forth; this section describes some fea- tures of the virtual machine as a processor. A number of approaches to implementing the Forth VM have been developed over the years. Each has features that optimize the VM for the physical CPU on which it runs, for its intended use, or for some combination of these. Here we discuss the most common implementa- tion strategies. The function of the Forth VM, like that of most processors, is to exe- cute instructions. Two of the VM’s registers are used to manage the stacks. Others control execution in various ways. Various implementa- tions name and use these registers differently; for purposes of discus- sion in this book, we use the names in Table 3. Table 3: Registers in the Forth virtual machine Forth Programmer’s Handbook Name Mnemonic Description S data Stack pointer Pointer to the current top of the data stack. R Return stack pointer Pointer to the current top of the return stack. I Instruction pointer Pointer to the next instruction (definition) to be executed; controls execution flow. Introduction 31 Forth Programmer’s Handbook Table 3: Registers in the Forth virtual machine (continued) A standard Forth high-level, or colon, definition consists fundamen- tally of a name followed by references to previously defined words. When such a definition is invoked by a call to its name, the run-time code needs to manage the sequential execution of the words compris- ing the body of the definition. Exactly how this is done depends on the particular system and the method it uses to implement the Forth vir- tual machine. The implementation strategy affects how definitions are structured and how they are executed; see the relevant documentation for your system. There are several possibilities: • Indirect-threaded code. This was the original design and is still the most common method. Pointers to previously defined words are compiled into the executing word’s parameter field. The code field of the executing word contains a pointer to machine code for an address interpreter that sequentially executes those defini- tions by performing indirect jumps through register I, which is used to keep its place. When a definition calls another high-level definition, the current I is pushed onto the return stack; when the called definition finishes, the saved I is popped off the return stack. This process is analogous to subroutine calls, and I in this model is analogous to a physical processor’s instruction pointer. • Direct-threaded code."
+  },
+  {
+   "id": "forth-21",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 34,
+   "pageEnd": 35,
+   "sectionPath": "1. Introduction > 1.2 Forth Operating System Features > 1.2.2 Multitasking",
+   "text": "Forth Programmer’s Handbook 1.2.1 Disk I/O Disk I/O is handled by Forth systems in different ways, depending on the system environment. Co-resident Forth systems access disk using a file-based system, as described in Section 5.5. Files may contain pro- gram source or data, and are compatible with the host OS. Source files may be edited by any programmer’s editor, although some Forths also provide an editor. Standalone systems that include a disk drive typically use standard blocks of 1024 bytes. This fixed block size applies both to Forth source program text and to data used by Forth programs. This standard for- mat allows I/O—using different media with different physical sector or record sizes, or even on different operating systems—via a stan- dard block handler. Block-based Forths are rare today, but several are still available. Some systems achieve a hybrid approach by mapping blocks into host OS files; this provides a measure of source code por- tability between the two types of systems. Blocks are discussed fur- ther in Appendix C. Also see your product documentation for details. The majority of Forth implementations today are purely file based, so we will assume this strategy for the balance of this book. 1.2.2 Multitasking Since the early 1970s, standalone Forth systems have commonly offered the ability to control multiple asynchronous tasks, either back- ground tasks or terminal tasks that provide independent user inter- faces. A small set of commands controls the multitasking facility. The number of tasks in the system usually is limited only by memory size. Because Forth definitions are naturally re-entrant, tasks rarely require much memory. A terminal task has associated hardware that allows it to support a user interface (perform text input and output). Each terminal task has a partition that contains its stacks, private (or user) variable area, and a scratch PAD (for text strings). A background task has a much smaller area, with only enough space for its stacks. There is no terminal associated with it, and it cannot perform text I/O. The routines the background task executes are in a 34 Introduction shared area or in the dictionary of one of the terminal tasks. The use in Forth of stacks for parameter passing facilitates multitask- ing, because it enables most words to be inherently re-entrant. Provid- ing a unique set of stacks for each task enables words to be re-entrant, concurrently executable by multiple tasks. A standalone Forth normally runs with interrupts enabled. Interrupt vectors transfer control directly to code that services the interrupting device, without system intervention or overhead. The interrupt code is responsible for saving and restoring any registers it changes. Interrupt code (actual assembler code) is responsible for performing time-critical actions such as reading a value from an analog device and storing it in a temporary location. The interrupt routine may also notify the task responsible for the device, although some (notably clock interrupts) are self-contained."
+  },
+  {
+   "id": "forth-22",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 35,
+   "pageEnd": 35,
+   "sectionPath": "1. Introduction > 1.2 Forth Operating System Features > 1.2.2 Multitasking",
+   "text": "The interrupt code is responsible for saving and restoring any registers it changes. Interrupt code (actual assembler code) is responsible for performing time-critical actions such as reading a value from an analog device and storing it in a temporary location. The interrupt routine may also notify the task responsible for the device, although some (notably clock interrupts) are self-contained. Notification may take many forms, ranging from incrementing a counter, to “awakening” the task by storing in the task’s status area a pointer to code that will cause the task to become active the next time the task is available. Many inter- rupt handlers do nothing else. Any processing that is not time-critical can be done by a task running a high-level Forth routine. In effect, the time-critical aspect of servic- ing an interrupt is decoupled from the more logically complex aspects of dealing with the consequences of the event signalled by the inter- rupt. Thus, it is guaranteed that interrupts will be serviced promptly, without having to wait for task scheduling, yet as a programmer you have the convenience of using high-level Forth (executed by the responding task) for the main logic of the application. Co-resident Forths also commonly offer multitasking capabilities con- sistent with the OS under which they run. Consult your product docu- mentation for details. References PAD, Section 3.1.2 Terminal I/O, Section 5.3 Forth Programmer’s Handbook Introduction 35"
+  },
+  {
+   "id": "forth-29",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 42,
+   "pageEnd": 42,
+   "sectionPath": "1. Introduction > 1.4 Documentation and Programmer Aids > 1.4.4 Decompiler and Disassembler",
+   "text": "Forth Programmer’s Handbook 1.4.4 Decompiler and Disassembler1 The disassembler/decompiler is used to reconstruct readable source code from CODE and : (colon) definitions. This is useful as a cross check, whenever a new definition fails to work as expected. The command SEE name decompiles and/or disassembles both CODE commands and colon definitions. On indirect, direct, and subroutine- threaded implementations, SEE can reconstruct the high-level defini- tion from which the running version was compiled. On native code sys- tems, this is not possible; use LOCATE (Section 1.4.2) to view the source. For example, one source definition for /STRING is: : /STRING ( c-addr1 len1 n -- c-addr2 len2) >R SWAPR@+ SWAPR>-; ...but if you decompile it (on a FORTH, Inc. 68000 cross-compiler, for example, which is an optimized native code generator), you get: SEE /STRING 08BE A6)+A7-)MOV 08C0 SWAP BSR 08C4 A7)A6-)MOV 08C6 A6)+D0MOV 08C8 D0A6)ADD 08CA SWAP BSR 08CE A7)+A6 08D0 A6)+D0 08D2 D0A6)SUB 08D4 RTS 2F1E 6100FB72 2D17 201E D196 6100FB68 2D1F 201E 9196 4E75 ok -) MOV MOV This example clearly shows the combination of in-line code and sub- routine calls in this implementation. An alternative approach is to start disassembly or decompilation at some address. This is useful for decompiling headless code, such as code preceded only by a LABEL. The command to disassemble a CODE definition, given an address addr, is: <addr> DASM 1. This facility is common, but not standardized, and may not be implemented on all systems. 42 Introduction"
+  },
+  {
+   "id": "forth-30",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 43,
+   "pageEnd": 44,
+   "sectionPath": "1. Introduction > 1.5 Interactive Programming—An Example",
+   "text": "The word .' is becoming increasingly popular in this debugging con- text, though it is not in Standard Forth nor in all systems. It attempts to identify the definition in which an address occurs. For example, given /STRING above, you could type: HEX 8C6 .' ...and get: /STRING +08  ok ...indicating that the location $8C6 was eight bytes into the definition of /STRING. Glossary SEE <name> ( — ) Tools Reconstruct the source code for name, using a decompiler for high- level definitions or a disassembler for code definitions. DASM ( addr — ) Common usage Begin disassembly at the address addr on top of the stack. The disas- sembler stops when it encounters an unconditional transfer of control outside the range of the definition, such as returns from interrupt or from subroutines, branches, and jumps. Subroutine calls are excluded, as control is assumed to return to the location following the call. .' ( addr — ) Common usage Display the name of the nearest definition before addr, and the offset of addr from the beginning of that definition. “dot-tick” 1.5 INTERACTIVE PROGRAMMING—AN EXAMPLE The Forth language was designed from first principles to support an interactive development style. By developing a very simple application in this section, we will show how this style translates into practice. The general process of developing a program in Forth is consistent with the recommended development practices of top-down design and bottom-up coding and testing. However, Forth adds another element: extreme modularity. You don’t write page after page of code and then try to figure out why it doesn’t work; instead, you write a few very brief definitions and exercise them one by one. Forth Programmer’s Handbook Introduction 43 Forth Programmer’s Handbook Suppose we are designing a washing machine. The highest-level defini- tion might be: : WASHER WASH SPIN RINSE SPIN ; The colon indicates that a new word is being defined; following it is the name of that new word, WASHER. The remainder are previously defined words that comprise this definition. Finally, the definition is terminated by a semi-colon. \\ Port addresses HEX 7000 CONSTANT MOTOR3 7004 CONSTANT FAUCETS 7008 CONSTANT TIMER 7010 CONSTANT LEVEL DECIMAL 7002 CONSTANT VALVE 7006 CONSTANT DETERGENT 700A CONSTANT CLUTCH \\ Basic commands : ON ( port -- ) : OFF ( port -- ) : SECONDS ( n -- ) : MINUTES ( n -- ) \\ Machine functions : ADD ( port -- ) : TILL-FULL ( -- ) -1 SWAP OUTPUT ; 0 SWAP OUTPUT ; 1000 * MS ; 60 * SECONDS ; DUP ON  10 SECONDS  OFF ; BEGIN  LEVEL INPUT  UNTIL ; : DRAIN ( -- ) : AGITATE ( -- ) : SPIN ( -- ) VALVE ON  3 MINUTES  VALVE OFF ; MOTOR ON  10 MINUTES  MOTOR OFF ; CLUTCH ON  MOTOR ON  5 MINUTES MOTOR OFF  CLUTCH OFF ; : FILL ( -- ) \\ Sequencing : WASH ( -- ) : RINSE ( -- ) : WASHER ( -- ) FAUCETS ON  TILL-FULL  FAUCETS OFF ; FILL DETERGENT ADD AGITATE DRAIN ; FILL AGITATE DRAIN ; WASH  SPIN  RINSE  SPIN ; Figure 6. Example of a control program that runs a washing machine Typically, we design the highest-level routines first. This approach leads to conceptually correct solutions with a minimum of effort. In 44 Introduction"
+  },
+  {
+   "id": "forth-31",
+   "sourceName": "Forth Programmer's Handbook",
+   "pageStart": 44,
+   "pageEnd": 46,
+   "sectionPath": "1. Introduction > 1.5 Interactive Programming—An Example",
+   "text": ": WASH ( -- ) : RINSE ( -- ) : WASHER ( -- ) FAUCETS ON  TILL-FULL  FAUCETS OFF ; FILL DETERGENT ADD AGITATE DRAIN ; FILL AGITATE DRAIN ; WASH  SPIN  RINSE  SPIN ; Figure 6. Example of a control program that runs a washing machine Typically, we design the highest-level routines first. This approach leads to conceptually correct solutions with a minimum of effort. In 44 Introduction Forth, words must be compiled before they can be referenced. Thus, a listing begins with the most primitive definitions and ends with the highest-level words. If the higher-level words are entered first, lower- level routines are added above them in the listing. Figure 6 shows a complete listing of the washing machine example. Comments follow parentheses (to a delimiting right-parenthesis) or backslashes. In this example, the first few lines define named con- stants, with hex values representing hardware port addresses. The remaining definitions define, in sequence, the application words that perform the work. The code in this example is nearly self-documenting; the few com- ments show parameters being passed to certain words. Forth allows as many comments as desired, with no penalty in object code size or per- formance. When reading, : WASHER ( -- ) WASH SPIN RINSE SPIN ; ...it is obvious what RINSE does. To determine how it does it, you read: : RINSE ( -- ) FILL AGITATE DRAIN ; When you wonder how FILL works, you find: : FILL ( -- ) FAUCETS ON TILL-FULL FAUCETS OFF ; Reading further, one finds that FAUCETS is simply a constant which returns the address of the port that controls the faucet, while ON is a simple word that turns on the bits at that address. Even from this simple example, it may be clear that Forth is not so much a language as a tool for building application-oriented command sets. The definition of WASHER is based not on low-level Forth words, but on washing-machine words like SPIN and RINSE. Because Forth is extensible, Forth programmers write collections of words that apply to the problem at hand. The power of Forth, which is simple and universal to begin with, grows rapidly as words are defined in terms of previously defined words. Each successive, newer word becomes more powerful and more specific. The final program becomes as readable as you wish to make it. Forth Programmer’s Handbook Introduction 45 Forth Programmer’s Handbook When developing this program, you would follow your top-down logic, as described above. But when the time comes to test it, you see the real convenience of Forth’s interactivity. If your hardware is available, your first step would be to see if it works. Even without the code in Figure 6, you could read and write the hardware registers by typing phrases such as: HEX 7010 INPUT . This would read the water-level register at 7010H and display its value. And you could type: -1 7002 OUTPUT 0 7002 OUTPUT ...to see if the valve opens and closes. If the hardware is unavailable, you might temporarily re-define the words MOTOR, etc., as variables you can read and write, and so test the rest of the logic."
+  },
+  {
+   "id": "meal-0",
+   "sourceName": "meal",
+   "pageStart": 1,
+   "pageEnd": 2,
+   "sectionPath": "",
+   "text": "Mitochondrial Energy Meal Prep Plan Two meals per day - high protein - low added sugar - Brooklyn/Whole Foods friendly - 45-minute batch cycle Design target How this plan handles it Mental health / energy support Mediterranean/MIND-style base: fish, olive oil, greens, legumes, berries, yogurt, nuts/seeds, and high micronutrient density. Fat reduction Protein-forward meals, high fiber, low added sugar, controlled complex carbs, dessert kept deliberate and small. Cycling support Normal days stay moderate-carb; hard/long ride days add rice, quinoa, potato, or on-bike carbs rather than underfueling. Prep constraint One 45-minute batch produces 6 servings: 3 lunches plus 3 dinner vegetable bases. Fish cooks day-of or comes from cans. Storage constraint Cooked foods are portioned for 3 days. Weekly groceries are shelf-stable, frozen, or hardy enough to last the week. The repeatable default Use this as a stable template. Change sauces, fish type, greens, and carb amount rather than rebuilding the whole diet every week. Lunch: turkey-lentil salad bowl. Dinner: fish plus roasted vegetables, greens, and measured complex carbs. Snacks: Greek yogurt/chia/cocoa/berries, eggs or sardines/hummus/vegetables. Dessert: 85-90% dark chocolate, cocoa yogurt, berries, or controlled mango. Mitochondrial Energy Meal Prep Plan - practical cooking and storage guide Page 1 of 7 1. Daily structure and portions This plan assumes two meals per day: lunch and dinner. Breakfast is intentionally absent; snacks and dessert are included so the day is not psychologically austere. Daily component Default amount Notes Protein 2 large servings/day Aim for 6-8 oz cooked protein at lunch and dinner. Add yogurt, eggs, sardines, or seeds as needed. Vegetables 8-12 cups/day total Large salads plus roasted crucifers. Cabbage/slaw helps bulk, crunch, and storage stability. Complex carbs 1-2 cups cooked/day Use lentils, quinoa, brown rice, farro, or sweet potato. Increase on hard ride days. Fats 2-4 tbsp/day Mostly olive oil, tahini, walnuts, chia, avocado, sardines/salmon. Avoid accidental oil overload. Fermented food 2-4 tbsp/day Sauerkraut, kimchi, kefir, or yogurt. Optional but useful if tolerated. Dessert 1 controlled serving/day 20-30 g 85-90% dark chocolate, cocoa yogurt, berries, or 1/2 mango after dinner or riding. Lunch bowl formula Dinner plate formula - 6-8 oz cooked ground turkey. - 6-8 oz salmon, cod, shrimp, sardines, canned salmon, or tuna. 3-5 cups vegetables: roasted crucifers plus salad/slaw base. 1/2 cup cooked lentils, quinoa, brown rice, or sweet potato on normal days. 1-1.5 cups complex carbs on hard ride days. Olive oil, lemon, herbs, yogurt sauce, salsa, capers, olives, or mustard. - - - 1/2-3/4 cup cooked lentils. - 2-4 tbsp yogurt-tahini-lemon dressing. 1/2 cup cooked quinoa, brown rice, or farro; use more after hard rides. - 3-5 cups greens, cabbage/slaw, cucumber, carrot, radish, herbs. - - 1/2-1 cup roasted broccoli, cauliflower, or brussels sprouts. - - Simple rule: lunch is the prepared turkey-lentil bowl; dinner is fish plus the same vegetable infrastructure."
+  },
+  {
+   "id": "meal-1",
+   "sourceName": "meal",
+   "pageStart": 2,
+   "pageEnd": 4,
+   "sectionPath": "",
+   "text": "1/2-3/4 cup cooked lentils. - 2-4 tbsp yogurt-tahini-lemon dressing. 1/2 cup cooked quinoa, brown rice, or farro; use more after hard rides. - 3-5 cups greens, cabbage/slaw, cucumber, carrot, radish, herbs. - - 1/2-1 cup roasted broccoli, cauliflower, or brussels sprouts. - - Simple rule: lunch is the prepared turkey-lentil bowl; dinner is fish plus the same vegetable infrastructure. This minimizes cooking decisions while preserving nutrient density. Mitochondrial Energy Meal Prep Plan - practical cooking and storage guide Page 2 of 7 2. The 45-minute batch cycle Cook this twice per week. Each cycle produces 6 main-meal bases: 3 turkey-lentil lunches and 3 roasted-vegetable dinner bases. Fish is best cooked day-of or pulled from cans. Batch ingredient Amount for 3 days Prep note Ground turkey 3 lb Use 93/7 or 85/15 depending on calorie target. Cook fully, then portion. Lentils 1.5 cups dry or 3-4 cups cooked Black, green, or red. Canned lentils are fine; rinse well. Frozen crucifers 3 x 16 oz bags Broccoli, cauliflower, brussels, or mix. Roast from frozen. Greens and slaw 3 days worth Keep raw greens separate from wet ingredients. Grain/starch 2-3 cups cooked Quinoa, brown rice, farro, or sweet potato. Use microwave packs if needed. Dressing 1.5-2 cups Greek yogurt + tahini + lemon + mustard + garlic + salt + water. Time 0:00 0:05 0:08 0:20 0:25 0:35 0:40 Action Preheat oven to 425 F. Start lentils or open/rinse canned lentils. Start rice/quinoa if not using microwave packs. Spread frozen crucifers on sheet pans. Add olive oil, salt, pepper, smoked paprika, turmeric, garlic powder. Roast 25-30 minutes. Brown turkey in a large pan. Add cumin, paprika, turmeric, black pepper, garlic, onion, salt. Optional: salsa or canned tomatoes. Make dressing: 1 cup Greek yogurt, 2-3 tbsp tahini, lemon juice, mustard, garlic, salt, pepper, water to thin. Chop cucumbers, radishes, carrots, cabbage/slaw, herbs. Dry greens well. Keep raw salad parts separate. Portion turkey, lentils, grain, and roasted vegetables into containers. Let hot food vent briefly before sealing. Portion yogurt snack jars and dark chocolate. Label containers with date. Texture rule: store cooked bases separately from raw greens and dressing. Combine only when eating. That is what keeps the salad from collapsing into wet leftovers. Mitochondrial Energy Meal Prep Plan - practical cooking and storage guide Page 3 of 7 3. Cooking instructions A. Turkey-lentil base - Heat a large pan over medium-high. Add 1-2 tbsp olive oil - only if using very lean turkey. - - - Add 3 lb ground turkey. Break it up and cook until no pink remains. Season heavily: cumin, smoked paprika, turmeric, garlic powder, black pepper, chili flakes, salt. Add 1/2 cup salsa or crushed tomatoes if you want it juicier. - - - Roast frozen vegetables directly from frozen at 425 F. Use enough sheet-pan space so the vegetables roast rather than steam. Season with olive oil, salt, pepper, turmeric, smoked paprika, garlic, and lemon after cooking. Cool before sealing so condensation does not make them soggy. Use in both lunch and dinner."
+  },
+  {
+   "id": "meal-3",
+   "sourceName": "meal",
+   "pageStart": 5,
+   "pageEnd": 7,
+   "sectionPath": "",
+   "text": "Raw salad kit x 3 Dressing jars x 3 Dinner veg base x 3 Snack jars x 3 Dessert portions x 7 What goes in it Turkey + lentils + grain + roasted veg Greens + slaw + cucumber/carrot/radish Yogurt-tahini-lemon Roasted crucifers + slaw/greens Greek yogurt + chia + cocoa + berries Dark chocolate or fruit Amount 6-8 oz turkey, 1/2-3/4 cup lentils, 1/2 cup grain, 1/2-1 cup roasted veg 3-5 cups 2-4 tbsp each 3-5 cups 1 cup yogurt, 1 tbsp chia, 1/4-1/2 cup berries 20-30 g chocolate or 1/2 mango Label rule: label cooked containers with day cooked. Eat oldest first. If it will not be eaten by day 4, freeze it immediately rather than hoping it lasts. Mitochondrial Energy Meal Prep Plan - practical cooking and storage guide Page 5 of 7 5. Daily assembly Meal Assembly Lunch Warm turkey-lentil base if desired. Put over raw greens/slaw. Add dressing after heating, not before. Add lemon, salsa, herbs, olives, or capers. Dinner Cook fish day-of. Reheat roasted vegetables. Add greens/slaw and 1/2 cup complex carbs, more if training was hard. Snack 1 Greek yogurt + chia + cocoa + berries. Prepare 3 jars at a time. Snack 2 Eggs, sardines, hummus/vegetables, walnuts, pumpkin seeds, or yogurt dip. Dessert 20-30 g 85-90% dark chocolate, cocoa yogurt, frozen berries, or 1/2 mango. Weekly shopping list Ride-day carb adjustment Ride Carb adjustment Rest/easy <60 min Base plan only. 60-90 min Add 1/2-1 cup cooked rice/quinoa/potato to lunch or dinner. 90-150 min hard Add 1 cup complex carbs before/after. Use 30-60 g carbs/hour during ride. 3+ hr Fuel the ride deliberately. Simple carbs here are performance fuel, not dessert. - - - - - - - - - - - - Ground turkey: 4-5 lb. Frozen fish: 4 lb total salmon/cod/shrimp mix. Canned sardines/salmon/tuna: 4-6 cans. Plain Greek yogurt: 64 oz. Lentils: 2 x 16 oz bags or several cans. Quinoa/brown rice/farro or sweet potatoes. Frozen broccoli/cauliflower/brussels: 6-7 bags. Greens: 4-5 boxes/bags; use delicate greens first. Cabbage/slaw: 2 bags or 1-2 heads. Cucumbers, carrots, radishes, red onion, lemons/limes. Tahini, olive oil, mustard, salsa, sauerkraut/kimchi. Chia, walnuts/pumpkin seeds, cocoa, frozen blueberries, dark chocolate. Default week: prep Sunday for Monday-Wednesday, prep Wednesday night for Thursday-Saturday, use cans/frozen fish/leftover frozen portions on Sunday. Mitochondrial Energy Meal Prep Plan - practical cooking and storage guide Page 6 of 7 6. Variations without rebuilding the plan Mood Change Mediterranean Turkey + lentils + greens + feta/olives/capers + lemon-yogurt sauce. Mexican-ish Turkey + lentils + slaw + salsa-yogurt + avocado + lime + cilantro. Nordic-ish Salmon/cod + cabbage + yogurt-dill-mustard + potatoes on ride days. No-cook dinner Sardines or canned salmon + cucumber/romaine/slaw + yogurt-mustard sauce + berries/chocolate. Lower calorie cut Use leaner turkey, reduce oil/tahini, keep protein and vegetables high, reduce grain to 1/2 cup. Higher training load Keep the same proteins/vegetables, increase rice/quinoa/potato around rides. Troubleshooting Problem Fix Salads get soggy Never store dressing on greens."
+  },
+  {
+   "id": "meal-4",
+   "sourceName": "meal",
+   "pageStart": 7,
+   "pageEnd": 7,
+   "sectionPath": "",
+   "text": "No-cook dinner Sardines or canned salmon + cucumber/romaine/slaw + yogurt-mustard sauce + berries/chocolate. Lower calorie cut Use leaner turkey, reduce oil/tahini, keep protein and vegetables high, reduce grain to 1/2 cup. Higher training load Keep the same proteins/vegetables, increase rice/quinoa/potato around rides. Troubleshooting Problem Fix Salads get soggy Never store dressing on greens. Keep hot/cooked foods separate from raw greens until eating. Too hungry at night Increase protein first, then vegetables, then add 1/2 cup complex carbs. Do not solve it with dessert. Low energy on bike You are underfueling. Add carbs before/after rides and use on-bike carbs for longer sessions. Meal feels boring Change sauce/acid/crunch: salsa, sauerkraut, capers, olives, mustard, dill, parsley, hot sauce. Too much reflux Reduce raw onion/chili, avoid huge late portions, use cooked vegetables, keep yogurt sauce mild. Groceries spoil Rely more on cabbage, carrots, frozen vegetables, frozen fish, canned fish, dry lentils, yogurt, and dark chocolate. The working principle: make the nutritious default extremely easy, then only adjust the carb dial based on training. Everything else should stay boringly stable. End of plan. Mitochondrial Energy Meal Prep Plan - practical cooking and storage guide Page 7 of 7"
+  },
+  {
+   "id": "summer-0",
+   "sourceName": "summer",
+   "pageStart": 1,
+   "pageEnd": 2,
+   "sectionPath": "",
+   "text": "Summer of Languages ��� 8-Week Plan Summer of Languages — 8-Week Plan Premises No AI assistance on spine work. Narrow, well-contained problems only. Two parallel tracks: the Frothy rewrite (main spine) and the math arc (slow burn). Test from day 1 using Unity (ThrowTheSwitch C testing framework). Major focus on multi-target build and integration. End deliverables: a working reimplementation of Frothy on host + one MCU target, written operational semantics, three write-ups. Materials Frothy rewrite - Frothy repo as primary reference. https://github.com/nikokozak/FrothyRewrite - Test-Driven Development for Embedded C, James Grenning (Pragmatic Bookshelf, 2nd ed. 2014). Canonical text. Philosophy of TDD in constrained environments, fakes/mocks for hardware, test-first design under embedded constraints. - A Field Manual for Ceedling, Matt Chernosky — https://www.electronvector.com/. Practical accompaniment to Grenning. - Unity / Ceedling documentation — https://www.throwtheswitch.org/. Thoughtful on test organization. - Frothy’s own test structure as a primary pattern source. C references (consult, don’t read linearly) - Modern C, Jens Gustedt — free PDF. Language-proper reference. - C FAQ — http://c-faq.com/. Folklore lookup. - GNU Make book — consult when your Makefile raises a question. Math arc - How to Prove It, Velleman — ch. 3 only. - Types and Programming Languages, Pierce — ch. 3, 5, 8–9 only. Read for notation fluency. - Semantics Engineering with PLT Redex, Felleisen et al. — execute the notation alongside TAPL. The Rewrite Reimplement Frothy from scratch, by hand, with the structure below. Goal isn’t a tiny working language — it’s a substantial reimplementation that exercises every layer Frothy uses, with tests written first wherever practical, building toward feature parity on at least one self-chosen feature beyond the minimum. Testing structure: unit tests for pure modules (tagged values, image rows, parser, compiler). Integration tests for VM execution (hand-assembled bytecode programs, asserting on outputs). Week-by-Week Weeks 1–2: Core runtime on host, testing scaffold Day 1: Project structure. Unity integrated into Makefile. First failing test, first passing test. Testing pattern locked in. Days 2–3: Tagged values. Fully TDDed. Days 4–5: Bytecode encoding/decoding, VM data structures. Days 6–7: VM dispatch loop, ~8 opcodes. Integration tests via hand-assembled programs. Days 8–10: Base image structure, native call interface, one native function ( print ). End of week 2: a tiny program runs end-to-end on host. Math: finish Velleman ch. 3. Begin TAPL ch. 3 alongside Redex. Weeks 3–4: Multi-target build system Days 1–2: Refactor to platform.h interface. Extract platform-dependent calls into platform functions. Host implementation in targets/host/ . Days 3–4: Add one MCU target (AVR or ESP32). Implement platform functions. Cross-compile. Days 5–6: Tests running on host with new structure. Decide policy on MCU-target tests (on-device, simulator, or smoke-compile only). Days 7–8: Implement save for both targets. File write on host, VFS or EEPROM write on MCU. End-to-end."
+  },
+  {
+   "id": "summer-1",
+   "sourceName": "summer",
+   "pageStart": 2,
+   "pageEnd": 3,
+   "sectionPath": "",
+   "text": "Host implementation in targets/host/ . Days 3–4: Add one MCU target (AVR or ESP32). Implement platform functions. Cross-compile. Days 5–6: Tests running on host with new structure. Decide policy on MCU-target tests (on-device, simulator, or smoke-compile only). Days 7–8: Implement save for both targets. File write on host, VFS or EEPROM write on MCU. End-to-end. Days 9–10: Profile system (header of #define s) and board definitions. Match Frothy’s pattern closely. Math: TAPL ch. 3 finished. Begin TAPL ch. 5. Weeks 5–6: Compiler, parser, feature stretch Days 1–3: AST representation. Compiler from AST to bytecode. TDD throughout. Days 4–6: Parser for a representative subset of Frothy’s surface syntax. Days 7–8: End-to-end on both targets: source text → AST → bytecode → execution → output. Days 9–10: One Frothy feature you feel least owned by — REPL, persistence, image serialization, or host tooling integration. Replicate in the rewrite. (Suggested: REPL — directly demo-able, isolated from the runtime.) Math: TAPL ch. 5 finished. Begin TAPL ch. 8–9. Weeks 7–8: Comparison, formalization, write-up Days 1–3: Read Frothy’s source carefully. Module by module, write up the diff. Design choices that differ, things you missed, things you did differently, things still unclear. Days 4–6: Write Frothy’s operational semantics in standard notation. Big-step or small-step. Use Redex to execute the semantics and verify it matches the implementation. Days 7–8: Finish TAPL ch. 8–9. Days 9–10: Three write-ups: the reimplementation experience, the operational semantics, the multi-target build system. Testing policy Pure modules (tagged values, image rows, bytecode codec, parser, compiler): unit-test strictly. Test first; code to pass. VM dispatch loop: integration tests. Execute hand-assembled programs, assert on outputs and final state. Platform glue: integration tests on host. Smoke tests (compiles, links, boots) on MCU. Cross-cutting (memory, native calls): integration level. Separate unit and integration tests in distinct files / directories. Math arc Compact, aimed at “read PL papers and write down Frothy’s semantics.” Velleman ch. 3 — proof techniques. TAPL ch. 3 — operational semantics, structural induction. TAPL ch. 5 — substitution, untyped lambda-calculus. TAPL ch. 8–9 — typing judgments. Redex tutorial alongside TAPL ch. 3 — execute the notation as you learn it. Read for notation fluency, not exercise completion. Total ~80 pages of TAPL plus one Velleman chapter."
+  },
+  {
+   "id": "lease-deposit",
+   "sourceName": "Residential Lease (synthetic)",
+   "pageStart": 1,
+   "pageEnd": 2,
+   "sectionPath": "",
+   "text": "SECURITY DEPOSIT. Lessee shall deposit with Lessor the sum of two months' rent as security for the faithful performance by Lessee of the terms hereof. Lessor may apply said deposit to remedy defaults in the payment of rent, to repair damages caused by Lessee beyond ordinary wear and tear, and to clean the premises upon termination of tenancy. Any remaining balance shall be returned to Lessee within twenty-one (21) days of surrender of the premises, together with an itemized statement of deductions."
+  },
+  {
+   "id": "lease-sublet",
+   "sourceName": "Residential Lease (synthetic)",
+   "pageStart": 1,
+   "pageEnd": 2,
+   "sectionPath": "",
+   "text": "ASSIGNMENT AND SUBLETTING. Lessee shall not assign this lease nor sublet the premises or any part thereof without the prior written consent of Lessor, which consent shall not be unreasonably withheld. Any assignment or subletting without such consent shall be void and shall, at the option of Lessor, constitute a default under the terms of this lease."
+  },
+  {
+   "id": "lease-repairs",
+   "sourceName": "Residential Lease (synthetic)",
+   "pageStart": 1,
+   "pageEnd": 2,
+   "sectionPath": "",
+   "text": "MAINTENANCE AND REPAIRS. Lessee shall keep the premises in a clean and sanitary condition and shall surrender the same at the termination of the tenancy in as good condition as received, ordinary wear and tear excepted. Lessor shall be responsible for repairs to the structural elements, plumbing, heating, and electrical systems, provided such repairs are not occasioned by the negligence or misuse of Lessee, who shall promptly notify Lessor in writing of any condition requiring repair."
+  },
+  {
+   "id": "lease-entry",
+   "sourceName": "Residential Lease (synthetic)",
+   "pageStart": 1,
+   "pageEnd": 2,
+   "sectionPath": "",
+   "text": "RIGHT OF ENTRY. Lessor reserves the right to enter the premises at reasonable times to inspect the same, to make necessary repairs or improvements, or to show the premises to prospective tenants or purchasers, provided that Lessor shall, except in cases of emergency, give Lessee no less than twenty-four (24) hours' notice of intent to enter."
+  }
+ ],
+ "cases": [
+  {
+   "id": "para-forth-numbers",
+   "class": "paraphrase",
+   "query": "how does forth read the numbers I type in",
+   "expected": [
+    "forth-16",
+    "forth-17"
+   ]
+  },
+  {
+   "id": "para-forth-base",
+   "class": "paraphrase",
+   "query": "printing values in binary or base sixteen instead of normal numbers",
+   "expected": [
+    "forth-17",
+    "forth-18"
+   ]
+  },
+  {
+   "id": "para-forth-memory-of-words",
+   "class": "paraphrase",
+   "query": "how does the system remember the commands I create",
+   "expected": [
+    "forth-8",
+    "forth-9"
+   ]
+  },
+  {
+   "id": "para-forth-working-values",
+   "class": "paraphrase",
+   "query": "where do intermediate values live while a program runs",
+   "expected": [
+    "forth-11",
+    "forth-12"
+   ]
+  },
+  {
+   "id": "para-forth-enter-key",
+   "class": "paraphrase",
+   "query": "what happens step by step after I press enter on a line",
+   "expected": [
+    "forth-14",
+    "forth-15"
+   ]
+  },
+  {
+   "id": "para-forth-concurrent",
+   "class": "paraphrase",
+   "query": "can it juggle several jobs at the same time",
+   "expected": [
+    "forth-21",
+    "forth-22"
+   ]
+  },
+  {
+   "id": "para-forth-view-source",
+   "class": "paraphrase",
+   "query": "recover the original code behind an existing command",
+   "expected": [
+    "forth-29"
+   ]
+  },
+  {
+   "id": "para-meal-energy",
+   "class": "paraphrase",
+   "query": "what should I eat to feel less tired during the week",
+   "expected": [
+    "meal-0",
+    "meal-1"
+   ]
+  },
+  {
+   "id": "para-lease-deposit",
+   "class": "paraphrase",
+   "query": "when do I get my money back after moving out",
+   "expected": [
+    "lease-deposit"
+   ]
+  },
+  {
+   "id": "para-lease-roommate",
+   "class": "paraphrase",
+   "query": "can I let a friend take over my apartment for the summer",
+   "expected": [
+    "lease-sublet"
+   ]
+  },
+  {
+   "id": "para-lease-broken",
+   "class": "paraphrase",
+   "query": "who pays when the heating breaks",
+   "expected": [
+    "lease-repairs"
+   ]
+  },
+  {
+   "id": "para-lease-privacy",
+   "class": "paraphrase",
+   "query": "can the owner just walk into my place whenever",
+   "expected": [
+    "lease-entry"
+   ]
+  },
+  {
+   "id": "lex-forth-decimal-hex",
+   "class": "lexical",
+   "query": "DECIMAL HEX BASE radix conversion",
+   "expected": [
+    "forth-17",
+    "forth-18"
+   ]
+  },
+  {
+   "id": "lex-forth-return-stack",
+   "class": "lexical",
+   "query": "return stack loop parameters nested definitions",
+   "expected": [
+    "forth-13",
+    "forth-14"
+   ]
+  },
+  {
+   "id": "lex-forth-immediate",
+   "class": "lexical",
+   "query": "IMMEDIATE precedence bit",
+   "expected": [
+    "forth-11"
+   ]
+  },
+  {
+   "id": "lex-forth-interpreter",
+   "class": "lexical",
+   "query": "text interpreter stack underflow",
+   "expected": [
+    "forth-15"
+   ]
+  },
+  {
+   "id": "lex-meal-jars",
+   "class": "lexical",
+   "query": "salad kit dressing jars snack jars",
+   "expected": [
+    "meal-3"
+   ]
+  },
+  {
+   "id": "lex-lease-deposit",
+   "class": "lexical",
+   "query": "security deposit itemized statement deductions",
+   "expected": [
+    "lease-deposit"
+   ]
+  },
+  {
+   "id": "neg-pasta",
+   "class": "negative",
+   "query": "what's a good pasta dish for dinner tonight",
+   "expected": []
+  },
+  {
+   "id": "neg-sports",
+   "class": "negative",
+   "query": "who won the wimbledon final",
+   "expected": []
+  },
+  {
+   "id": "neg-marathon",
+   "class": "negative",
+   "query": "best way to train for a marathon",
+   "expected": []
+  },
+  {
+   "id": "neg-smalltalk",
+   "class": "negative",
+   "query": "hey what's up",
+   "expected": []
+  },
+  {
+   "id": "neg-politics",
+   "class": "negative",
+   "query": "summarize the latest supreme court ruling",
+   "expected": []
+  }
+ ]
+}
