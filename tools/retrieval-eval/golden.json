@@ -321,7 +321,6 @@
    "class": "lexical",
    "query": "return stack loop parameters nested definitions",
    "expected": [
-    "forth-13",
     "forth-14"
    ]
   },

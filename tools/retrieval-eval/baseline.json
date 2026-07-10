@@ -156,11 +156,10 @@
     {
       "class" : "lexical",
       "expected" : [
-        "forth-13",
         "forth-14"
       ],
       "id" : "lex-forth-return-stack",
-      "recall" : 0.5,
+      "recall" : 1,
       "retrieved" : [
         "forth-14"
       ]
@@ -272,7 +271,7 @@
   "metrics" : {
     "lexical" : {
       "cases" : 6,
-      "recallAt8" : 0.9166666666666666
+      "recallAt8" : 1
     },
     "negative" : {
       "cases" : 5,
@@ -280,7 +279,7 @@
     },
     "overall" : {
       "cases" : 23,
-      "recallAt8" : 0.5217391304347826
+      "recallAt8" : 0.5434782608695652
     },
     "paraphrase" : {
       "cases" : 12,
