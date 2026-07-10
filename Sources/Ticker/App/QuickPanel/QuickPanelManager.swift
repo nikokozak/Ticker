@@ -1126,6 +1126,10 @@ final class QuickPanelManager: ObservableObject {
             )
         } catch {
             DebugLog.log("[QuickPanel] Failed to append AI response (\(DebugLog.errorSummary(error)))")
+            bridgeService?.send(BridgeMessage(type: "quickPanelAIFailed", payload: [
+                "streamId": AnyCodable(streamId.uuidString),
+                "message": AnyCodable("Quick Panel AI answer could not be saved. Try again.")
+            ]))
         }
     }
 

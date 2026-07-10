@@ -1038,6 +1038,13 @@ export function StreamEditor({
         return;
       }
 
+      if (message.type === 'quickPanelAIFailed') {
+        if (message.payload?.streamId !== stream.id) return;
+        clearQuickPanelPending();
+        addToast('Quick Panel AI answer could not be saved. Try again.', 'error');
+        return;
+      }
+
       if (message.type === 'streamDocumentConflict') {
         const payloadStreamId = message.payload?.streamId as string | undefined;
         const markdown = message.payload?.markdown as string | undefined;

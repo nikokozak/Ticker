@@ -20,6 +20,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'imageSaved',
   'marginNotesChanged',
   'proxyAuthState',
+  'quickPanelAIFailed',
   'quickPanelAIStarted',
   'pdfAnchorPickCancelled',
   'pdfAnchorPlaced',
