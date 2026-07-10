@@ -128,17 +128,14 @@ enum StreamCodec {
                     "sourceCount": summary.sourceCount,
                     "cellCount": summary.cellCount,
                     "charCount": summary.charCount,
-                    "wordCount": wordCount(from: summary.previewText ?? ""),
+                    "wordCount": summary.wordCount,
                     "imageCount": summary.imageCount,
                     "openQuestionCount": summary.openQuestionCount,
-                    "previewLine": previewLine(from: summary.previewText ?? "") ?? "",
+                    "previewLine": previewLine(from: summary.previewPrefix ?? "") ?? "",
                     "updatedAt": formatter.string(from: summary.updatedAt)
                 ]
                 if let sourceShortTitle = summary.sourceShortTitle {
                     dict["sourceShortTitle"] = sourceShortTitle
-                }
-                if let previewText = summary.previewText {
-                    dict["previewText"] = previewText
                 }
                 return dict
             })
@@ -196,10 +193,6 @@ enum StreamCodec {
             .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"`([^`]*)`"#, with: "$1", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func wordCount(from markdown: String) -> Int {
-        markdown.split { $0.isWhitespace }.count
     }
 
     private static func strippedPreviewMarkdown(_ line: String) -> String {

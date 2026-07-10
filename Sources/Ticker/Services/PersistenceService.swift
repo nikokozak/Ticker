@@ -46,14 +46,8 @@ final class PersistenceService {
 #endif
     }
 
-    private static func countMarkdownImageTokens(in markdown: String) -> Int {
-        var count = 0
-        var searchStart = markdown.startIndex
-        while let range = markdown.range(of: "![", range: searchStart..<markdown.endIndex) {
-            count += 1
-            searchStart = range.upperBound
-        }
-        return count
+    private static func wordCount(in markdown: String) -> Int {
+        markdown.split { $0.isWhitespace }.count
     }
 
     init(databaseURL: URL? = nil, fileManager: FileManager = .default) throws {
@@ -503,6 +497,21 @@ final class PersistenceService {
                 """)
         }
 
+        migrator.registerMigration("v22_stream_document_word_count") { db in
+            try db.alter(table: "stream_documents") { t in
+                t.add(column: "word_count", .integer).notNull().defaults(to: 0)
+            }
+
+            let documents = try Row.fetchAll(db, sql: "SELECT stream_id, markdown FROM stream_documents")
+            for document in documents {
+                let markdown: String = document["markdown"]
+                try db.execute(
+                    sql: "UPDATE stream_documents SET word_count = ? WHERE stream_id = ?",
+                    arguments: [Self.wordCount(in: markdown), document["stream_id"] as String]
+                )
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -590,19 +599,18 @@ final class PersistenceService {
                     (SELECT display_name FROM sources WHERE stream_id = s.id ORDER BY added_at LIMIT 1) as source_display_name,
                     (SELECT COUNT(*) FROM cells WHERE stream_id = s.id) as cell_count,
                     (SELECT COUNT(*) FROM margin_notes WHERE stream_id = s.id AND status = 'open' AND kind = 'question') as open_question_count,
-                    (SELECT markdown FROM stream_documents WHERE stream_id = s.id) as document_markdown,
+                    LENGTH(d.markdown) as char_count,
+                    d.word_count,
+                    (LENGTH(d.markdown) - LENGTH(REPLACE(d.markdown, '![', ''))) / 2 as image_count,
                     COALESCE(
-                        (SELECT markdown FROM stream_documents WHERE stream_id = s.id),
-                        (SELECT content FROM cells WHERE stream_id = s.id ORDER BY position LIMIT 1)
-                    ) as preview_text
+                        SUBSTR(d.markdown, 1, 2000),
+                        SUBSTR((SELECT content FROM cells WHERE stream_id = s.id ORDER BY position LIMIT 1), 1, 2000)
+                    ) as preview_prefix
                 FROM streams s
+                LEFT JOIN stream_documents d ON d.stream_id = s.id
                 ORDER BY s.updated_at DESC
             """
             return try Row.fetchAll(db, sql: sql).map { row in
-                let documentMarkdown: String = row["document_markdown"] ?? ""
-                // ponytail: raw markdown counts are the ceiling here; upgrade to parser-backed rendered-text/image metrics if list metadata needs semantic precision.
-                let charCount = documentMarkdown.count
-                let imageCount = Self.countMarkdownImageTokens(in: documentMarkdown)
                 let sourceCount: Int = row["source_count"]
                 let sourceDisplayName: String? = row["source_display_name"]
                 return StreamSummary(
@@ -611,11 +619,12 @@ final class PersistenceService {
                     sourceCount: sourceCount,
                     sourceShortTitle: sourceCount == 1 ? sourceDisplayName.map { SourceShortTitle.derive(displayName: $0) } : nil,
                     cellCount: row["cell_count"],
-                    charCount: charCount,
-                    imageCount: imageCount,
+                    charCount: row["char_count"] ?? 0,
+                    wordCount: row["word_count"] ?? 0,
+                    imageCount: row["image_count"] ?? 0,
                     openQuestionCount: row["open_question_count"],
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
-                    previewText: row["preview_text"]
+                    previewPrefix: row["preview_prefix"]
                 )
             }
         }
@@ -951,10 +960,10 @@ final class PersistenceService {
                 try db.execute(
                     sql: """
                         UPDATE stream_documents
-                        SET markdown = ?, revision = ?, updated_at = ?
+                        SET markdown = ?, word_count = ?, revision = ?, updated_at = ?
                         WHERE stream_id = ?
                     """,
-                    arguments: [markdown, newRevision, now, streamId.uuidString]
+                    arguments: [markdown, Self.wordCount(in: markdown), newRevision, now, streamId.uuidString]
                 )
 
                 try db.execute(
@@ -984,10 +993,10 @@ final class PersistenceService {
             let newRevision = 1
             try db.execute(
                 sql: """
-                    INSERT INTO stream_documents (stream_id, markdown, revision, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO stream_documents (stream_id, markdown, word_count, revision, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                arguments: [streamId.uuidString, markdown, newRevision, now, now]
+                arguments: [streamId.uuidString, markdown, Self.wordCount(in: markdown), newRevision, now, now]
             )
 
             try db.execute(
@@ -1052,14 +1061,15 @@ final class PersistenceService {
 
             try db.execute(
                 sql: """
-                    INSERT INTO stream_documents (stream_id, markdown, revision, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO stream_documents (stream_id, markdown, word_count, revision, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(stream_id) DO UPDATE SET
                         markdown = excluded.markdown,
+                        word_count = excluded.word_count,
                         revision = excluded.revision,
                         updated_at = excluded.updated_at
                 """,
-                arguments: [streamId.uuidString, markdown, newRevision, now, now]
+                arguments: [streamId.uuidString, markdown, Self.wordCount(in: markdown), newRevision, now, now]
             )
 
             try db.execute(

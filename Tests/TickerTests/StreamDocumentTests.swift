@@ -3280,14 +3280,15 @@ final class StreamDocumentTests: XCTestCase {
             )
 
             let newerSummary = try XCTUnwrap(summaries.first { $0.id == newerStream.id })
-            XCTAssertEqual(newerSummary.previewText, newerMarkdown)
+            XCTAssertEqual(newerSummary.previewPrefix, String(newerMarkdown.prefix(2_000)))
             XCTAssertEqual(newerSummary.sourceCount, 1)
             XCTAssertEqual(newerSummary.sourceShortTitle, "Notebook")
             XCTAssertEqual(newerSummary.charCount, newerMarkdown.count)
+            XCTAssertEqual(newerSummary.wordCount, newerMarkdown.split { $0.isWhitespace }.count)
             XCTAssertEqual(newerSummary.imageCount, 2)
 
             let olderSummary = try XCTUnwrap(summaries.first { $0.id == olderStream.id })
-            XCTAssertEqual(olderSummary.previewText, olderMarkdown)
+            XCTAssertEqual(olderSummary.previewPrefix, String(olderMarkdown.prefix(2_000)))
             XCTAssertEqual(olderSummary.charCount, olderMarkdown.count)
             XCTAssertEqual(olderSummary.imageCount, 0)
 
@@ -3298,6 +3299,11 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(encodedSummary["sourceShortTitle"] as? String, "Notebook")
             XCTAssertEqual(encodedSummary["wordCount"] as? Int, newerMarkdown.split { $0.isWhitespace }.count)
             XCTAssertEqual(encodedSummary["charCount"] as? Int, newerMarkdown.count)
+            XCTAssertNil(encodedSummary["previewText"])
+
+            _ = try service.appendToStreamDocument(streamId: olderStream.id, fragment: "three appended words")
+            let appendedSummary = try XCTUnwrap(service.loadStreamSummaries().first { $0.id == olderStream.id })
+            XCTAssertEqual(appendedSummary.wordCount, olderMarkdown.split { $0.isWhitespace }.count + 3)
         }
     }
 
