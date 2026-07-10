@@ -53,16 +53,6 @@ export function ImageIcon(props: IconProps) {
   );
 }
 
-export function NoteIcon(props: IconProps) {
-  return (
-    <Icon {...props}>
-      <path d="M6 4h12v15l-3-2-3 2-3-2-3 2z" />
-      <path d="M9 8h6" />
-      <path d="M9 12h5" />
-    </Icon>
-  );
-}
-
 export function KeyIcon(props: IconProps) {
   return (
     <Icon {...props}>

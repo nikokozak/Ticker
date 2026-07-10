@@ -1,10 +1,12 @@
 # Ticker-Next Production Readiness Plan
 
+> **Historical record:** The audit summary and Phase 0–5 checklists below describe completed stabilization work; use `AGENTS.md` and the live bridge contract for current implementation guidance.
+
 > **For agentic workers (Codex):** Execute tasks strictly in order within a phase. One task = one commit (or one small PR). Before each task, restate the user-visible behavior change in one sentence. After each task, run the listed verification. Do not start a task while the previous task's verification fails. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Fix the capture→document pipeline, delete the dead cell-era subsystem, make markdown rendering and the selection popover reliable, decompose the Swift god object, and harden the bridge — so the app matches its own MVP contract and is shippable to alpha users.
 
-**Architecture:** The app is already what the MVP plan says it should be — a CodeMirror 6 markdown document editor in a WKWebView with a Swift host — but it is wrapped in a dead TipTap/cell subsystem that still owns the Quick Panel write path. The plan converges everything on ONE data model (`stream_documents.markdown`), ONE external-write primitive (`appendToStreamDocument` + `streamDocumentAppended` bridge event), then deletes the corpse and splits the 2,498-line `WebViewManager`.
+**Architecture:** The app is a CodeMirror 6 markdown document editor in a WKWebView with a Swift host. It uses one data model (`stream_documents.markdown`) and one external-write primitive (`appendToStreamDocument` + `streamDocumentAppended`); the historical tasks below record that migration.
 
 **Tech Stack:** Swift/AppKit + GRDB (SQLite), WKWebView bridge, React + CodeMirror 6 (`@uiw/react-codemirror`, `@codemirror/lang-markdown`), Vite/TypeScript.
 
@@ -22,7 +24,7 @@
 
 ---
 
-## Audit Summary (read this before any task)
+## Historical Audit Summary
 
 Root causes established by a four-way audit (quick panel flow, persistence, web editor, Swift shell), with file:line evidence:
 
@@ -97,7 +99,7 @@ Design decision (locked): **Option B — Quick Panel writes markdown directly. T
   - append to an existing document produces `existing + "\n\n" + fragment`;
   - two sequential appends preserve order;
   - `loadOrCreateStreamDocument` after an append returns markdown containing the fragment (this is the regression test for the original bug).
-- [ ] Run: `swift test --filter StreamDocumentTests` → FAIL (method missing).
+- [ ] Run: `./tickerctl.sh swift-test` → FAIL (method missing).
 - [ ] Implement; run again → PASS.
 - [ ] Commit: `feat(persistence): add appendToStreamDocument primitive`
 
@@ -209,7 +211,7 @@ Order matters: web first (proves nothing references it), then bridge messages, t
 - Modify: `Sources/Ticker/Services/ProcessingService.swift` — cascade/refresh logic is cell-based; delete if its bridge entry points went away in 2.2 (verify with grep first).
 - Test: update `Tests/TickerTests/DeviceKeyServiceTests.swift` — delete `PersistenceServiceQuickPanelTests` (they assert the removed model; Task 1.1's tests are the replacement).
 
-- [ ] Grep-verify zero references before each deletion; `swift build && swift test` after each file.
+- [ ] Grep-verify zero references before each deletion; `./tickerctl.sh build-dev && ./tickerctl.sh swift-test` after each file.
 - [ ] Do NOT drop the `cells` table itself in this pass (harmless, and it is the recovery source if v11 ever needs a re-run on a user DB). Note this with a `ponytail:` comment on the migration.
 - [ ] Verify: search modal still finds stream content.
 - [ ] Commit: `chore(persistence): delete cell-era write/read paths`
@@ -221,7 +223,7 @@ Order matters: web first (proves nothing references it), then bridge messages, t
 - Modify: `Sources/Ticker/Services/AIOrchestrator.swift` — accept an injected `ProxyLLMService` instead of constructing its own (`:17`); `WebViewManager` passes its instance (fixes the double instantiation).
 - Modify: `Sources/Ticker/Services/SourceService.swift` — skip chunking/embedding scheduling when embeddings are disabled (`SettingsService.proxyOnlyMode`), so source-add stops burning CPU for an index that is never queried. Keep `ChunkingService`/`EmbeddingService`/`RetrievalService`/`RAGMigrationService` files (they are the seed of a future retrieval feature) but ensure no runtime path invokes them under `proxyOnlyMode` — including the `migrateExistingSourcesToRAG` call at `WebViewManager.swift:731`.
 
-- [ ] `swift build && swift test`; verify AI Send / Send & Prompt / quick panel AI still work (all go through `ProxyLLMService`).
+- [ ] `./tickerctl.sh build-dev && ./tickerctl.sh swift-test`; verify AI Send / Send & Prompt / quick panel AI still work (all go through `ProxyLLMService`).
 - [ ] Commit: `chore(services): delete dead LLM providers, single ProxyLLMService, gate inert RAG`
 
 ---
@@ -362,7 +364,7 @@ Goal: the app should read as ONE instrument — calm, typographic, low-chrome (i
 
 ### Task 5.2: CI
 
-- [ ] Add `.github/workflows/ci.yml` per `docs/GITHUB_BACKLOG_ALPHA.md` A3: Swift build + `swift test` + `cd Web && npm run typecheck && npm test` + `node tools/contracts/check_bridge_contract.mjs`. Branch protection per A1.
+- [ ] Add `.github/workflows/ci.yml` per `docs/GITHUB_BACKLOG_ALPHA.md` A3: Xcode build + `./tickerctl.sh swift-test` + `cd Web && npm run typecheck && npm test` + `node tools/contracts/check_bridge_contract.mjs`. Branch protection per A1.
 - [ ] Commit: `chore(ci): build, tests, bridge contract check`
 
 ### Task 5.3: Docs truth pass
@@ -395,7 +397,7 @@ Candidates, roughly ordered by leverage:
 2. **Stream cross-links + backlinks.** `[[stream-title]]` syntax as a CM extension (autocomplete on `[[`, concealed rendering, click-to-navigate) plus a backlinks drawer. The deleted references code was groping at this; the document model makes it a weekend feature instead of a schema project.
 3. **Ask-your-sources (revive RAG properly).** The chunking/embedding/retrieval stack survives behind its flag (2.4). When the proxy grows an embeddings endpoint, turn it on and add a "ask across this stream's sources" mode to Send & Prompt, with answers citing chunk page ranges that deep-link into the PDF pane (the highlight-link plumbing from Phase 0 already navigates there).
 4. **PDF anchors, bidirectional.** MVP contract §9 promises editor→highlight AND highlight→editor. The current branch does editor→PDF; add stable anchor IDs in markdown (`[▸ p.12](ticker-pdf://source/highlight)`) and a "show in stream" affordance on PDF highlights.
-5. **Export/publish.** `StreamCodec.formatStreamForExport` already exists; expose Markdown/HTML export with assets bundled, and a "copy as rich text" for pasting into mail/docs.
+5. **Export/publish.** Add a bridge/UI export flow when Markdown/HTML export with bundled assets or rich-text copying is prioritized.
 6. **Capture API surface.** Once `appendToStreamDocument` + `streamDocumentAppended` is the single write primitive (Phase 1), *anything* can be a capture source: a share extension, a CLI (`tickerctl append`), a URL scheme (`ticker://append?stream=…`). The Quick Panel becomes just the first client of a general append API — this is the highest-leverage architectural payoff of the P0 fix.
 7. **Reading sessions (the document-reading core).** With a PDF open in the pane: (a) **section anchors** — use the PDF outline (`PDFDocument.outlineRoot`) plus page/selection geometry so links can target sections, not just ad-hoc highlights; (b) **anchored notes** — select in the PDF → "Add note" appends a note block to the stream carrying the anchor, so notes are ordinary markdown that deep-links back; (c) **section summaries** — "Summarize section" runs the orchestrator over the section's extracted text (ChunkingService already computes page ranges) and appends a cited summary; (d) **further readings** — the proxy already fronts an LLM; a "suggest readings" action over the document's extracted text is a prompt, not an architecture. All four are just selection-actions (feature 1) + append-API clients (feature 6) + PDF anchors (feature 4) composed — which is why the stabilization order matters more than starting any of them early.
 8. **Richer annotation blocks (later).** Small code blocks with syntax highlight already work in CodeMirror's markdown; "proper support" means conceal-layer styling for fenced blocks (3.2) and, later, dedicated widgets (like the image widget pattern) for callouts/figures. No new data model needed — it stays markdown.

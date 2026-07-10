@@ -56,8 +56,8 @@ sequenceDiagram
 
 | Path | Role |
 |---|---|
-| `Sources/Ticker/App/WebViewManager.swift` | WKWebView ownership, drop coordination, router wiring (~450 lines — keep it that way) |
-| `Sources/Ticker/App/Bridge/` | `BridgeRouter`, one `*MessageHandler` per feature, `StreamCodec` (encode/export) |
+| `Sources/Ticker/App/WebViewManager.swift` | WKWebView ownership, drop coordination, router wiring (~725 lines; keep feature handling in `App/Bridge/`) |
+| `Sources/Ticker/App/Bridge/` | `BridgeRouter`, one `*MessageHandler` per feature, `StreamCodec` (bridge encoding) |
 | `Sources/Ticker/App/ServiceContainer.swift` | Composition root; the only place services are constructed |
 | `Sources/Ticker/Services/PersistenceService.swift` | GRDB migrations (v1–v13, frozen), `appendToStreamDocument`, revision-checked saves |
 | `Sources/Ticker/App/QuickPanel/` | ⌘L capture panel (manager/view/window) |
@@ -75,13 +75,13 @@ sequenceDiagram
 2. **One write primitive.** Anything outside the open editor writes via `appendToStreamDocument` and announces with `streamDocumentAppended`. Never UPSERT a whole document from outside the editor; never bypass the revision check.
 3. **A feature = CM extension (web) + BridgeMessageHandler (Swift) + contract entry.** Register the handler in WebViewManager's router setup, add the message to `bridge.v2.json` and `bridge.ts` — the contract checker fails CI otherwise. This is the plugin pattern; don't invent another.
 4. **Product guardrails:** no cell model, no native editor, no persistent split panes (PDF pane is the sanctioned on-demand exception), autosave always on, AI apply = one undo step, **static concealment** — conceal decorations depend only on document + viewport + explicit reveal (⌥-click line, footer "Show formatting" toggle), never on selection or mouse; selection-keyed reveal reintroduces a geometry feedback loop. Markdown is an invisible substrate (storage/AI/export) — users format via the selection menu, never by knowing syntax.
-5. **Migrations are append-only.** New schema = new `vN` migration; never edit v1–v13. Backup-before-migrate must keep working.
+5. **Migrations are append-only.** New schema = new `vN` migration; never edit v1–v22. Backup-before-migrate must keep working.
 6. Editor perf: CM plugins must only walk `view.visibleRanges`; never scan the whole doc per update.
 
 ## Build / test / verify
 
 ```
-./tickerctl.sh build-dev            # xcodebuild Debug (THE build gate — plain `swift build` is broken: mlx-swift-lm/sandbox)
+./tickerctl.sh build-dev            # xcodebuild Debug (THE build gate — no standalone Swift package manifest)
 ./tickerctl.sh swift-test           # xcodebuild test; result in .xcresult (exit code is authoritative)
 ./tickerctl.sh run-dev              # Debug + Vite dev server; run-prod = Release + bundled web
 cd Web && npm run typecheck && npm test && npm run build

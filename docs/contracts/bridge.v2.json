@@ -3,9 +3,6 @@
   "status": "live",
   "swiftToWeb": {
     "messages": {
-      "assetPath": {
-        "requiredPayloadKeys": ["relativePath", "fullPath"]
-      },
       "bridgeError": {
         "requiredPayloadKeys": ["originalType", "reason"]
       },
@@ -38,15 +35,6 @@
       },
       "marginNotesChanged": {
         "requiredPayloadKeys": ["streamId", "notes"]
-      },
-      "exportCanceled": {
-        "requiredPayloadKeys": ["streamId"]
-      },
-      "exportComplete": {
-        "requiredPayloadKeys": ["streamId", "path"]
-      },
-      "exportError": {
-        "requiredPayloadKeys": ["streamId", "error"]
       },
       "fileDropError": {
         "requiredPayloadKeys": ["error"]
@@ -205,9 +193,6 @@
       "saveSettings": {
         "requiredPayloadKeys": [],
         "optionalPayloadKeys": [
-          "openaiAPIKey",
-          "anthropicAPIKey",
-          "perplexityAPIKey",
           "defaultModel",
           "appearance",
           "diagnosticsEnabled",

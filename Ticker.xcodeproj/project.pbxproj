@@ -8,7 +8,6 @@
 
 			/* Begin PBXBuildFile section */
 				C1000001000000000001 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000001 /* GRDB */; };
-				C1000001000000000002 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000002 /* MLXLLM */; };
 				C1000001000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = D1000001000000000003 /* Sparkle */; };
 				R1000001000000000001 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = F1000001000000000001 /* Resources */; };
 				R1000001000000000002 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F1000001000000000002 /* Assets.xcassets */; };
@@ -35,7 +34,6 @@
 		A1000001000000000007 /* QuickPanelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000007 /* QuickPanelManager.swift */; };
 		A1000001000000000008 /* QuickPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000008 /* QuickPanelView.swift */; };
 		A1000001000000000009 /* QuickPanelWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000009 /* QuickPanelWindow.swift */; };
-		A100000100000000000A /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000000A /* Colors.swift */; };
 		A100000100000000000B /* Spacing.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000000B /* Spacing.swift */; };
 		A100000100000000000C /* BridgePayloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000000C /* BridgePayloads.swift */; };
 		A1000001000000000010 /* SourceChunk.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000010 /* SourceChunk.swift */; };
@@ -59,7 +57,6 @@
 		A1000001000000000026 /* ClipboardService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000026 /* ClipboardService.swift */; };
 		A1000001000000000027 /* CursorPositionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000027 /* CursorPositionService.swift */; };
 		A1000001000000000028 /* HotkeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000028 /* HotkeyService.swift */; };
-		A1000001000000000029 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000029 /* KeychainService.swift */; };
 		A100000100000000002A /* SelectionReaderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002A /* SelectionReaderService.swift */; };
 			A100000100000000002C /* DeviceKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002C /* DeviceKeyService.swift */; };
 			A100000100000000002D /* ProxyLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000002D /* ProxyLLMService.swift */; };
@@ -105,7 +102,6 @@
 		B1000001000000000007 /* QuickPanelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPanelManager.swift; sourceTree = "<group>"; };
 		B1000001000000000008 /* QuickPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPanelView.swift; sourceTree = "<group>"; };
 		B1000001000000000009 /* QuickPanelWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPanelWindow.swift; sourceTree = "<group>"; };
-		B100000100000000000A /* Colors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Colors.swift; sourceTree = "<group>"; };
 		B100000100000000000B /* Spacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spacing.swift; sourceTree = "<group>"; };
 		B100000100000000000C /* BridgePayloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgePayloads.swift; sourceTree = "<group>"; };
 		B1000001000000000010 /* SourceChunk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceChunk.swift; sourceTree = "<group>"; };
@@ -130,7 +126,6 @@
 		B1000001000000000026 /* ClipboardService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardService.swift; sourceTree = "<group>"; };
 		B1000001000000000027 /* CursorPositionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorPositionService.swift; sourceTree = "<group>"; };
 		B1000001000000000028 /* HotkeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyService.swift; sourceTree = "<group>"; };
-		B1000001000000000029 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		B100000100000000002A /* SelectionReaderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionReaderService.swift; sourceTree = "<group>"; };
 			B100000100000000002C /* DeviceKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyService.swift; sourceTree = "<group>"; };
 			B100000100000000002D /* ProxyLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyLLMService.swift; sourceTree = "<group>"; };
@@ -147,7 +142,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				C1000001000000000001 /* GRDB in Frameworks */,
-				C1000001000000000002 /* MLXLLM in Frameworks */,
 				C1000001000000000003 /* Sparkle in Frameworks */,
 				);
 				runOnlyForDeploymentPostprocessing = 0;
@@ -249,7 +243,6 @@
 		G1000001000000000002 /* Design */ = {
 			isa = PBXGroup;
 			children = (
-				B100000100000000000A /* Colors.swift */,
 				B100000100000000000B /* Spacing.swift */,
 			);
 			path = Design;
@@ -325,7 +318,6 @@
 					B1000001000000000026 /* ClipboardService.swift */,
 				B1000001000000000027 /* CursorPositionService.swift */,
 				B1000001000000000028 /* HotkeyService.swift */,
-				B1000001000000000029 /* KeychainService.swift */,
 				B100000100000000002A /* SelectionReaderService.swift */,
 			);
 				path = System;
@@ -367,7 +359,6 @@
 			name = Ticker;
 			packageProductDependencies = (
 				D1000001000000000001 /* GRDB */,
-				D1000001000000000002 /* MLXLLM */,
 				D1000001000000000003 /* Sparkle */,
 			);
 			productName = Ticker;
@@ -420,7 +411,6 @@
 			mainGroup = E8A1B2C3D4E5F6A7B8C9D100;
 			packageReferences = (
 				P1000001000000000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
-				P1000001000000000002 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				P1000001000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			productRefGroup = E8A1B2C3D4E5F6A7B8C9D102 /* Products */;
@@ -497,7 +487,6 @@
 				A1000001000000000007 /* QuickPanelManager.swift in Sources */,
 				A1000001000000000008 /* QuickPanelView.swift in Sources */,
 				A1000001000000000009 /* QuickPanelWindow.swift in Sources */,
-				A100000100000000000A /* Colors.swift in Sources */,
 				A100000100000000000B /* Spacing.swift in Sources */,
 				A100000100000000000C /* BridgePayloads.swift in Sources */,
 				A1000001000000000010 /* SourceChunk.swift in Sources */,
@@ -522,7 +511,6 @@
 				A1000001000000000026 /* ClipboardService.swift in Sources */,
 				A1000001000000000027 /* CursorPositionService.swift in Sources */,
 				A1000001000000000028 /* HotkeyService.swift in Sources */,
-				A1000001000000000029 /* KeychainService.swift in Sources */,
 				A100000100000000002A /* SelectionReaderService.swift in Sources */,
 				A100000100000000002C /* DeviceKeyService.swift in Sources */,
 				A100000100000000002D /* ProxyLLMService.swift in Sources */,
@@ -791,14 +779,6 @@
 				minimumVersion = 6.24.0;
 			};
 		};
-		P1000001000000000002 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.29.2;
-			};
-		};
 		P1000001000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
@@ -814,11 +794,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = P1000001000000000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */;
 			productName = GRDB;
-		};
-		D1000001000000000002 /* MLXLLM */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = P1000001000000000002 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
-			productName = MLXLLM;
 		};
 		D1000001000000000003 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
