@@ -30,12 +30,15 @@ export const aiWritingRangeField = StateField.define<AiWritingRange | null>({
 
     return nextRange;
   },
-  provide: (field) => EditorView.decorations.from(field, (range) => {
+  provide: (field) => EditorView.decorations.compute([field], (state) => {
+    const range = state.field(field);
     if (!range) return Decoration.none;
-    if (range.to <= range.from) {
-      // Waiting for the first chunk: pulsing dots at the exact insertion point.
+    // Waiting for the first chunk: the range is empty or holds only the
+    // insertion prefix (newlines in 'after' mode) — pulsing dots at the
+    // insertion point instead of an invisible whitespace highlight.
+    if (state.doc.sliceString(range.from, range.to).trim().length === 0) {
       return Decoration.set([
-        Decoration.widget({ widget: new AiPendingWidget(), side: 1 }).range(range.from),
+        Decoration.widget({ widget: new AiPendingWidget(), side: 1 }).range(range.to),
       ]);
     }
     return Decoration.set([
