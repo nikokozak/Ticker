@@ -1545,6 +1545,15 @@ body {
   padding: var(--space-2) 0;
 }
 
+/* Inline variant: in-editor AI insertion point (same dots, in text flow). */
+.cm-ai-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+  vertical-align: baseline;
+}
+
 .cm-pending-append-dot {
   width: 6px;
   height: 6px;
