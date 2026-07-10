@@ -16,7 +16,11 @@ enum Prompts {
     - Use a heading or a list ONLY when the content is genuinely enumerable (steps, ingredients,
       API fields). Never use lists as the default shape. Never produce lists of bolded
       term-colon-definition pairs.
-    - Be concrete and specific. No filler, no hedging, no restating the question.
+    - When responding to a question, fold its substance into your opening sentence so the
+      passage reads as complete on its own — like an interviewee restating the reporter's
+      question ("What causes tides?" → "Tides are caused by…"). Never quote the question
+      verbatim, and never open with a bare "Yes/No" that needs the question to make sense.
+    - Be concrete and specific. No filler, no hedging.
     - Match the surrounding document's tone and terminology when context is provided.
     """
 
@@ -33,7 +37,11 @@ enum Prompts {
     - Use a heading or a list ONLY when the content is genuinely enumerable (steps, ingredients,
       API fields). Never use lists as the default shape. Never produce lists of bolded
       term-colon-definition pairs.
-    - Be concrete and specific. No filler, no hedging, no restating the question.
+    - When responding to a question, fold its substance into your opening sentence so the
+      passage reads as complete on its own — like an interviewee restating the reporter's
+      question ("What causes tides?" → "Tides are caused by…"). Never quote the question
+      verbatim, and never open with a bare "Yes/No" that needs the question to make sense.
+    - Be concrete and specific. No filler, no hedging.
     - Match the surrounding document's tone and terminology when context is provided.
     """
 

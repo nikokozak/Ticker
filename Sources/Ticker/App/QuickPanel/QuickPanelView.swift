@@ -530,14 +530,8 @@ struct QuickPanelView: View {
 
             if manager.ephemeralConversation.currentResponse.isEmpty {
                 // Typing indicator when waiting for first chunk
-                HStack(spacing: QuickPanelStyle.typingDotSize) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        Circle()
-                            .fill(QuickPanelStyle.textSubtle)
-                            .frame(width: QuickPanelStyle.typingDotSize, height: QuickPanelStyle.typingDotSize)
-                    }
-                }
-                .padding(.vertical, Spacing.xs)
+                TypingDotsView()
+                    .padding(.vertical, Spacing.xs)
             } else {
                 HStack(alignment: .bottom, spacing: 0) {
                     Text(verbatim: manager.ephemeralConversation.currentResponse)
@@ -1000,6 +994,31 @@ class QuickPanelTextView: NSTextView {
         }
 
         super.keyDown(with: event)
+    }
+}
+
+// MARK: - Typing Indicator
+
+/// Three dots pulsing in a staggered wave while waiting for the first AI chunk.
+private struct TypingDotsView: View {
+    @State private var pulsing = false
+
+    var body: some View {
+        HStack(spacing: QuickPanelStyle.typingDotSize) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(QuickPanelStyle.textSubtle)
+                    .frame(width: QuickPanelStyle.typingDotSize, height: QuickPanelStyle.typingDotSize)
+                    .opacity(pulsing ? 1 : 0.25)
+                    .animation(
+                        .easeInOut(duration: 0.5)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(index) * 0.15),
+                        value: pulsing
+                    )
+            }
+        }
+        .onAppear { pulsing = true }
     }
 }
 

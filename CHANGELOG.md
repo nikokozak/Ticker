@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- ⌘B and ⌘I now toggle bold and italic on the stream editor selection.
 - Quick Panel AI answers now show presence in the open editor: the AI-writing pill plus a typing indicator pinned to the exact spot where the answer will land.
 - Settings now offers a model choice — Balanced (GPT-5 mini), Fast (GPT-4o mini), or Claude — with web search available on the OpenAI options.
 - Search-vs-knowledge routing now uses Apple's on-device foundation model when available (macOS 26 + Apple Intelligence), with the keyword gate as fallback.
@@ -39,6 +40,8 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- AI answers now fold the question's substance into their opening sentence so saved passages read complete on their own.
+- The Claude model option is now marked "Coming soon"; AI requests route to the OpenAI models until it ships.
 - Document AI now biases toward the only attached large source when a question has weak but present lexical overlap.
 - Document AI now uses local source retrieval for large source sets instead of concatenating every source.
 - Main window chrome is now transparent, with content inset around the floating traffic-light controls.
@@ -48,6 +51,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Quick Panel typing dots now pulse while waiting for the first AI chunk instead of sitting static.
 - Bug reports no longer falsely claim the previous session crashed after an app auto-update.
 - Quick Panel now avoids copying an editor cursor line when Accessibility reports that no text is selected.
 - Debug builds now use a distinct bundle id and display name so they do not share the release app's macOS permission identity.

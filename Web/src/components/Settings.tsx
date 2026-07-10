@@ -557,14 +557,9 @@ export function Settings({ onClose }: SettingsProps) {
                 <span className="settings-model-name">Fast</span>
                 <span className="settings-model-detail">GPT-4o mini · searches the web</span>
               </button>
-              <button
-                className={`settings-model-btn ${settings.defaultModel === 'anthropic' ? 'settings-model-btn--active' : ''}`}
-                onClick={() => {
-                  applySettingsPatch({ defaultModel: 'anthropic' });
-                }}
-              >
+              <button className="settings-model-btn" disabled>
                 <span className="settings-model-name">Claude</span>
-                <span className="settings-model-detail">Sonnet · no live web access</span>
+                <span className="settings-model-detail">Coming soon</span>
               </button>
             </div>
             <p className="settings-hint">

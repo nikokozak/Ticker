@@ -122,6 +122,22 @@ const SELECTION_MENU_DELAY_MS = 180;
 const AI_ERROR_FEEDBACK_MS = 2200;
 const AI_INDEXING_NOTICE_MS = 4000;
 
+/** Keymap command for ⌘B/⌘I: toggle an inline markdown marker on the selection. */
+function toggleInlineMarkCommand(marker: string) {
+  return (view: EditorView): boolean => {
+    const edit = toggleInlineMark(view.state, view.state.selection.main, marker);
+    if (edit) {
+      view.dispatch({
+        changes: edit.changes,
+        selection: edit.newSelection,
+        annotations: Transaction.userEvent.of('input.format'),
+      });
+    }
+    // Always consume so WebKit's contenteditable bold/italic never fires.
+    return true;
+  };
+}
+
 export function nextSourceScope(scope: SourceScope): SourceScope {
   switch (scope) {
     case 'auto':
@@ -2810,7 +2826,12 @@ export function StreamEditor({
                 // Bullet lines get our always-tight continuation; everything
                 // else falls through to markdownKeymap (quote continuation,
                 // Backspace marker deletion).
-                Prec.high(keymap.of([{ key: 'Enter', run: continueBulletListOnEnter }, ...markdownKeymap])),
+                Prec.high(keymap.of([
+                  { key: 'Enter', run: continueBulletListOnEnter },
+                  { key: 'Mod-b', run: toggleInlineMarkCommand('**') },
+                  { key: 'Mod-i', run: toggleInlineMarkCommand('*') },
+                  ...markdownKeymap,
+                ])),
                 syntaxHighlighting(markdownHighlightStyle),
                 markdownConcealExtension,
                 arrivalField,
