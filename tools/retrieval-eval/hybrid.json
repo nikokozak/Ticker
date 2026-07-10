@@ -1,0 +1,324 @@
+{
+  "cases" : [
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "forth-16",
+        "forth-17"
+      ],
+      "id" : "para-forth-numbers",
+      "recall" : 0,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "forth-17",
+        "forth-18"
+      ],
+      "id" : "para-forth-base",
+      "recall" : 0.5,
+      "retrieved" : [
+        "forth-17",
+        "forth-16",
+        "forth-11",
+        "forth-30",
+        "forth-12",
+        "forth-9",
+        "forth-31",
+        "forth-13"
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "forth-8",
+        "forth-9"
+      ],
+      "id" : "para-forth-memory-of-words",
+      "recall" : 0,
+      "retrieved" : [
+        "forth-30",
+        "forth-11",
+        "forth-29",
+        "forth-15",
+        "forth-12",
+        "forth-14",
+        "forth-18",
+        "forth-13"
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "forth-11",
+        "forth-12"
+      ],
+      "id" : "para-forth-working-values",
+      "recall" : 0.5,
+      "retrieved" : [
+        "forth-11",
+        "forth-30"
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "forth-14",
+        "forth-15"
+      ],
+      "id" : "para-forth-enter-key",
+      "recall" : 1,
+      "retrieved" : [
+        "forth-14",
+        "forth-30",
+        "forth-15",
+        "forth-12",
+        "forth-11",
+        "forth-29",
+        "forth-31"
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "forth-21",
+        "forth-22"
+      ],
+      "id" : "para-forth-concurrent",
+      "recall" : 0,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "forth-29"
+      ],
+      "id" : "para-forth-view-source",
+      "recall" : 1,
+      "retrieved" : [
+        "forth-30",
+        "forth-29",
+        "forth-11",
+        "forth-15",
+        "forth-18",
+        "forth-14",
+        "forth-9",
+        "forth-13"
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "meal-0",
+        "meal-1"
+      ],
+      "id" : "para-meal-energy",
+      "recall" : 0,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "lease-deposit"
+      ],
+      "id" : "para-lease-deposit",
+      "recall" : 0,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "lease-sublet"
+      ],
+      "id" : "para-lease-roommate",
+      "recall" : 0,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "lease-repairs"
+      ],
+      "id" : "para-lease-broken",
+      "recall" : 1,
+      "retrieved" : [
+        "lease-repairs"
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "lease-entry"
+      ],
+      "id" : "para-lease-privacy",
+      "recall" : 0,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "lexical",
+      "expected" : [
+        "forth-17",
+        "forth-18"
+      ],
+      "id" : "lex-forth-decimal-hex",
+      "recall" : 1,
+      "retrieved" : [
+        "forth-17",
+        "forth-18",
+        "forth-16"
+      ]
+    },
+    {
+      "class" : "lexical",
+      "expected" : [
+        "forth-14"
+      ],
+      "id" : "lex-forth-return-stack",
+      "recall" : 1,
+      "retrieved" : [
+        "forth-14",
+        "forth-30",
+        "forth-29",
+        "summer-1",
+        "summer-0"
+      ]
+    },
+    {
+      "class" : "lexical",
+      "expected" : [
+        "forth-11"
+      ],
+      "id" : "lex-forth-immediate",
+      "recall" : 1,
+      "retrieved" : [
+        "forth-11",
+        "forth-16"
+      ]
+    },
+    {
+      "class" : "lexical",
+      "expected" : [
+        "forth-15"
+      ],
+      "id" : "lex-forth-interpreter",
+      "recall" : 1,
+      "retrieved" : [
+        "forth-13",
+        "forth-15",
+        "forth-14"
+      ]
+    },
+    {
+      "class" : "lexical",
+      "expected" : [
+        "meal-3"
+      ],
+      "id" : "lex-meal-jars",
+      "recall" : 1,
+      "retrieved" : [
+        "meal-3",
+        "meal-1"
+      ]
+    },
+    {
+      "class" : "lexical",
+      "expected" : [
+        "lease-deposit"
+      ],
+      "id" : "lex-lease-deposit",
+      "recall" : 1,
+      "retrieved" : [
+        "lease-deposit"
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-pasta",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-sports",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-marathon",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-smalltalk",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-politics",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    }
+  ],
+  "metrics" : {
+    "lexical" : {
+      "cases" : 6,
+      "recallAt8" : 1
+    },
+    "negative" : {
+      "cases" : 5,
+      "recallAt8" : 1
+    },
+    "overall" : {
+      "cases" : 23,
+      "recallAt8" : 0.6521739130434783
+    },
+    "paraphrase" : {
+      "cases" : 12,
+      "recallAt8" : 0.3333333333333333
+    }
+  },
+  "mode" : "hybrid",
+  "negativeFalseRetrievalRate" : 0,
+  "version" : 1
+}

@@ -17,11 +17,13 @@ final class NaturalLanguageEmbeddingProvider: EmbeddingProvider {
     var modelId: String { model.modelIdentifier }
 
     private let model: NLContextualEmbedding
+    private let language: NLLanguage
     private var isPrepared = false
 
     init?(language: NLLanguage = .english) {
         guard let model = NLContextualEmbedding(language: language) else { return nil }
         self.model = model
+        self.language = language
         assetsWereAvailableBeforePrepare = model.hasAvailableAssets
     }
 
@@ -42,7 +44,7 @@ final class NaturalLanguageEmbeddingProvider: EmbeddingProvider {
     func embed(_ texts: [String]) async throws -> [[Float]] {
         guard isPrepared else { throw Error.notPrepared }
         return try texts.map { text in
-            let result = try model.embeddingResult(for: text, language: .english)
+            let result = try model.embeddingResult(for: text, language: language)
             var sum = [Double](repeating: 0, count: model.dimension)
             var tokenCount = 0
             result.enumerateTokenVectors(in: text.startIndex..<text.endIndex) { vector, _ in

@@ -13,7 +13,7 @@ Commands:
   contracts            Run bridge contract tests (if present in this checkout)
   web-typecheck        Run Web TypeScript typecheck
   swift-test           Run Swift tests (xcodebuild test, no code signing)
-  eval-retrieval       Run the manual BM25 retrieval golden-set evaluation
+  eval-retrieval       Run the manual BM25 + hybrid retrieval golden-set evaluation
   clean-derived-data    Delete repo-local Xcode DerivedData (fixes stale SPM artifacts)
   install-sparkle-tools  Install Sparkle CLI tools into ./tools/sparkle (from SwiftPM artifacts)
   build-dev            Build Debug app (unsigned)
@@ -448,10 +448,11 @@ cmd_eval_retrieval() {
   require_cmd xcodebuild
   cd "$ROOT_DIR"
   local marker="$ROOT_DIR/.build/retrieval-eval-enabled"
-  local table="$ROOT_DIR/tools/retrieval-eval/baseline.json.table"
+  local baseline_table="$ROOT_DIR/tools/retrieval-eval/baseline.json.table"
+  local hybrid_table="$ROOT_DIR/tools/retrieval-eval/hybrid.json.table"
   mkdir -p "$(dirname "$marker")"
   touch "$marker"
-  trap "rm -f '$marker' '$table'" RETURN
+  trap "rm -f '$marker' '$baseline_table' '$hybrid_table'" RETURN
   xcodebuild test \
     -project "$XCODE_PROJECT" \
     -scheme "$XCODE_SCHEME" \
@@ -460,7 +461,15 @@ cmd_eval_retrieval() {
     -only-testing:TickerTests/RetrievalEvalTests \
     CODE_SIGNING_ALLOWED=NO \
     -quiet
-  cat "$table"
+  echo "BM25 baseline"
+  cat "$baseline_table"
+  echo
+  echo "Hybrid operating point"
+  if [[ -f "$hybrid_table" ]]; then
+    cat "$hybrid_table"
+  else
+    echo "NLContextualEmbedding assets unavailable; see tools/retrieval-eval/operating-point.json"
+  fi
 }
 
 cmd_preflight_alpha() {
