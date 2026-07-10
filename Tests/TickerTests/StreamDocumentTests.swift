@@ -46,6 +46,18 @@ final class TickerURLCommandTests: XCTestCase {
     }
 }
 
+private final class TestEmbeddingProvider: EmbeddingProvider {
+    let modelId = "test-model"
+    private let embedBlock: ([String]) throws -> [[Float]]
+
+    init(embed: @escaping ([String]) throws -> [[Float]]) {
+        embedBlock = embed
+    }
+
+    func prepare() async -> Bool { true }
+    func embed(_ texts: [String]) async throws -> [[Float]] { try embedBlock(texts) }
+}
+
 final class QuickPanelMarkdownFormatterTests: XCTestCase {
     func test_buildFragment_includesSelectedTextAsBlockquoteWithAttribution() throws {
         let context = QuickPanelContext(
@@ -739,13 +751,10 @@ final class StreamDocumentTests: XCTestCase {
             }
             XCTAssertTrue(ftsExists)
 
-            let legacyEmbeddingTableIsGone = try dbQueue.read { db in
-                try Row.fetchOne(
-                    db,
-                    sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunk_embeddings'"
-                ) == nil
+            let embeddingColumns: [String] = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(chunk_embeddings)").map { $0["name"] }
             }
-            XCTAssertTrue(legacyEmbeddingTableIsGone)
+            XCTAssertEqual(embeddingColumns, ["chunk_id", "model_id", "dims", "vector"])
 
             let ftsCount: Int = try dbQueue.read { db in
                 try Row.fetchOne(db, sql: "SELECT COUNT(*) AS count FROM source_chunks_fts")?["count"] ?? -1
@@ -2223,6 +2232,75 @@ final class StreamDocumentTests: XCTestCase {
             lock.unlock()
             XCTAssertTrue(capturedStatuses.contains(.indexing))
             XCTAssertTrue(capturedStatuses.contains(.ready))
+        }
+    }
+
+    func test_v23MigrationCreatesEmptyChunkEmbeddingCache() throws {
+        try withTempPersistenceServiceAndURL { _, dbURL, _ in
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let columns: [String] = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(chunk_embeddings)").map { $0["name"] }
+            }
+            let count = try dbQueue.read { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM chunk_embeddings")!
+            }
+            XCTAssertEqual(columns, ["chunk_id", "model_id", "dims", "vector"])
+            XCTAssertEqual(count, 0)
+        }
+    }
+
+    func test_modelIdMismatchIsMissingEmbedding() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Model mismatch")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id, displayName: "Notes.txt", fileType: .text,
+                bookmarkData: Data(), status: .ready, indexStatus: .ready
+            )
+            try service.saveSource(source)
+            let chunk = SourceChunk(sourceId: source.id, seq: 0, text: "cached text", pageStart: 1, pageEnd: 1)
+            try service.saveSourceChunks([chunk], for: source.id)
+            try service.saveChunkEmbeddings([[1, 0]], for: [chunk], modelId: "old-model")
+
+            XCTAssertEqual(
+                try service.loadChunksMissingEmbeddings(streamId: stream.id, modelId: "new-model").map(\.id),
+                [chunk.id]
+            )
+            XCTAssertTrue(try service.loadChunksMissingEmbeddings(streamId: stream.id, modelId: "old-model").isEmpty)
+        }
+    }
+
+    func test_ingestEmbeddingFailureLeavesFTSReady() throws {
+        try withTempPersistenceServiceAndURL { service, _, fileManager in
+            let stream = Stream(title: "Embedding failure")
+            try service.saveStream(stream)
+            let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { try? fileManager.removeItem(at: tempDir) }
+            let pdfURL = tempDir.appendingPathComponent("Ready.pdf")
+            try makePDFData(pages: ["FTS survives an embedding provider failure."]).write(to: pdfURL)
+            let sourceService = SourceService(persistence: service)
+            let source = try sourceService.addSource(from: pdfURL, to: stream.id)
+            let embeddingAttempted = expectation(description: "embedding attempted")
+            let provider = TestEmbeddingProvider { _ in
+                embeddingAttempted.fulfill()
+                throw TestPDFError.creationFailed
+            }
+            let ingest = IngestService(
+                persistence: service,
+                sourceService: sourceService,
+                chunkingService: ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0)),
+                embeddingProvider: provider
+            )
+            let ready = expectation(description: "FTS ready")
+            ingest.onStatusChange = { if $0.status == .ready { ready.fulfill() } }
+
+            ingest.enqueue(source: source)
+            wait(for: [ready, embeddingAttempted], timeout: 5)
+
+            XCTAssertEqual(try service.loadSource(id: source.id)?.indexStatus, .ready)
+            XCTAssertFalse(try service.loadSourceChunks(sourceId: source.id).isEmpty)
+            XCTAssertFalse(try service.loadChunksMissingEmbeddings(streamId: stream.id, modelId: provider.modelId).isEmpty)
         }
     }
 

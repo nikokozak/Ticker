@@ -56,7 +56,8 @@ struct ServiceContainer {
             let ingestService = IngestService(
                 persistence: persistence,
                 sourceService: sourceService,
-                chunkingService: chunkingService
+                chunkingService: chunkingService,
+                embeddingProvider: MiniLMEmbeddingProvider()
             )
             ingestService.onStatusChange = { [bridgeService] update in
                 var payload: [String: AnyCodable] = [

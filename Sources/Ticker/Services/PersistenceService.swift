@@ -512,6 +512,16 @@ final class PersistenceService {
             }
         }
 
+        migrator.registerMigration("v23_chunk_embeddings") { db in
+            try db.create(table: "chunk_embeddings") { t in
+                t.column("chunk_id", .text).primaryKey()
+                    .references("source_chunks", onDelete: .cascade)
+                t.column("model_id", .text).notNull()
+                t.column("dims", .integer).notNull()
+                t.column("vector", .blob).notNull()
+            }
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -1752,6 +1762,39 @@ final class PersistenceService {
                 """,
                 arguments: [id.uuidString]
             ).map(Self.decodeSourceChunk)
+        }
+    }
+
+    func loadChunksMissingEmbeddings(streamId: UUID, modelId: String) throws -> [SourceChunk] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT c.id, c.source_id, c.seq, c.text, c.page_start, c.page_end, c.section_path
+                    FROM source_chunks c
+                    JOIN sources s ON s.id = c.source_id
+                    LEFT JOIN chunk_embeddings e ON e.chunk_id = c.id AND e.model_id = ?
+                    WHERE s.stream_id = ? AND s.index_status = 'ready' AND e.chunk_id IS NULL
+                    ORDER BY c.source_id, c.seq
+                """,
+                arguments: [modelId, streamId.uuidString]
+            ).map(Self.decodeSourceChunk)
+        }
+    }
+
+    func saveChunkEmbeddings(_ vectors: [[Float]], for chunks: [SourceChunk], modelId: String) throws {
+        guard vectors.count == chunks.count else { return }
+        try dbQueue.write { db in
+            for (chunk, vector) in zip(chunks, vectors) {
+                let data = vector.withUnsafeBufferPointer { Data(buffer: $0) }
+                try db.execute(
+                    sql: """
+                        INSERT OR REPLACE INTO chunk_embeddings (chunk_id, model_id, dims, vector)
+                        VALUES (?, ?, ?, ?)
+                    """,
+                    arguments: [chunk.id.uuidString, modelId, vector.count, data]
+                )
+            }
         }
     }
 
