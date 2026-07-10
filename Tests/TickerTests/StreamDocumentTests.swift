@@ -2262,6 +2262,47 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_ingestServiceFallsBackToFailedWhenReadyStatusCannotPersist() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Terminal Status")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Notes.txt",
+                fileType: .text,
+                bookmarkData: Data(),
+                status: .ready
+            )
+            try service.saveSource(source)
+
+            var readyAttempts = 0
+            let ingestService = IngestService(
+                persistence: service,
+                sourceService: SourceService(persistence: service),
+                chunkingService: ChunkingService(),
+                writeIndexStatus: { sourceId, status in
+                    if status == .ready {
+                        readyAttempts += 1
+                        throw TestPDFError.creationFailed
+                    }
+                    try service.updateSourceIndexStatus(sourceId, status: status)
+                }
+            )
+            let failed = expectation(description: "terminal status fell back to failed")
+            ingestService.onStatusChange = { update in
+                if update.status == .failed {
+                    failed.fulfill()
+                }
+            }
+
+            ingestService.enqueue(source: source)
+            wait(for: [failed], timeout: 5)
+
+            XCTAssertEqual(readyAttempts, 2)
+            XCTAssertEqual(try service.loadSource(id: source.id)?.indexStatus, .failed)
+        }
+    }
+
     func test_savePDFHighlightRoundTripsRects() throws {
         try withTempPersistenceService { service in
             let source = try savePDFSource(in: service)
