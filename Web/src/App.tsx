@@ -111,7 +111,10 @@ export function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
+      if (!(event.metaKey || event.ctrlKey)) return;
+      const key = event.key.toLowerCase();
+      // ⌘K everywhere; ⌘F only outside the editor (inside, it's in-document find).
+      if (key !== 'k' && !(key === 'f' && viewRef.current === 'list')) return;
       const canSearch = viewRef.current === 'list' || (viewRef.current === 'stream' && currentStreamIdRef.current);
       if (isAuthGated || !canSearch) return;
       event.preventDefault();
