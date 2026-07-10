@@ -119,7 +119,7 @@ export interface SourceTitlePayload {
   shortTitle?: string;
 }
 
-export type DocumentAISourceContextMode = 'passthrough' | 'retrieved' | 'none';
+export type DocumentAISourceContextMode = 'passthrough' | 'retrieved' | 'none' | 'unavailable';
 
 /** Callback registry for async responses */
 type CallbackFn = (payload: Record<string, unknown>) => void;

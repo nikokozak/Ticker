@@ -58,6 +58,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Source-required AI requests now fail when local retrieval fails, while Auto answers clearly disclose retrieval degradation.
 - Bridge callback failures now return immediately instead of timing out, and production surfaces a safe error when native actions fail.
 - Quick Panel AI now clears the editor typing indicator and shows an error if its answer cannot be saved.
 - Quick Panel now ignores late AI callbacks from a cancelled request after a new conversation request starts.

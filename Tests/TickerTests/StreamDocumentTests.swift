@@ -1008,6 +1008,35 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_sourceRetrievalFailureHasHonestErrorAndCompletionMode() async throws {
+        XCTAssertEqual(
+            OrchestratorError.sourceRetrievalFailed.localizedDescription,
+            "Source retrieval failed — answer not generated"
+        )
+
+        let recorder = BridgeMessageRecorder()
+        let handler = await AIMessageHandler(
+            sendToWeb: { recorder.send($0) },
+            routeDocumentAI: { _, _, _, _, _, _, _, onComplete, _, _ in
+                onComplete(SourceContext(text: "", chunks: [], mode: .unavailable))
+            }
+        )
+        let requestId = UUID().uuidString
+
+        await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
+            "requestId": AnyCodable(requestId),
+            "query": AnyCodable("Use my sources"),
+            "sourceScope": AnyCodable("auto"),
+            "imageURLs": AnyCodable([])
+        ]))
+
+        try await waitUntil {
+            recorder.messages(ofType: "documentAIComplete").contains { message in
+                message.payload?["sourceContextMode"]?.value as? String == "unavailable"
+            }
+        }
+    }
+
     @MainActor
     func test_documentAICancelStopsSlowStreamingProvider() async throws {
         let recorder = BridgeMessageRecorder()

@@ -191,6 +191,7 @@ struct SourceContext {
 enum SourceContextMode: Equatable {
     case passthrough
     case retrieved
+    case unavailable
 }
 
 enum SourceScope: String, Codable {
