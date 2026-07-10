@@ -468,7 +468,7 @@ cmd_eval_retrieval() {
   if [[ -f "$hybrid_table" ]]; then
     cat "$hybrid_table"
   else
-    echo "NLContextualEmbedding assets unavailable; see tools/retrieval-eval/operating-point.json"
+    echo "Bundled MiniLM evaluation did not produce a hybrid table"
   fi
 }
 

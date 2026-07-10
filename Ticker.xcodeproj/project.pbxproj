@@ -51,6 +51,7 @@
 		A100000100000000001E /* Prompts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000001E /* Prompts.swift */; };
 		A100000100000000001F /* LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000001F /* LLMProvider.swift */; };
 		A10000010000000000E1 /* EmbeddingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000010000000000E1 /* EmbeddingProvider.swift */; };
+		A10000010000000000E2 /* MiniLMEmbeddingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000010000000000E2 /* MiniLMEmbeddingProvider.swift */; };
 		A1000001000000000022 /* RetrievalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000022 /* RetrievalService.swift */; };
 		A1000001000000000023 /* SearchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000023 /* SearchService.swift */; };
 		A1000001000000000024 /* SettingsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000024 /* SettingsService.swift */; };
@@ -122,6 +123,7 @@
 		B100000100000000001E /* Prompts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Prompts.swift; sourceTree = "<group>"; };
 		B100000100000000001F /* LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMProvider.swift; sourceTree = "<group>"; };
 		B10000010000000000E1 /* EmbeddingProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddingProvider.swift; sourceTree = "<group>"; };
+		B10000010000000000E2 /* MiniLMEmbeddingProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniLMEmbeddingProvider.swift; sourceTree = "<group>"; };
 		B1000001000000000022 /* RetrievalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetrievalService.swift; sourceTree = "<group>"; };
 		B1000001000000000023 /* SearchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchService.swift; sourceTree = "<group>"; };
 		B1000001000000000024 /* SettingsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsService.swift; sourceTree = "<group>"; };
@@ -312,6 +314,7 @@
 			isa = PBXGroup;
 			children = (
 				B10000010000000000E1 /* EmbeddingProvider.swift */,
+				B10000010000000000E2 /* MiniLMEmbeddingProvider.swift */,
 				B100000100000000001F /* LLMProvider.swift */,
 			);
 			path = Providers;
@@ -511,6 +514,7 @@
 				A100000100000000001E /* Prompts.swift in Sources */,
 				A100000100000000001F /* LLMProvider.swift in Sources */,
 				A10000010000000000E1 /* EmbeddingProvider.swift in Sources */,
+				A10000010000000000E2 /* MiniLMEmbeddingProvider.swift in Sources */,
 				A1000001000000000022 /* RetrievalService.swift in Sources */,
 				A1000001000000000023 /* SearchService.swift in Sources */,
 				A1000001000000000024 /* SettingsService.swift in Sources */,

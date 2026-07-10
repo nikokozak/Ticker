@@ -5,8 +5,30 @@ import XCTest
 @testable import Ticker
 
 final class RetrievalEvalTests: XCTestCase {
+    func testMiniLMMatchesPythonReferenceVectors() async throws {
+        let root = Self.repositoryRoot
+        let references = try JSONDecoder().decode(
+            ReferenceVectors.self,
+            from: Data(contentsOf: root.appendingPathComponent("tools/retrieval-eval/reference-vectors.json"))
+        )
+        let provider = MiniLMEmbeddingProvider(
+            resourceDirectory: root.appendingPathComponent("Sources/Ticker/Resources/MiniLM")
+        )
+        let prepared = await provider.prepare()
+        guard prepared else {
+            XCTFail("Bundled MiniLM resources failed to load")
+            return
+        }
+        let actual = try await provider.embed(references.sentences.map(\.text))
+        for (reference, vector) in zip(references.sentences, actual) {
+            let cosine = Self.dot(reference.embedding, vector)
+            print(String(format: "MiniLM fidelity cosine %.6f — %@", cosine, reference.text))
+            XCTAssertGreaterThanOrEqual(cosine, 0.999, reference.text)
+        }
+    }
+
     func testBM25Baseline() throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let root = Self.repositoryRoot
         // ponytail: A repo-local marker is process-global; use a per-run test plan if concurrent eval lanes ever matter.
         guard FileManager.default.fileExists(atPath: root.appendingPathComponent(".build/retrieval-eval-enabled").path) else {
             throw XCTSkip("Manual lane: ./tickerctl.sh eval-retrieval")
@@ -77,7 +99,7 @@ final class RetrievalEvalTests: XCTestCase {
     }
 
     func testHybridSweep() async throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let root = Self.repositoryRoot
         guard FileManager.default.fileExists(atPath: root.appendingPathComponent(".build/retrieval-eval-enabled").path) else {
             throw XCTSkip("Manual lane: ./tickerctl.sh eval-retrieval")
         }
@@ -86,25 +108,18 @@ final class RetrievalEvalTests: XCTestCase {
             Golden.self,
             from: Data(contentsOf: root.appendingPathComponent("tools/retrieval-eval/golden.json"))
         )
-        guard let provider = NaturalLanguageEmbeddingProvider() else {
-            XCTFail("NLContextualEmbedding has no English model on this OS")
-            return
-        }
+        let provider = MiniLMEmbeddingProvider(
+            resourceDirectory: root.appendingPathComponent("Sources/Ticker/Resources/MiniLM")
+        )
 
         let memoryBefore = Self.physicalFootprintBytes()
+        let loadStart = ContinuousClock.now
         let prepared = await provider.prepare()
+        let modelLoadMs = Self.milliseconds(loadStart.duration(to: .now))
         let memoryAfter = Self.physicalFootprintBytes()
         guard prepared else {
-            let unavailable = OperatingPoint.unavailable(
-                modelId: provider.modelId,
-                assetsPreinstalled: provider.assetsWereAvailableBeforePrepare,
-                memoryBefore: memoryBefore,
-                memoryAfter: memoryAfter
-            )
-            try JSONEncoder.pretty.encode(unavailable).write(
-                to: root.appendingPathComponent("tools/retrieval-eval/operating-point.json"), options: .atomic
-            )
-            throw XCTSkip("NLContextualEmbedding assets unavailable; see operating-point.json")
+            XCTFail("Bundled MiniLM resources failed to load")
+            return
         }
 
         let fileManager = FileManager.default
@@ -143,14 +158,16 @@ final class RetrievalEvalTests: XCTestCase {
                 .compactMap { productionToGolden[$0.id] }
             return (item.id, ids)
         })
+        let coldStart = ContinuousClock.now
+        _ = try await provider.embed([golden.cases[0].query])
+        let coldQueryMs = Self.milliseconds(coldStart.duration(to: .now))
         let corpusVectors = try await provider.embed(golden.corpus.map(\.text))
         var queryVectors: [String: [Float]] = [:]
         var latenciesMs: [Double] = []
         for item in golden.cases {
             let start = ContinuousClock.now
             queryVectors[item.id] = try await provider.embed([item.query])[0]
-            let elapsed = start.duration(to: .now).components
-            latenciesMs.append(Double(elapsed.seconds) * 1_000 + Double(elapsed.attoseconds) / 1e15)
+            latenciesMs.append(Self.milliseconds(start.duration(to: .now)))
         }
 
         let floors = stride(from: 0.25, through: 1.00, by: 0.025).map { ($0 * 1_000).rounded() / 1_000 }
@@ -177,15 +194,20 @@ final class RetrievalEvalTests: XCTestCase {
             p50Ms: Self.percentile(latenciesMs, 0.50),
             p95Ms: Self.percentile(latenciesMs, 0.95)
         )
+        let separation = Self.separation(golden: golden, corpusVectors: corpusVectors, queryVectors: queryVectors)
         let operatingPoint = OperatingPoint(
+            provider: "MiniLMEmbeddingProvider",
             modelId: provider.modelId,
-            assetsPreinstalled: provider.assetsWereAvailableBeforePrepare,
-            assetsAvailable: true,
             cosineFloor: selected.floor,
             rrfK: 60,
             topK: 8,
-            queryEmbedLatencyMs: latency,
-            memory: Memory(beforePrepareBytes: memoryBefore, afterPrepareBytes: memoryAfter),
+            latency: Performance(modelLoadMs: modelLoadMs, coldQueryMs: coldQueryMs, warmQueryMs: latency),
+            memory: Memory(
+                beforePrepareBytes: memoryBefore,
+                afterPrepareBytes: memoryAfter,
+                deltaBytes: Int64(memoryAfter) - Int64(memoryBefore)
+            ),
+            separation: separation,
             sweep: sweeps.map(SweepRow.init)
         )
         let outputRoot = root.appendingPathComponent("tools/retrieval-eval")
@@ -239,6 +261,34 @@ final class RetrievalEvalTests: XCTestCase {
         zip(lhs, rhs).reduce(0) { $0 + $1.0 * $1.1 }
     }
 
+    private static func separation(
+        golden: Golden,
+        corpusVectors: [[Float]],
+        queryVectors: [String: [Float]]
+    ) -> Separation {
+        let corpusIndex = Dictionary(uniqueKeysWithValues: golden.corpus.enumerated().map { ($1.id, $0) })
+        let relevant = golden.cases.flatMap { item in
+            item.expected.compactMap { expected in
+                corpusIndex[expected].map { dot(queryVectors[item.id]!, corpusVectors[$0]) }
+            }
+        }
+        let unrelated = golden.cases.filter { $0.expected.isEmpty }.flatMap { item in
+            corpusVectors.map { dot(queryVectors[item.id]!, $0) }
+        }
+        let worstRelevant = relevant.min() ?? 0
+        let bestUnrelated = unrelated.max() ?? 0
+        return Separation(
+            bestUnrelatedCosine: Double(bestUnrelated),
+            worstRelevantCosine: Double(worstRelevant),
+            margin: Double(worstRelevant - bestUnrelated)
+        )
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Double {
+        let components = duration.components
+        return Double(components.seconds) * 1_000 + Double(components.attoseconds) / 1e15
+    }
+
     private static func percentile(_ values: [Double], _ percentile: Double) -> Double {
         let sorted = values.sorted()
         let index = Int(ceil(percentile * Double(sorted.count))) - 1
@@ -255,6 +305,19 @@ final class RetrievalEvalTests: XCTestCase {
         }
         return result == KERN_SUCCESS ? info.phys_footprint : 0
     }
+
+    private static var repositoryRoot: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    }
+}
+
+private struct ReferenceVectors: Decodable {
+    let sentences: [ReferenceSentence]
+}
+
+private struct ReferenceSentence: Decodable {
+    let text: String
+    let embedding: [Float]
 }
 
 private struct Golden: Decodable {
@@ -343,6 +406,19 @@ private struct Latency: Encodable {
 private struct Memory: Encodable {
     let beforePrepareBytes: UInt64
     let afterPrepareBytes: UInt64
+    let deltaBytes: Int64
+}
+
+private struct Performance: Encodable {
+    let modelLoadMs: Double
+    let coldQueryMs: Double
+    let warmQueryMs: Latency
+}
+
+private struct Separation: Encodable {
+    let bestUnrelatedCosine: Double
+    let worstRelevantCosine: Double
+    let margin: Double
 }
 
 private struct SweepResult {
@@ -365,29 +441,16 @@ private struct SweepRow: Encodable {
 }
 
 private struct OperatingPoint: Encodable {
-    let version = 1
+    let version = 2
+    let provider: String
     let modelId: String
-    let assetsPreinstalled: Bool
-    let assetsAvailable: Bool
-    let cosineFloor: Double?
+    let cosineFloor: Double
     let rrfK: Int
     let topK: Int
-    let queryEmbedLatencyMs: Latency?
+    let latency: Performance
     let memory: Memory
+    let separation: Separation
     let sweep: [SweepRow]
-
-    static func unavailable(
-        modelId: String,
-        assetsPreinstalled: Bool,
-        memoryBefore: UInt64,
-        memoryAfter: UInt64
-    ) -> Self {
-        Self(
-            modelId: modelId, assetsPreinstalled: assetsPreinstalled, assetsAvailable: false,
-            cosineFloor: nil, rrfK: 60, topK: 8, queryEmbedLatencyMs: nil,
-            memory: Memory(beforePrepareBytes: memoryBefore, afterPrepareBytes: memoryAfter), sweep: []
-        )
-    }
 }
 
 private extension String {
