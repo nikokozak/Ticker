@@ -69,6 +69,15 @@ describe('ProvenanceField', () => {
     expectHashesMatch(state);
   });
 
+  it('keeps the existing hash when edits do not touch covered text', () => {
+    const original = spanFor('beforeHello', 6, 11, { spanId: 'span-1' });
+    let state = stateWith('beforeHello', [{ ...original, textHash: 'already-verified' }]);
+
+    state = state.update({ changes: { from: 0, insert: 'X' } }).state;
+
+    expect(currentSpans(state)[0].textHash).toBe('already-verified');
+  });
+
   it('shrinks a span across deletions', () => {
     let state = stateWith('abcdefghi', [spanFor('abcdefghi', 2, 8, { spanId: 'span-1' })]);
 
@@ -98,6 +107,15 @@ describe('ProvenanceField', () => {
         textHash: fnv1a('abcdef'),
       },
     ]);
+  });
+
+  it('does not merge adjacent spans with different source attribution or metadata', () => {
+    const doc = 'abcdefghi';
+    const first = spanFor(doc, 0, 3, { spanId: 'a', requestId: 'r1', sourceId: 'source-1', meta: { page: 1 } });
+    const differentSource = spanFor(doc, 3, 6, { spanId: 'b', requestId: 'r1', sourceId: 'source-2', meta: { page: 1 } });
+    const differentMeta = spanFor(doc, 6, 9, { spanId: 'c', requestId: 'r1', sourceId: 'source-2', meta: { page: 2 } });
+
+    expect(normalizeSpans([first, differentSource, differentMeta], doc)).toHaveLength(3);
   });
 
   it('restores dissolved spans through undo', () => {

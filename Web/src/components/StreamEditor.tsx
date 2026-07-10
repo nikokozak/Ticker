@@ -342,7 +342,7 @@ function fieldSpanToPayload(span: Span): ProvenanceSpanJSON {
 }
 
 function serializeFieldSpans(spans: Span[], doc: string): ProvenanceSpanJSON[] {
-  return serializeProvenanceSpans(normalizeSpans(spans, doc).map(fieldSpanToPayload));
+  return serializeProvenanceSpans(normalizeSpans(spans, doc, true).map(fieldSpanToPayload));
 }
 
 function persistNewUnanchoredMarginNotes(rawNotes: Stream['marginNotes'], notes: MarginNote[]): void {
