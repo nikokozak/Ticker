@@ -453,6 +453,7 @@ cmd_eval_retrieval() {
   mkdir -p "$(dirname "$marker")"
   touch "$marker"
   trap "rm -f '$marker' '$baseline_table' '$hybrid_table'" RETURN
+  local test_status
   xcodebuild test \
     -project "$XCODE_PROJECT" \
     -scheme "$XCODE_SCHEME" \
@@ -460,7 +461,7 @@ cmd_eval_retrieval() {
     -derivedDataPath "$DERIVED_DATA_PATH" \
     -only-testing:TickerTests/RetrievalEvalTests \
     CODE_SIGNING_ALLOWED=NO \
-    -quiet
+    -quiet && test_status=0 || test_status=$?
   echo "BM25 baseline"
   cat "$baseline_table"
   echo
@@ -470,6 +471,7 @@ cmd_eval_retrieval() {
   else
     echo "Bundled MiniLM evaluation did not produce a hybrid table"
   fi
+  return "$test_status"
 }
 
 cmd_preflight_alpha() {

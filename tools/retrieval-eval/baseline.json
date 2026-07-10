@@ -266,6 +266,106 @@
       "retrieved" : [
 
       ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+        "meal-4"
+      ],
+      "id" : "para-meal-nocook",
+      "recall" : 1,
+      "retrieved" : [
+        "meal-4",
+        "meal-3"
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-css",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-weather",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-travel",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-movie",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-medical",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-shopping",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-math",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-history",
+      "recall" : 0,
+      "retrieved" : [
+        "lease-deposit"
+      ]
     }
   ],
   "metrics" : {
@@ -274,19 +374,19 @@
       "recallAt8" : 1
     },
     "negative" : {
-      "cases" : 5,
-      "recallAt8" : 1
+      "cases" : 13,
+      "recallAt8" : 0.9230769230769231
     },
     "overall" : {
-      "cases" : 23,
-      "recallAt8" : 0.5434782608695652
+      "cases" : 32,
+      "recallAt8" : 0.640625
     },
     "paraphrase" : {
-      "cases" : 12,
-      "recallAt8" : 0.125
+      "cases" : 13,
+      "recallAt8" : 0.19230769230769232
     }
   },
   "mode" : "bm25",
-  "negativeFalseRetrievalRate" : 0,
+  "negativeFalseRetrievalRate" : 0.07692307692307693,
   "version" : 1
 }

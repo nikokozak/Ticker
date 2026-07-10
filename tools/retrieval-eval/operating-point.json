@@ -1,212 +1,300 @@
 {
-  "cosineFloor" : 0.35,
+  "cosineFloor" : 0.225,
   "latency" : {
-    "coldQueryMs" : 15.451834,
-    "modelLoadMs" : 80.98175,
+    "coldQueryMs" : 17.149625,
+    "modelLoadMs" : 258.224,
     "warmQueryMs" : {
-      "p50Ms" : 6.488042,
-      "p95Ms" : 9.225042
+      "p50Ms" : 6.161834,
+      "p95Ms" : 7.74425
     }
   },
+  "marginRule" : {
+    "achievedMargin" : 0.07033429145812989,
+    "bestObservedUnrelatedCosine" : 0.15466570854187012,
+    "chosenFloor" : 0.225,
+    "gridStep" : 0.025,
+    "minimumFloor" : 0.2046657085418701,
+    "requiredMargin" : 0.05
+  },
   "memory" : {
-    "afterPrepareBytes" : 42435640,
-    "beforePrepareBytes" : 35800120,
-    "deltaBytes" : 6635520
+    "afterPrepareBytes" : 43238456,
+    "beforePrepareBytes" : 35685384,
+    "deltaBytes" : 7553072
   },
   "modelId" : "sentence-transformers/all-MiniLM-L6-v2",
   "provider" : "MiniLMEmbeddingProvider",
   "rrfK" : 60,
-  "separation" : {
-    "bestUnrelatedCosine" : 0.3488314151763916,
-    "margin" : -0.28807753324508667,
-    "worstRelevantCosine" : 0.06075386703014374
-  },
-  "sweep" : [
+  "sensitivity" : [
     {
-      "cosineFloor" : 0.25,
+      "cosineFloor" : 0.175,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0.2,
-      "paraphraseRecallAt8" : 0.9166666666666666
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.225,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.9230769230769231
     },
     {
       "cosineFloor" : 0.275,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0.2,
-      "paraphraseRecallAt8" : 0.875
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.8846153846153846
+    }
+  ],
+  "separation" : {
+    "bestUnrelatedCosine" : 0.15466570854187012,
+    "margin" : -0.09391184151172638,
+    "worstRelevantCosine" : 0.06075386703014374
+  },
+  "sweep" : [
+    {
+      "cosineFloor" : 0,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 1,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.025,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.9230769230769231,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.05,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.8461538461538461,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.075,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.6153846153846154,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.1,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.46153846153846156,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.125,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.15384615384615385,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.15,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.15384615384615385,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.175,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.2,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.225,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.25,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.9230769230769231
+    },
+    {
+      "cosineFloor" : 0.275,
+      "lexicalRecallAt8" : 1,
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.8846153846153846
     },
     {
       "cosineFloor" : 0.3,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0.2,
-      "paraphraseRecallAt8" : 0.7083333333333334
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.7307692307692307
     },
     {
       "cosineFloor" : 0.325,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0.2,
-      "paraphraseRecallAt8" : 0.625
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.6538461538461539
     },
     {
       "cosineFloor" : 0.35,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.625
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.6538461538461539
     },
     {
       "cosineFloor" : 0.375,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.4166666666666667
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.46153846153846156
     },
     {
       "cosineFloor" : 0.4,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.4166666666666667
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.46153846153846156
     },
     {
       "cosineFloor" : 0.425,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.2916666666666667
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.34615384615384615
     },
     {
       "cosineFloor" : 0.45,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.16666666666666666
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.23076923076923078
     },
     {
       "cosineFloor" : 0.475,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.16666666666666666
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.23076923076923078
     },
     {
       "cosineFloor" : 0.5,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.525,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.55,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.575,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.6,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.625,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.65,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.675,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.7,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.725,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.75,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.775,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.8,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.825,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.85,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.875,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.9,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.925,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.95,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 0.975,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     },
     {
       "cosineFloor" : 1,
       "lexicalRecallAt8" : 1,
-      "negativeFalseRetrievalRate" : 0,
-      "paraphraseRecallAt8" : 0.125
+      "negativeFalseRetrievalRate" : 0.07692307692307693,
+      "paraphraseRecallAt8" : 0.19230769230769232
     }
   ],
   "topK" : 8,

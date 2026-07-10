@@ -37,52 +37,9 @@ final class RetrievalEvalTests: XCTestCase {
         let goldenURL = root.appendingPathComponent("tools/retrieval-eval/golden.json")
         let outputURL = root.appendingPathComponent("tools/retrieval-eval/baseline.json")
         let golden = try JSONDecoder().decode(Golden.self, from: Data(contentsOf: goldenURL))
-        let fileManager = FileManager.default
-        let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: tempDirectory) }
-
-        let persistence = try PersistenceService(
-            databaseURL: tempDirectory.appendingPathComponent("ticker.db"),
-            fileManager: fileManager
-        )
-        let stream = Stream(id: Self.uuid(0), title: "Retrieval Eval", createdAt: .distantPast, updatedAt: .distantPast)
-        try persistence.saveStream(stream)
-
-        var productionToGolden: [UUID: String] = [:]
-        for (sourceIndex, group) in Dictionary(grouping: golden.corpus, by: \.sourceName)
-            .sorted(by: { $0.key < $1.key }).enumerated() {
-            let source = SourceReference(
-                id: Self.uuid(sourceIndex + 1),
-                streamId: stream.id,
-                displayName: group.key,
-                fileType: .pdf,
-                bookmarkData: Data(),
-                status: .ready,
-                indexStatus: .ready,
-                addedAt: .distantPast
-            )
-            try persistence.saveSource(source)
-            let chunks = group.value.sorted(by: { $0.id < $1.id }).enumerated().map { offset, item in
-                let id = Self.uuid(1_000 + productionToGolden.count)
-                productionToGolden[id] = item.id
-                return SourceChunk(
-                    id: id,
-                    sourceId: source.id,
-                    seq: offset,
-                    text: item.text,
-                    pageStart: item.pageStart,
-                    pageEnd: item.pageEnd,
-                    sectionPath: item.sectionPath.nilIfEmpty
-                )
-            }
-            try persistence.saveSourceChunks(chunks, for: source.id)
-        }
-
-        let retrieval = RetrievalService(persistence: persistence)
-        let cases = try golden.cases.map { item -> CaseResult in
-            let retrieved = try retrieval.retrieve(query: item.query, streamId: stream.id)
-                .compactMap { productionToGolden[$0.id] }
+        let bm25 = try Self.bm25Results(golden: golden)
+        let cases = golden.cases.map { item -> CaseResult in
+            let retrieved = bm25[item.id, default: []]
             let found = item.expected.filter(Set(retrieved).contains).count
             return CaseResult(
                 id: item.id,
@@ -122,42 +79,7 @@ final class RetrievalEvalTests: XCTestCase {
             return
         }
 
-        let fileManager = FileManager.default
-        let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: tempDirectory) }
-        let persistence = try PersistenceService(
-            databaseURL: tempDirectory.appendingPathComponent("ticker.db"),
-            fileManager: fileManager
-        )
-        let stream = Stream(id: Self.uuid(0), title: "Retrieval Eval", createdAt: .distantPast, updatedAt: .distantPast)
-        try persistence.saveStream(stream)
-
-        var productionToGolden: [UUID: String] = [:]
-        for (sourceIndex, group) in Dictionary(grouping: golden.corpus, by: \.sourceName)
-            .sorted(by: { $0.key < $1.key }).enumerated() {
-            let source = SourceReference(
-                id: Self.uuid(sourceIndex + 1), streamId: stream.id, displayName: group.key,
-                fileType: .pdf, bookmarkData: Data(), status: .ready, indexStatus: .ready, addedAt: .distantPast
-            )
-            try persistence.saveSource(source)
-            let chunks = group.value.sorted(by: { $0.id < $1.id }).enumerated().map { offset, item in
-                let id = Self.uuid(1_000 + productionToGolden.count)
-                productionToGolden[id] = item.id
-                return SourceChunk(
-                    id: id, sourceId: source.id, seq: offset, text: item.text,
-                    pageStart: item.pageStart, pageEnd: item.pageEnd, sectionPath: item.sectionPath.nilIfEmpty
-                )
-            }
-            try persistence.saveSourceChunks(chunks, for: source.id)
-        }
-
-        let retrieval = RetrievalService(persistence: persistence)
-        let bm25 = try Dictionary(uniqueKeysWithValues: golden.cases.map { item in
-            let ids = try retrieval.retrieve(query: item.query, streamId: stream.id)
-                .compactMap { productionToGolden[$0.id] }
-            return (item.id, ids)
-        })
+        let bm25 = try Self.bm25Results(golden: golden)
         let coldStart = ContinuousClock.now
         _ = try await provider.embed([golden.cases[0].query])
         let coldQueryMs = Self.milliseconds(coldStart.duration(to: .now))
@@ -170,31 +92,29 @@ final class RetrievalEvalTests: XCTestCase {
             latenciesMs.append(Self.milliseconds(start.duration(to: .now)))
         }
 
-        let floors = stride(from: 0.25, through: 1.00, by: 0.025).map { ($0 * 1_000).rounded() / 1_000 }
+        let floors = stride(from: 0.00, through: 1.00, by: 0.025).map { ($0 * 1_000).rounded() / 1_000 }
         let sweeps = floors.map { floor in
             SweepResult(floor: floor, report: Self.hybridReport(
                 golden: golden, bm25: bm25, corpusVectors: corpusVectors,
                 queryVectors: queryVectors, cosineFloor: Float(floor)
             ))
         }
-        let eligible = sweeps.filter {
-            $0.report.metrics["lexical"]?.recallAt8 ?? 0 >= 1
-                && $0.report.negativeFalseRetrievalRate == 0
-        }
-        guard let selected = eligible.max(by: {
-            let lhs = $0.report.metrics["paraphrase"]?.recallAt8 ?? 0
-            let rhs = $1.report.metrics["paraphrase"]?.recallAt8 ?? 0
-            return lhs == rhs ? $0.floor < $1.floor : lhs < rhs
-        }) else {
-            XCTFail("No cosine floor preserved lexical recall and zero negative false retrievals")
+        let separation = Self.separation(golden: golden, corpusVectors: corpusVectors, queryVectors: queryVectors)
+        let requiredFloor = Double(separation.bestUnrelatedCosine) + 0.05
+        guard let selected = sweeps.first(where: { $0.floor >= requiredFloor }) else {
+            XCTFail("No swept floor satisfies best unrelated cosine + 0.05")
             return
+        }
+        XCTAssertEqual(selected.report.metrics["lexical"]?.recallAt8, 1)
+        XCTAssertEqual(selected.report.negativeFalseRetrievalRate, 0)
+        let sensitivity = [-0.05, 0, 0.05].compactMap { delta in
+            sweeps.first { abs($0.floor - selected.floor - delta) < 0.0001 }.map(SensitivityRow.init)
         }
 
         let latency = Latency(
             p50Ms: Self.percentile(latenciesMs, 0.50),
             p95Ms: Self.percentile(latenciesMs, 0.95)
         )
-        let separation = Self.separation(golden: golden, corpusVectors: corpusVectors, queryVectors: queryVectors)
         let operatingPoint = OperatingPoint(
             provider: "MiniLMEmbeddingProvider",
             modelId: provider.modelId,
@@ -208,6 +128,15 @@ final class RetrievalEvalTests: XCTestCase {
                 deltaBytes: Int64(memoryAfter) - Int64(memoryBefore)
             ),
             separation: separation,
+            marginRule: MarginRule(
+                bestObservedUnrelatedCosine: Double(separation.bestUnrelatedCosine),
+                requiredMargin: 0.05,
+                minimumFloor: requiredFloor,
+                gridStep: 0.025,
+                chosenFloor: selected.floor,
+                achievedMargin: selected.floor - Double(separation.bestUnrelatedCosine)
+            ),
+            sensitivity: sensitivity,
             sweep: sweeps.map(SweepRow.init)
         )
         let outputRoot = root.appendingPathComponent("tools/retrieval-eval")
@@ -223,6 +152,41 @@ final class RetrievalEvalTests: XCTestCase {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", value))!
     }
 
+    private static func bm25Results(golden: Golden) throws -> [String: [String]] {
+        let fileManager = FileManager.default
+        return try Dictionary(uniqueKeysWithValues: golden.cases.map { item in
+            let directory = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? fileManager.removeItem(at: directory) }
+            let persistence = try PersistenceService(
+                databaseURL: directory.appendingPathComponent("ticker.db"), fileManager: fileManager
+            )
+            let stream = Stream(id: uuid(0), title: "Retrieval Eval", createdAt: .distantPast, updatedAt: .distantPast)
+            try persistence.saveStream(stream)
+            var productionToGolden: [UUID: String] = [:]
+            for (sourceIndex, group) in Dictionary(grouping: golden.corpus(for: item), by: \.sourceName)
+                .sorted(by: { $0.key < $1.key }).enumerated() {
+                let source = SourceReference(
+                    id: uuid(sourceIndex + 1), streamId: stream.id, displayName: group.key,
+                    fileType: .pdf, bookmarkData: Data(), status: .ready, indexStatus: .ready, addedAt: .distantPast
+                )
+                try persistence.saveSource(source)
+                let chunks = group.value.sorted(by: { $0.id < $1.id }).enumerated().map { offset, chunk in
+                    let id = uuid(1_000 + productionToGolden.count)
+                    productionToGolden[id] = chunk.id
+                    return SourceChunk(
+                        id: id, sourceId: source.id, seq: offset, text: chunk.text,
+                        pageStart: chunk.pageStart, pageEnd: chunk.pageEnd, sectionPath: chunk.sectionPath.nilIfEmpty
+                    )
+                }
+                try persistence.saveSourceChunks(chunks, for: source.id)
+            }
+            let retrieved = try RetrievalService(persistence: persistence)
+                .retrieve(query: item.query, streamId: stream.id).compactMap { productionToGolden[$0.id] }
+            return (item.id, retrieved)
+        })
+    }
+
     private static func hybridReport(
         golden: Golden,
         bm25: [String: [String]],
@@ -233,7 +197,7 @@ final class RetrievalEvalTests: XCTestCase {
         let cases = golden.cases.map { item -> CaseResult in
             let query = queryVectors[item.id]!
             var scored: [(id: String, score: Float)] = []
-            for index in golden.corpus.indices {
+            for index in golden.corpus.indices where golden.includes(golden.corpus[index], for: item) {
                 scored.append((golden.corpus[index].id, dot(query, corpusVectors[index])))
             }
             let passing = scored.filter { $0.score >= cosineFloor }
@@ -273,7 +237,10 @@ final class RetrievalEvalTests: XCTestCase {
             }
         }
         let unrelated = golden.cases.filter { $0.expected.isEmpty }.flatMap { item in
-            corpusVectors.map { dot(queryVectors[item.id]!, $0) }
+            golden.corpus.indices.compactMap { index in
+                golden.includes(golden.corpus[index], for: item)
+                    ? dot(queryVectors[item.id]!, corpusVectors[index]) : nil
+            }
         }
         let worstRelevant = relevant.min() ?? 0
         let bestUnrelated = unrelated.max() ?? 0
@@ -323,6 +290,14 @@ private struct ReferenceSentence: Decodable {
 private struct Golden: Decodable {
     let corpus: [CorpusChunk]
     let cases: [GoldenCase]
+
+    func corpus(for item: GoldenCase) -> [CorpusChunk] {
+        corpus.filter { includes($0, for: item) }
+    }
+
+    func includes(_ chunk: CorpusChunk, for item: GoldenCase) -> Bool {
+        item.corpusFilter?.contains { chunk.id.hasPrefix($0) } ?? true
+    }
 }
 
 private struct CorpusChunk: Decodable {
@@ -339,9 +314,10 @@ private struct GoldenCase: Decodable {
     let className: String
     let query: String
     let expected: [String]
+    let corpusFilter: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case id, query, expected
+        case id, query, expected, corpusFilter
         case className = "class"
     }
 }
@@ -421,12 +397,35 @@ private struct Separation: Encodable {
     let margin: Double
 }
 
+private struct MarginRule: Encodable {
+    let bestObservedUnrelatedCosine: Double
+    let requiredMargin: Double
+    let minimumFloor: Double
+    let gridStep: Double
+    let chosenFloor: Double
+    let achievedMargin: Double
+}
+
 private struct SweepResult {
     let floor: Double
     let report: Report
 }
 
 private struct SweepRow: Encodable {
+    let cosineFloor: Double
+    let paraphraseRecallAt8: Double
+    let lexicalRecallAt8: Double
+    let negativeFalseRetrievalRate: Double
+
+    init(_ result: SweepResult) {
+        cosineFloor = result.floor
+        paraphraseRecallAt8 = result.report.metrics["paraphrase"]?.recallAt8 ?? 0
+        lexicalRecallAt8 = result.report.metrics["lexical"]?.recallAt8 ?? 0
+        negativeFalseRetrievalRate = result.report.negativeFalseRetrievalRate
+    }
+}
+
+private struct SensitivityRow: Encodable {
     let cosineFloor: Double
     let paraphraseRecallAt8: Double
     let lexicalRecallAt8: Double
@@ -450,6 +449,8 @@ private struct OperatingPoint: Encodable {
     let latency: Performance
     let memory: Memory
     let separation: Separation
+    let marginRule: MarginRule
+    let sensitivity: [SensitivityRow]
     let sweep: [SweepRow]
 }
 
