@@ -202,11 +202,17 @@ final class RetrievalService {
     }
 
     private func embedQuery(_ query: String, using provider: EmbeddingProvider) -> [Float]? {
+        guard provider.isReady else {
+            // Never pay cold-start in the query path: this query stays BM25-only
+            // while the model warms in the background for the next one.
+            DebugLog.log("RetrievalService: Embedding model cold; warming in background")
+            Task { _ = await provider.prepare() }
+            return nil
+        }
         let result = QueryEmbeddingResult()
         let semaphore = DispatchSemaphore(value: 0)
         Task {
             defer { semaphore.signal() }
-            guard await provider.prepare() else { return }
             result.vector = try? await provider.embed([query]).first
         }
         guard semaphore.wait(timeout: .now() + queryBudget) == .success else {

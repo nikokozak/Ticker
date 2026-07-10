@@ -54,6 +54,7 @@ private final class TestEmbeddingProvider: EmbeddingProvider {
         embedBlock = embed
     }
 
+    var isReady: Bool { true }
     func prepare() async -> Bool { true }
     func embed(_ texts: [String]) async throws -> [[Float]] { try embedBlock(texts) }
 }

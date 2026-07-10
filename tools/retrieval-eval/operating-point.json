@@ -1,11 +1,11 @@
 {
   "cosineFloor" : 0.225,
   "latency" : {
-    "coldQueryMs" : 17.149625,
-    "modelLoadMs" : 258.224,
+    "coldQueryMs" : 17.371625,
+    "modelLoadMs" : 1031.987792,
     "warmQueryMs" : {
-      "p50Ms" : 6.161834,
-      "p95Ms" : 7.74425
+      "p50Ms" : 7.386917,
+      "p95Ms" : 9.1645
     }
   },
   "marginRule" : {
@@ -17,9 +17,9 @@
     "requiredMargin" : 0.05
   },
   "memory" : {
-    "afterPrepareBytes" : 43238456,
-    "beforePrepareBytes" : 35685384,
-    "deltaBytes" : 7553072
+    "afterPrepareBytes" : 115475584,
+    "beforePrepareBytes" : 113804392,
+    "deltaBytes" : 1671192
   },
   "modelId" : "sentence-transformers/all-MiniLM-L6-v2",
   "provider" : "MiniLMEmbeddingProvider",

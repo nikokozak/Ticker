@@ -21,6 +21,10 @@ final class MiniLMEmbeddingProvider: EmbeddingProvider {
         self.resourceDirectory = resourceDirectory
     }
 
+    var isReady: Bool {
+        lock.withLock { model != nil }
+    }
+
     func prepare() async -> Bool {
         lock.withLock {
             guard model == nil else { return true }

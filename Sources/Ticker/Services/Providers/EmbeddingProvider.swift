@@ -3,6 +3,8 @@ import NaturalLanguage
 
 protocol EmbeddingProvider {
     var modelId: String { get }
+    /// True when the model is loaded and `embed` runs without cold-start cost.
+    var isReady: Bool { get }
     func prepare() async -> Bool
     func embed(_ texts: [String]) async throws -> [[Float]]
 }
@@ -15,6 +17,7 @@ final class NaturalLanguageEmbeddingProvider: EmbeddingProvider {
 
     let assetsWereAvailableBeforePrepare: Bool
     var modelId: String { model.modelIdentifier }
+    var isReady: Bool { isPrepared }
 
     private let model: NLContextualEmbedding
     private let language: NLLanguage
