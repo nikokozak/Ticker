@@ -5,6 +5,8 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Quick Panel AI answers now show presence in the open editor: the AI-writing pill plus a typing indicator pinned to the exact spot where the answer will land.
+- Settings now offers a model choice — Balanced (GPT-5 mini), Fast (GPT-4o mini), or Claude — with web search available on the OpenAI options.
 - Search-vs-knowledge routing now uses Apple's on-device foundation model when available (macOS 26 + Apple Intelligence), with the keyword gate as fallback.
 - Provenance x-ray now tints each AI exchange with its own color variant so neighboring exchanges read as distinct, and the exchange overlay gained a proper title bar with a close button.
 - Selection menu now offers heading (H1/H2/H3), quote, and bullet-list toggles, and a new stream-editor footer has a "Show formatting" switch that reveals the raw markdown document-wide.

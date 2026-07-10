@@ -46,7 +46,24 @@ final class SettingsService {
 
     enum DefaultModel: String {
         case openai = "openai"
+        case openaiFast = "openaiFast"
         case anthropic = "anthropic"
+
+        /// Proxy provider name for this choice.
+        var provider: String {
+            switch self {
+            case .openai, .openaiFast: return "openai"
+            case .anthropic: return "anthropic"
+            }
+        }
+
+        /// Explicit model to request, or "default" to use the proxy's default.
+        var proxyModel: String {
+            switch self {
+            case .openai, .anthropic: return "default"
+            case .openaiFast: return "gpt-4o-mini"
+            }
+        }
     }
 
     enum EditorFont: String {

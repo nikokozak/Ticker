@@ -5,7 +5,7 @@ import { useToastStore } from '../store/toastStore';
 import { debugError } from '../utils/debug';
 
 type Appearance = 'light' | 'dark' | 'system';
-type DefaultModel = 'openai' | 'anthropic';
+type DefaultModel = 'openai' | 'openaiFast' | 'anthropic';
 type EditorFont = 'systemSans' | 'humanistSans' | 'monoSans';
 
 interface SettingsData {
@@ -545,8 +545,17 @@ export function Settings({ onClose }: SettingsProps) {
                   applySettingsPatch({ defaultModel: 'openai' });
                 }}
               >
-                <span className="settings-model-name">OpenAI</span>
-                <span className="settings-model-detail">GPT-4o</span>
+                <span className="settings-model-name">Balanced</span>
+                <span className="settings-model-detail">GPT-5 mini · searches the web</span>
+              </button>
+              <button
+                className={`settings-model-btn ${settings.defaultModel === 'openaiFast' ? 'settings-model-btn--active' : ''}`}
+                onClick={() => {
+                  applySettingsPatch({ defaultModel: 'openaiFast' });
+                }}
+              >
+                <span className="settings-model-name">Fast</span>
+                <span className="settings-model-detail">GPT-4o mini · searches the web</span>
               </button>
               <button
                 className={`settings-model-btn ${settings.defaultModel === 'anthropic' ? 'settings-model-btn--active' : ''}`}
@@ -554,12 +563,13 @@ export function Settings({ onClose }: SettingsProps) {
                   applySettingsPatch({ defaultModel: 'anthropic' });
                 }}
               >
-                <span className="settings-model-name">Anthropic</span>
-                <span className="settings-model-detail">Claude Sonnet</span>
+                <span className="settings-model-name">Claude</span>
+                <span className="settings-model-detail">Sonnet · no live web access</span>
               </button>
             </div>
             <p className="settings-hint">
-              Select the default AI provider for responses (requests are routed through Ticker Proxy).
+              Which model answers AI requests (routed through Ticker Proxy). OpenAI models can
+              search the web when a question needs current information.
             </p>
           </div>
         </section>
