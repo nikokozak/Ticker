@@ -989,6 +989,13 @@ final class QuickPanelManager: ObservableObject {
         var responseMarkdown = ""
         var selectedModel: String?
 
+        // Tell the editor work is in flight so it can show presence at the
+        // append point. Every terminal path below appends (answer or error
+        // fragment), so streamDocumentAppended doubles as the "done" signal.
+        bridgeService?.send(BridgeMessage(type: "quickPanelAIStarted", payload: [
+            "streamId": AnyCodable(streamId.uuidString)
+        ]))
+
         documentAITasks[taskId] = Task { [weak self] in
             await orchestrator.route(
                 query: prompt,
