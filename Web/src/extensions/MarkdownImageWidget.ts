@@ -275,37 +275,14 @@ function buildImageDecorations(view: EditorView): DecorationSet {
 
 function visibleLineRanges(view: EditorView): Array<{ from: number; to: number }> {
   const doc = view.state.doc;
-  const ranges: Array<{ from: number; to: number }> = [];
 
-  for (const visibleRange of view.visibleRanges) {
-    const fromLine = doc.lineAt(Math.min(visibleRange.from, doc.length));
-    const toLine = doc.lineAt(Math.min(visibleRange.to, doc.length));
-    ranges.push({
-      from: fromLine.from,
-      to: toLine.to,
-    });
-  }
-
-  return mergeRanges(ranges);
-}
-
-function mergeRanges(ranges: Array<{ from: number; to: number }>): Array<{ from: number; to: number }> {
-  if (ranges.length < 2) return ranges;
-
-  const sorted = [...ranges].sort((a, b) => a.from - b.from || a.to - b.to);
-  const merged: Array<{ from: number; to: number }> = [];
-
-  for (const range of sorted) {
-    const previous = merged[merged.length - 1];
-    if (!previous || range.from > previous.to) {
-      merged.push({ ...range });
-      continue;
-    }
-
-    previous.to = Math.max(previous.to, range.to);
-  }
-
-  return merged;
+  // Decorate the whole viewport (CM's viewport already extends beyond what's
+  // strictly visible), not just visibleRanges: an image the height map has
+  // never measured contributes one text line of estimated height, and that
+  // under-measurement desyncs click hit-testing in long documents.
+  const fromLine = doc.lineAt(Math.min(view.viewport.from, doc.length));
+  const toLine = doc.lineAt(Math.min(view.viewport.to, doc.length));
+  return [{ from: fromLine.from, to: toLine.to }];
 }
 
 const markdownImageWidgetPlugin = ViewPlugin.fromClass(class {

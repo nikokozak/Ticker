@@ -20,7 +20,7 @@ import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetE
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
-import { canRedevelopSpan, provenanceXrayExtension } from '../extensions/ProvenanceXray';
+import { canRedevelopSpan, provenanceXrayExtension, setProvenanceXrayVisible, type ProvenanceXrayOptions } from '../extensions/ProvenanceXray';
 import { pendingAppendField, setPendingAppend } from '../extensions/PendingAppend';
 import {
   marginNotesField,
@@ -263,6 +263,13 @@ const clickToDocumentEndExtension: Extension = EditorView.domEventHandlers({
   mousedown: (event, view) => {
     if (event.button !== 0 || event.defaultPrevented) return false;
     if (!(event.target instanceof Node) || !view.scrollDOM.contains(event.target)) return false;
+
+    // A precise hit on rendered content vetoes the jump outright. The
+    // estimated height map under-measures long documents (this editor's
+    // page-scrolls layout keeps scrollDOM.scrollTop at 0), so the
+    // coords-based check below can misclassify mid-document clicks as
+    // "past the end" — jumping the viewport and seeding phantom selections.
+    if (view.posAtCoords({ x: event.clientX, y: event.clientY }) !== null) return false;
 
     const endCoords = view.coordsAtPos(view.state.doc.length, 1);
     if (!endCoords) return false;
@@ -2463,18 +2470,32 @@ export function StreamEditor({
     });
   }, [stream.id]);
 
-  const provenanceXray = useMemo<Extension>(() => (
-    isProvenanceXrayVisible
-      ? provenanceXrayExtension({
-        sources,
-        isAiThinking,
-        loadExchange: getExchange,
-        onShowExchange: (exchange, span) => setExchangeOverlay({ exchange, span }),
-        onRedevelop: openRedevelopPrompt,
-        onOpenSource: handleOpenSourceById,
-      })
-      : []
-  ), [handleOpenSourceById, isAiThinking, isProvenanceXrayVisible, openRedevelopPrompt, sources]);
+  // X-ray options are a stable object mutated per render and read lazily at
+  // event time (hover/click), so the extension identity NEVER changes —
+  // toggling visibility must not reconfigure the editor (see ProvenanceXray.ts).
+  const xrayOptionsRef = useRef<ProvenanceXrayOptions>({
+    sources: [],
+    isAiThinking: false,
+    loadExchange: getExchange,
+    onShowExchange: () => {},
+    onRedevelop: () => {},
+    onOpenSource: () => {},
+  });
+  xrayOptionsRef.current.sources = sources;
+  xrayOptionsRef.current.isAiThinking = isAiThinking;
+  xrayOptionsRef.current.onShowExchange = (exchange, span) => setExchangeOverlay({ exchange, span });
+  xrayOptionsRef.current.onRedevelop = openRedevelopPrompt;
+  xrayOptionsRef.current.onOpenSource = handleOpenSourceById;
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- stable by design
+  const provenanceXray = useMemo<Extension>(() => provenanceXrayExtension(xrayOptionsRef.current), []);
+
+  useEffect(() => {
+    editorViewRef.current?.dispatch({
+      effects: setProvenanceXrayVisible.of(isProvenanceXrayVisible),
+      annotations: Transaction.addToHistory.of(false),
+    });
+  }, [isProvenanceXrayVisible]);
 
   const editorExtensions = useMemo<Extension[]>(() => [
     EditorView.lineWrapping,

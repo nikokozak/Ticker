@@ -1,4 +1,4 @@
-import { RangeSetBuilder, Transaction, type Extension } from '@codemirror/state';
+import { RangeSetBuilder, StateEffect, StateField, Transaction, type EditorState, type Extension } from '@codemirror/state';
 import {
   Decoration,
   EditorView,
@@ -20,6 +20,28 @@ export interface ProvenanceRange {
 export interface ProvenanceDecorationRange extends ProvenanceRange {
   className: string;
   span: Span;
+}
+
+/**
+ * Visibility rides a StateField, NOT extension add/remove: swapping the
+ * extensions array forces a full StateEffect.reconfigure on every toggle,
+ * which rebuilds all view plugins mid-gesture and desyncs click geometry
+ * in long documents (live bug: click → jump to end + phantom selection).
+ */
+export const setProvenanceXrayVisible = StateEffect.define<boolean>();
+
+export const provenanceXrayVisibleField = StateField.define<boolean>({
+  create: () => false,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setProvenanceXrayVisible)) return effect.value;
+    }
+    return value;
+  },
+});
+
+export function provenanceXrayIsVisible(state: EditorState): boolean {
+  return state.field(provenanceXrayVisibleField, false) ?? false;
 }
 
 export interface ProvenanceXrayOptions {
@@ -116,6 +138,7 @@ function atomicRangesInView(view: EditorView): ProvenanceRange[] {
 }
 
 function buildDecorations(view: EditorView): DecorationSet {
+  if (!provenanceXrayIsVisible(view.state)) return Decoration.none;
   const builder = new RangeSetBuilder<Decoration>();
   for (const range of buildProvenanceDecorationRanges(currentSpans(view.state), view.visibleRanges, atomicRangesInView(view))) {
     builder.add(range.from, range.to, Decoration.mark({ class: range.className }));
@@ -251,7 +274,8 @@ const provenanceXrayPlugin = ViewPlugin.fromClass(class {
       update.docChanged ||
       update.viewportChanged ||
       update.geometryChanged ||
-      currentSpans(update.startState) !== currentSpans(update.state)
+      currentSpans(update.startState) !== currentSpans(update.state) ||
+      provenanceXrayIsVisible(update.startState) !== provenanceXrayIsVisible(update.state)
     ) {
       this.decorations = buildDecorations(update.view);
     }
@@ -262,8 +286,10 @@ const provenanceXrayPlugin = ViewPlugin.fromClass(class {
 
 export function provenanceXrayExtension(options: ProvenanceXrayOptions): Extension {
   return [
+    provenanceXrayVisibleField,
     provenanceXrayPlugin,
     hoverTooltip((view, pos) => {
+      if (!provenanceXrayIsVisible(view.state)) return null;
       if (isAtomicPosition(view, pos)) return null;
       const span = spanAt(view, pos);
       return span ? tooltipForSpan(view, span, options) : null;
