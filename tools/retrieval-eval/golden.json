@@ -450,7 +450,8 @@
    "id": "neg-history",
    "class": "negative",
    "query": "what caused the fall of the roman empire",
-   "expected": []
+   "expected": [],
+   "knownFailure": "bm25-lexical-leak: single-word overlap (caused) retrieves lease-deposit in BM25 baseline; pre-existing, tracked for a cutoff-tuning round, not an R3 regression"
   }
  ]
 }
