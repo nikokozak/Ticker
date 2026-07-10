@@ -69,6 +69,9 @@ interface SelectionContext {
 type PromptIntent = {
   kind: 'ask';
 } | {
+  kind: 'rewrite';
+  preview: string;
+} | {
   kind: 'redevelop';
   verb: DocumentAIVerb;
   parentRequestId?: string;
@@ -359,7 +362,7 @@ function spanIdsIntersectingRange(spans: Span[], from: number, to: number): stri
 }
 
 function parseDocumentAIVerb(value: unknown): DocumentAIVerb {
-  return value === 'ask' || value === 'challenge' || value === 'define' || value === 'develop'
+  return value === 'ask' || value === 'challenge' || value === 'define' || value === 'develop' || value === 'rewrite'
     ? value
     : 'develop';
 }
@@ -724,6 +727,21 @@ export function StreamEditor({
     if (!aiRequestRef.current) hideAiFeedback();
   }, [hideAiFeedback]);
 
+  // A full-document reload while document AI is streaming is fatal if the
+  // writing range survives it: mapping the range through a doc-wide replace
+  // collapses it to {0, docLength}, so the completion handler would then
+  // overwrite the ENTIRE stream with the AI passage. Abort before reloading.
+  const abortInFlightDocumentAI = useCallback(() => {
+    const active = aiRequestRef.current;
+    if (!active) return;
+    bridge.send({ type: 'cancelDocumentAI', payload: { requestId: active.id } });
+    aiRequestRef.current = null;
+    const view = editorViewRef.current;
+    if (view) dispatchAiRangeClear(view);
+    setAiStatus('idle');
+    hideAiFeedback();
+  }, [hideAiFeedback]);
+
   const showAiErrorFeedback = useCallback((message: string) => {
     clearAiFeedbackTimer();
     setAiFeedback({
@@ -1035,6 +1053,8 @@ export function StreamEditor({
           return;
         }
 
+        abortInFlightDocumentAI();
+
         const view = editorViewRef.current;
         const spans = payloadSpansForDoc(message.payload?.spans, markdown);
         if (view) {
@@ -1080,6 +1100,7 @@ export function StreamEditor({
             localRevision: revisionRef.current,
             appendRevision: revision,
           });
+          abortInFlightDocumentAI();
           bridge.send({ type: 'loadStream', payload: { id: stream.id } });
           return;
         }
@@ -1328,7 +1349,7 @@ export function StreamEditor({
     });
 
     return () => unsubscribe();
-  }, [addToast, clearQuickPanelPending, hideAiFeedback, showAiErrorFeedback, showAiWritingFeedback, stream.id]);
+  }, [abortInFlightDocumentAI, addToast, clearQuickPanelPending, hideAiFeedback, showAiErrorFeedback, showAiWritingFeedback, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
@@ -2108,6 +2129,23 @@ export function StreamEditor({
     openPromptWithContext(context);
   }, [addToast, getSelectionContext, isAiThinking, openPromptWithContext]);
 
+  const openRewritePrompt = useCallback(() => {
+    if (isAiThinking) {
+      addToast('AI is already running for this stream.', 'info');
+      return;
+    }
+    const context = getSelectionContext(true);
+    if (!context || !context.text.trim()) {
+      addToast('Select text to rewrite.', 'info');
+      return;
+    }
+    hideSelectionMenu();
+    promptContextRef.current = context;
+    setPromptValue('');
+    setPromptIntent({ kind: 'rewrite', preview: replacementPreview(context.text) });
+    setShowPrompt(true);
+  }, [addToast, getSelectionContext, hideSelectionMenu, isAiThinking]);
+
   const handleSelectionFormat = useCallback((marker: string) => {
     const view = editorViewRef.current;
     if (!view) {
@@ -2217,9 +2255,22 @@ export function StreamEditor({
   const handlePromptSend = useCallback(() => {
     const prompt = promptValue.trim();
     const context = promptContextRef.current;
-    if ((!prompt && promptIntent.kind === 'ask') || !context) return;
+    if ((!prompt && promptIntent.kind !== 'redevelop') || !context) return;
 
     closePrompt();
+
+    if (promptIntent.kind === 'rewrite') {
+      startDocumentAI({
+        query: prompt,
+        context: context.text.trim(),
+        imageUrls: context.imageUrls,
+        from: context.from,
+        to: context.to,
+        mode: 'replace',
+        verb: 'rewrite',
+      });
+      return;
+    }
 
     if (promptIntent.kind === 'redevelop') {
       startDocumentAI({
@@ -2229,7 +2280,10 @@ export function StreamEditor({
         from: context.from,
         to: context.to,
         mode: 'replace',
-        verb: promptIntent.verb,
+        // With an edited prompt the instruction must win: rewrite's system
+        // prompt follows it, while the original verb's (e.g. develop's
+        // "deepen, do not pad") overrides it.
+        verb: prompt ? 'rewrite' : promptIntent.verb,
         parentRequestId: promptIntent.parentRequestId,
       });
       return;
@@ -2508,11 +2562,13 @@ export function StreamEditor({
       {showPrompt && (
         <div className="ai-prompt-overlay" onClick={closePrompt}>
           <div className="ai-prompt-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>{promptIntent.kind === 'redevelop' ? 'Re-develop' : 'Ask'}</h2>
+            <h2>
+              {promptIntent.kind === 'redevelop' ? 'Re-develop' : promptIntent.kind === 'rewrite' ? 'Rewrite' : 'Ask'}
+            </h2>
             <p>
-              {promptIntent.kind === 'redevelop'
-                ? `will replace: ${promptIntent.preview}`
-                : 'Selection will be attached as context.'}
+              {promptIntent.kind === 'ask'
+                ? 'Selection will be attached as context.'
+                : `will replace: ${promptIntent.preview}`}
             </p>
             <textarea
               className="ai-prompt-input"
@@ -2527,7 +2583,13 @@ export function StreamEditor({
                   closePrompt();
                 }
               }}
-              placeholder={promptIntent.kind === 'redevelop' ? 'Edit the prompt…' : 'Ask a question or continue the line of thought…'}
+              placeholder={
+                promptIntent.kind === 'redevelop'
+                  ? 'Edit the prompt…'
+                  : promptIntent.kind === 'rewrite'
+                    ? 'How should this be rewritten? (e.g. "condense to one sentence")'
+                    : 'Ask a question or continue the line of thought…'
+              }
               autoFocus
               rows={5}
             />
@@ -2551,9 +2613,9 @@ export function StreamEditor({
                 className="ai-prompt-send"
                 type="button"
                 onClick={handlePromptSend}
-                disabled={promptIntent.kind === 'ask' && !promptValue.trim()}
+                disabled={promptIntent.kind !== 'redevelop' && !promptValue.trim()}
               >
-                {promptIntent.kind === 'redevelop' ? 'Re-develop' : 'Ask'}
+                {promptIntent.kind === 'redevelop' ? 'Re-develop' : promptIntent.kind === 'rewrite' ? 'Rewrite' : 'Ask'}
               </button>
             </div>
           </div>
@@ -2741,6 +2803,16 @@ export function StreamEditor({
                   onClick={() => handleSelectionVerb('develop')}
                 >
                   Develop (replaces)
+                </button>
+                <button
+                  type="button"
+                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
+                  title="Rewrite with instructions (replaces)"
+                  aria-label="Rewrite with instructions (replaces)"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={openRewritePrompt}
+                >
+                  With instructions…
                 </button>
               </div>
             )}

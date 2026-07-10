@@ -53,6 +53,10 @@ enum Prompts {
     Answer the question or continue the line of thought, grounded in the provided context. Output only the answer prose.
     """
 
+    static let verbRewrite = """
+    Rewrite the provided passage following the instruction exactly — including any required length, tone, or structure. Preserve the passage's meaning unless the instruction says otherwise. Output only the rewritten passage.
+    """
+
     static let verbChallenge = """
     Identify the single weakest point in this passage — a hidden assumption, an internal contradiction, or an unsupported leap. State it plainly in two to four sentences, then end with one pointed question back to the author. Do not rewrite the passage. Do not answer your own question.
     """

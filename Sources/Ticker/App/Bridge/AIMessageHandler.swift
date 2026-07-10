@@ -57,6 +57,7 @@ private enum DocumentAIVerb: String {
     case ask
     case challenge
     case define
+    case rewrite
 
     var systemPrompt: String {
         switch self {
@@ -68,6 +69,8 @@ private enum DocumentAIVerb: String {
             return Prompts.verbChallenge
         case .define:
             return Prompts.verbDefine
+        case .rewrite:
+            return Prompts.verbRewrite
         }
     }
 }
@@ -185,8 +188,13 @@ final class AIMessageHandler: BridgeMessageHandler {
 
             var resolvedQuery = query
             let cleanedContext = (payload["context"]?.value as? String).flatMap(Self.cleanedDocumentContext)
-            if let context = payload["context"]?.value as? String, !context.isEmpty {
-                if let cleanContext = Self.cleanedDocumentContext(context) {
+            if let cleanContext = cleanedContext {
+                if verb == .rewrite {
+                    // Instruction-primary framing: the passage is material, the
+                    // user's prompt is the task. The Ask-style "Regarding this
+                    // context" wrapper demotes the instruction to a footnote.
+                    resolvedQuery = "Passage:\n\"\"\"\n\(cleanContext)\n\"\"\"\n\nInstruction: \(resolvedQuery)"
+                } else {
                     resolvedQuery = "Regarding this context:\n\"\"\"\n\(cleanContext)\n\"\"\"\n\n\(resolvedQuery)"
                 }
             }
