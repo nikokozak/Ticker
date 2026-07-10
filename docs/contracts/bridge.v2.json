@@ -109,7 +109,7 @@
       },
       "streamLoaded": {
         "requiredPayloadKeys": ["stream", "spans", "marginNotes"],
-        "optionalPayloadKeys": ["scrollOffset", "sourceScope"]
+        "optionalPayloadKeys": ["scrollOffset", "sourceScope", "requestId"]
       },
       "streamTitleUpdated": {
         "requiredPayloadKeys": ["id", "title"]
@@ -163,7 +163,8 @@
         "requiredPayloadKeys": []
       },
       "loadStream": {
-        "requiredPayloadKeys": ["id"]
+        "requiredPayloadKeys": ["id"],
+        "optionalPayloadKeys": ["requestId"]
       },
       "loadStreams": {
         "requiredPayloadKeys": []

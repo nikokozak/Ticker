@@ -3,7 +3,14 @@ import { history, undo } from '@codemirror/commands';
 import { describe, expect, it } from 'vitest';
 import { addSpans, currentSpans, provenanceField } from '../extensions/ProvenanceField';
 import { fnv1a } from '../utils/fnv1a';
-import { buildDocumentAIProvenanceSpan, documentAIErrorRecovery, nextSourceScope } from './StreamEditor';
+import { buildDocumentAIProvenanceSpan, documentAIErrorRecovery, isStreamDocumentDirty, nextSourceScope } from './StreamEditor';
+
+describe('isStreamDocumentDirty', () => {
+  it('only reports content that differs from the last successful save', () => {
+    expect(isStreamDocumentDirty('edited', 'saved')).toBe(true);
+    expect(isStreamDocumentDirty('saved', 'saved')).toBe(false);
+  });
+});
 
 describe('nextSourceScope', () => {
   it('cycles auto to all to none to auto', () => {

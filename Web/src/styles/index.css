@@ -878,6 +878,10 @@ body {
   color: var(--color-text-secondary);
 }
 
+.stream-save-status--error {
+  color: var(--color-error);
+}
+
 .selection-action-menu {
   position: fixed;
   z-index: 920;

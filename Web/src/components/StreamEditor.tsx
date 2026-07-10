@@ -173,6 +173,10 @@ export function documentAIErrorRecovery(originalText: string, errorCode: string 
   };
 }
 
+export function isStreamDocumentDirty(content: string, lastSavedContent: string): boolean {
+  return content !== lastSavedContent;
+}
+
 export function buildDocumentAIProvenanceSpan(options: {
   requestId: string;
   start: number;
@@ -508,7 +512,7 @@ export function StreamEditor({
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [isProvenanceXrayVisible, setIsProvenanceXrayVisible] = useState(false);
   const [showRawFormatting, setShowRawFormatting] = useState(false);
-  const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
+  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
   const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
@@ -551,6 +555,8 @@ export function StreamEditor({
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
   const markdownContentRef = useRef(stream.document?.markdown ?? '');
   const revisionRef = useRef(stream.document?.revision ?? 0);
+  const queuedSaveContentRef = useRef<string | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
   const aiFeedbackTimerRef = useRef<number | null>(null);
@@ -941,6 +947,53 @@ export function StreamEditor({
     markdownContentRef.current = markdownContent;
   }, [markdownContent]);
 
+  const saveNow = useCallback(() => {
+    const contentToSave = markdownContentRef.current;
+    if (!isStreamDocumentDirty(contentToSave, lastSavedContentRef.current)) return saveQueueRef.current;
+    if (queuedSaveContentRef.current === contentToSave) return saveQueueRef.current;
+
+    const view = editorViewRef.current;
+    const spans = view ? serializeFieldSpans(currentSpans(view.state), contentToSave) : [];
+    queuedSaveContentRef.current = contentToSave;
+    setSaveState('saving');
+
+    const save = async () => {
+      const baseRevision = revisionRef.current;
+      try {
+        const response = await bridge.sendAsync<{ revision: number }>('saveStreamDocument', {
+          streamId: stream.id,
+          markdown: contentToSave,
+          baseRevision,
+          spans,
+        });
+        if (Number.isFinite(response.revision)) {
+          revisionRef.current = response.revision;
+        }
+        lastSavedContentRef.current = contentToSave;
+        if (markdownContentRef.current === contentToSave) {
+          setSaveState('saved');
+        }
+      } catch (error) {
+        if (markdownContentRef.current === contentToSave) {
+          setSaveState('error');
+        }
+        addToast('Changes could not be saved. Your edits are still in the editor.', 'error');
+        debugWarn('[StreamEditor] Failed to save stream document', {
+          streamId: stream.id,
+          baseRevision,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        if (queuedSaveContentRef.current === contentToSave) {
+          queuedSaveContentRef.current = null;
+        }
+      }
+    };
+
+    saveQueueRef.current = saveQueueRef.current.then(save, save);
+    return saveQueueRef.current;
+  }, [addToast, stream.id]);
+
   useEffect(() => {
     if (!pendingSourceId) return;
     if (sources.some((source) => source.id === pendingSourceId)) {
@@ -988,38 +1041,15 @@ export function StreamEditor({
   }, [pendingMatchText, onClearPendingMatch]);
 
   useEffect(() => {
-    if (markdownContent === lastSavedContentRef.current) return;
+    if (!isStreamDocumentDirty(markdownContent, lastSavedContentRef.current)) return;
     setSaveState('saving');
 
     const timer = window.setTimeout(() => {
-      const contentToSave = markdownContent;
-      const baseRevision = revisionRef.current;
-      const view = editorViewRef.current;
-
-      void bridge.sendAsync<{ revision: number }>('saveStreamDocument', {
-        streamId: stream.id,
-        markdown: contentToSave,
-        baseRevision,
-        spans: view ? serializeFieldSpans(currentSpans(view.state), contentToSave) : [],
-      }).then((response) => {
-        if (Number.isFinite(response.revision)) {
-          revisionRef.current = response.revision;
-        }
-        lastSavedContentRef.current = contentToSave;
-        if (markdownContentRef.current === contentToSave) {
-          setSaveState('saved');
-        }
-      }).catch((error) => {
-        debugWarn('[StreamEditor] Failed to save stream document', {
-          streamId: stream.id,
-          baseRevision,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
+      void saveNow();
     }, 350);
 
     return () => window.clearTimeout(timer);
-  }, [markdownContent, stream.id]);
+  }, [markdownContent, saveNow]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
@@ -2345,6 +2375,13 @@ export function StreamEditor({
 
   useEffect(() => {
     return () => {
+      void saveNow();
+      abortInFlightDocumentAI();
+    };
+  }, [abortInFlightDocumentAI, saveNow]);
+
+  useEffect(() => {
+    return () => {
       flushScrollPosition();
       scrollCleanupRef.current?.();
       scrollCleanupRef.current = null;
@@ -2501,7 +2538,7 @@ export function StreamEditor({
         )}
         <div className="stream-header-actions">
           <span className={`stream-save-status stream-save-status--${saveState}`}>
-            {saveState === 'saving' ? 'Saving…' : 'Saved'}
+            {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}
           </span>
           <button
             onClick={() => setIsProvenanceXrayVisible((value) => !value)}
@@ -2983,6 +3020,7 @@ export function StreamEditor({
 
               }}
               onChange={(value) => {
+                markdownContentRef.current = value;
                 setMarkdownContent(value);
               }}
               className="document-editor-codemirror"

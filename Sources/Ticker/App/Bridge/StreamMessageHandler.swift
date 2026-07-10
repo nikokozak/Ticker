@@ -100,7 +100,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 return
             }
             do {
-                try await sendStreamLoaded(id: id)
+                try await sendStreamLoaded(id: id, requestId: payload["requestId"]?.intValue)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load stream (\(DebugLog.errorSummary(error)))")
             }
@@ -364,7 +364,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         }
     }
 
-    func sendStreamLoaded(id: UUID) async throws {
+    func sendStreamLoaded(id: UUID, requestId: Int? = nil) async throws {
         guard let stream = try persistence.loadStream(id: id) else { return }
         delegate?.setCurrentStreamIdForFileDrops(id)
         await delegate?.closePDFPaneIfShowingDifferentStream(id)
@@ -372,13 +372,16 @@ final class StreamMessageHandler: BridgeMessageHandler {
         let spans = try persistence.loadSpans(streamId: id)
         let marginNotes = try persistence.loadMarginNotes(streamId: id)
         let streamPayload = StreamCodec.encodeStream(stream, document: document)
-        let payload: [String: AnyCodable] = [
+        var payload: [String: AnyCodable] = [
             "stream": AnyCodable(streamPayload),
             "sourceScope": AnyCodable(stream.sourceScope.rawValue),
             "scrollOffset": AnyCodable(document.scrollOffset),
             "spans": AnyCodable(StreamCodec.encodeSpans(spans)),
             "marginNotes": AnyCodable(StreamCodec.encodeMarginNotes(marginNotes))
         ]
+        if let requestId {
+            payload["requestId"] = AnyCodable(requestId)
+        }
         bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
         ingestService?.enqueuePendingSources(for: id)
     }
