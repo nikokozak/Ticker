@@ -611,6 +611,17 @@ final class StreamDocumentTests: XCTestCase {
         sectionPath: String?
     )
 
+    func test_quickPanelStreamingGenerationRejectsCancelledRequestCallbacks() {
+        var gate = QuickPanelManager.StreamingGeneration()
+        let requestA = gate.begin()
+
+        gate.invalidate()
+        let requestB = gate.begin()
+
+        XCTAssertFalse(gate.owns(requestA))
+        XCTAssertTrue(gate.owns(requestB))
+    }
+
     func test_v14MigrationCreatesPDFHighlightsTable() throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

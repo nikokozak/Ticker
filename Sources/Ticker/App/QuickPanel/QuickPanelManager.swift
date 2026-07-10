@@ -135,6 +135,23 @@ struct QuickPanelStatus: Equatable {
 @MainActor
 final class QuickPanelManager: ObservableObject {
 
+    struct StreamingGeneration {
+        private(set) var current = 0
+
+        mutating func begin() -> Int {
+            current += 1
+            return current
+        }
+
+        mutating func invalidate() {
+            current += 1
+        }
+
+        func owns(_ generation: Int) -> Bool {
+            generation == current
+        }
+    }
+
     // MARK: - Published State
 
     @Published private(set) var isVisible: Bool = false
@@ -167,7 +184,7 @@ final class QuickPanelManager: ObservableObject {
     private var documentAITasks: [UUID: Task<Void, Never>] = [:]
     private var statusClearTask: Task<Void, Never>?
     private var saveFeedbackTask: Task<Void, Never>?
-    private var isStreamingCancelled = false  // Explicit flag since nested Tasks don't inherit cancellation
+    private var streamingGeneration = StreamingGeneration()
 
     // MARK: - Height Management
 
@@ -417,7 +434,7 @@ final class QuickPanelManager: ObservableObject {
 
     /// Cancel any active streaming task
     private func cancelStreaming() {
-        isStreamingCancelled = true
+        streamingGeneration.invalidate()
         streamingTask?.cancel()
         streamingTask = nil
         ephemeralConversation.isStreaming = false
@@ -537,7 +554,7 @@ final class QuickPanelManager: ObservableObject {
 
         // Cancel any existing streaming task
         streamingTask?.cancel()
-        isStreamingCancelled = false  // Reset flag for new streaming session
+        let generation = streamingGeneration.begin()
 
         // Build context for first turn only
         let isFirstTurn = ephemeralConversation.turns.isEmpty
@@ -584,13 +601,13 @@ final class QuickPanelManager: ObservableObject {
                 onChunk: { [weak self] chunk in
                     responseRaw += chunk
                     Task { @MainActor in
-                        guard let self = self, !self.isStreamingCancelled else { return }
+                        guard let self, self.streamingGeneration.owns(generation) else { return }
                         self.ephemeralConversation.currentResponse += chunk
                     }
                 },
                 onComplete: { [weak self] sourceContext in
                     Task { @MainActor in
-                        guard let self = self, !self.isStreamingCancelled else { return }
+                        guard let self, self.streamingGeneration.owns(generation) else { return }
                         // Record assistant turn with completed response
                         let manifest = DocumentAICitationManifest.entries(from: sourceContext) ?? []
                         let displayContent = CitationMarkerSwap.swap(responseRaw, manifest: manifest, mode: .plainLabel)
@@ -614,13 +631,17 @@ final class QuickPanelManager: ObservableObject {
                         ))
                         self.ephemeralConversation.isStreaming = false
                         self.ephemeralConversation.currentResponse = ""
+                        self.streamingTask = nil
+                        self.streamingGeneration.invalidate()
                     }
                 },
                 onError: { [weak self] err in
                     Task { @MainActor in
-                        guard let self = self, !self.isStreamingCancelled else { return }
+                        guard let self, self.streamingGeneration.owns(generation) else { return }
                         self.error = err.localizedDescription
                         self.ephemeralConversation.isStreaming = false
+                        self.streamingTask = nil
+                        self.streamingGeneration.invalidate()
                     }
                 },
                 onModelSelected: { model in
