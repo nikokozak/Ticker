@@ -54,6 +54,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Rapid stream navigation can no longer be overwritten by an older, slower stream load.
 - Leaving a stream now flushes pending edits, stops in-flight document AI, and visibly reports save failures instead of remaining stuck on “Saving…”.
 - Drag selection no longer stalls or lags in streams containing links: link chips were rebuilt on every selection tick during a drag, feeding CodeMirror's pointer snapping a moving target. Failed image loads now also record their real rendered size so scroll geometry stays honest.
 - A revision-conflict reload during an in-flight AI request no longer risks replacing the entire stream with the AI passage: the request is cancelled and its writing range cleared before the document reloads.

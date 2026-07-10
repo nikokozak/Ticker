@@ -35,6 +35,11 @@ const DEFAULT_EDITOR_TYPOGRAPHY: EditorTypographySettings = {
   editorLineSpacing: 1.55,
 };
 
+export function shouldAcceptStreamLoaded(requestId: unknown, pendingRequestId: number | null): boolean {
+  if (requestId === undefined) return pendingRequestId === null;
+  return typeof requestId === 'number' && Number.isInteger(requestId) && requestId === pendingRequestId;
+}
+
 function editorFontStack(font: EditorFont): string {
   switch (font) {
     case 'humanistSans':
@@ -82,6 +87,14 @@ export function App() {
   const addToast = useToastStore((state) => state.addToast);
   const viewRef = useRef(view);
   const currentStreamIdRef = useRef<string | null>(currentStream?.id ?? null);
+  const streamLoadSequenceRef = useRef(0);
+  const pendingStreamLoadRequestIdRef = useRef<number | null>(null);
+
+  const requestStreamLoad = (id: string) => {
+    const requestId = ++streamLoadSequenceRef.current;
+    pendingStreamLoadRequestIdRef.current = requestId;
+    bridge.send({ type: 'loadStream', payload: { id, requestId } });
+  };
 
   // Proxy auth state - gates main UI until key is validated
   const [proxyAuthState, setProxyAuthState] = useState<ProxyAuthState>('validating');
@@ -169,6 +182,9 @@ export function App() {
           setIsLoading(false);
           break;
         case 'streamLoaded': {
+          const requestId = message.payload?.requestId;
+          if (!shouldAcceptStreamLoaded(requestId, pendingStreamLoadRequestIdRef.current)) break;
+          pendingStreamLoadRequestIdRef.current = null;
           const payloadStream = message.payload?.stream as Stream | undefined;
           if (!payloadStream) break;
           const scrollOffset = Number(message.payload?.scrollOffset ?? payloadStream?.document?.scrollOffset ?? 0);
@@ -219,7 +235,7 @@ export function App() {
 
             debugLog('[App] Quick Panel created new stream document', { streamId });
 
-            bridge.send({ type: 'loadStream', payload: { id: streamId } });
+            requestStreamLoad(streamId);
           }
           break;
         case 'streamsChanged':
@@ -239,15 +255,17 @@ export function App() {
   }, [addToast]);
 
   const handleCreateStream = () => {
+    pendingStreamLoadRequestIdRef.current = null;
     bridge.send({ type: 'createStream' });
   };
 
   const handleSelectStream = (id: string) => {
     setIsLoadingStream(true);
-    bridge.send({ type: 'loadStream', payload: { id } });
+    requestStreamLoad(id);
   };
 
   const handleBackToList = () => {
+    pendingStreamLoadRequestIdRef.current = null;
     setCurrentStream(null);
     setView('list');
     bridge.send({ type: 'loadStreams' });
@@ -255,6 +273,7 @@ export function App() {
 
   const handleDeleteStream = () => {
     if (currentStream) {
+      pendingStreamLoadRequestIdRef.current = null;
       bridge.send({ type: 'deleteStream', payload: { id: currentStream.id } });
       setCurrentStream(null);
       setView('list');
@@ -280,7 +299,7 @@ export function App() {
     }
 
     setIsLoadingStream(true);
-    bridge.send({ type: 'loadStream', payload: { id: streamId } });
+    requestStreamLoad(streamId);
   };
 
   const handleNavigateToMatch = (matchText: string) => {
