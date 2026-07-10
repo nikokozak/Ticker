@@ -49,6 +49,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Quick Panel typing dots now pulse while waiting for the first AI chunk instead of sitting static.
 - Bug reports no longer falsely claim the previous session crashed after an app auto-update.
 - Quick Panel now avoids copying an editor cursor line when Accessibility reports that no text is selected.
 - Debug builds now use a distinct bundle id and display name so they do not share the release app's macOS permission identity.
