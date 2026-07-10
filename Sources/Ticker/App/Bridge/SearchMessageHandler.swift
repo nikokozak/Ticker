@@ -18,14 +18,15 @@ final class SearchMessageHandler: BridgeMessageHandler {
         case "hybridSearch":
             guard let payload = message.payload,
                   let query = payload["query"]?.value as? String,
-                  let currentStreamIdStr = payload["currentStreamId"]?.value as? String,
-                  let currentStreamId = UUID(uuidString: currentStreamIdStr),
                   let callbackId = message.callbackId else {
                 DebugLog.log("[WebViewManager] Invalid hybridSearch payload")
                 await bridgeService.sendBridgeError(type: message.type, reason: "Invalid hybridSearch payload")
                 return
             }
 
+            // Absent when searching from the stream list.
+            let currentStreamId = (payload["currentStreamId"]?.value as? String)
+                .flatMap(UUID.init(uuidString:))
             let limit = payload["limit"]?.intValue ?? 20
 
             guard let searchService = searchService else {

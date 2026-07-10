@@ -51,6 +51,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Search now speaks the document model: opening a result scrolls the stream to the matched text (previously errored on a defunct cell anchor), and searching from the stream list covers all streams instead of arbitrarily treating the first list entry as "current".
 - Quick Panel typing dots now pulse while waiting for the first AI chunk instead of sitting static.
 - Bug reports no longer falsely claim the previous session crashed after an app auto-update.
 - Quick Panel now avoids copying an editor cursor line when Accessibility reports that no text is selected.

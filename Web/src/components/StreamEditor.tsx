@@ -53,9 +53,9 @@ interface StreamEditorProps {
   stream: Stream;
   onBack: () => void;
   onDelete: () => void;
-  pendingCellId?: string | null;
+  pendingMatchText?: string | null;
   pendingSourceId?: string | null;
-  onClearPendingCell?: () => void;
+  onClearPendingMatch?: () => void;
   onClearPendingSource?: () => void;
 }
 
@@ -490,9 +490,9 @@ export function StreamEditor({
   stream,
   onBack,
   onDelete,
-  pendingCellId,
+  pendingMatchText,
   pendingSourceId,
-  onClearPendingCell,
+  onClearPendingMatch,
   onClearPendingSource,
 }: StreamEditorProps) {
   const addToast = useToastStore((state) => state.addToast);
@@ -937,12 +937,37 @@ export function StreamEditor({
     }
   }, [onClearPendingSource, pendingSourceId, sources]);
 
+  // Scroll to the first occurrence of a search match once the editor view exists.
   useEffect(() => {
-    if (pendingCellId) {
-      addToast('Cell anchors are not available in document editor mode yet.', 'info');
-      onClearPendingCell?.();
-    }
-  }, [pendingCellId, addToast, onClearPendingCell]);
+    if (!pendingMatchText) return;
+    let cancelled = false;
+
+    const tryScroll = (attempt: number) => {
+      if (cancelled) return;
+      const view = editorViewRef.current;
+      if (!view) {
+        // Editor may not be mounted yet when arriving from another stream.
+        if (attempt < 10) requestAnimationFrame(() => tryScroll(attempt + 1));
+        else onClearPendingMatch?.();
+        return;
+      }
+      const doc = view.state.doc.toString();
+      const index = doc.toLowerCase().indexOf(pendingMatchText.toLowerCase());
+      if (index >= 0) {
+        view.dispatch({
+          selection: { anchor: index, head: index + pendingMatchText.length },
+          effects: EditorView.scrollIntoView(index, { y: 'center' }),
+        });
+        view.focus();
+      }
+      onClearPendingMatch?.();
+    };
+
+    tryScroll(0);
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingMatchText, onClearPendingMatch]);
 
   useEffect(() => {
     if (markdownContent === lastSavedContentRef.current) return;

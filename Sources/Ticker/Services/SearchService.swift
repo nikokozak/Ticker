@@ -15,10 +15,12 @@ final class SearchService {
 
     // MARK: - Public Interface
 
-    /// Perform hybrid search combining text and semantic results
+    /// Perform hybrid search combining text and semantic results.
+    /// With no current stream (searching from the stream list) all matches land in
+    /// `otherStreamResults` and source chunks are skipped.
     func hybridSearch(
         query: String,
-        currentStreamId: UUID,
+        currentStreamId: UUID?,
         limit: Int = 20
     ) async throws -> HybridSearchResults {
         // 1. Text search with separate limits per stream category (ensures cross-stream coverage)
@@ -28,85 +30,37 @@ final class SearchService {
             limitPerCategory: limit
         )
 
-        // 2. Get current stream title for chunk results
-        let currentStreamTitle = try persistence.getStreamTitle(id: currentStreamId) ?? "Untitled"
+        // 2. Convert to unified SearchResult format, keeping results separated by stream
+        var currentStreamResults = currentTextResults.map { documentResult($0, query: query) }
+        var otherStreamResults = otherTextResults.map { documentResult($0, query: query) }
 
-        // 3. Source chunk search in current stream.
-        let chunkResults = try retrieval.retrieve(
-            query: query,
-            streamId: currentStreamId,
-            excludeAIPrivateSources: false
-        )
+        // 3. Source chunk search, current stream only.
+        if let currentStreamId {
+            let currentStreamTitle = try persistence.getStreamTitle(id: currentStreamId) ?? "Untitled"
+            let chunkResults = try retrieval.retrieve(
+                query: query,
+                streamId: currentStreamId,
+                excludeAIPrivateSources: false
+            )
 
-        // 4. Convert to unified SearchResult format, keeping results separated by stream
-        var currentStreamResults: [SearchResult] = []
-        var otherStreamResults: [SearchResult] = []
+            for chunkResult in chunkResults {
+                let snippet = truncate(chunkResult.text, maxLength: 150)
+                let shortTitle = SourceShortTitle.derive(displayName: chunkResult.sourceName)
 
-        // Add text results for current stream
-        for textResult in currentTextResults {
-            let title = extractFirstHeading(from: textResult.markdown)
-                ?? textResult.streamTitle
-
-            let snippet = extractSnippet(from: textResult.markdown, query: query)
-
-            currentStreamResults.append(SearchResult(
-                id: textResult.streamId.uuidString,
-                streamId: textResult.streamId.uuidString,
-                streamTitle: textResult.streamTitle,
-                sourceType: .cell,
-                title: title,
-                shortTitle: nil,
-                snippet: snippet,
-                cellType: "text",
-                sourceId: nil,
-                sourceName: nil,
-                similarity: nil,
-                matchType: .text
-            ))
-        }
-
-        // Add text results for other streams
-        for textResult in otherTextResults {
-            let title = extractFirstHeading(from: textResult.markdown)
-                ?? textResult.streamTitle
-
-            let snippet = extractSnippet(from: textResult.markdown, query: query)
-
-            otherStreamResults.append(SearchResult(
-                id: textResult.streamId.uuidString,
-                streamId: textResult.streamId.uuidString,
-                streamTitle: textResult.streamTitle,
-                sourceType: .cell,
-                title: title,
-                shortTitle: nil,
-                snippet: snippet,
-                cellType: "text",
-                sourceId: nil,
-                sourceName: nil,
-                similarity: nil,
-                matchType: .text
-            ))
-        }
-
-        // Add source chunk results (only for current stream)
-        for chunkResult in chunkResults {
-            let snippet = truncate(chunkResult.text, maxLength: 150)
-            let shortTitle = SourceShortTitle.derive(displayName: chunkResult.sourceName)
-
-            currentStreamResults.append(SearchResult(
-                id: chunkResult.id.uuidString,
-                streamId: currentStreamId.uuidString,
-                streamTitle: currentStreamTitle,
-                sourceType: .chunk,
-                title: shortTitle,
-                shortTitle: shortTitle,
-                snippet: snippet,
-                cellType: nil,
-                sourceId: chunkResult.sourceId.uuidString,
-                sourceName: chunkResult.sourceName,
-                similarity: nil,
-                matchType: .text
-            ))
+                currentStreamResults.append(SearchResult(
+                    id: chunkResult.id.uuidString,
+                    streamId: currentStreamId.uuidString,
+                    streamTitle: currentStreamTitle,
+                    sourceType: .chunk,
+                    title: shortTitle,
+                    shortTitle: shortTitle,
+                    snippet: snippet,
+                    sourceId: chunkResult.sourceId.uuidString,
+                    sourceName: chunkResult.sourceName,
+                    similarity: nil,
+                    matchType: .text
+                ))
+            }
         }
 
         // 5. Deduplicate within each category
@@ -124,6 +78,22 @@ final class SearchService {
     }
 
     // MARK: - Private Helpers
+
+    private func documentResult(_ textResult: StreamDocumentSearchResult, query: String) -> SearchResult {
+        SearchResult(
+            id: textResult.streamId.uuidString,
+            streamId: textResult.streamId.uuidString,
+            streamTitle: textResult.streamTitle,
+            sourceType: .document,
+            title: extractFirstHeading(from: textResult.markdown) ?? textResult.streamTitle,
+            shortTitle: nil,
+            snippet: extractSnippet(from: textResult.markdown, query: query),
+            sourceId: nil,
+            sourceName: nil,
+            similarity: nil,
+            matchType: .text
+        )
+    }
 
     private func sortResults(_ results: [SearchResult]) -> [SearchResult] {
         // Preserve input indices for stable tie-breaking (SQL returns by updated_at DESC)
@@ -222,7 +192,6 @@ struct SearchResult: Encodable {
     let title: String
     let shortTitle: String?
     let snippet: String
-    let cellType: String?
     let sourceId: String?
     let sourceName: String?
     let similarity: Float?
@@ -230,7 +199,7 @@ struct SearchResult: Encodable {
 }
 
 enum SearchResultSourceType: String, Encodable {
-    case cell
+    case document
     case chunk
 }
 

@@ -258,16 +258,16 @@ export function App() {
     }
   };
 
-  // Navigate to a different stream and scroll to a specific cell or source
-  const [pendingCellId, setPendingCellId] = useState<string | null>(null);
+  // Navigate to a different stream and scroll to a text match or a source
+  const [pendingMatchText, setPendingMatchText] = useState<string | null>(null);
   const [pendingSourceId, setPendingSourceId] = useState<string | null>(null);
 
-  const handleNavigateToStream = (streamId: string, targetId: string, targetType: 'cell' | 'source' = 'cell') => {
+  const handleNavigateToStream = (streamId: string, targetId: string, targetType: 'match' | 'source' = 'match') => {
     if (targetType === 'source') {
       setPendingSourceId(targetId);
-      setPendingCellId(null);
+      setPendingMatchText(null);
     } else {
-      setPendingCellId(targetId);
+      setPendingMatchText(targetId);
       setPendingSourceId(null);
     }
 
@@ -280,14 +280,14 @@ export function App() {
     bridge.send({ type: 'loadStream', payload: { id: streamId } });
   };
 
-  const handleNavigateToCell = (cellId: string) => {
-    setPendingCellId(cellId);
+  const handleNavigateToMatch = (matchText: string) => {
+    setPendingMatchText(matchText);
     setPendingSourceId(null);
   };
 
   const handleNavigateToSource = (sourceId: string) => {
     setPendingSourceId(sourceId);
-    setPendingCellId(null);
+    setPendingMatchText(null);
   };
 
   const handleOpenSettings = () => {
@@ -320,9 +320,9 @@ export function App() {
         stream={currentStream}
         onBack={handleBackToList}
         onDelete={handleDeleteStream}
-        pendingCellId={pendingCellId}
+        pendingMatchText={pendingMatchText}
         pendingSourceId={pendingSourceId}
-        onClearPendingCell={() => setPendingCellId(null)}
+        onClearPendingMatch={() => setPendingMatchText(null)}
         onClearPendingSource={() => setPendingSourceId(null)}
       />
     );
@@ -345,9 +345,9 @@ export function App() {
       <SearchModal
         isOpen={showSearch}
         onClose={() => setShowSearch(false)}
-        currentStreamId={currentStream?.id ?? streams[0]?.id ?? null}
+        currentStreamId={view === 'stream' ? currentStream?.id ?? null : null}
         isStreamOpen={view === 'stream' && currentStream !== null}
-        onNavigateToCell={handleNavigateToCell}
+        onNavigateToMatch={handleNavigateToMatch}
         onNavigateToStream={handleNavigateToStream}
         onNavigateToSource={handleNavigateToSource}
       />

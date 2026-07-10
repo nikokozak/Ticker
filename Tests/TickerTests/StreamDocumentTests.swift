@@ -3318,11 +3318,35 @@ final class StreamDocumentTests: XCTestCase {
             let result = try XCTUnwrap(results.currentStreamResults.first)
             XCTAssertEqual(result.streamId, stream.id.uuidString)
             XCTAssertEqual(result.streamTitle, "Searchable Stream")
-            XCTAssertEqual(result.sourceType.rawValue, "cell")
-            XCTAssertEqual(result.cellType, "text")
+            XCTAssertEqual(result.sourceType.rawValue, "document")
             XCTAssertEqual(result.title, "Research Notes")
             XCTAssertTrue(result.snippet.contains("retargeted search phrase"))
             XCTAssertTrue(results.otherStreamResults.isEmpty)
+        }
+    }
+
+    func test_hybridSearchWithoutCurrentStreamReturnsAllMatchesAsOtherStreams() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Listed Stream")
+            try service.saveStream(stream)
+            try service.saveStreamDocument(
+                streamId: stream.id,
+                markdown: "A globally findable phrase."
+            )
+
+            let searchService = SearchService(
+                persistence: service,
+                retrieval: RetrievalService(persistence: service)
+            )
+
+            let results = try await searchService.hybridSearch(
+                query: "globally findable",
+                currentStreamId: nil,
+                limit: 5
+            )
+
+            XCTAssertTrue(results.currentStreamResults.isEmpty)
+            XCTAssertEqual(results.otherStreamResults.first?.streamId, stream.id.uuidString)
         }
     }
 
