@@ -17,7 +17,6 @@ final class SettingsService {
 
     // UserDefaults keys (non-sensitive settings)
     private enum Keys {
-        static let smartRoutingEnabled = "smart_routing_enabled"
         static let defaultModel = "default_model"
         static let appearance = "appearance"
         static let editorFont = "editor_font"
@@ -177,21 +176,6 @@ final class SettingsService {
         !hasCompletedOnboarding
     }
 
-    // MARK: - Routing Settings
-
-    /// Whether to use MLX classifier for smart model routing.
-    /// Defaults to true if not explicitly set (alpha posture: smart routing ON by default).
-    var smartRoutingEnabled: Bool {
-        get {
-            // Default to true if not set
-            if defaults.object(forKey: Keys.smartRoutingEnabled) == nil {
-                return true
-            }
-            return defaults.bool(forKey: Keys.smartRoutingEnabled)
-        }
-        set { defaults.set(newValue, forKey: Keys.smartRoutingEnabled) }
-    }
-
     var defaultModel: DefaultModel {
         get {
             guard let raw = defaults.string(forKey: Keys.defaultModel),
@@ -284,7 +268,6 @@ final class SettingsService {
     func allSettings() -> [String: Any] {
         [
             "proxyOnlyMode": Self.proxyOnlyMode,
-            "smartRoutingEnabled": smartRoutingEnabled,
             "defaultModel": defaultModel.rawValue,
             "appearance": appearance.rawValue,
             "diagnosticsEnabled": diagnosticsEnabled,

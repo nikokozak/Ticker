@@ -82,17 +82,12 @@ final class ProxyLLMService {
         // Build request body in proxy format
         let messages = buildProxyMessages(from: request)
         let provider = determineProvider(for: request)
-        var requestBody: [String: Any] = [
+        let requestBody: [String: Any] = [
             "model": "default",  // Let proxy resolve model based on provider + vision
             "messages": messages,
             "provider": provider,
             "stream": true
         ]
-
-        // Include intent if available (for smart routing on proxy side)
-        if let intent = request.intent {
-            requestBody["intent"] = intent.toDictionary()
-        }
 
         guard let bodyData = try? JSONSerialization.data(withJSONObject: requestBody) else {
             await MainActor.run {
@@ -119,8 +114,7 @@ final class ProxyLLMService {
 
         // Add diagnostic headers (conditional on user preference)
         let requestId = await deviceKeyService.applyDiagnosticsHeaders(to: &urlRequest)
-        let intentType = request.intent?.type ?? "none"
-        debugLog("Starting stream request provider=\(provider) intent=\(intentType) hasImages=\(request.hasImages) requestId=\(requestId ?? "nil") url=\(url.absoluteString)")
+        debugLog("Starting stream request provider=\(provider) hasImages=\(request.hasImages) requestId=\(requestId ?? "nil") url=\(url.absoluteString)")
         debugLog("Awaiting response headers (idle timeout=\(Int(urlRequest.timeoutInterval))s)")
 
         var didReceiveHeaders = false
@@ -489,8 +483,6 @@ final class ProxyLLMService {
 
     /// Determine which provider to use based on user settings (preference hint for proxy)
     private func determineProvider(for request: LLMRequest) -> String {
-        // This is a preference hint - the proxy may override based on intent
-        // (e.g., search intent routes to Perplexity regardless of this preference)
         switch SettingsService.shared.defaultModel {
         case .openai:
             return "openai"

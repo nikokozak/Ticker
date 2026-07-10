@@ -2,9 +2,9 @@ import Foundation
 
 /// Central orchestrator for AI services
 /// Routes all LLM requests through Ticker Proxy (proxy-only mode for alpha).
-/// Intent classification is done locally via MLX and passed to proxy for routing.
+/// Freshness is the answering model's call: the proxy offers it a web_search
+/// tool on every request, so no client-side intent classification exists.
 final class AIOrchestrator {
-    private var classifier: QueryClassifier?
     private let settings: SettingsService
     private var retrievalService: RetrievalService?
 
@@ -24,11 +24,6 @@ final class AIOrchestrator {
     /// Set the retrieval service for RAG
     func setRetrievalService(_ service: RetrievalService) {
         self.retrievalService = service
-    }
-
-    /// Set the query classifier for intent-based routing
-    func setClassifier(_ classifier: QueryClassifier) {
-        self.classifier = classifier
     }
 
     // MARK: - Routing
@@ -64,27 +59,6 @@ final class AIOrchestrator {
     ) async {
         // Proxy-only mode: all LLM traffic goes through the proxy.
         // If device key is not active, the proxy will return an auth error.
-
-        // Classify if we have a classifier and smart routing is enabled.
-        // Fixed-prompt flows (document AI verbs, read-back, ephemeral ask)
-        // must not be re-routed by content sniffing: a passage that "looks
-        // like a search" would go to a web-search model that ignores the
-        // structured system prompt entirely.
-        var intent: QueryIntent = .knowledge
-        var classificationResult: ClassificationResult?
-        if settings.smartRoutingEnabled, let classifier, systemPromptOverride == nil {
-            do {
-                DebugLog.log("AIOrchestrator: classifying query…")
-                let result = try await classifier.classify(query: query)
-                intent = result.intent
-                classificationResult = result
-                DebugLog.log("AIOrchestrator: classified as \(intent) (confidence: \(result.confidence), raw: \"\(result.reasoning ?? "")\")")
-            } catch {
-                DebugLog.log("AIOrchestrator: classification failed, defaulting to knowledge (\(DebugLog.errorSummary(error)))")
-            }
-        }
-
-        // Always use proxy service - no vendor fallback
         // Note: We don't call onModelSelected here; the proxy will tell us the resolved model via headers
 
         var contextToUse = sourceContext.flatMap { context -> SourceContext? in
@@ -116,12 +90,10 @@ final class AIOrchestrator {
 
         // Build request and truncate to token budget
         let request = buildRequest(
-            for: intent,
             query: query,
             queryImages: queryImages,
             priorCells: priorCells,
             sourceContext: contextToUse,
-            classificationResult: classificationResult,
             systemPromptOverride: systemPromptOverride,
             includeHeading: includeHeading
         ).truncated()
@@ -146,27 +118,15 @@ final class AIOrchestrator {
     // MARK: - Private
 
     private func buildRequest(
-        for intent: QueryIntent,
         query: String,
         queryImages: [String],
         priorCells: [[String: Any]],
         sourceContext: SourceContext?,
-        classificationResult: ClassificationResult?,
         systemPromptOverride: String? = nil,
         includeHeading: Bool = false
     ) -> LLMRequest {
-        // Select appropriate system prompt based on intent and heading requirement
-        let systemPrompt: String
-        switch intent {
-        case .search:
-            systemPrompt = includeHeading ? Prompts.searchWithHeading : Prompts.search
-        case .summarize:
-            systemPrompt = Prompts.applyModifier // Modifiers never include heading
-        case .expand, .rewrite, .extract:
-            systemPrompt = Prompts.applyModifier
-        case .knowledge, .ambiguous:
-            systemPrompt = includeHeading ? Prompts.thinkingPartnerWithHeading : Prompts.thinkingPartner
-        }
+        let systemPrompt =
+            includeHeading ? Prompts.thinkingPartnerWithHeading : Prompts.thinkingPartner
 
         let resolvedSystemPrompt: String
         if let override = systemPromptOverride?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -215,15 +175,11 @@ final class AIOrchestrator {
             )
         )
 
-        // Build intent for proxy if classification result available
-        let llmIntent = classificationResult.map { LLMIntent(from: $0) }
-
         return LLMRequest(
             systemPrompt: resolvedSystemPrompt,
             messages: messages,
             temperature: 0.7,
-            maxTokens: 2048,
-            intent: llmIntent
+            maxTokens: 2048
         )
     }
 

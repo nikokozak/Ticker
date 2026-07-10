@@ -73,6 +73,7 @@ All notable user-facing changes to Ticker are documented here.
 - Made Quick Panel dismissal consistent, stabilized stream picking, and added visible save feedback.
 
 ### Removed
+- Client-side intent classification is fully retired: the proxy now offers the answering model a web-search tool, so the model decides when it needs live information.
 - Smart routing no longer downloads a local MLX model; a deterministic keyword gate decides search vs. knowledge (the 0.5B classifier misclassified in live testing).
 - Removed AI-generated margin notes (read-back and Challenge tension notes) and the margin-notes header toggle; margin rendering can no longer be enabled from the app.
 - Removed dead TipTap/cell-era editor paths, legacy bridge messages, cell write/read paths, and unused LLM providers from active runtime.
