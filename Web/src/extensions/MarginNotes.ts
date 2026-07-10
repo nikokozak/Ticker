@@ -156,18 +156,21 @@ export const marginNotesField: StateField<MarginNote[]> = StateField.define<Marg
     let next = transaction.docChanged
       ? notes.map((note) => mapNote(note, transaction, insertionChanges(transaction)))
       : notes;
+    let affected = transaction.docChanged;
 
     for (const effect of transaction.effects) {
       if (effect.is(setMarginNotes)) {
         next = effect.value;
+        affected = true;
       } else if (effect.is(updateMarginNoteStatusEffect)) {
         next = next.map((note) => (
           note.noteId === effect.value.noteId ? { ...note, status: effect.value.status } : note
         ));
+        affected = true;
       }
     }
 
-    return normalizeMarginNoteAnchors(next, transaction.state.doc);
+    return affected ? normalizeMarginNoteAnchors(next, transaction.state.doc) : notes;
   },
 });
 

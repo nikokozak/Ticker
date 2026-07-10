@@ -26,7 +26,14 @@ function docLength(doc: Text | string): number {
   return typeof doc === 'string' ? doc.length : doc.length;
 }
 
-function withHash(span: Span, start: number, end: number, doc: Text | string, spanId = span.spanId): Span | null {
+function withHash(
+  span: Span,
+  start: number,
+  end: number,
+  doc: Text | string,
+  spanId = span.spanId,
+  keepHash = false,
+): Span | null {
   if (start < 0 || end > docLength(doc) || end - start < 3) return null;
   return {
     ...span,
@@ -34,8 +41,20 @@ function withHash(span: Span, start: number, end: number, doc: Text | string, sp
     start,
     end,
     meta: { ...span.meta },
-    textHash: fnv1a(docText(doc, start, end)),
+    textHash: keepHash ? span.textHash : fnv1a(docText(doc, start, end)),
   };
+}
+
+function spanTextChanged(span: Span, transaction: Transaction): boolean {
+  let changed = false;
+  transaction.changes.iterChanges((fromA, toA) => {
+    if (fromA === toA) {
+      if (fromA > span.start && fromA < span.end) changed = true;
+    } else if (fromA < span.end && toA > span.start) {
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 function insertionChanges(transaction: Transaction) {
@@ -76,7 +95,9 @@ function mapSpan(span: Span, transaction: Transaction, insertions: Array<{ from:
       span,
       mapBoundaryStart(span, transaction, insertions),
       mapBoundaryEnd(span, transaction, insertions),
-      transaction.state.doc
+      transaction.state.doc,
+      span.spanId,
+      !spanTextChanged(span, transaction),
     );
     return mapped ? [mapped] : [];
   }
@@ -101,10 +122,10 @@ function mapSpan(span: Span, transaction: Transaction, insertions: Array<{ from:
   return pieces;
 }
 
-export function normalizeSpans(spans: Span[], doc: Text | string): Span[] {
+export function normalizeSpans(spans: Span[], doc: Text | string, keepHashes = false): Span[] {
   const sorted = spans
     .flatMap((span) => {
-      const normalized = withHash(span, span.start, span.end, doc);
+      const normalized = withHash(span, span.start, span.end, doc, span.spanId, keepHashes);
       return normalized ? [normalized] : [];
     })
     .sort((a, b) => a.start - b.start || a.end - b.end || a.spanId.localeCompare(b.spanId));
@@ -112,7 +133,15 @@ export function normalizeSpans(spans: Span[], doc: Text | string): Span[] {
   const merged: Span[] = [];
   for (const span of sorted) {
     const previous = merged[merged.length - 1];
-    if (previous && previous.end === span.start && previous.requestId === span.requestId && previous.origin === span.origin) {
+    if (
+      previous
+      && previous.end === span.start
+      && previous.origin === span.origin
+      && previous.requestId === span.requestId
+      && previous.sourceId === span.sourceId
+      && previous.createdAt === span.createdAt
+      && JSON.stringify(previous.meta) === JSON.stringify(span.meta)
+    ) {
       const combined = withHash(previous, previous.start, span.end, doc);
       if (combined) merged[merged.length - 1] = combined;
       continue;
@@ -125,9 +154,8 @@ export function normalizeSpans(spans: Span[], doc: Text | string): Span[] {
 export const provenanceField: StateField<Span[]> = StateField.define<Span[]>({
   create: () => [],
   update(spans, transaction) {
-    let next = transaction.docChanged
-      ? spans.flatMap((span) => mapSpan(span, transaction, insertionChanges(transaction)))
-      : spans;
+    const insertions = transaction.docChanged ? insertionChanges(transaction) : [];
+    let next = transaction.docChanged ? spans.flatMap((span) => mapSpan(span, transaction, insertions)) : spans;
 
     for (const effect of transaction.effects) {
       if (effect.is(setSpans)) {

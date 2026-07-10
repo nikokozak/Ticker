@@ -23,15 +23,10 @@ import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField,
 import { canRedevelopSpan, provenanceXrayExtension } from '../extensions/ProvenanceXray';
 import { pendingAppendField, setPendingAppend } from '../extensions/PendingAppend';
 import {
-  buildPromoteMarginNoteEdit,
-  currentMarginNotes,
-  marginNotesExtension,
   marginNotesField,
   payloadMarginNotesForDoc,
   setMarginNotes,
-  updateMarginNoteStatusEffect,
   type MarginNote,
-  type MarginNoteStatus,
 } from '../extensions/MarginNotes';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
@@ -347,7 +342,7 @@ function fieldSpanToPayload(span: Span): ProvenanceSpanJSON {
 }
 
 function serializeFieldSpans(spans: Span[], doc: string): ProvenanceSpanJSON[] {
-  return serializeProvenanceSpans(normalizeSpans(spans, doc).map(fieldSpanToPayload));
+  return serializeProvenanceSpans(normalizeSpans(spans, doc, true).map(fieldSpanToPayload));
 }
 
 function persistNewUnanchoredMarginNotes(rawNotes: Stream['marginNotes'], notes: MarginNote[]): void {
@@ -493,6 +488,13 @@ const markdownHighlightStyle = HighlightStyle.define([
   },
 ]);
 
+const editorBasicSetup = {
+  lineNumbers: false,
+  foldGutter: false,
+  highlightActiveLine: false,
+  highlightActiveLineGutter: false,
+};
+
 export function StreamEditor({
   stream,
   onBack,
@@ -513,7 +515,7 @@ export function StreamEditor({
   const [isProvenanceXrayVisible, setIsProvenanceXrayVisible] = useState(false);
   const [showRawFormatting, setShowRawFormatting] = useState(false);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
-  const [markdownContent, setMarkdownContent] = useState(stream.document?.markdown ?? '');
+  const initialMarkdownRef = useRef(stream.document?.markdown ?? '');
   const [showPrompt, setShowPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState('');
   const [promptIntent, setPromptIntent] = useState<PromptIntent>({ kind: 'ask' });
@@ -557,6 +559,7 @@ export function StreamEditor({
   const revisionRef = useRef(stream.document?.revision ?? 0);
   const queuedSaveContentRef = useRef<string | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const autosaveTimerRef = useRef<number | null>(null);
   const promptContextRef = useRef<SelectionContext | null>(null);
   const selectionMenuTimerRef = useRef<number | null>(null);
   const aiFeedbackTimerRef = useRef<number | null>(null);
@@ -588,7 +591,7 @@ export function StreamEditor({
     const view = editorViewRef.current;
 
     if (!view) {
-      setMarkdownContent((prev) => `${prev}${snippet}`);
+      markdownContentRef.current += snippet;
       return;
     }
 
@@ -608,7 +611,7 @@ export function StreamEditor({
     const view = editorViewRef.current;
 
     if (!view) {
-      setMarkdownContent((prev) => `${prev}${snippet}`);
+      markdownContentRef.current += snippet;
       return;
     }
 
@@ -839,48 +842,11 @@ export function StreamEditor({
     persistNewUnanchoredMarginNotes(rawNotes, notes);
   }, []);
 
-  const persistMarginNoteStatus = useCallback((note: Pick<MarginNote, 'noteId'>, status: MarginNoteStatus) => {
-    updateMarginNote({ noteId: note.noteId, status });
-  }, []);
-
-  const handleDismissMarginNote = useCallback((note: MarginNote) => {
-    const view = editorViewRef.current;
-    if (view) {
-      view.dispatch({
-        effects: updateMarginNoteStatusEffect.of({ noteId: note.noteId, status: 'dismissed' }),
-        annotations: Transaction.addToHistory.of(false),
-      });
-      view.focus();
-    }
-    persistMarginNoteStatus(note, 'dismissed');
-  }, [persistMarginNoteStatus]);
-
-  const handlePromoteMarginNote = useCallback((note: MarginNote) => {
-    const view = editorViewRef.current;
-    if (!view) return;
-    const currentNote = currentMarginNotes(view.state).find((candidate) => candidate.noteId === note.noteId) ?? note;
-    const edit = buildPromoteMarginNoteEdit(currentNote, view.state.doc.toString());
-    if (!edit) return;
-
-    view.dispatch({
-      changes: { from: edit.from, insert: edit.insert },
-      selection: { anchor: edit.from + edit.insert.length },
-      effects: [
-        addSpans.of([edit.span]),
-        updateMarginNoteStatusEffect.of({ noteId: note.noteId, status: 'promoted' }),
-      ],
-      annotations: [
-        Transaction.addToHistory.of(true),
-        Transaction.userEvent.of('input'),
-        isolateHistory.of('full'),
-      ],
-    });
-    view.focus();
-    persistMarginNoteStatus(note, 'promoted');
-  }, [persistMarginNoteStatus]);
-
   useEffect(() => {
-    setMarkdownContent(stream.document?.markdown ?? '');
+    if (autosaveTimerRef.current !== null) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
     lastSavedContentRef.current = stream.document?.markdown ?? '';
     markdownContentRef.current = stream.document?.markdown ?? '';
     revisionRef.current = stream.document?.revision ?? 0;
@@ -943,13 +909,13 @@ export function StreamEditor({
     applyMarginNotesToEditor(stream.marginNotes);
   }, [applyMarginNotesToEditor, stream.id, stream.marginNotes]);
 
-  useEffect(() => {
-    markdownContentRef.current = markdownContent;
-  }, [markdownContent]);
-
   const saveNow = useCallback(() => {
-    const contentToSave = markdownContentRef.current;
-    if (!isStreamDocumentDirty(contentToSave, lastSavedContentRef.current)) return saveQueueRef.current;
+    const contentToSave = editorViewRef.current?.state.doc.toString() ?? markdownContentRef.current;
+    markdownContentRef.current = contentToSave;
+    if (!isStreamDocumentDirty(contentToSave, lastSavedContentRef.current)) {
+      setSaveState('saved');
+      return saveQueueRef.current;
+    }
     if (queuedSaveContentRef.current === contentToSave) return saveQueueRef.current;
 
     const view = editorViewRef.current;
@@ -993,6 +959,15 @@ export function StreamEditor({
     saveQueueRef.current = saveQueueRef.current.then(save, save);
     return saveQueueRef.current;
   }, [addToast, stream.id]);
+
+  const scheduleAutosave = useCallback((view: EditorView) => {
+    if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
+    setSaveState('saving');
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null;
+      if (editorViewRef.current === view) void saveNow();
+    }, 350);
+  }, [saveNow]);
 
   useEffect(() => {
     if (!pendingSourceId) return;
@@ -1041,17 +1016,6 @@ export function StreamEditor({
   }, [pendingMatchText, onClearPendingMatch]);
 
   useEffect(() => {
-    if (!isStreamDocumentDirty(markdownContent, lastSavedContentRef.current)) return;
-    setSaveState('saving');
-
-    const timer = window.setTimeout(() => {
-      void saveNow();
-    }, 350);
-
-    return () => window.clearTimeout(timer);
-  }, [markdownContent, saveNow]);
-
-  useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
       if (message.type === 'quickPanelAIStarted') {
         if (message.payload?.streamId !== stream.id) return;
@@ -1097,7 +1061,6 @@ export function StreamEditor({
         revisionRef.current = revision;
         markdownContentRef.current = markdown;
         lastSavedContentRef.current = markdown;
-        setMarkdownContent(markdown);
         setSaveState('saved');
 
         debugWarn('[StreamEditor] Reloaded document after revision conflict', {
@@ -1172,7 +1135,6 @@ export function StreamEditor({
           lastSavedContentRef.current = nextMarkdown;
           setSaveState('saved');
         }
-        setMarkdownContent(nextMarkdown);
         return;
       }
 
@@ -1829,8 +1791,8 @@ export function StreamEditor({
       return;
     }
 
-    const selection = view.state.selection.main;
-    if (selection.empty || !view.state.sliceDoc(selection.from, selection.to).trim()) {
+    const { from, to } = view.state.selection.main;
+    if (from === to) {
       hideSelectionMenu();
       return;
     }
@@ -1845,9 +1807,9 @@ export function StreamEditor({
       }
 
       const currentSelection = currentView.state.selection.main;
-      const selectedText = currentView.state.sliceDoc(currentSelection.from, currentSelection.to);
+      const selectedText = currentView.state.sliceDoc(from, to);
       const placement = getSelectionMenuPlacement(currentView);
-      if (currentSelection.empty || !selectedText.trim() || !placement) {
+      if (currentSelection.from !== from || currentSelection.to !== to || !selectedText.trim() || !placement) {
         hideSelectionMenu();
         return;
       }
@@ -1997,6 +1959,8 @@ export function StreamEditor({
 
   const selectionMenuExtension = useMemo<Extension>(() => [
     EditorView.updateListener.of((update) => {
+      if (update.docChanged) scheduleAutosave(update.view);
+
       if (update.docChanged && pendingPDFAnchorSelectionRef.current) {
         pendingPDFAnchorSelectionRef.current = mapPendingPDFAnchorSelection(
           pendingPDFAnchorSelectionRef.current,
@@ -2022,7 +1986,7 @@ export function StreamEditor({
         hideSelectionMenu();
       },
     }),
-  ], [hideSelectionMenu, scheduleSelectionMenu]);
+  ], [hideSelectionMenu, scheduleAutosave, scheduleSelectionMenu]);
 
   const startDocumentAI = useCallback((options: {
     query: string;
@@ -2375,6 +2339,10 @@ export function StreamEditor({
 
   useEffect(() => {
     return () => {
+      if (autosaveTimerRef.current !== null) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
       void saveNow();
       abortInFlightDocumentAI();
     };
@@ -2499,14 +2467,40 @@ export function StreamEditor({
       : []
   ), [handleOpenSourceById, isAiThinking, isProvenanceXrayVisible, openRedevelopPrompt, sources]);
 
-  const marginNotesExtensionValue = useMemo<Extension>(() => marginNotesExtension({
-    // Margin rendering is retired from the UI; the field stays wired so
-    // existing notes keep mapping/persisting their anchors dormant.
-    visible: false,
-    onPromote: handlePromoteMarginNote,
-    onDismiss: handleDismissMarginNote,
-    onUnanchor: (note) => persistMarginNoteStatus(note, 'unanchored'),
-  }), [handleDismissMarginNote, handlePromoteMarginNote, persistMarginNoteStatus]);
+  const editorExtensions = useMemo<Extension[]>(() => [
+    EditorView.lineWrapping,
+    EditorView.contentAttributes.of({
+      spellcheck: 'true',
+      autocapitalize: 'sentences',
+      autocomplete: 'on',
+      autocorrect: 'on',
+    }),
+    selectionMenuExtension,
+    clickToDocumentEndExtension,
+    aiWritingExtension,
+    editorFindExtension,
+    markdown({ base: markdownLanguage, codeLanguages: languages }),
+    // basicSetup's default Enter shadows the markdown bindings.
+    // Bullet lines get our always-tight continuation; everything
+    // else falls through to markdownKeymap (quote continuation,
+    // Backspace marker deletion).
+    Prec.high(keymap.of([
+      { key: 'Enter', run: continueBulletListOnEnter },
+      { key: 'Mod-b', run: toggleInlineMarkCommand('**') },
+      { key: 'Mod-i', run: toggleInlineMarkCommand('*') },
+      ...markdownKeymap,
+    ])),
+    syntaxHighlighting(markdownHighlightStyle),
+    markdownConcealExtension,
+    arrivalField,
+    provenanceField,
+    marginNotesField,
+    pendingAppendField,
+    markdownImageWidgetExtension,
+    provenanceXray,
+    tickerPDFLinkExtension(stream.id),
+    linkInteraction,
+  ], [linkInteraction, provenanceXray, selectionMenuExtension, stream.id]);
 
   const selectionDissolveSpanIds = (() => {
     const view = editorViewRef.current;
@@ -2936,50 +2930,17 @@ export function StreamEditor({
             onDragOver={handleDragOver}
           >
             <CodeMirror
-              value={markdownContent}
-              basicSetup={{
-                lineNumbers: false,
-                foldGutter: false,
-                highlightActiveLine: false,
-                highlightActiveLineGutter: false,
-              }}
-              extensions={[
-                EditorView.lineWrapping,
-                EditorView.contentAttributes.of({
-                  spellcheck: 'true',
-                  autocapitalize: 'sentences',
-                  autocomplete: 'on',
-                  autocorrect: 'on',
-                }),
-                selectionMenuExtension,
-                clickToDocumentEndExtension,
-                aiWritingExtension,
-                editorFindExtension,
-                markdown({ base: markdownLanguage, codeLanguages: languages }),
-                // basicSetup's default Enter shadows the markdown bindings.
-                // Bullet lines get our always-tight continuation; everything
-                // else falls through to markdownKeymap (quote continuation,
-                // Backspace marker deletion).
-                Prec.high(keymap.of([
-                  { key: 'Enter', run: continueBulletListOnEnter },
-                  { key: 'Mod-b', run: toggleInlineMarkCommand('**') },
-                  { key: 'Mod-i', run: toggleInlineMarkCommand('*') },
-                  ...markdownKeymap,
-                ])),
-                syntaxHighlighting(markdownHighlightStyle),
-                markdownConcealExtension,
-                arrivalField,
-                provenanceField,
-                marginNotesField,
-                pendingAppendField,
-                markdownImageWidgetExtension,
-                provenanceXray,
-                marginNotesExtensionValue,
-                tickerPDFLinkExtension(stream.id),
-                linkInteraction,
-              ]}
+              value={initialMarkdownRef.current}
+              basicSetup={editorBasicSetup}
+              extensions={editorExtensions}
               onCreateEditor={(view) => {
                 editorViewRef.current = view;
+                if (markdownContentRef.current !== view.state.doc.toString()) {
+                  view.dispatch({
+                    changes: { from: 0, to: view.state.doc.length, insert: markdownContentRef.current },
+                    annotations: Transaction.addToHistory.of(false),
+                  });
+                }
                 view.dispatch({
                   effects: [
                     setSpans.of(payloadSpansForDoc(stream.spans, view.state.doc.toString())),
@@ -3017,11 +2978,6 @@ export function StreamEditor({
                     }
                   });
                 });
-
-              }}
-              onChange={(value) => {
-                markdownContentRef.current = value;
-                setMarkdownContent(value);
               }}
               className="document-editor-codemirror"
             />

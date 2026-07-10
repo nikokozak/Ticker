@@ -126,6 +126,8 @@ class EditorFindPanel implements Panel {
   readonly top = true;
 
   private query: SearchQuery;
+  private matches: EditorFindMatch[] = [];
+  private capped = false;
   private readonly input: HTMLInputElement;
   private readonly count: HTMLSpanElement;
 
@@ -154,6 +156,7 @@ class EditorFindPanel implements Panel {
 
     this.input.addEventListener('input', this.handleInput);
     this.dom.addEventListener('keydown', this.handleKeyDown);
+    this.refreshMatches();
     this.refreshCount();
   }
 
@@ -173,6 +176,9 @@ class EditorFindPanel implements Panel {
       }
     }
 
+    if (queryChanged || update.docChanged) {
+      this.refreshMatches();
+    }
     if (queryChanged || update.docChanged || update.selectionSet) {
       this.refreshCount();
     }
@@ -202,10 +208,8 @@ class EditorFindPanel implements Panel {
   private handleInput = (): void => {
     const anchor = this.view.state.selection.main.from;
     const query = createLiteralQuery(this.input.value);
-    this.query = query;
     this.view.dispatch({ effects: setSearchQuery.of(query) });
     selectNearestMatch(this.view, query, anchor);
-    this.refreshCount();
   };
 
   private handleKeyDown = (event: KeyboardEvent): void => {
@@ -220,12 +224,16 @@ class EditorFindPanel implements Panel {
     }
   };
 
+  private refreshMatches(): void {
+    const result = collectMatches(this.view, this.query);
+    this.matches = result.matches;
+    this.capped = result.capped;
+  }
+
   private refreshCount(): void {
-    const query = getSearchQuery(this.view.state);
-    const { matches, capped } = collectMatches(this.view, query);
     const selection = this.view.state.selection.main;
     this.count.textContent = formatEditorFindCount(
-      deriveEditorFindCount(matches, { from: selection.from, to: selection.to }, capped),
+      deriveEditorFindCount(this.matches, { from: selection.from, to: selection.to }, this.capped),
     );
   }
 }
