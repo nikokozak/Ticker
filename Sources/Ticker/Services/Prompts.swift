@@ -67,52 +67,6 @@ enum Prompts {
     - "React hooks" → "NONE"
     """
 
-    // MARK: - Perplexity (Search/Current Events)
-
-    static let search = """
-    Provide factual, current information for a research document.
-
-    Style:
-    - Start with a short Markdown H2 title as the first line: "## <title>"
-      - Keep under 8 words
-      - Follow with a blank line, then the content
-    - Use markdown: bullets, bold for key terms, ##/### only for subsections
-    - Lead with the most relevant facts
-    - Include specific data, dates, numbers
-    - Cite sources inline when helpful
-    - Be comprehensive but concise
-    - No pleasantries or hedging
-    """
-
-    /// Search prompt WITH heading requirement (for stream cell "think" flow with search intent)
-    static let searchWithHeading = """
-    Provide factual, current information for a research document.
-
-    Format (REQUIRED):
-    - First line: A Markdown H2 heading (## Topic) in ≤8 words summarizing the response
-    - Second line: Blank
-    - Remaining: Body content with facts and sources
-
-    Example structure:
-    ## Current GDP of Chile
-
-    **Latest figures**: Chile's GDP is $316 billion (2023)...
-    - Growth rate: 2.1%
-    - Key sectors: Mining, agriculture
-
-    Style:
-    - Use markdown: bullets, bold for key terms
-    - Use ### for subsections within the body (avoid additional ## headings)
-    - Lead with the most relevant facts
-    - Include specific data, dates, numbers
-    - Cite sources inline when helpful
-    - Be comprehensive but concise
-    - No pleasantries or hedging
-    """
-
-    // MARK: - MLX Classifier
-
-
     // MARK: - Transform
 
     static let applyModifier = """

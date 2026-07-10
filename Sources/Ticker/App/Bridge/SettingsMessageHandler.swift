@@ -47,11 +47,6 @@ final class SettingsMessageHandler: BridgeMessageHandler {
                 settingsService.perplexityAPIKey = perplexityKey.isEmpty ? nil : perplexityKey
             }
 
-            // Save smart routing setting if provided
-            if let smartRouting = payload["smartRoutingEnabled"]?.value as? Bool {
-                settingsService.smartRoutingEnabled = smartRouting
-            }
-
             // Save default model setting if provided
             if let modelValue = payload["defaultModel"]?.value as? String,
                let model = SettingsService.DefaultModel(rawValue: modelValue) {

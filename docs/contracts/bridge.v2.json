@@ -200,7 +200,6 @@
           "openaiAPIKey",
           "anthropicAPIKey",
           "perplexityAPIKey",
-          "smartRoutingEnabled",
           "defaultModel",
           "appearance",
           "diagnosticsEnabled",
