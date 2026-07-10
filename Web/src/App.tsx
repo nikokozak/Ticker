@@ -171,6 +171,8 @@ export function App() {
             const originalType = String(message.payload?.originalType ?? 'unknown');
             const reason = String(message.payload?.reason ?? 'Unknown bridge error');
             addToast(`Bridge error (${originalType}): ${reason}`, 'error', 10000);
+          } else {
+            addToast('Ticker could not complete that action. Try again.', 'error');
           }
           break;
         case 'proxyAuthState':

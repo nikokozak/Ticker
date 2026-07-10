@@ -177,6 +177,15 @@ final class BridgeService: NSObject, WKScriptMessageHandler {
         ]))
     }
 
+    @MainActor
+    func reject(_ message: BridgeMessage, reason: String) {
+        if let callbackId = message.callbackId {
+            respondWithError(to: callbackId, error: reason)
+        } else {
+            sendBridgeError(type: message.type, reason: reason)
+        }
+    }
+
     private func originalType(from body: Any) -> String {
         if let dict = body as? [String: Any],
            let type = dict["type"] as? String {

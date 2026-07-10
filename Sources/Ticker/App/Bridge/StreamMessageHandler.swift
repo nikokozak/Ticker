@@ -165,15 +165,18 @@ final class StreamMessageHandler: BridgeMessageHandler {
             }
 
         case "saveStreamDocument":
+            guard let callbackId = message.callbackId else {
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for saveStreamDocument")
+                return
+            }
             guard let payload = message.payload,
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue),
                   let markdown = payload["markdown"]?.value as? String,
                   let baseRevision = payload["baseRevision"]?.intValue,
-                  let spans = decodeSpans(payload["spans"]?.value, streamId: streamId),
-                  let callbackId = message.callbackId else {
+                  let spans = decodeSpans(payload["spans"]?.value, streamId: streamId) else {
                 DebugLog.log("[WebViewManager] Invalid saveStreamDocument payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveStreamDocument payload")
+                await bridgeService.respondWithError(to: callbackId, error: "Invalid saveStreamDocument payload")
                 return
             }
             do {
@@ -257,11 +260,14 @@ final class StreamMessageHandler: BridgeMessageHandler {
             }
 
         case "getExchange":
+            guard let callbackId = message.callbackId else {
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for getExchange")
+                return
+            }
             guard let payload = message.payload,
-                  let requestId = payload["requestId"]?.value as? String,
-                  let callbackId = message.callbackId else {
+                  let requestId = payload["requestId"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid getExchange payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid getExchange payload")
+                await bridgeService.respondWithError(to: callbackId, error: "Invalid getExchange payload")
                 return
             }
             do {
