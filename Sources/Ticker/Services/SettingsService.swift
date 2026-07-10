@@ -199,7 +199,8 @@ final class SettingsService {
                   let value = DefaultModel(rawValue: raw) else {
                 return .openai  // Default to OpenAI
             }
-            return value
+            // Claude is "coming soon" in Settings; coerce any stored pick to the default.
+            return value == .anthropic ? .openai : value
         }
         set { defaults.set(newValue.rawValue, forKey: Keys.defaultModel) }
     }
