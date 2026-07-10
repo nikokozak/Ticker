@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { EditorState } from '@codemirror/state';
 import { fnv1a } from '../utils/fnv1a';
 import {
   buildPromoteMarginNoteEdit,
+  currentMarginNotes,
+  marginNotesField,
   normalizeMarginNoteAnchors,
+  setMarginNotes,
   stackMarginCards,
   type MarginNote,
 } from './MarginNotes';
@@ -40,6 +44,16 @@ describe('MarginNotes', () => {
   it('marks anchor hash mismatches as unanchored', () => {
     expect(normalizeMarginNoteAnchors([note()], 'Hello world')[0].status).toBe('open');
     expect(normalizeMarginNoteAnchors([note()], 'Hullo world')[0].status).toBe('unanchored');
+  });
+
+  it('preserves field identity for selection-only transactions', () => {
+    let state = EditorState.create({ doc: 'Hello world', extensions: [marginNotesField] });
+    state = state.update({ effects: setMarginNotes.of([note()]) }).state;
+    const notes = currentMarginNotes(state);
+
+    state = state.update({ selection: { anchor: 5 } }).state;
+
+    expect(currentMarginNotes(state)).toBe(notes);
   });
 
   it('builds promote insertion at paragraph end with an ai span', () => {

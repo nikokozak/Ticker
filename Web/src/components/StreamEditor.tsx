@@ -23,15 +23,10 @@ import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField,
 import { canRedevelopSpan, provenanceXrayExtension } from '../extensions/ProvenanceXray';
 import { pendingAppendField, setPendingAppend } from '../extensions/PendingAppend';
 import {
-  buildPromoteMarginNoteEdit,
-  currentMarginNotes,
-  marginNotesExtension,
   marginNotesField,
   payloadMarginNotesForDoc,
   setMarginNotes,
-  updateMarginNoteStatusEffect,
   type MarginNote,
-  type MarginNoteStatus,
 } from '../extensions/MarginNotes';
 import { computeAppendInsertion } from '../utils/appendInsertion';
 import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
@@ -846,46 +841,6 @@ export function StreamEditor({
     });
     persistNewUnanchoredMarginNotes(rawNotes, notes);
   }, []);
-
-  const persistMarginNoteStatus = useCallback((note: Pick<MarginNote, 'noteId'>, status: MarginNoteStatus) => {
-    updateMarginNote({ noteId: note.noteId, status });
-  }, []);
-
-  const handleDismissMarginNote = useCallback((note: MarginNote) => {
-    const view = editorViewRef.current;
-    if (view) {
-      view.dispatch({
-        effects: updateMarginNoteStatusEffect.of({ noteId: note.noteId, status: 'dismissed' }),
-        annotations: Transaction.addToHistory.of(false),
-      });
-      view.focus();
-    }
-    persistMarginNoteStatus(note, 'dismissed');
-  }, [persistMarginNoteStatus]);
-
-  const handlePromoteMarginNote = useCallback((note: MarginNote) => {
-    const view = editorViewRef.current;
-    if (!view) return;
-    const currentNote = currentMarginNotes(view.state).find((candidate) => candidate.noteId === note.noteId) ?? note;
-    const edit = buildPromoteMarginNoteEdit(currentNote, view.state.doc.toString());
-    if (!edit) return;
-
-    view.dispatch({
-      changes: { from: edit.from, insert: edit.insert },
-      selection: { anchor: edit.from + edit.insert.length },
-      effects: [
-        addSpans.of([edit.span]),
-        updateMarginNoteStatusEffect.of({ noteId: note.noteId, status: 'promoted' }),
-      ],
-      annotations: [
-        Transaction.addToHistory.of(true),
-        Transaction.userEvent.of('input'),
-        isolateHistory.of('full'),
-      ],
-    });
-    view.focus();
-    persistMarginNoteStatus(note, 'promoted');
-  }, [persistMarginNoteStatus]);
 
   useEffect(() => {
     if (autosaveTimerRef.current !== null) {
@@ -1836,8 +1791,8 @@ export function StreamEditor({
       return;
     }
 
-    const selection = view.state.selection.main;
-    if (selection.empty || !view.state.sliceDoc(selection.from, selection.to).trim()) {
+    const { from, to } = view.state.selection.main;
+    if (from === to) {
       hideSelectionMenu();
       return;
     }
@@ -1852,9 +1807,9 @@ export function StreamEditor({
       }
 
       const currentSelection = currentView.state.selection.main;
-      const selectedText = currentView.state.sliceDoc(currentSelection.from, currentSelection.to);
+      const selectedText = currentView.state.sliceDoc(from, to);
       const placement = getSelectionMenuPlacement(currentView);
-      if (currentSelection.empty || !selectedText.trim() || !placement) {
+      if (currentSelection.from !== from || currentSelection.to !== to || !selectedText.trim() || !placement) {
         hideSelectionMenu();
         return;
       }
@@ -2512,15 +2467,6 @@ export function StreamEditor({
       : []
   ), [handleOpenSourceById, isAiThinking, isProvenanceXrayVisible, openRedevelopPrompt, sources]);
 
-  const marginNotesExtensionValue = useMemo<Extension>(() => marginNotesExtension({
-    // Margin rendering is retired from the UI; the field stays wired so
-    // existing notes keep mapping/persisting their anchors dormant.
-    visible: false,
-    onPromote: handlePromoteMarginNote,
-    onDismiss: handleDismissMarginNote,
-    onUnanchor: (note) => persistMarginNoteStatus(note, 'unanchored'),
-  }), [handleDismissMarginNote, handlePromoteMarginNote, persistMarginNoteStatus]);
-
   const editorExtensions = useMemo<Extension[]>(() => [
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({
@@ -2552,10 +2498,9 @@ export function StreamEditor({
     pendingAppendField,
     markdownImageWidgetExtension,
     provenanceXray,
-    marginNotesExtensionValue,
     tickerPDFLinkExtension(stream.id),
     linkInteraction,
-  ], [linkInteraction, marginNotesExtensionValue, provenanceXray, selectionMenuExtension, stream.id]);
+  ], [linkInteraction, provenanceXray, selectionMenuExtension, stream.id]);
 
   const selectionDissolveSpanIds = (() => {
     const view = editorViewRef.current;
