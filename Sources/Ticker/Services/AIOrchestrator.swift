@@ -76,7 +76,8 @@ final class AIOrchestrator {
                     case .passthrough:
                         DebugLog.log("AIOrchestrator: Using source passthrough context")
                     case .retrieved:
-                        DebugLog.log("AIOrchestrator: Using retrieved source context (\(assembledContext.chunks.count) chunks)")
+                        let semanticCount = assembledContext.chunks.filter(\.semanticMatch).count
+                        DebugLog.log("AIOrchestrator: Using retrieved source context (\(assembledContext.chunks.count) chunks, \(semanticCount) semantic)")
                     case .unavailable:
                         break
                     }

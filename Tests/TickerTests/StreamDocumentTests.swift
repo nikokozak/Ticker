@@ -1740,6 +1740,95 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_hybridRetrievalAppliesCosineFloor() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Semantic floor")
+            try service.saveStream(stream)
+            let source = try saveRetrievalSource(
+                in: service, streamId: stream.id, displayName: "Concepts.pdf",
+                extractedText: largeExtractedText(), chunks: [(0, "orthogonal source wording", 1, 1, nil)]
+            )
+            let chunk = try XCTUnwrap(service.loadSourceChunks(sourceId: source.id).first)
+            try service.saveChunkEmbeddings([[0.4, 0.9165]], for: [chunk], modelId: "test-model")
+            let provider = TestEmbeddingProvider { _ in [[1, 0]] }
+
+            let gated = RetrievalService(
+                persistence: service, embeddingProvider: provider,
+                operatingPoint: .init(cosineFloor: 0.5, rrfK: 60), semanticDisabled: { false }
+            )
+            let passing = RetrievalService(
+                persistence: service, embeddingProvider: provider,
+                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60), semanticDisabled: { false }
+            )
+
+            XCTAssertTrue(try gated.retrieve(query: "conceptual question", streamId: stream.id).isEmpty)
+            XCTAssertEqual(try passing.retrieve(query: "conceptual question", streamId: stream.id).map(\.id), [chunk.id])
+        }
+    }
+
+    func test_reciprocalRankFusionOrder() {
+        XCTAssertNotNil(RetrievalOperatingPoint.bundled())
+        XCTAssertEqual(
+            RetrievalService.reciprocalRankFuse(
+                bm25: ["a", "b"], semantic: ["b", "c"], rrfK: 60, limit: 3
+            ),
+            ["b", "a", "c"]
+        )
+    }
+
+    func test_semanticBudgetExceededFallsBackToExactBM25() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Budget fallback")
+            try service.saveStream(stream)
+            let source = try saveRetrievalSource(
+                in: service, streamId: stream.id, displayName: "Lexical.pdf",
+                extractedText: largeExtractedText(), chunks: [(0, "anvil anvil anvil receipt", 1, 1, nil)]
+            )
+            let chunk = try XCTUnwrap(service.loadSourceChunks(sourceId: source.id).first)
+            try service.saveChunkEmbeddings([[1, 0]], for: [chunk], modelId: "test-model")
+            let baseline = try RetrievalService(persistence: service)
+                .retrieve(query: "anvil receipt", streamId: stream.id)
+            let slow = TestEmbeddingProvider { _ in
+                Thread.sleep(forTimeInterval: 0.05)
+                return [[1, 0]]
+            }
+            let actual = try RetrievalService(
+                persistence: service, embeddingProvider: slow,
+                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60),
+                semanticDisabled: { false }, queryBudget: 0.001
+            ).retrieve(query: "anvil receipt", streamId: stream.id)
+
+            XCTAssertEqual(actual.map(\.id), baseline.map(\.id))
+            XCTAssertEqual(actual.map(\.score), baseline.map(\.score))
+        }
+    }
+
+    func test_semanticKillSwitchFallsBackWithoutEmbedding() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Kill switch")
+            try service.saveStream(stream)
+            let source = try saveRetrievalSource(
+                in: service, streamId: stream.id, displayName: "Lexical.pdf",
+                extractedText: largeExtractedText(), chunks: [(0, "anvil anvil anvil receipt", 1, 1, nil)]
+            )
+            let chunk = try XCTUnwrap(service.loadSourceChunks(sourceId: source.id).first)
+            try service.saveChunkEmbeddings([[1, 0]], for: [chunk], modelId: "test-model")
+            let baseline = try RetrievalService(persistence: service)
+                .retrieve(query: "anvil receipt", streamId: stream.id)
+            let provider = TestEmbeddingProvider { _ in
+                XCTFail("kill switch must skip embedding")
+                return [[1, 0]]
+            }
+            let actual = try RetrievalService(
+                persistence: service, embeddingProvider: provider,
+                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60), semanticDisabled: { true }
+            ).retrieve(query: "anvil receipt", streamId: stream.id)
+
+            XCTAssertEqual(actual.map(\.id), baseline.map(\.id))
+            XCTAssertEqual(actual.map(\.score), baseline.map(\.score))
+        }
+    }
+
     func test_retrievalSingleSourceFloorReturnsBestChunkWhenAllQueryTokensMatchOnlyWeakly() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Weak Matches")

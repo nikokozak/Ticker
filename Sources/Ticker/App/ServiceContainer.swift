@@ -53,11 +53,12 @@ struct ServiceContainer {
                 }
             )
 
+            let embeddingProvider = MiniLMEmbeddingProvider()
             let ingestService = IngestService(
                 persistence: persistence,
                 sourceService: sourceService,
                 chunkingService: chunkingService,
-                embeddingProvider: MiniLMEmbeddingProvider()
+                embeddingProvider: embeddingProvider
             )
             ingestService.onStatusChange = { [bridgeService] update in
                 var payload: [String: AnyCodable] = [
@@ -76,7 +77,10 @@ struct ServiceContainer {
             }
             self.ingestService = ingestService
 
-            let retrievalService = RetrievalService(persistence: persistence)
+            let retrievalService = RetrievalService(
+                persistence: persistence,
+                embeddingProvider: embeddingProvider
+            )
             self.retrievalService = retrievalService
             orchestrator.setRetrievalService(retrievalService)
 

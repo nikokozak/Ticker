@@ -1798,6 +1798,46 @@ final class PersistenceService {
         }
     }
 
+    func loadChunkEmbeddings(
+        streamId: UUID,
+        modelId: String,
+        excludeAIPrivateSources: Bool = true
+    ) throws -> [(chunk: RetrievedChunk, vector: [Float])] {
+        let aiExclusionPredicate = excludeAIPrivateSources ? "AND s.ai_excluded = 0" : ""
+        return try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT c.id, c.source_id, s.display_name AS source_name, c.seq, c.text,
+                           c.page_start, c.page_end, c.section_path, e.dims, e.vector
+                    FROM chunk_embeddings e
+                    JOIN source_chunks c ON c.id = e.chunk_id
+                    JOIN sources s ON s.id = c.source_id
+                    WHERE s.stream_id = ? AND e.model_id = ? \(aiExclusionPredicate)
+                    ORDER BY c.source_id, c.seq
+                """,
+                arguments: [streamId.uuidString, modelId]
+            ).compactMap { row in
+                let dims: Int = row["dims"]
+                let data: Data = row["vector"]
+                guard dims > 0, data.count == dims * MemoryLayout<Float>.size else { return nil }
+                var vector = [Float](repeating: 0, count: dims)
+                _ = vector.withUnsafeMutableBytes { data.copyBytes(to: $0) }
+                return (
+                    RetrievedChunk(
+                        id: UUID(uuidString: row["id"])!,
+                        sourceId: UUID(uuidString: row["source_id"])!,
+                        sourceName: row["source_name"], seq: row["seq"], text: row["text"],
+                        pageStart: row["page_start"], pageEnd: row["page_end"],
+                        sectionPath: row["section_path"], score: .greatestFiniteMagnitude,
+                        semanticMatch: true
+                    ),
+                    vector
+                )
+            }
+        }
+    }
+
     func searchSourceChunks(
         matching ftsQuery: String,
         streamId: UUID,

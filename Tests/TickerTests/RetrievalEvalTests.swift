@@ -204,15 +204,9 @@ final class RetrievalEvalTests: XCTestCase {
             let passing = scored.filter { $0.score >= cosineFloor }
             let ranked = passing.sorted { $0.score == $1.score ? $0.id < $1.id : $0.score > $1.score }
             let semantic = ranked.map(\.id)
-            var fused: [String: Double] = [:]
-            for (offset, id) in bm25[item.id, default: []].enumerated() {
-                fused[id, default: 0] += 1 / Double(60 + offset + 1)
-            }
-            for (offset, id) in semantic.enumerated() {
-                fused[id, default: 0] += 1 / Double(60 + offset + 1)
-            }
-            let retrieved = fused.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
-                .prefix(8).map(\.key)
+            let retrieved = RetrievalService.reciprocalRankFuse(
+                bm25: bm25[item.id, default: []], semantic: semantic, rrfK: 60, limit: 8
+            )
             let found = item.expected.filter(Set(retrieved).contains).count
             return CaseResult(
                 id: item.id, className: item.className, expected: item.expected, retrieved: retrieved,

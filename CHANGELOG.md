@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Source answers now use on-device semantic retrieval alongside lexical matching, improving paraphrase recall while preserving the existing fallback behavior.
 - The Rewrite menu gained "With instructions…": describe how the selection should be rewritten and the AI replaces it accordingly. Re-develop with an edited prompt now actually obeys the prompt (it previously deferred to the fixed "develop" instruction and near-restated the passage).
 - In-editor AI now shows the same pulsing-dots indicator at the exact insertion point while waiting for the first chunk, matching quick-panel dispatches.
 - ⌘F opens search from the stream list (⌘K still works everywhere; in the editor ⌘F remains in-document find).

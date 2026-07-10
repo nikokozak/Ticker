@@ -13,6 +13,7 @@ final class MiniLMEmbeddingProvider: EmbeddingProvider {
 
     private static let sequenceLength = 256
     private let resourceDirectory: URL?
+    private let lock = NSLock()
     private var model: MLModel?
     private var tokenizer: WordPieceTokenizer?
 
@@ -21,26 +22,29 @@ final class MiniLMEmbeddingProvider: EmbeddingProvider {
     }
 
     func prepare() async -> Bool {
-        guard model == nil else { return true }
-        do {
-            let directory = try resourceDirectory ?? Self.bundledResourceDirectory()
-            let vocabulary = try String(contentsOf: directory.appendingPathComponent("vocab.txt"), encoding: .utf8)
-                .split(whereSeparator: \.isNewline).map(String.init)
-            let configuration = MLModelConfiguration()
-            configuration.computeUnits = .all
-            model = try MLModel(contentsOf: directory.appendingPathComponent("MiniLM.mlmodelc"), configuration: configuration)
-            tokenizer = WordPieceTokenizer(vocabulary: vocabulary, sequenceLength: Self.sequenceLength)
-            return true
-        } catch {
-            model = nil
-            tokenizer = nil
-            return false
+        lock.withLock {
+            guard model == nil else { return true }
+            do {
+                let directory = try resourceDirectory ?? Self.bundledResourceDirectory()
+                let vocabulary = try String(contentsOf: directory.appendingPathComponent("vocab.txt"), encoding: .utf8)
+                    .split(whereSeparator: \.isNewline).map(String.init)
+                let configuration = MLModelConfiguration()
+                configuration.computeUnits = .all
+                model = try MLModel(contentsOf: directory.appendingPathComponent("MiniLM.mlmodelc"), configuration: configuration)
+                tokenizer = WordPieceTokenizer(vocabulary: vocabulary, sequenceLength: Self.sequenceLength)
+                return true
+            } catch {
+                model = nil
+                tokenizer = nil
+                return false
+            }
         }
     }
 
     func embed(_ texts: [String]) async throws -> [[Float]] {
-        guard let model, let tokenizer else { throw Error.notPrepared }
-        return try texts.map { text in
+        try lock.withLock {
+            guard let model, let tokenizer else { throw Error.notPrepared }
+            return try texts.map { text in
             let encoded = tokenizer.encode(text)
             let ids = try MLMultiArray(shape: [1, NSNumber(value: Self.sequenceLength)], dataType: .int32)
             let mask = try MLMultiArray(shape: [1, NSNumber(value: Self.sequenceLength)], dataType: .int32)
@@ -73,6 +77,7 @@ final class MiniLMEmbeddingProvider: EmbeddingProvider {
             let norm = sqrt(pooled.reduce(0) { $0 + $1 * $1 })
             guard norm > 0 else { throw Error.emptyEmbedding }
             return pooled.map { Float($0 / norm) }
+            }
         }
     }
 

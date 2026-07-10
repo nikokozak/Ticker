@@ -44,4 +44,5 @@ struct RetrievedChunk {
     let pageEnd: Int
     let sectionPath: String?
     let score: Double
+    var semanticMatch = false
 }

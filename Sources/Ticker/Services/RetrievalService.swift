@@ -3,6 +3,10 @@ import Foundation
 /// Local source retrieval over the v16 FTS chunk index.
 final class RetrievalService {
     private let persistence: PersistenceService
+    private let embeddingProvider: EmbeddingProvider?
+    private let operatingPoint: RetrievalOperatingPoint?
+    private let semanticDisabled: () -> Bool
+    private let queryBudget: TimeInterval
 
     private static let topK = 8
     private static let passthroughTokenBudget = 8_000
@@ -22,8 +26,21 @@ final class RetrievalService {
         "should", "my", "your"
     ]
 
-    init(persistence: PersistenceService) {
+    init(
+        persistence: PersistenceService,
+        embeddingProvider: EmbeddingProvider? = nil,
+        operatingPoint: RetrievalOperatingPoint? = nil,
+        semanticDisabled: @escaping () -> Bool = {
+            // ponytail: One-release emergency switch; delete retrieval.semantic.disabled by 2026-08-10.
+            UserDefaults.standard.bool(forKey: "retrieval.semantic.disabled")
+        },
+        queryBudget: TimeInterval = 0.1 // ponytail: hard 100ms wall; tune only from measured release telemetry.
+    ) {
         self.persistence = persistence
+        self.embeddingProvider = embeddingProvider
+        self.operatingPoint = operatingPoint ?? RetrievalOperatingPoint.bundled()
+        self.semanticDisabled = semanticDisabled
+        self.queryBudget = queryBudget
     }
 
     /// Retrieve relevant chunks for a query within a stream.
@@ -45,16 +62,25 @@ final class RetrievalService {
             excludeAIPrivateSources: excludeAIPrivateSources
         )
 
-        guard applyThreshold else {
-            return chunks
+        let bm25Result: [RetrievedChunk]
+        if applyThreshold {
+            guard let bestScore = chunks.first?.score,
+                  bestScore <= relevanceCutoff else {
+                bm25Result = []
+                return semanticResult(
+                    query: query, streamId: streamId, bm25: bm25Result,
+                    excludeAIPrivateSources: excludeAIPrivateSources
+                ) ?? bm25Result
+            }
+            bm25Result = chunks.filter { $0.score <= relevanceCutoff }
+        } else {
+            bm25Result = chunks
         }
 
-        guard let bestScore = chunks.first?.score,
-              bestScore <= relevanceCutoff else {
-            return []
-        }
-
-        return chunks.filter { $0.score <= relevanceCutoff }
+        return semanticResult(
+            query: query, streamId: streamId, bm25: bm25Result,
+            excludeAIPrivateSources: excludeAIPrivateSources
+        ) ?? bm25Result
     }
 
     /// One source-context decision point: small-source passthrough, retrieved manifest, or no source context.
@@ -102,14 +128,7 @@ final class RetrievalService {
             return try persistence.loadSourceChunks(sourceId: source.id).isEmpty ? count : count + 1
         }
 
-        let candidates = try retrieve(query: query, streamId: streamId, applyThreshold: false)
-        guard !candidates.isEmpty,
-              let ftsQuery = Self.sanitizedFTSQuery(query) else {
-            return nil
-        }
-
-        let relevanceCutoff = Self.relevanceCutoff(tokenCount: ftsQuery.tokenCount)
-        let chunks = candidates.filter { $0.score <= relevanceCutoff }
+        let chunks = try retrieve(query: query, streamId: streamId)
         if !chunks.isEmpty {
             return SourceContext(
                 text: Self.buildManifest(from: chunks),
@@ -122,6 +141,9 @@ final class RetrievalService {
             return nil
         }
 
+        let candidates = try retrieve(query: query, streamId: streamId, applyThreshold: false)
+        guard !candidates.isEmpty else { return nil }
+
         // ponytail: Single-source weak lexical matches are an intent floor; upgrade with
         // R3 golden-set embeddings before loosening the shared BM25 cutoff.
         return SourceContext(
@@ -129,6 +151,69 @@ final class RetrievalService {
             chunks: candidates,
             mode: .retrieved
         )
+    }
+
+    static func reciprocalRankFuse<ID: Hashable & Comparable>(
+        bm25: [ID], semantic: [ID], rrfK: Int, limit: Int
+    ) -> [ID] {
+        var scores: [ID: Double] = [:]
+        for (offset, id) in bm25.enumerated() {
+            scores[id, default: 0] += 1 / Double(rrfK + offset + 1)
+        }
+        for (offset, id) in semantic.enumerated() {
+            scores[id, default: 0] += 1 / Double(rrfK + offset + 1)
+        }
+        return scores.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .prefix(limit).map(\.key)
+    }
+
+    private func semanticResult(
+        query: String,
+        streamId: UUID,
+        bm25: [RetrievedChunk],
+        excludeAIPrivateSources: Bool
+    ) -> [RetrievedChunk]? {
+        guard !semanticDisabled(), let provider = embeddingProvider, let operatingPoint else { return nil }
+        do {
+            let embedded = try persistence.loadChunkEmbeddings(
+                streamId: streamId,
+                modelId: provider.modelId,
+                excludeAIPrivateSources: excludeAIPrivateSources
+            )
+            guard !embedded.isEmpty, let queryVector = embedQuery(query, using: provider) else { return nil }
+            let semantic = embedded.compactMap { item -> (RetrievedChunk, Float)? in
+                guard item.vector.count == queryVector.count else { return nil }
+                let cosine = zip(queryVector, item.vector).reduce(Float.zero) { $0 + $1.0 * $1.1 }
+                return cosine >= operatingPoint.cosineFloor ? (item.chunk, cosine) : nil
+            }.sorted {
+                $0.1 == $1.1 ? $0.0.id.uuidString < $1.0.id.uuidString : $0.1 > $1.1
+            }.map(\.0)
+            guard !semantic.isEmpty else { return nil }
+            var byId = Dictionary(uniqueKeysWithValues: bm25.map { ($0.id, $0) })
+            for chunk in semantic { byId[chunk.id] = chunk }
+            return Self.reciprocalRankFuse(
+                bm25: bm25.map(\.id), semantic: semantic.map(\.id),
+                rrfK: operatingPoint.rrfK, limit: Self.topK
+            ).compactMap { byId[$0] }
+        } catch {
+            DebugLog.log("RetrievalService: Semantic retrieval failed (\(DebugLog.errorSummary(error)))")
+            return nil
+        }
+    }
+
+    private func embedQuery(_ query: String, using provider: EmbeddingProvider) -> [Float]? {
+        let result = QueryEmbeddingResult()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            defer { semaphore.signal() }
+            guard await provider.prepare() else { return }
+            result.vector = try? await provider.embed([query]).first
+        }
+        guard semaphore.wait(timeout: .now() + queryBudget) == .success else {
+            DebugLog.log("RetrievalService: Query embedding exceeded budget")
+            return nil
+        }
+        return result.vector
     }
 
     /// FTS5 MATCH treats quotes/operators/parens as syntax, so raw user text is unsafe.
@@ -174,6 +259,27 @@ final class RetrievalService {
 
     private static func relevanceCutoff(tokenCount: Int) -> Double {
         perTokenCutoff * Double(min(tokenCount, maxCutoffTokens))
+    }
+}
+
+private final class QueryEmbeddingResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [Float]?
+    var vector: [Float]? {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}
+
+struct RetrievalOperatingPoint: Decodable {
+    let cosineFloor: Float
+    let rrfK: Int
+
+    static func bundled() -> Self? {
+        guard let url = Bundle(for: RetrievalService.self).resourceURL?
+            .appendingPathComponent("Resources/retrieval-operating-point.json"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Self.self, from: data)
     }
 }
 
