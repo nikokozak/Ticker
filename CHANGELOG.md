@@ -39,6 +39,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- AI answers now fold the question's substance into their opening sentence so saved passages read complete on their own.
 - The Claude model option is now marked "Coming soon"; AI requests route to the OpenAI models until it ships.
 - Document AI now biases toward the only attached large source when a question has weak but present lexical overlap.
 - Document AI now uses local source retrieval for large source sets instead of concatenating every source.
