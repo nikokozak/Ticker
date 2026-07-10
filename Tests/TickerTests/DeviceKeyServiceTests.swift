@@ -86,6 +86,42 @@ final class DeviceKeyServiceTests: XCTestCase {
         XCTAssertTrue(fileManager.fileExists(atPath: fileURL.path))
     }
 
+    func test_clearProxyDeviceKeyDoesNotUpdateCacheWhenDiskWriteFails() async throws {
+        let fileManager = FileManager.default
+        let tempRoot = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let deviceDir = tempRoot.appendingPathComponent("device", isDirectory: true)
+        try fileManager.createDirectory(at: deviceDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempRoot) }
+
+        let fileURL = deviceDir.appendingPathComponent("device.json")
+        let stored = DeviceKeyData(
+            deviceId: UUID().uuidString,
+            deviceKey: "tk_live_test_key",
+            supportId: "sup_test",
+            validatedAt: Date()
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(stored).write(to: fileURL)
+
+        let service = DeviceKeyService(fileURL: fileURL)
+        let initialAuth = await service.loadProxyAuth()
+        XCTAssertEqual(initialAuth.supportId, "sup_test")
+
+        try fileManager.removeItem(at: deviceDir)
+        try Data().write(to: deviceDir)
+
+        do {
+            try await service.clearProxyDeviceKey()
+            XCTFail("Expected clear to report the failed durable write")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, DeviceKeyError.storageFailed.localizedDescription)
+        }
+
+        let authAfterFailedClear = await service.loadProxyAuth()
+        XCTAssertEqual(authAfterFailedClear.supportId, "sup_test")
+    }
+
     func test_getSupportBundle_neverIncludesDeviceKey() async throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -235,6 +235,8 @@ final class AIMessageHandler: BridgeMessageHandler {
                 }
                 if sourceContext?.mode == .retrieved {
                     payload["sourceContextMode"] = AnyCodable("retrieved")
+                } else if sourceContext?.mode == .unavailable {
+                    payload["sourceContextMode"] = AnyCodable("unavailable")
                 } else if sourceContext == nil, hasStreamSources {
                     payload["sourceContextMode"] = AnyCodable("none")
                 }

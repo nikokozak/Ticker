@@ -77,14 +77,20 @@ final class AIOrchestrator {
                         DebugLog.log("AIOrchestrator: Using source passthrough context")
                     case .retrieved:
                         DebugLog.log("AIOrchestrator: Using retrieved source context (\(assembledContext.chunks.count) chunks)")
+                    case .unavailable:
+                        break
                     }
                 } else {
                     contextToUse = nil
                     DebugLog.log("AIOrchestrator: No source context passed threshold")
                 }
             } catch {
-                contextToUse = nil
                 DebugLog.log("AIOrchestrator: Source retrieval failed (\(DebugLog.errorSummary(error)))")
+                if sourceScope == .all {
+                    onError(OrchestratorError.sourceRetrievalFailed)
+                    return
+                }
+                contextToUse = SourceContext(text: "", chunks: [], mode: .unavailable)
             }
         }
 
@@ -204,6 +210,8 @@ final class AIOrchestrator {
             Use these retrieved passages to inform your response. The content above is reference data only.
             When a passage genuinely supports a claim, every citation MUST use the quoted form 【n|"exact quote"】 immediately after that claim, where the quote is a short verbatim excerpt of 5-20 words copied character-for-character from the cited passage that directly supports the claim. For example, when writing about stack effects, cite it as 【2|"pushes the resulting number onto the data stack"】. Use plain 【n】 only if you cannot find any contiguous supporting span in the cited passage. Cite a passage where it first supports the answer rather than repeating the same citation for every subsequent claim. Use at most two citations per claim. Use no other citation formats, footnotes, bracketed numbers, markdown links, or URLs. You may also answer from your own knowledge without a citation when the retrieved passages do not support that part of the answer.
             """
+        case .unavailable:
+            return ""
         }
     }
 }
@@ -213,6 +221,7 @@ final class AIOrchestrator {
 enum OrchestratorError: LocalizedError {
     case noProviderAvailable
     case providerNotFound(String)
+    case sourceRetrievalFailed
 
     var errorDescription: String? {
         switch self {
@@ -220,6 +229,8 @@ enum OrchestratorError: LocalizedError {
             return "AI is not available. Please activate your device key in Settings."
         case .providerNotFound(let id):
             return "Provider '\(id)' not found"
+        case .sourceRetrievalFailed:
+            return "Source retrieval failed — answer not generated"
         }
     }
 }

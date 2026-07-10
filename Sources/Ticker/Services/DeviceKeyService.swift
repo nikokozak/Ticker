@@ -136,6 +136,7 @@ enum DeviceKeyError: LocalizedError {
     case forbidden
     case serverError(Int)
     case networkError(Error)
+    case storageFailed
 
     var errorDescription: String? {
         switch self {
@@ -161,6 +162,8 @@ enum DeviceKeyError: LocalizedError {
             return "Server error (\(code)). Please try again later."
         case .networkError:
             return "Unable to reach server. Check your internet connection."
+        case .storageFailed:
+            return "Device key could not be saved. Check disk space and permissions, then try again."
         }
     }
 
@@ -172,7 +175,7 @@ enum DeviceKeyError: LocalizedError {
         case .boundToOtherDevice: return .blockedBoundElsewhere
         case .networkError: return .degradedOffline
         case .rateLimited, .serverError, .invalidURL, .invalidResponse,
-             .payloadTooLarge, .notFound, .forbidden:
+             .payloadTooLarge, .notFound, .forbidden, .storageFailed:
             // These are transient/non-auth errors - don't change auth state
             return nil
         }
@@ -466,6 +469,7 @@ actor DeviceKeyService {
 
     /// Set and validate a device key
     func setProxyDeviceKey(_ key: String) async throws -> ProxyAuthValidationResponse {
+        let previousState = currentState
         await setState(.validating)
 
         do {
@@ -476,7 +480,7 @@ actor DeviceKeyService {
             data.deviceKey = key
             data.supportId = response.supportId
             data.validatedAt = Date()
-            save(data)
+            try save(data)
 
             // Cache limits and usage
             cachedLimits = response.limits
@@ -486,6 +490,10 @@ actor DeviceKeyService {
             return response
 
         } catch let error as DeviceKeyError {
+            if case .storageFailed = error {
+                await setState(previousState)
+                throw error
+            }
             // For first-time key entry:
             // - Network errors: stay unregistered (no cached key to fall back on)
             // - Rate limit/transient errors: stay unregistered, let user retry
@@ -509,12 +517,12 @@ actor DeviceKeyService {
     }
 
     /// Clear stored key
-    func clearProxyDeviceKey() async {
+    func clearProxyDeviceKey() async throws {
         var data = loadOrCreate()
         data.deviceKey = nil
         data.supportId = nil
         data.validatedAt = nil
-        save(data)
+        try save(data)
         await setState(.unregistered)
     }
 
@@ -526,6 +534,7 @@ actor DeviceKeyService {
             return
         }
 
+        let previousState = currentState
         await setState(.validating)
 
         do {
@@ -535,7 +544,7 @@ actor DeviceKeyService {
             var updatedData = data
             updatedData.supportId = response.supportId
             updatedData.validatedAt = Date()
-            save(updatedData)
+            try save(updatedData)
 
             // Cache limits and usage
             cachedLimits = response.limits
@@ -554,8 +563,12 @@ actor DeviceKeyService {
                     await setState(.degradedOffline)
                 } else {
                     // Auth error - key is invalid/revoked/bound elsewhere, clear it
-                    await clearProxyDeviceKey()
-                    await setState(newState)
+                    do {
+                        try await clearProxyDeviceKey()
+                        await setState(newState)
+                    } catch {
+                        await setState(previousState)
+                    }
                 }
             } else {
                 // Transient error (rate limit, server error) - keep current state
@@ -974,18 +987,17 @@ actor DeviceKeyService {
             supportId: nil,
             validatedAt: nil
         )
-        save(newData)
+        try? save(newData)
         return newData
     }
 
     /// Save device data to disk atomically
-    private func save(_ data: DeviceKeyData) {
-        cachedData = data
+    private func save(_ data: DeviceKeyData) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = .prettyPrinted
 
-        guard let encoded = try? encoder.encode(data) else { return }
+        let encoded = try encoder.encode(data)
         ensureDeviceDirectoryExists()
 
         // Write to a unique temp file in the same directory, then atomically replace.
@@ -1002,6 +1014,7 @@ actor DeviceKeyService {
             }
 
             hardenDeviceFilePermissions()
+            cachedData = data
         } catch {
             // Best-effort cleanup; temp file may contain plaintext key.
             try? fileManager.removeItem(at: tempURL)
@@ -1010,9 +1023,9 @@ actor DeviceKeyService {
             do {
                 try encoded.write(to: fileURL, options: .atomic)
                 hardenDeviceFilePermissions()
+                cachedData = data
             } catch {
-                // If even fallback fails, we keep cachedData in memory; caller will still function
-                // for this session (but persistence is compromised).
+                throw DeviceKeyError.storageFailed
             }
         }
     }

@@ -43,6 +43,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- Stream lists now load bounded previews and cached word counts instead of transferring every document in full.
 - Provenance spans now avoid unnecessary rehashing during edits and preserve distinct adjacent source attribution.
 - Selection dragging in large documents now avoids repeated text extraction and dormant margin-note/find rescans.
 - Large documents now avoid full-document React updates and editor reconfiguration on every keystroke, making typing more responsive.
@@ -57,6 +58,9 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Device-key changes now report disk-write failures in Settings and leave the durable key and in-memory auth state unchanged.
+- Source indexing can no longer remain stuck after terminal status-write failures, and refreshed file bookmarks now persist after stale recovery.
+- Source-required AI requests now fail when local retrieval fails, while Auto answers clearly disclose retrieval degradation.
 - Bridge callback failures now return immediately instead of timing out, and production surfaces a safe error when native actions fail.
 - Quick Panel AI now clears the editor typing indicator and shows an error if its answer cannot be saved.
 - Quick Panel now ignores late AI callbacks from a cancelled request after a new conversation request starts.

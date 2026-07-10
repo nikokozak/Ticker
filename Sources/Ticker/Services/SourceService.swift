@@ -56,10 +56,14 @@ final class SourceService {
             )
 
             if isStale {
-                // Bookmark is stale - mark source and try to refresh
                 var updated = source
-                updated.status = .stale
-                try? persistence.saveSource(updated)
+                updated.bookmarkData = try url.bookmarkData(
+                    options: [.withSecurityScope],
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+                updated.status = updated.extractedText == nil ? .pending : .ready
+                try persistence.saveSource(updated)
             }
 
             guard url.startAccessingSecurityScopedResource() else {

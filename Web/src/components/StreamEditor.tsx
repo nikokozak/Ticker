@@ -218,8 +218,8 @@ function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
   });
 }
 
-function parseDocumentAISourceContextMode(value: unknown): DocumentAISourceContextMode | undefined {
-  if (value === 'passthrough' || value === 'retrieved' || value === 'none') {
+export function parseDocumentAISourceContextMode(value: unknown): DocumentAISourceContextMode | undefined {
+  if (value === 'passthrough' || value === 'retrieved' || value === 'none' || value === 'unavailable') {
     return value;
   }
   return undefined;
@@ -1287,6 +1287,8 @@ export function StreamEditor({
           provenanceLine = buildProvenanceLine(result.swappedCitations);
         } else if (sourceContextMode === 'none') {
           provenanceLine = '*From model knowledge.*';
+        } else if (sourceContextMode === 'unavailable') {
+          provenanceLine = '*Source retrieval unavailable — answered from model knowledge.*';
         }
 
         if (provenanceLine) {

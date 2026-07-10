@@ -1008,6 +1008,35 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_sourceRetrievalFailureHasHonestErrorAndCompletionMode() async throws {
+        XCTAssertEqual(
+            OrchestratorError.sourceRetrievalFailed.localizedDescription,
+            "Source retrieval failed — answer not generated"
+        )
+
+        let recorder = BridgeMessageRecorder()
+        let handler = await AIMessageHandler(
+            sendToWeb: { recorder.send($0) },
+            routeDocumentAI: { _, _, _, _, _, _, _, onComplete, _, _ in
+                onComplete(SourceContext(text: "", chunks: [], mode: .unavailable))
+            }
+        )
+        let requestId = UUID().uuidString
+
+        await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
+            "requestId": AnyCodable(requestId),
+            "query": AnyCodable("Use my sources"),
+            "sourceScope": AnyCodable("auto"),
+            "imageURLs": AnyCodable([])
+        ]))
+
+        try await waitUntil {
+            recorder.messages(ofType: "documentAIComplete").contains { message in
+                message.payload?["sourceContextMode"]?.value as? String == "unavailable"
+            }
+        }
+    }
+
     @MainActor
     func test_documentAICancelStopsSlowStreamingProvider() async throws {
         let recorder = BridgeMessageRecorder()
@@ -2233,6 +2262,47 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_ingestServiceFallsBackToFailedWhenReadyStatusCannotPersist() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Terminal Status")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Notes.txt",
+                fileType: .text,
+                bookmarkData: Data(),
+                status: .ready
+            )
+            try service.saveSource(source)
+
+            var readyAttempts = 0
+            let ingestService = IngestService(
+                persistence: service,
+                sourceService: SourceService(persistence: service),
+                chunkingService: ChunkingService(),
+                writeIndexStatus: { sourceId, status in
+                    if status == .ready {
+                        readyAttempts += 1
+                        throw TestPDFError.creationFailed
+                    }
+                    try service.updateSourceIndexStatus(sourceId, status: status)
+                }
+            )
+            let failed = expectation(description: "terminal status fell back to failed")
+            ingestService.onStatusChange = { update in
+                if update.status == .failed {
+                    failed.fulfill()
+                }
+            }
+
+            ingestService.enqueue(source: source)
+            wait(for: [failed], timeout: 5)
+
+            XCTAssertEqual(readyAttempts, 2)
+            XCTAssertEqual(try service.loadSource(id: source.id)?.indexStatus, .failed)
+        }
+    }
+
     func test_savePDFHighlightRoundTripsRects() throws {
         try withTempPersistenceService { service in
             let source = try savePDFSource(in: service)
@@ -3280,14 +3350,15 @@ final class StreamDocumentTests: XCTestCase {
             )
 
             let newerSummary = try XCTUnwrap(summaries.first { $0.id == newerStream.id })
-            XCTAssertEqual(newerSummary.previewText, newerMarkdown)
+            XCTAssertEqual(newerSummary.previewPrefix, String(newerMarkdown.prefix(2_000)))
             XCTAssertEqual(newerSummary.sourceCount, 1)
             XCTAssertEqual(newerSummary.sourceShortTitle, "Notebook")
             XCTAssertEqual(newerSummary.charCount, newerMarkdown.count)
+            XCTAssertEqual(newerSummary.wordCount, newerMarkdown.split { $0.isWhitespace }.count)
             XCTAssertEqual(newerSummary.imageCount, 2)
 
             let olderSummary = try XCTUnwrap(summaries.first { $0.id == olderStream.id })
-            XCTAssertEqual(olderSummary.previewText, olderMarkdown)
+            XCTAssertEqual(olderSummary.previewPrefix, String(olderMarkdown.prefix(2_000)))
             XCTAssertEqual(olderSummary.charCount, olderMarkdown.count)
             XCTAssertEqual(olderSummary.imageCount, 0)
 
@@ -3298,6 +3369,11 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(encodedSummary["sourceShortTitle"] as? String, "Notebook")
             XCTAssertEqual(encodedSummary["wordCount"] as? Int, newerMarkdown.split { $0.isWhitespace }.count)
             XCTAssertEqual(encodedSummary["charCount"] as? Int, newerMarkdown.count)
+            XCTAssertNil(encodedSummary["previewText"])
+
+            _ = try service.appendToStreamDocument(streamId: olderStream.id, fragment: "three appended words")
+            let appendedSummary = try XCTUnwrap(service.loadStreamSummaries().first { $0.id == olderStream.id })
+            XCTAssertEqual(appendedSummary.wordCount, olderMarkdown.split { $0.isWhitespace }.count + 3)
         }
     }
 

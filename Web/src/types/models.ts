@@ -72,7 +72,6 @@ export interface StreamSummary {
   imageCount: number;
   openQuestionCount: number;
   updatedAt: string;
-  previewText: string | null;
   previewLine: string | null;
 }
 

@@ -34,10 +34,11 @@ struct StreamSummary: Identifiable, Codable {
     let sourceShortTitle: String?
     let cellCount: Int
     let charCount: Int
+    let wordCount: Int
     let imageCount: Int
     let openQuestionCount: Int
     let updatedAt: Date
-    let previewText: String?
+    let previewPrefix: String?
 }
 
 /// Canonical stream editor document (Markdown)

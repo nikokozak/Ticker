@@ -20,6 +20,7 @@ final class IngestService: @unchecked Sendable {
     private let persistence: PersistenceService
     private let sourceService: SourceService
     private let chunkingService: ChunkingService
+    private let writeIndexStatus: (UUID, SourceIndexStatus) throws -> Void
     private let stateQueue = DispatchQueue(label: "com.ticker.source-ingest")
 
     private var queuedSources: [SourceReference] = []
@@ -30,11 +31,13 @@ final class IngestService: @unchecked Sendable {
     init(
         persistence: PersistenceService,
         sourceService: SourceService,
-        chunkingService: ChunkingService
+        chunkingService: ChunkingService,
+        writeIndexStatus: ((UUID, SourceIndexStatus) throws -> Void)? = nil
     ) {
         self.persistence = persistence
         self.sourceService = sourceService
         self.chunkingService = chunkingService
+        self.writeIndexStatus = writeIndexStatus ?? persistence.updateSourceIndexStatus
     }
 
     func enqueue(source: SourceReference) {
@@ -127,13 +130,12 @@ final class IngestService: @unchecked Sendable {
             guard source.indexStatus == .pending || source.indexStatus == .failed else { return }
 
             source.indexStatus = .indexing
-            try persistence.updateSourceIndexStatus(source.id, status: .indexing)
+            try writeIndexStatus(source.id, .indexing)
             emit(.indexing, progress: 0, force: true)
 
             guard source.fileType == .pdf else {
                 try persistence.saveSourceChunks([], for: source.id)
-                try persistence.updateSourceIndexStatus(source.id, status: .ready)
-                emit(.ready)
+                emit(persistCompletionStatus(source.id, desired: .ready))
                 return
             }
 
@@ -166,19 +168,44 @@ final class IngestService: @unchecked Sendable {
             }
 
             try persistence.saveSourceChunks(chunks, for: source.id)
-            try persistence.updateSourceIndexStatus(source.id, status: .ready)
-            emit(.ready)
+            emit(persistCompletionStatus(source.id, desired: .ready))
         } catch is CancellationError {
-            try? persistence.updateSourceIndexStatus(queuedSource.id, status: .pending)
-            emit(.pending)
+            emit(persistCompletionStatus(queuedSource.id, desired: .pending))
         } catch IngestError.noReadableText {
             try? persistence.saveSourceChunks([], for: queuedSource.id)
-            try? persistence.updateSourceIndexStatus(queuedSource.id, status: .failedNoText)
-            emit(.failedNoText)
+            emit(persistCompletionStatus(queuedSource.id, desired: .failedNoText))
         } catch {
             DebugLog.log("IngestService: Failed sourceId=\(queuedSource.id) (\(DebugLog.errorSummary(error)))")
-            try? persistence.updateSourceIndexStatus(queuedSource.id, status: .failed)
-            emit(.failed)
+            emit(persistCompletionStatus(queuedSource.id, desired: .failed))
+        }
+    }
+
+    private func persistCompletionStatus(_ sourceId: UUID, desired: SourceIndexStatus) -> SourceIndexStatus {
+        for _ in 0..<2 {
+            do {
+                try writeIndexStatus(sourceId, desired)
+                return desired
+            } catch {
+                DebugLog.log("IngestService: Failed to persist terminal status (\(DebugLog.errorSummary(error)))")
+            }
+        }
+
+        do {
+            try writeIndexStatus(sourceId, .failed)
+        } catch {
+            queueFailedStatus(sourceId)
+        }
+        return .failed
+    }
+
+    private func queueFailedStatus(_ sourceId: UUID) {
+        stateQueue.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            do {
+                try self.writeIndexStatus(sourceId, .failed)
+            } catch {
+                self.queueFailedStatus(sourceId)
+            }
         }
     }
 }
