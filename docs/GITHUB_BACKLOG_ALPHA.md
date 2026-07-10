@@ -190,10 +190,8 @@ Implementation notes (source of truth for Epic D):
 - `X-Ticker-Request-Id` is treated as an opaque string; Ticker should send a UUID per request and surface it to the user on failures.
 
 #### Routing / dispatch (alpha)
-- Intent classification is **client-side** (MLX) and must never require vendor keys.
-- Ticker attaches an `intent` object to `/v1/llm/request`; the proxy uses intent to choose provider/model.
-- Default behavior: if classification is disabled/unavailable/fails, omit `intent` and use the user’s default provider preference.
-- Model IDs should be centralized on the proxy (env-configurable). Ticker should send `model: "default"` and let the proxy resolve the actual model id.
+- The client does not classify intent; the proxy's OpenAI Responses API request exposes `web_search` and the answering model decides whether to use it.
+- `model: "default"` lets the proxy choose its default; an explicit client model passes through.
 
 #### Proxy endpoints and auth models
 - Header-auth endpoints (send `Authorization: Bearer <device_key>` + `X-Ticker-Device-Id`):
@@ -210,7 +208,6 @@ Web → Swift:
 - `loadProxyAuth`
 - `setProxyDeviceKey` `{ deviceKey }` (store in Application Support via `DeviceKeyService`; validate)
 - `clearProxyDeviceKey`
-- `validateProxyDeviceKey`
 - `proxyLlmRequest` `{ provider?, model, messages, stream, ... }` (used by “think” path)
 - `submitFeedback` `{ type, title, description, metadata?, relatedRequestId? }`
 - `createFeedbackAttachment` `{ feedbackId, filename, contentType, byteSize }`

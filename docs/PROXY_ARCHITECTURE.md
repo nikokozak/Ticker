@@ -5,7 +5,7 @@ Ticker Proxy enables shipping the app without embedding provider API keys and pr
 Status:
 - Proxy is implemented (Ticker-Proxy repo).
 - Ticker is in **proxy-only** posture: no local OpenAI/Anthropic/Perplexity calls or keys.
-- Routing is evolving to: **client-side intent → proxy-side provider/model selection**.
+- Routing is proxy-side: OpenAI Responses API exposes `web_search` to the answering model, which decides when to use it; the client does not classify intent. Explicit client model choices pass through.
 
 Contract + implementation notes live in:
 - `docs/GITHUB_BACKLOG_ALPHA.md` (Epic C/D acceptance criteria + integration notes)
@@ -79,16 +79,19 @@ Notes:
 `POST /v1/llm/request`
 - Body includes:
   - provider (optional; supported values: `openai`, `anthropic`, `perplexity`)
-  - model (client may send `"default"` to let proxy pick via env-configured defaults)
+  - model (`"default"` lets the proxy choose its default; an explicit client model passes through)
   - messages (each `content` is either a string or an array of parts for multimodal prompts)
     - For alpha vision: send **base64** image parts (`media_type` + `data`) rather than URL images
   - streaming flag (`stream: true` uses SSE)
-  - intent (optional; client-side classification result used by the proxy for routing, e.g. search → Perplexity)
   - metadata (stream id, document id/anchor id) *only if non-sensitive*
 - Returns:
   - streaming or non-stream response
   - token counts (if available)
   - `X-Ticker-Request-Id`
+
+Routing notes:
+- The proxy uses the OpenAI Responses API with the `web_search` tool available; the answering model decides whether to search.
+- The client sends no intent/classifier result.
 
 Notes:
 - `perplexity` does not support vision/image inputs (proxy returns `400` for image parts)
