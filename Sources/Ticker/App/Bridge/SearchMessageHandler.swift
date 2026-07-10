@@ -16,11 +16,14 @@ final class SearchMessageHandler: BridgeMessageHandler {
     func handle(_ message: BridgeMessage) async {
         switch message.type {
         case "hybridSearch":
+            guard let callbackId = message.callbackId else {
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for hybridSearch")
+                return
+            }
             guard let payload = message.payload,
-                  let query = payload["query"]?.value as? String,
-                  let callbackId = message.callbackId else {
+                  let query = payload["query"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid hybridSearch payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid hybridSearch payload")
+                await bridgeService.respondWithError(to: callbackId, error: "Invalid hybridSearch payload")
                 return
             }
 
@@ -31,7 +34,6 @@ final class SearchMessageHandler: BridgeMessageHandler {
 
             guard let searchService = searchService else {
                 Task { @MainActor in
-                    bridgeService.sendBridgeError(type: message.type, reason: "Search service not available")
                     bridgeService.respondWithError(to: callbackId, error: "Search service not available")
                 }
                 return

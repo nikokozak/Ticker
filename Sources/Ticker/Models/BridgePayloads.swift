@@ -54,6 +54,7 @@ struct SourcePayload: Codable {
 
 extension BridgeService {
     /// Send a typed payload to JavaScript
+    @MainActor
     func send<T: Encodable>(_ type: String, payload: T) {
         do {
             let encoder = JSONEncoder()
@@ -71,16 +72,19 @@ extension BridgeService {
 
     // MARK: - Source Convenience Methods
 
+    @MainActor
     func sendSourceAdded(_ source: SourceReference) {
         send("sourceAdded", payload: SourceAddedPayload(source: SourcePayload(from: source)))
     }
 
+    @MainActor
     func sendSourceRemoved(id: String) {
         send("sourceRemoved", payload: SourceRemovedPayload(id: id))
     }
 
     // MARK: - Image Convenience Methods
 
+    @MainActor
     func sendImageDropped(assetUrl: String) {
         send("imageDropped", payload: ImageDroppedPayload(assetUrl: assetUrl))
     }

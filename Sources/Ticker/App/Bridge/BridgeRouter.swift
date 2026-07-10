@@ -23,7 +23,7 @@ final class BridgeRouter {
     func route(_ message: BridgeMessage) async {
         guard let handler = handlersByType[message.type] else {
             DebugLog.log("[BridgeRouter] Unknown message type: \(message.type)")
-            await bridgeService.sendBridgeError(type: message.type, reason: "Unknown bridge message type")
+            await bridgeService.reject(message, reason: "Unknown bridge message type")
             return
         }
 

@@ -75,6 +75,7 @@ private enum DocumentAIVerb: String {
     }
 }
 
+@MainActor
 final class AIMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
         "thinkDocument",
@@ -107,7 +108,7 @@ final class AIMessageHandler: BridgeMessageHandler {
             bridgeService.send(message)
         }
         self.sendBridgeErrorMessage = { [bridgeService = container.bridgeService] type, reason in
-            await bridgeService.sendBridgeError(type: type, reason: reason)
+            bridgeService.sendBridgeError(type: type, reason: reason)
         }
         self.isProxyUsable = { [deviceKeyService = container.deviceKeyService] in
             await deviceKeyService.currentState.isUsable

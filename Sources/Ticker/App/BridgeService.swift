@@ -125,6 +125,7 @@ final class BridgeService: NSObject, WKScriptMessageHandler {
     }
 
     /// Send a message to JavaScript
+    @MainActor
     func send(_ message: BridgeMessage) {
         guard let webView else {
             DebugLog.log("Bridge send: No webView available for message: \(message.type)")
@@ -152,12 +153,14 @@ final class BridgeService: NSObject, WKScriptMessageHandler {
     }
 
     /// Send a response to a callback
+    @MainActor
     func respond(to callbackId: String, with payload: [String: AnyCodable]) {
         let message = BridgeMessage(type: "callback", payload: payload, callbackId: callbackId)
         send(message)
     }
 
     /// Send an error response
+    @MainActor
     func respondWithError(to callbackId: String, error: String) {
         let payload: [String: AnyCodable] = [
             "error": AnyCodable(error)
@@ -166,11 +169,21 @@ final class BridgeService: NSObject, WKScriptMessageHandler {
         send(message)
     }
 
+    @MainActor
     func sendBridgeError(type originalType: String, reason: String) {
         send(BridgeMessage(type: "bridgeError", payload: [
             "originalType": AnyCodable(originalType),
             "reason": AnyCodable(reason)
         ]))
+    }
+
+    @MainActor
+    func reject(_ message: BridgeMessage, reason: String) {
+        if let callbackId = message.callbackId {
+            respondWithError(to: callbackId, error: reason)
+        } else {
+            sendBridgeError(type: message.type, reason: reason)
+        }
     }
 
     private func originalType(from body: Any) -> String {

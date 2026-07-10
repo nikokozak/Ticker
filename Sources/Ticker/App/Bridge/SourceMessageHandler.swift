@@ -135,11 +135,11 @@ final class SourceMessageHandler: BridgeMessageHandler {
             do {
                 let source = try sourceService.addSource(from: url, to: streamId)
                 let sourcePayload = StreamCodec.encodeSource(source)
-                bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+                await bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
                 ingestService?.enqueue(source: source)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to add source from path (\(DebugLog.errorSummary(error)))")
-                bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
+                await bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
             }
 
         case "removeSource":
@@ -153,10 +153,10 @@ final class SourceMessageHandler: BridgeMessageHandler {
             }
             do {
                 try sourceService.removeSource(id: id)
-                bridgeService.send(BridgeMessage(type: "sourceRemoved", payload: ["id": AnyCodable(id.uuidString)]))
+                await bridgeService.send(BridgeMessage(type: "sourceRemoved", payload: ["id": AnyCodable(id.uuidString)]))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to remove source (\(DebugLog.errorSummary(error)))")
-                bridgeService.send(BridgeMessage(type: "sourceRemoveError", payload: [
+                await bridgeService.send(BridgeMessage(type: "sourceRemoveError", payload: [
                     "id": AnyCodable(id.uuidString),
                     "error": AnyCodable(error.localizedDescription)
                 ]))
@@ -174,7 +174,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
 
             do {
                 guard var source = try persistence.loadSource(id: sourceId) else {
-                    sendSourceError("Source not found.")
+                    await sendSourceError("Source not found.")
                     return
                 }
 
@@ -187,7 +187,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 ingestService.enqueue(source: source)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to retry source indexing (\(DebugLog.errorSummary(error)))")
-                sendSourceError(error.localizedDescription)
+                await sendSourceError(error.localizedDescription)
             }
 
         case "setSourceAIExclusion":
@@ -202,7 +202,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
 
             do {
                 guard try persistence.loadSource(id: sourceId) != nil else {
-                    sendSourceError("Source not found.")
+                    await sendSourceError("Source not found.")
                     return
                 }
 
@@ -210,7 +210,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 DebugLog.log("[SourceMessageHandler] setSourceAIExclusion sourceId=\(sourceId.uuidString) excluded=\(excluded)")
             } catch {
                 DebugLog.log("[SourceMessageHandler] Failed to set source AI exclusion (\(DebugLog.errorSummary(error)))")
-                sendSourceError(error.localizedDescription)
+                await sendSourceError(error.localizedDescription)
             }
 
         case "openSource":
@@ -225,13 +225,13 @@ final class SourceMessageHandler: BridgeMessageHandler {
 
             do {
                 guard let source = try persistence.loadSource(id: sourceId) else {
-                    sendSourceError("Source not found.")
+                    await sendSourceError("Source not found.")
                     return
                 }
                 delegate?.openSourceReference(source, sourceService: sourceService)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to open source (\(DebugLog.errorSummary(error)))")
-                sendSourceError(error.localizedDescription)
+                await sendSourceError(error.localizedDescription)
             }
 
         case "openPdfDestination":
@@ -240,7 +240,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                   let streamId = UUID(uuidString: streamIdValue),
                   let sourceService else {
                 DebugLog.log("[WebViewManager] Invalid openPdfDestination payload")
-                sendPDFDestinationFailure(.damagedLink)
+                await sendPDFDestinationFailure(.damagedLink)
                 return
             }
 
@@ -264,7 +264,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 if let sourceId {
                     guard let loadedSource = try persistence.loadSource(id: sourceId) else {
                         DebugLog.log("[WebViewManager] PDF destination source is missing")
-                        sendPDFDestinationFailure(.missingSource)
+                        await sendPDFDestinationFailure(.missingSource)
                         return
                     }
                     source = loadedSource
@@ -272,7 +272,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 } else if let highlightId {
                     guard UUID(uuidString: highlightId) != nil else {
                         DebugLog.log("[WebViewManager] Invalid PDF highlight destination")
-                        sendPDFDestinationFailure(.damagedLink)
+                        await sendPDFDestinationFailure(.damagedLink)
                         return
                     }
                     guard let legacyDestination = try legacyPDFHighlightDestination(
@@ -280,25 +280,25 @@ final class SourceMessageHandler: BridgeMessageHandler {
                         highlightId: highlightId
                     ) else {
                         DebugLog.log("[WebViewManager] PDF highlight destination is missing")
-                        sendPDFDestinationFailure(.missingSource)
+                        await sendPDFDestinationFailure(.missingSource)
                         return
                     }
                     source = legacyDestination.source
                     pageToOpen = page ?? legacyDestination.page
                 } else {
                     DebugLog.log("[WebViewManager] Invalid openPdfDestination payload")
-                    sendPDFDestinationFailure(.damagedLink)
+                    await sendPDFDestinationFailure(.damagedLink)
                     return
                 }
 
                 guard source.streamId == streamId else {
                     DebugLog.log("[WebViewManager] PDF destination source belongs to another stream")
-                    sendPDFDestinationFailure(.wrongStream)
+                    await sendPDFDestinationFailure(.wrongStream)
                     return
                 }
                 guard source.fileType == .pdf else {
                     DebugLog.log("[WebViewManager] PDF destination source is not a PDF")
-                    sendPDFDestinationFailure(.damagedLink)
+                    await sendPDFDestinationFailure(.damagedLink)
                     return
                 }
 
@@ -312,7 +312,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 )
             } catch {
                 DebugLog.log("[WebViewManager] Failed to open PDF destination (\(DebugLog.errorSummary(error)))")
-                sendPDFDestinationFailure(.damagedLink)
+                await sendPDFDestinationFailure(.damagedLink)
             }
 
         case "beginPdfAnchorPick":
@@ -336,7 +336,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 DebugLog.log("[WebViewManager] Invalid saveImage payload")
                 let requestId = message.payload?["requestId"]?.value as? String
                 await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveImage payload")
-                bridgeService.send(BridgeMessage(type: "imageSaveError", payload: [
+                await bridgeService.send(BridgeMessage(type: "imageSaveError", payload: [
                     "error": AnyCodable("Invalid image data"),
                     "requestId": AnyCodable(requestId as Any)
                 ]))
@@ -349,14 +349,14 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
                 let assetUrl = "ticker-asset:///\(relativePath)"
 
-                bridgeService.send(BridgeMessage(type: "imageSaved", payload: [
+                await bridgeService.send(BridgeMessage(type: "imageSaved", payload: [
                     "relativePath": AnyCodable(relativePath),
                     "assetUrl": AnyCodable(assetUrl),
                     "requestId": AnyCodable(requestId as Any)
                 ]))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to save image (\(DebugLog.errorSummary(error)))")
-                bridgeService.send(BridgeMessage(type: "imageSaveError", payload: [
+                await bridgeService.send(BridgeMessage(type: "imageSaveError", payload: [
                     "error": AnyCodable(error.localizedDescription),
                     "requestId": AnyCodable(requestId as Any)
                 ]))
@@ -371,7 +371,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 return
             }
             let fullPath = assetService.assetURL(for: relativePath).path
-            bridgeService.send(BridgeMessage(type: "assetPath", payload: [
+            await bridgeService.send(BridgeMessage(type: "assetPath", payload: [
                 "relativePath": AnyCodable(relativePath),
                 "fullPath": AnyCodable(fullPath)
             ]))
@@ -381,12 +381,14 @@ final class SourceMessageHandler: BridgeMessageHandler {
         }
     }
 
+    @MainActor
     private func sendSourceError(_ message: String) {
         bridgeService.send(BridgeMessage(type: "sourceError", payload: [
             "error": AnyCodable(message)
         ]))
     }
 
+    @MainActor
     private func sendPDFDestinationFailure(_ failure: OpenPDFDestinationFailure) {
         sendSourceError(failure.userMessage)
     }

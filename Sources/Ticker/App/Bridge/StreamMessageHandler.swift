@@ -81,7 +81,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
             do {
                 let summaries = try persistence.loadStreamSummaries()
                 let payload = StreamCodec.encodeSummaries(summaries)
-                bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: [
+                await bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: [
                     "streams": payload["streams"]!
                 ]))
                 if let restoreId = delegate?.consumeLastOpenStreamIdForLaunchRestore() {
@@ -119,7 +119,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     "spans": AnyCodable(StreamCodec.encodeSpans([])),
                     "marginNotes": AnyCodable([])
                 ]
-                bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
+                await bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
             } catch {
                 DebugLog.log("[WebViewManager] Failed to create stream (\(DebugLog.errorSummary(error)))")
             }
@@ -135,7 +135,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
             }
             do {
                 if try persistence.updateStreamTitle(id: id, title: title) {
-                    bridgeService.send(BridgeMessage(type: "streamTitleUpdated", payload: ["id": AnyCodable(id.uuidString), "title": AnyCodable(title)]))
+                    await bridgeService.send(BridgeMessage(type: "streamTitleUpdated", payload: ["id": AnyCodable(id.uuidString), "title": AnyCodable(title)]))
                 }
             } catch {
                 DebugLog.log("[WebViewManager] Failed to update stream title (\(DebugLog.errorSummary(error)))")
@@ -157,7 +157,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 // Reload streams list
                 let summaries = try persistence.loadStreamSummaries()
                 let summariesPayload = StreamCodec.encodeSummaries(summaries)
-                bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: [
+                await bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: [
                     "streams": summariesPayload["streams"]!
                 ]))
             } catch {
@@ -165,15 +165,18 @@ final class StreamMessageHandler: BridgeMessageHandler {
             }
 
         case "saveStreamDocument":
+            guard let callbackId = message.callbackId else {
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for saveStreamDocument")
+                return
+            }
             guard let payload = message.payload,
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue),
                   let markdown = payload["markdown"]?.value as? String,
                   let baseRevision = payload["baseRevision"]?.intValue,
-                  let spans = decodeSpans(payload["spans"]?.value, streamId: streamId),
-                  let callbackId = message.callbackId else {
+                  let spans = decodeSpans(payload["spans"]?.value, streamId: streamId) else {
                 DebugLog.log("[WebViewManager] Invalid saveStreamDocument payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveStreamDocument payload")
+                await bridgeService.respondWithError(to: callbackId, error: "Invalid saveStreamDocument payload")
                 return
             }
             do {
@@ -257,11 +260,14 @@ final class StreamMessageHandler: BridgeMessageHandler {
             }
 
         case "getExchange":
+            guard let callbackId = message.callbackId else {
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for getExchange")
+                return
+            }
             guard let payload = message.payload,
-                  let requestId = payload["requestId"]?.value as? String,
-                  let callbackId = message.callbackId else {
+                  let requestId = payload["requestId"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid getExchange payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid getExchange payload")
+                await bridgeService.respondWithError(to: callbackId, error: "Invalid getExchange payload")
                 return
             }
             do {
@@ -304,7 +310,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
             do {
                 guard let stream = try persistence.loadStream(id: streamId) else {
                     DebugLog.log("[WebViewManager] Stream not found for export")
-                    bridgeService.send(BridgeMessage(type: "exportError", payload: [
+                    await bridgeService.send(BridgeMessage(type: "exportError", payload: [
                         "streamId": AnyCodable(streamIdString),
                         "error": AnyCodable("Stream not found")
                     ]))
@@ -353,7 +359,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 }
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load stream for export (\(DebugLog.errorSummary(error)))")
-                bridgeService.send(BridgeMessage(type: "exportError", payload: [
+                await bridgeService.send(BridgeMessage(type: "exportError", payload: [
                     "streamId": AnyCodable(streamIdString),
                     "error": AnyCodable(error.localizedDescription)
                 ]))
@@ -382,7 +388,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         if let requestId {
             payload["requestId"] = AnyCodable(requestId)
         }
-        bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
+        await bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
         ingestService?.enqueuePendingSources(for: id)
     }
 

@@ -57,6 +57,10 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Bridge callback failures now return immediately instead of timing out, and production surfaces a safe error when native actions fail.
+- Quick Panel AI now clears the editor typing indicator and shows an error if its answer cannot be saved.
+- Quick Panel now ignores late AI callbacks from a cancelled request after a new conversation request starts.
+- Bridge sends now enforce the main-thread boundary, and overlapping document AI cancellation can no longer race its request registry.
 - Database upgrades now stop before migration when the required safety backup cannot be created.
 - Rapid stream navigation can no longer be overwritten by an older, slower stream load.
 - Leaving a stream now flushes pending edits, stops in-flight document AI, and visibly reports save failures instead of remaining stuck on “Saving…”.

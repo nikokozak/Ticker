@@ -107,6 +107,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Complete startup after onboarding (or skip if not needed)
+    @MainActor
     private func completeStartup() {
         guard !didCompleteStartup else { return }
         didCompleteStartup = true
@@ -127,9 +128,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showOnboarding() {
         let onboardingView = OnboardingView {
             // Onboarding complete callback
-            self.onboardingWindow?.close()
-            self.onboardingWindow = nil
-            self.completeStartup()
+            Task { @MainActor in
+                self.onboardingWindow?.close()
+                self.onboardingWindow = nil
+                self.completeStartup()
+            }
         }
 
         let hostingView = NSHostingView(rootView: onboardingView)
@@ -241,6 +244,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    @MainActor
     private func handleTickerURL(_ url: URL) {
         guard let command = TickerURLCommand.parse(url) else {
             DebugLog.log("[TickerURL] Ignored malformed URL: \(url.absoluteString)")
@@ -455,6 +459,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             && event.charactersIgnoringModifiers?.lowercased() == "f"
     }
 
+    @MainActor
     private func setupMainWindow(container: ServiceContainer) {
         let autosaveName = "TickerMainWindow"
         let hasSavedFrame = UserDefaults.standard.string(forKey: "NSWindow Frame \(autosaveName)") != nil
