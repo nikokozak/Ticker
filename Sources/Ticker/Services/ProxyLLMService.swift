@@ -83,7 +83,7 @@ final class ProxyLLMService {
         let messages = buildProxyMessages(from: request)
         let provider = determineProvider(for: request)
         let requestBody: [String: Any] = [
-            "model": "default",  // Let proxy resolve model based on provider + vision
+            "model": SettingsService.shared.defaultModel.proxyModel,
             "messages": messages,
             "provider": provider,
             "stream": true
@@ -334,7 +334,7 @@ final class ProxyLLMService {
             ["role": "user", "content": input]
         ]
         let requestBody: [String: Any] = [
-            "model": "default",
+            "model": SettingsService.shared.defaultModel.proxyModel,
             "messages": messages,
             "provider": provider,
             "stream": false
@@ -483,12 +483,7 @@ final class ProxyLLMService {
 
     /// Determine which provider to use based on user settings (preference hint for proxy)
     private func determineProvider(for request: LLMRequest) -> String {
-        switch SettingsService.shared.defaultModel {
-        case .openai:
-            return "openai"
-        case .anthropic:
-            return "anthropic"
-        }
+        SettingsService.shared.defaultModel.provider
     }
 
     // MARK: - SSE Event Handling

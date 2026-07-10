@@ -79,6 +79,9 @@
       "proxyAuthState": {
         "requiredPayloadKeys": ["state"]
       },
+      "quickPanelAIStarted": {
+        "requiredPayloadKeys": ["streamId"]
+      },
       "settingsLoaded": {
         "requiredPayloadKeys": ["settings"]
       },

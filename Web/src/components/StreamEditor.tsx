@@ -21,6 +21,7 @@ import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } 
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
 import { canRedevelopSpan, provenanceXrayExtension } from '../extensions/ProvenanceXray';
+import { pendingAppendField, setPendingAppend } from '../extensions/PendingAppend';
 import {
   buildPromoteMarginNoteEdit,
   currentMarginNotes,
@@ -543,6 +544,8 @@ export function StreamEditor({
   const sourceIndexStatusesRef = useRef<Map<string, SourceReference['indexStatus']>>(new Map());
   const showPromptRef = useRef(showPrompt);
   const isAiThinkingRef = useRef(false);
+  const quickPanelPendingRef = useRef(false);
+  const quickPanelPendingTimerRef = useRef<number | null>(null);
   const aiRequestRef = useRef<{
     id: string;
     buffer: string;
@@ -690,6 +693,21 @@ export function StreamEditor({
     setAiFeedback((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearAiFeedbackTimer]);
 
+  const clearQuickPanelPending = useCallback(() => {
+    if (quickPanelPendingTimerRef.current !== null) {
+      window.clearTimeout(quickPanelPendingTimerRef.current);
+      quickPanelPendingTimerRef.current = null;
+    }
+    if (!quickPanelPendingRef.current) return;
+    quickPanelPendingRef.current = false;
+    editorViewRef.current?.dispatch({
+      effects: setPendingAppend.of(false),
+      annotations: Transaction.addToHistory.of(false),
+    });
+    // Don't stomp the pill if an in-editor AI request is also running.
+    if (!aiRequestRef.current) hideAiFeedback();
+  }, [hideAiFeedback]);
+
   const showAiErrorFeedback = useCallback((message: string) => {
     clearAiFeedbackTimer();
     setAiFeedback({
@@ -834,6 +852,7 @@ export function StreamEditor({
     setSaveState('saved');
     setAiStatus('idle');
     hideAiFeedback();
+    clearQuickPanelPending();
     clearSourceIndexNoticeTimer();
     setSourceIndexNotice(null);
     setFloatingMenu({
@@ -878,7 +897,7 @@ export function StreamEditor({
       persistNewUnanchoredMarginNotes(stream.marginNotes, notes);
       dispatchAiRangeClear(view);
     }
-  }, [clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
+  }, [clearQuickPanelPending, clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
 
   useEffect(() => {
     applyMarginNotesToEditor(stream.marginNotes);
@@ -945,6 +964,27 @@ export function StreamEditor({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
+      if (message.type === 'quickPanelAIStarted') {
+        if (message.payload?.streamId !== stream.id) return;
+        const view = editorViewRef.current;
+        if (!view) return;
+        quickPanelPendingRef.current = true;
+        view.dispatch({
+          effects: [
+            setPendingAppend.of(true),
+            EditorView.scrollIntoView(view.state.doc.length, { y: 'nearest' }),
+          ],
+          annotations: Transaction.addToHistory.of(false),
+        });
+        showAiWritingFeedback();
+        if (quickPanelPendingTimerRef.current !== null) {
+          window.clearTimeout(quickPanelPendingTimerRef.current);
+        }
+        // Fallback: proxy idle timeout is 120s; never leave the indicator stranded.
+        quickPanelPendingTimerRef.current = window.setTimeout(clearQuickPanelPending, 130_000);
+        return;
+      }
+
       if (message.type === 'streamDocumentConflict') {
         const payloadStreamId = message.payload?.streamId as string | undefined;
         const markdown = message.payload?.markdown as string | undefined;
@@ -984,6 +1024,10 @@ export function StreamEditor({
         if (!payloadStreamId || payloadStreamId !== stream.id || typeof fragment !== 'string' || fragment.length === 0) {
           return;
         }
+
+        // An append landing (answer or error fragment) ends any pending
+        // quick-panel AI presence.
+        clearQuickPanelPending();
 
         // Revision gap = this editor missed an earlier append (it wasn't
         // listening when it broadcast). Patching the fragment in and adopting
@@ -1243,7 +1287,7 @@ export function StreamEditor({
     });
 
     return () => unsubscribe();
-  }, [addToast, hideAiFeedback, showAiErrorFeedback, stream.id]);
+  }, [addToast, clearQuickPanelPending, hideAiFeedback, showAiErrorFeedback, showAiWritingFeedback, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
@@ -2772,6 +2816,7 @@ export function StreamEditor({
                 arrivalField,
                 provenanceField,
                 marginNotesField,
+                pendingAppendField,
                 markdownImageWidgetExtension,
                 provenanceXray,
                 marginNotesExtensionValue,

@@ -1537,6 +1537,42 @@ body {
   border-top: 1px solid var(--border-subtle);
 }
 
+/* Typing indicator at the append point while quick-panel AI is in flight */
+.cm-pending-append {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+}
+
+.cm-pending-append-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  opacity: 0.3;
+  animation: pending-append-pulse 1.2s ease-in-out infinite;
+}
+
+.cm-pending-append-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.cm-pending-append-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes pending-append-pulse {
+  0%, 100% {
+    opacity: 0.25;
+    transform: none;
+  }
+  50% {
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+}
+
 .cm-margin-notes-layer {
   position: absolute;
   inset: 0;
