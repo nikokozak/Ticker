@@ -1,5 +1,6 @@
 import { EditorState, Transaction } from '@codemirror/state';
 import { history, isolateHistory, undo } from '@codemirror/commands';
+import { EditorView, type DecorationSet } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
 import {
   AI_HISTORY_USER_EVENT,
@@ -7,6 +8,17 @@ import {
   getAiWritingRange,
   setAiWritingRangeEffect,
 } from './AIWritingState';
+
+function collectDecorations(state: EditorState): Array<{ from: number; to: number; spec: Record<string, unknown> }> {
+  const found: Array<{ from: number; to: number; spec: Record<string, unknown> }> = [];
+  for (const value of state.facet(EditorView.decorations)) {
+    if (typeof value === 'function') continue;
+    (value as DecorationSet).between(0, state.doc.length, (from, to, deco) => {
+      found.push({ from, to, spec: deco.spec as Record<string, unknown> });
+    });
+  }
+  return found;
+}
 
 describe('aiWritingExtension', () => {
   it('maps the active AI writing range through document edits', () => {
@@ -46,6 +58,26 @@ describe('aiWritingExtension', () => {
     }).state;
 
     expect(getAiWritingRange(state)).toBeNull();
+  });
+
+  it('shows a pending widget at the insertion point while the range is empty', () => {
+    let state = EditorState.create({ doc: 'hello world', extensions: [aiWritingExtension] });
+    state = state.update({ effects: setAiWritingRangeEffect.of({ from: 5, to: 5 }) }).state;
+
+    const decorations = collectDecorations(state);
+    expect(decorations).toHaveLength(1);
+    expect(decorations[0].from).toBe(5);
+    expect(decorations[0].spec.widget).toBeDefined();
+  });
+
+  it('switches to the writing-range highlight once content streams in', () => {
+    let state = EditorState.create({ doc: 'hello world', extensions: [aiWritingExtension] });
+    state = state.update({ effects: setAiWritingRangeEffect.of({ from: 5, to: 11 }) }).state;
+
+    const decorations = collectDecorations(state);
+    expect(decorations).toHaveLength(1);
+    expect(decorations[0].spec.class).toBe('cm-ai-writing-range');
+    expect(decorations[0].spec.widget).toBeUndefined();
   });
 
   it('keeps streamed partials out of history and records final AI text as one undo step', () => {

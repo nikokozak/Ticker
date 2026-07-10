@@ -5,6 +5,9 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- The Rewrite menu gained "With instructions…": describe how the selection should be rewritten and the AI replaces it accordingly. Re-develop with an edited prompt now actually obeys the prompt (it previously deferred to the fixed "develop" instruction and near-restated the passage).
+- In-editor AI now shows the same pulsing-dots indicator at the exact insertion point while waiting for the first chunk, matching quick-panel dispatches.
+- ⌘F opens search from the stream list (⌘K still works everywhere; in the editor ⌘F remains in-document find).
 - ⌘B and ⌘I now toggle bold and italic on the stream editor selection.
 - Quick Panel AI answers now show presence in the open editor: the AI-writing pill plus a typing indicator pinned to the exact spot where the answer will land.
 - Settings now offers a model choice — Balanced (GPT-5 mini), Fast (GPT-4o mini), or Claude — with web search available on the OpenAI options.
@@ -51,6 +54,8 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Drag selection no longer stalls or lags in streams containing links: link chips were rebuilt on every selection tick during a drag, feeding CodeMirror's pointer snapping a moving target. Failed image loads now also record their real rendered size so scroll geometry stays honest.
+- A revision-conflict reload during an in-flight AI request no longer risks replacing the entire stream with the AI passage: the request is cancelled and its writing range cleared before the document reloads.
 - Search now speaks the document model: opening a result scrolls the stream to the matched text (previously errored on a defunct cell anchor), and searching from the stream list covers all streams instead of arbitrarily treating the first list entry as "current".
 - Quick Panel typing dots now pulse while waiting for the first AI chunk instead of sitting static.
 - Bug reports no longer falsely claim the previous session crashed after an app auto-update.
