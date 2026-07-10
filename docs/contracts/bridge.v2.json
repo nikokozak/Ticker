@@ -151,7 +151,8 @@
         "requiredCallbackId": true
       },
       "hybridSearch": {
-        "requiredPayloadKeys": ["query", "currentStreamId", "limit"],
+        "requiredPayloadKeys": ["query", "limit"],
+        "optionalPayloadKeys": ["currentStreamId"],
         "requiredCallbackId": true
       },
       "loadProxyAuth": {

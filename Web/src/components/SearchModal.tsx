@@ -8,9 +8,10 @@ interface SearchModalProps {
   onClose: () => void;
   currentStreamId: string | null;
   isStreamOpen: boolean;
-  onNavigateToCell: (cellId: string) => void;
-  /** Navigate to another stream, optionally to a specific cell or source */
-  onNavigateToStream: (streamId: string, targetId: string, targetType?: 'cell' | 'source') => void;
+  /** Scroll the open editor to the first occurrence of the matched text */
+  onNavigateToMatch: (matchText: string) => void;
+  /** Navigate to another stream, to a text match or a source */
+  onNavigateToStream: (streamId: string, targetId: string, targetType?: 'match' | 'source') => void;
   /** Navigate to a source in the source panel (for chunk results) */
   onNavigateToSource: (sourceId: string) => void;
 }
@@ -20,7 +21,7 @@ export function SearchModal({
   onClose,
   currentStreamId,
   isStreamOpen,
-  onNavigateToCell,
+  onNavigateToMatch,
   onNavigateToStream,
   onNavigateToSource,
 }: SearchModalProps) {
@@ -71,17 +72,12 @@ export function SearchModal({
     // Increment sequence for this request
     const currentSequence = ++requestSequenceRef.current;
 
-    if (!currentStreamId) {
-      setResults({ currentStreamResults: [], otherStreamResults: [] });
-      setLoading(false);
-      return;
-    }
-
     debounceRef.current = window.setTimeout(async () => {
       try {
         const response = await bridge.sendAsync<HybridSearchResults>('hybridSearch', {
           query: query.trim(),
-          currentStreamId,
+          // Absent when searching from the stream list
+          ...(currentStreamId ? { currentStreamId } : {}),
           limit: 20,
         });
         // Only update state if this is still the most recent request
@@ -118,13 +114,14 @@ export function SearchModal({
 
   // Handle clicking on a search result
   const navigateToResult = useCallback((result: SearchResult) => {
-    const targetId = result.sourceType === 'chunk' && result.sourceId
-      ? result.sourceId
-      : result.id;
-    const targetType = result.sourceType === 'chunk' ? 'source' : 'cell';
     onClose();
-    onNavigateToStream(result.streamId, targetId, targetType);
-  }, [onClose, onNavigateToStream]);
+    if (result.sourceType === 'chunk' && result.sourceId) {
+      onNavigateToStream(result.streamId, result.sourceId, 'source');
+    } else {
+      // Document result: scroll the target stream to the matched text
+      onNavigateToStream(result.streamId, query.trim(), 'match');
+    }
+  }, [onClose, onNavigateToStream, query]);
 
   const handleResultClick = useCallback((result: SearchResult) => {
     if (isStreamOpen && result.streamId === currentStreamId) {
@@ -134,8 +131,8 @@ export function SearchModal({
         // Chunk result: navigate to source in source panel
         onNavigateToSource(result.sourceId);
       } else {
-        // Cell result: scroll to cell
-        onNavigateToCell(result.id);
+        // Document result: scroll to the matched text
+        onNavigateToMatch(query.trim());
       }
     } else if (!isStreamOpen) {
       navigateToResult(result);
@@ -143,7 +140,7 @@ export function SearchModal({
       // Other stream: show expanded preview
       setExpandedResult(result);
     }
-  }, [currentStreamId, isStreamOpen, navigateToResult, onClose, onNavigateToCell, onNavigateToSource]);
+  }, [currentStreamId, isStreamOpen, navigateToResult, onClose, onNavigateToMatch, onNavigateToSource, query]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -186,7 +183,7 @@ export function SearchModal({
             ref={inputRef}
             type="text"
             className="search-modal-input"
-            placeholder="Search cells..."
+            placeholder="Search…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -236,7 +233,7 @@ export function SearchModal({
             {results.otherStreamResults.length > 0 && (
               <>
                 <div className="search-modal-section-header search-modal-section-divider">
-                  Other Streams
+                  {isStreamOpen ? 'Other Streams' : 'Streams'}
                 </div>
                 {results.otherStreamResults.map((result, index) => (
                   <SearchResultItem
@@ -257,7 +254,7 @@ export function SearchModal({
 
         {!results && !loading && query.trim() === '' && (
           <div className="search-modal-hint">
-            Type to search across cells and sources
+            Type to search streams and sources
           </div>
         )}
       </div>
@@ -290,7 +287,7 @@ function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps
       <span className="search-result-icon">{icon}</span>
       <div className="search-result-content">
         <div className="search-result-title">
-          {result.streamTitle !== '' && result.sourceType === 'cell' && (
+          {result.streamTitle !== '' && result.sourceType === 'document' && (
             <span className="search-result-stream">[{result.streamTitle}]</span>
           )}
           {title}
@@ -306,16 +303,7 @@ function getResultIcon(result: SearchResult): ReactNode {
   if (result.sourceType === 'chunk') {
     return <DocumentIcon size={14} />;
   }
-  switch (result.cellType) {
-    case 'text':
-      return 'T';
-    case 'aiResponse':
-      return <SparkleIcon size={14} />;
-    case 'quote':
-      return '"';
-    default:
-      return '•';
-  }
+  return 'T';
 }
 
 function getMatchBadge(matchType: string): ReactNode | null {

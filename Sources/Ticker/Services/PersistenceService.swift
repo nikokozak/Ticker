@@ -1855,9 +1855,10 @@ final class PersistenceService {
 
     /// Search stream documents by text, returning results split by current vs other streams.
     /// Each stream category gets its own limit to ensure cross-stream coverage.
+    /// With no current stream (e.g. searching from the stream list) every match lands in `otherStreams`.
     func textSearchStreamDocuments(
         query: String,
-        currentStreamId: UUID,
+        currentStreamId: UUID?,
         limitPerCategory: Int = 15
     ) throws -> (currentStream: [StreamDocumentSearchResult], otherStreams: [StreamDocumentSearchResult]) {
         // Escape SQL LIKE special characters to prevent injection
@@ -1877,7 +1878,7 @@ final class PersistenceService {
                   AND d.markdown LIKE ? ESCAPE '\\' COLLATE NOCASE
                 ORDER BY d.updated_at DESC
                 LIMIT ?
-            """, arguments: [currentStreamId.uuidString, pattern, limitPerCategory])
+            """, arguments: [currentStreamId?.uuidString ?? "", pattern, limitPerCategory])
             .map { row in
                 StreamDocumentSearchResult(
                     streamId: UUID(uuidString: row["stream_id"])!,
@@ -1896,7 +1897,7 @@ final class PersistenceService {
                   AND d.markdown LIKE ? ESCAPE '\\' COLLATE NOCASE
                 ORDER BY d.updated_at DESC
                 LIMIT ?
-            """, arguments: [currentStreamId.uuidString, pattern, limitPerCategory])
+            """, arguments: [currentStreamId?.uuidString ?? "", pattern, limitPerCategory])
             .map { row in
                 StreamDocumentSearchResult(
                     streamId: UUID(uuidString: row["stream_id"])!,

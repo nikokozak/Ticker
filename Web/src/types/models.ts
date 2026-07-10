@@ -111,11 +111,10 @@ export interface SearchResult {
   id: string;
   streamId: string;
   streamTitle: string;
-  sourceType: 'cell' | 'chunk';
+  sourceType: 'document' | 'chunk';
   title: string;
   shortTitle?: string;
   snippet: string;
-  cellType?: 'text' | 'aiResponse' | 'quote';
   /** Source ID for chunk results (to navigate to source panel) */
   sourceId?: string;
   sourceName?: string;
