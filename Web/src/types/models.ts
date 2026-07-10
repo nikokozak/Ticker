@@ -117,8 +117,6 @@ export interface SearchResult {
   /** Source ID for chunk results (to navigate to source panel) */
   sourceId?: string;
   sourceName?: string;
-  similarity?: number;
-  matchType: 'text' | 'semantic' | 'both';
 }
 
 /** Response from hybrid search API */

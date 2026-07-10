@@ -1,6 +1,19 @@
 import SwiftUI
 import AppKit
 
+private extension Color {
+    init(light: Color, dark: Color) {
+        self.init(NSColor(name: nil, dynamicProvider: { appearance in
+            switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
+            case .darkAqua:
+                return NSColor(dark)
+            default:
+                return NSColor(light)
+            }
+        }))
+    }
+}
+
 private enum QuickPanelStyle {
     static let radius: CGFloat = 8
     static let badgeVerticalPadding: CGFloat = 2

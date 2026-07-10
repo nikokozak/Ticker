@@ -54,8 +54,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         "setSourceScope",
         "updateMarginNote",
         "openExternalURL",
-        "getExchange",
-        "exportStream"
+        "getExchange"
     ]
 
     private let persistence: PersistenceService
@@ -153,7 +152,11 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 try persistence.deleteStream(id: id)
                 delegate?.clearCurrentStreamIdForFileDrops(ifMatches: id)
                 // Also delete stream assets (images, etc.)
-                try? assetService.deleteAssets(for: id)
+                do {
+                    try assetService.deleteAssets(for: id)
+                } catch {
+                    DebugLog.log("[StreamMessageHandler] Failed to delete stream assets (\(DebugLog.errorSummary(error)))")
+                }
                 // Reload streams list
                 let summaries = try persistence.loadStreamSummaries()
                 let summariesPayload = StreamCodec.encodeSummaries(summaries)
@@ -295,74 +298,6 @@ final class StreamMessageHandler: BridgeMessageHandler {
 
             await MainActor.run {
                 _ = NSWorkspace.shared.open(url)
-            }
-
-        case "exportStream":
-            guard let payload = message.payload,
-                  let streamIdString = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdString),
-                  let format = payload["format"]?.value as? String else {
-                DebugLog.log("[WebViewManager] Invalid exportStream payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid exportStream payload")
-                return
-            }
-
-            do {
-                guard let stream = try persistence.loadStream(id: streamId) else {
-                    DebugLog.log("[WebViewManager] Stream not found for export")
-                    await bridgeService.send(BridgeMessage(type: "exportError", payload: [
-                        "streamId": AnyCodable(streamIdString),
-                        "error": AnyCodable("Stream not found")
-                    ]))
-                    return
-                }
-                let document = try persistence.loadOrCreateStreamDocument(streamId: streamId)
-
-                // Convert to export format
-                let content = StreamCodec.formatStreamForExport(stream: stream, document: document, format: format)
-                let fileExtension = format == "markdown" ? ".md" : ".txt"
-                let suggestedName = StreamCodec.sanitizeFilename(stream.title) + fileExtension
-
-                // Show save panel on main thread
-                await MainActor.run {
-                    let savePanel = NSSavePanel()
-                    savePanel.nameFieldStringValue = suggestedName
-                    // Use appropriate content type for the format
-                    if format == "markdown" {
-                        savePanel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
-                    } else {
-                        savePanel.allowedContentTypes = [.plainText]
-                    }
-                    savePanel.message = "Export stream as \(format == "markdown" ? "Markdown" : "Plain Text")"
-
-                    let result = savePanel.runModal()
-                    if result == .OK, let url = savePanel.url {
-                        do {
-                            try content.write(to: url, atomically: true, encoding: .utf8)
-                            bridgeService.send(BridgeMessage(type: "exportComplete", payload: [
-                                "streamId": AnyCodable(streamId.uuidString),
-                                "path": AnyCodable(url.path)
-                            ]))
-                        } catch {
-                            DebugLog.log("[WebViewManager] Failed to write export file (\(DebugLog.errorSummary(error)))")
-                            bridgeService.send(BridgeMessage(type: "exportError", payload: [
-                                "streamId": AnyCodable(streamId.uuidString),
-                                "error": AnyCodable(error.localizedDescription)
-                            ]))
-                        }
-                    } else {
-                        // User canceled - no error, just inform frontend
-                        bridgeService.send(BridgeMessage(type: "exportCanceled", payload: [
-                            "streamId": AnyCodable(streamId.uuidString)
-                        ]))
-                    }
-                }
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to load stream for export (\(DebugLog.errorSummary(error)))")
-                await bridgeService.send(BridgeMessage(type: "exportError", payload: [
-                    "streamId": AnyCodable(streamIdString),
-                    "error": AnyCodable(error.localizedDescription)
-                ]))
             }
 
         default:

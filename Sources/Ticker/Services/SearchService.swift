@@ -15,7 +15,7 @@ final class SearchService {
 
     // MARK: - Public Interface
 
-    /// Perform hybrid search combining text and semantic results.
+    /// Perform text search across stream documents and indexed source chunks.
     /// With no current stream (searching from the stream list) all matches land in
     /// `otherStreamResults` and source chunks are skipped.
     func hybridSearch(
@@ -56,9 +56,7 @@ final class SearchService {
                     shortTitle: shortTitle,
                     snippet: snippet,
                     sourceId: chunkResult.sourceId.uuidString,
-                    sourceName: chunkResult.sourceName,
-                    similarity: nil,
-                    matchType: .text
+                    sourceName: chunkResult.sourceName
                 ))
             }
         }
@@ -67,13 +65,9 @@ final class SearchService {
         currentStreamResults = deduplicateResults(currentStreamResults)
         otherStreamResults = deduplicateResults(otherStreamResults)
 
-        // 6. Sort: semantic matches first within each group, then text
-        let sortedCurrent = sortResults(currentStreamResults)
-        let sortedOther = sortResults(otherStreamResults)
-
         return HybridSearchResults(
-            currentStreamResults: Array(sortedCurrent.prefix(limit)),
-            otherStreamResults: Array(sortedOther.prefix(limit))
+            currentStreamResults: Array(currentStreamResults.prefix(limit)),
+            otherStreamResults: Array(otherStreamResults.prefix(limit))
         )
     }
 
@@ -89,36 +83,13 @@ final class SearchService {
             shortTitle: nil,
             snippet: extractSnippet(from: textResult.markdown, query: query),
             sourceId: nil,
-            sourceName: nil,
-            similarity: nil,
-            matchType: .text
+            sourceName: nil
         )
-    }
-
-    private func sortResults(_ results: [SearchResult]) -> [SearchResult] {
-        // Preserve input indices for stable tie-breaking (SQL returns by updated_at DESC)
-        let indexed = results.enumerated().map { ($0.offset, $0.element) }
-        return indexed.sorted { a, b in
-            let (indexA, resultA) = a
-            let (indexB, resultB) = b
-            // Future semantic matches first
-            if resultA.matchType == .semantic && resultB.matchType != .semantic { return true }
-            if resultA.matchType != .semantic && resultB.matchType == .semantic { return false }
-            // Then by similarity if both semantic
-            if let simA = resultA.similarity, let simB = resultB.similarity {
-                if simA != simB { return simA > simB }
-            }
-            // Preserve original order (by recency from SQL) as tie-breaker
-            return indexA < indexB
-        }.map { $0.1 }
     }
 
     private func deduplicateResults(_ results: [SearchResult]) -> [SearchResult] {
         // Deduplicate by streamId + sourceType + id
-        // Note: text search returns stream documents, semantic search returns chunks - these are
-        // different entity types with different IDs, so true duplicates are rare.
-        // This mainly guards against the same result appearing twice if both search
-        // methods somehow return it.
+        // Stream documents and source chunks are different entities with different IDs.
         var seen = Set<String>()
         return results.filter { result in
             let key = "\(result.streamId):\(result.sourceType.rawValue):\(result.id)"
@@ -194,17 +165,9 @@ struct SearchResult: Encodable {
     let snippet: String
     let sourceId: String?
     let sourceName: String?
-    let similarity: Float?
-    let matchType: SearchMatchType
 }
 
 enum SearchResultSourceType: String, Encodable {
     case document
     case chunk
-}
-
-enum SearchMatchType: String, Encodable {
-    case text
-    case semantic
-    case both
 }

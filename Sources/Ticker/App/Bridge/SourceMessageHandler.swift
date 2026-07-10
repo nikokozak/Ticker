@@ -38,7 +38,6 @@ final class SourceMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
         "setFileDropContext",
         "addSource",
-        "addSourceFromPath",
         "removeSource",
         "retrySourceIndexing",
         "setSourceAIExclusion",
@@ -46,7 +45,6 @@ final class SourceMessageHandler: BridgeMessageHandler {
         "openPdfDestination",
         "beginPdfAnchorPick",
         "saveImage",
-        "getAssetPath"
     ]
 
     private let persistence: PersistenceService
@@ -118,28 +116,6 @@ final class SourceMessageHandler: BridgeMessageHandler {
                         bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
                     }
                 }
-            }
-
-        case "addSourceFromPath":
-            guard let payload = message.payload,
-                  let streamIdValue = payload["streamId"]?.value as? String,
-                  let streamId = UUID(uuidString: streamIdValue),
-                  let filePath = payload["path"]?.value as? String,
-                  let sourceService else {
-                DebugLog.log("[WebViewManager] Invalid addSourceFromPath payload or service unavailable")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid addSourceFromPath payload or service unavailable")
-                return
-            }
-
-            let url = URL(fileURLWithPath: filePath)
-            do {
-                let source = try sourceService.addSource(from: url, to: streamId)
-                let sourcePayload = StreamCodec.encodeSource(source)
-                await bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
-                ingestService?.enqueue(source: source)
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to add source from path (\(DebugLog.errorSummary(error)))")
-                await bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
             }
 
         case "removeSource":
@@ -361,20 +337,6 @@ final class SourceMessageHandler: BridgeMessageHandler {
                     "requestId": AnyCodable(requestId as Any)
                 ]))
             }
-
-        case "getAssetPath":
-            // Get the full file path for an asset
-            guard let payload = message.payload,
-                  let relativePath = payload["relativePath"]?.value as? String else {
-                DebugLog.log("[WebViewManager] Invalid getAssetPath payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid getAssetPath payload")
-                return
-            }
-            let fullPath = assetService.assetURL(for: relativePath).path
-            await bridgeService.send(BridgeMessage(type: "assetPath", payload: [
-                "relativePath": AnyCodable(relativePath),
-                "fullPath": AnyCodable(fullPath)
-            ]))
 
         default:
             DebugLog.log("[SourceMessageHandler] Unknown message type: \(message.type)")

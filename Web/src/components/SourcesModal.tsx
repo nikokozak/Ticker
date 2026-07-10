@@ -86,6 +86,8 @@ export function SourcesModal({
   const [isDragOver, setIsDragOver] = useState(false);
   const [indexUpdates, setIndexUpdates] = useState<Record<string, SourceIndexStatusSnapshot>>({});
   const sourceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const errorTimerRef = useRef<number>();
+  const highlightClearTimerRef = useRef<number>();
 
   const handleClose = useCallback(() => {
     setError(null);
@@ -126,8 +128,14 @@ export function SourcesModal({
 
   const showError = (message: string) => {
     setError(message);
-    window.setTimeout(() => setError(null), 5000);
+    window.clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = window.setTimeout(() => setError(null), 5000);
   };
+
+  useEffect(() => () => {
+    window.clearTimeout(errorTimerRef.current);
+    window.clearTimeout(highlightClearTimerRef.current);
+  }, []);
 
   const handleDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -223,7 +231,7 @@ export function SourcesModal({
       if (sourceEl) {
         sourceEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
         sourceEl.classList.add('sources-modal-item--highlighted');
-        window.setTimeout(() => {
+        highlightClearTimerRef.current = window.setTimeout(() => {
           sourceEl.classList.remove('sources-modal-item--highlighted');
           onClearHighlight?.();
         }, 2000);
@@ -231,7 +239,10 @@ export function SourcesModal({
         onClearHighlight?.();
       }
     }, 80);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(highlightClearTimerRef.current);
+    };
   }, [highlightedSourceId, isOpen, onClearHighlight]);
 
   if (!isOpen) return null;

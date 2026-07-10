@@ -142,37 +142,6 @@ enum StreamCodec {
         ]
     }
 
-    /// Format a stream for export as markdown or plain text
-    static func formatStreamForExport(stream: Stream, document: StreamDocument, format: String) -> String {
-        var output = ""
-        let isMarkdown = format == "markdown"
-
-        if isMarkdown {
-            output += "# \(stream.title)\n\n"
-        } else {
-            output += "\(stream.title)\n\n"
-        }
-
-        let body = isMarkdown ? document.markdown : plainTextFromMarkdown(document.markdown)
-        if !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            output += body + "\n\n"
-        }
-
-        if !stream.sources.isEmpty {
-            output += isMarkdown ? "## Sources\n\n" : "Sources:\n"
-            for source in stream.sources {
-                output += "- \(source.displayName)\n"
-            }
-        }
-
-        return output
-    }
-
-    static func sanitizeFilename(_ name: String) -> String {
-        let invalidChars = CharacterSet(charactersIn: ":/\\?%*|\"<>")
-        return name.components(separatedBy: invalidChars).joined(separator: "-")
-    }
-
     static func previewLine(from markdown: String) -> String? {
         for line in markdown.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -184,15 +153,6 @@ enum StreamCodec {
             return stripped
         }
         return nil
-    }
-
-    private static func plainTextFromMarkdown(_ markdown: String) -> String {
-        markdown
-            .replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\!\[([^\]]*)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]*\)"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"`([^`]*)`"#, with: "$1", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func strippedPreviewMarkdown(_ line: String) -> String {

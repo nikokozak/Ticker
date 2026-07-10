@@ -32,21 +32,6 @@ final class SettingsMessageHandler: BridgeMessageHandler {
                 return
             }
 
-            // Save OpenAI API key if provided
-            if let openaiKey = payload["openaiAPIKey"]?.value as? String {
-                settingsService.openaiAPIKey = openaiKey.isEmpty ? nil : openaiKey
-            }
-
-            // Save Anthropic API key if provided
-            if let anthropicKey = payload["anthropicAPIKey"]?.value as? String {
-                settingsService.anthropicAPIKey = anthropicKey.isEmpty ? nil : anthropicKey
-            }
-
-            // Save Perplexity API key if provided
-            if let perplexityKey = payload["perplexityAPIKey"]?.value as? String {
-                settingsService.perplexityAPIKey = perplexityKey.isEmpty ? nil : perplexityKey
-            }
-
             // Save default model setting if provided
             if let modelValue = payload["defaultModel"]?.value as? String,
                let model = SettingsService.DefaultModel(rawValue: modelValue) {

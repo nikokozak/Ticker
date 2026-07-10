@@ -5,7 +5,6 @@ final class ProxyAuthHandler: BridgeMessageHandler {
         "loadProxyAuth",
         "setProxyDeviceKey",
         "clearProxyDeviceKey",
-        "validateProxyDeviceKey",
         "refreshProxyAuth",
         "submitFeedback",
         "getSupportBundle"
@@ -133,11 +132,11 @@ final class ProxyAuthHandler: BridgeMessageHandler {
                 }
             }
 
-        case "validateProxyDeviceKey", "refreshProxyAuth":
+        case "refreshProxyAuth":
             // Re-validate cached key with server and return fresh limits/usage
             guard let callbackId = message.callbackId else {
-                DebugLog.log("[WebViewManager] Invalid validateProxyDeviceKey/refreshProxyAuth payload")
-                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for validateProxyDeviceKey/refreshProxyAuth")
+                DebugLog.log("[WebViewManager] Invalid refreshProxyAuth payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for refreshProxyAuth")
                 return
             }
             Task {

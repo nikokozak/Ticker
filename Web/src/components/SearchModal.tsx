@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { SearchResult, HybridSearchResults, bridge } from '../types';
-import { DocumentIcon, SearchIcon, SparkleIcon, Spinner } from './icons';
+import { DocumentIcon, SearchIcon, Spinner } from './icons';
 import { markdownPreviewLine } from '../utils/markdownPreview';
 
 interface SearchModalProps {
@@ -47,10 +47,12 @@ export function SearchModal({
       setError(null);
       setLoading(false);
       requestSequenceRef.current = 0;
-      setTimeout(() => inputRef.current?.focus(), 50);
+      const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 50);
+      return () => window.clearTimeout(focusTimer);
     } else {
       // Modal closing - increment sequence to invalidate any in-flight requests
       requestSequenceRef.current++;
+      return undefined;
     }
   }, [isOpen]);
 
@@ -270,7 +272,6 @@ interface SearchResultItemProps {
 
 function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps) {
   const icon = getResultIcon(result);
-  const badge = getMatchBadge(result.matchType);
   const title = result.sourceType === 'chunk'
     ? result.shortTitle ?? result.title
     : result.title;
@@ -294,7 +295,6 @@ function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps
         </div>
         <div className="search-result-snippet">{markdownPreviewLine(result.snippet)}</div>
       </div>
-      {badge && <span className="search-result-badge">{badge}</span>}
     </button>
   );
 }
@@ -304,15 +304,4 @@ function getResultIcon(result: SearchResult): ReactNode {
     return <DocumentIcon size={14} />;
   }
   return 'T';
-}
-
-function getMatchBadge(matchType: string): ReactNode | null {
-  switch (matchType) {
-    case 'semantic':
-      return <SparkleIcon size={14} />;
-    // Note: 'both' match type is reserved for future use when we can correlate
-    // cell content with source chunks that share the same underlying text
-    default:
-      return null;
-  }
 }
