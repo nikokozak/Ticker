@@ -20,7 +20,7 @@ final class SettingsMessageHandler: BridgeMessageHandler {
         switch message.type {
         case "loadSettings":
             let settings = settingsProvider()
-            bridgeService.send(BridgeMessage(
+            await bridgeService.send(BridgeMessage(
                 type: "settingsLoaded",
                 payload: ["settings": AnyCodable(settings)]
             ))
@@ -84,7 +84,7 @@ final class SettingsMessageHandler: BridgeMessageHandler {
 
             // Send back updated settings
             let settings = settingsProvider()
-            bridgeService.send(BridgeMessage(
+            await bridgeService.send(BridgeMessage(
                 type: "settingsLoaded",
                 payload: ["settings": AnyCodable(settings)]
             ))

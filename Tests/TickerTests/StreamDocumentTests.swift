@@ -997,6 +997,7 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    @MainActor
     func test_documentAICancelStopsSlowStreamingProvider() async throws {
         let recorder = BridgeMessageRecorder()
         let provider = SlowDocumentAIProvider()
@@ -1045,6 +1046,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertTrue(recorder.messages(ofType: "documentAIComplete").isEmpty)
     }
 
+    @MainActor
     func test_documentAICompletionSavesExchangeReceipt() async throws {
         try await withTempPersistenceService { service in
             let stream = Stream(title: "Exchange Receipt")
