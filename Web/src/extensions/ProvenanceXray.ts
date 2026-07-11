@@ -1,16 +1,13 @@
-import { RangeSetBuilder, StateEffect, StateField, Transaction, type EditorState, type Extension } from '@codemirror/state';
+import { RangeSetBuilder, StateEffect, StateField, type EditorState, type Extension } from '@codemirror/state';
 import {
   Decoration,
   EditorView,
   ViewPlugin,
-  hoverTooltip,
   type DecorationSet,
-  type Tooltip,
   type ViewUpdate,
 } from '@codemirror/view';
 import type { SourceReference } from '../types';
-import type { AIExchangeJSON } from '../types';
-import { currentSpans, dissolveSpans, type Span } from './ProvenanceField';
+import { currentSpans, type Span } from './ProvenanceField';
 
 export interface ProvenanceRange {
   from: number;
@@ -45,12 +42,8 @@ export function provenanceXrayIsVisible(state: EditorState): boolean {
 }
 
 export interface ProvenanceXrayOptions {
-  sources: SourceReference[];
-  isAiThinking: boolean;
-  loadExchange: (requestId: string) => Promise<{ exchange: AIExchangeJSON | null }>;
-  onShowExchange: (exchange: AIExchangeJSON, span: Span) => void;
-  onRedevelop: (span: Span, exchange: AIExchangeJSON) => void;
-  onOpenSource: (sourceId: string) => void;
+  onSpanHover: (span: Span, pos: number) => void;
+  onSpanHoverEnd: () => void;
 }
 
 function classForOrigin(origin: Span['origin']): string {
@@ -166,7 +159,7 @@ export function canRedevelopSpan(span: Pick<Span, 'origin'>, coveredText: string
   return span.origin === 'ai' && !isAiThinking && coveredText.trim().split(/\s+/).filter(Boolean).length >= 3;
 }
 
-function originLine(span: Span, sources: SourceReference[]): string {
+export function originLine(span: Span, sources: SourceReference[]): string {
   if (span.origin === 'capture') {
     return `Captured from ${textMeta(span.meta.sourceApp, 'unknown app')}`;
   }
@@ -185,81 +178,6 @@ function spanAt(view: EditorView, pos: number): Span | null {
 
 function isAtomicPosition(view: EditorView, pos: number): boolean {
   return atomicRangesInView(view).some((range) => range.from <= pos && pos < range.to);
-}
-
-function button(label: string, onClick?: () => void): HTMLButtonElement {
-  const element = document.createElement('button');
-  element.type = 'button';
-  element.className = 'selection-action-button selection-action-button--text';
-  element.textContent = label;
-  element.disabled = !onClick;
-  element.onmousedown = (event) => event.preventDefault();
-  if (onClick) element.onclick = onClick;
-  return element;
-}
-
-function setButtonAction(element: HTMLButtonElement, onClick?: () => void): void {
-  element.disabled = !onClick;
-  element.onclick = onClick ?? null;
-}
-
-function tooltipForSpan(view: EditorView, span: Span, options: ProvenanceXrayOptions): Tooltip {
-  return {
-    pos: span.start,
-    end: span.end,
-    above: true,
-    create() {
-      const dom = document.createElement('div');
-      dom.className = 'cm-provenance-tooltip';
-
-      const line = document.createElement('div');
-      line.className = 'cm-provenance-tooltip-line';
-      line.textContent = originLine(span, options.sources);
-      dom.append(line);
-
-      const actions = document.createElement('div');
-      actions.className = 'cm-provenance-tooltip-actions';
-      actions.append(button('Dissolve', () => {
-        view.dispatch({
-          effects: dissolveSpans.of([span.spanId]),
-          annotations: Transaction.addToHistory.of(true),
-        });
-        view.focus();
-      }));
-      if (span.origin === 'ai' && span.requestId) {
-        const showExchangeButton = button('Show exchange');
-        actions.append(showExchangeButton);
-
-        const coveredText = view.state.doc.sliceString(span.start, span.end);
-        const redevelopButton = button('Re-develop');
-        actions.append(redevelopButton);
-
-        void options.loadExchange(span.requestId).then(({ exchange }) => {
-          if (!exchange) {
-            showExchangeButton.textContent = 'Exchange no longer stored';
-            setButtonAction(showExchangeButton);
-            setButtonAction(redevelopButton);
-            return;
-          }
-
-          setButtonAction(showExchangeButton, () => options.onShowExchange(exchange, span));
-          if (canRedevelopSpan(span, coveredText, options.isAiThinking)) {
-            setButtonAction(redevelopButton, () => options.onRedevelop(span, exchange));
-          }
-        }).catch(() => {
-          showExchangeButton.textContent = 'Exchange no longer stored';
-          setButtonAction(showExchangeButton);
-          setButtonAction(redevelopButton);
-        });
-      }
-      if (span.origin === 'source' && span.sourceId) {
-        actions.append(button('Open source →', () => options.onOpenSource(span.sourceId!)));
-      }
-      dom.append(actions);
-
-      return { dom };
-    },
-  };
 }
 
 const provenanceXrayPlugin = ViewPlugin.fromClass(class {
@@ -284,15 +202,40 @@ const provenanceXrayPlugin = ViewPlugin.fromClass(class {
   decorations: (value) => value.decorations,
 });
 
+/**
+ * The popover itself is a React element in StreamEditor, positioned by the
+ * same rules as the selection menu. CM's hoverTooltip positions against
+ * scrollDOM geometry, which the page-scrolls layout breaks (tooltip pinned
+ * to the top-right regardless of pointer). This extension only reports which
+ * span is under the pointer.
+ */
 export function provenanceXrayExtension(options: ProvenanceXrayOptions): Extension {
+  let lastSpanId: string | null = null;
+
+  const report = (span: Span | null, pos: number) => {
+    const spanId = span?.spanId ?? null;
+    if (spanId === lastSpanId) return;
+    lastSpanId = spanId;
+    if (span) options.onSpanHover(span, pos);
+    else options.onSpanHoverEnd();
+  };
+
   return [
     provenanceXrayVisibleField,
     provenanceXrayPlugin,
-    hoverTooltip((view, pos) => {
-      if (!provenanceXrayIsVisible(view.state)) return null;
-      if (isAtomicPosition(view, pos)) return null;
-      const span = spanAt(view, pos);
-      return span ? tooltipForSpan(view, span, options) : null;
-    }, { hoverTime: 180, hideOnChange: true }),
+    EditorView.domEventHandlers({
+      mousemove(event, view) {
+        if (!provenanceXrayIsVisible(view.state)) {
+          report(null, 0);
+          return;
+        }
+        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+        const span = pos !== null && !isAtomicPosition(view, pos) ? spanAt(view, pos) : null;
+        report(span, pos ?? 0);
+      },
+      mouseleave() {
+        report(null, 0);
+      },
+    }),
   ];
 }

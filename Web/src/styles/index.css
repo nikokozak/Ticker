@@ -1507,11 +1507,12 @@ body {
   border-bottom: 1px dotted var(--prov-capture-border);
 }
 
-/* CodeMirror's default tooltip wrapper draws its own gray border/background;
-   the provenance card inside is the whole visual — neutralize the wrapper. */
-.document-editor-codemirror .cm-tooltip {
-  border: none;
-  background: transparent;
+/* React popover (StreamEditor), positioned by the selection-menu rules —
+   left is the clamped center point, like .selection-action-menu. */
+.provenance-popover {
+  position: fixed;
+  z-index: 920;
+  transform: translateX(-50%);
 }
 
 .cm-provenance-tooltip {
