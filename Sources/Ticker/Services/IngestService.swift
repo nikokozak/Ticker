@@ -165,7 +165,7 @@ final class IngestService: @unchecked Sendable {
                     throw IngestError.noReadableText
                 }
 
-                chunks = try chunkingService.chunkPDF(
+                let result = try chunkingService.extractAndChunkPDF(
                     document: document,
                     sourceId: source.id,
                     progress: { progress in
@@ -173,6 +173,13 @@ final class IngestService: @unchecked Sendable {
                     },
                     shouldCancel: { Task.isCancelled }
                 )
+                try persistence.updateSourceExtraction(
+                    source.id,
+                    text: result.extractedText.isEmpty ? nil : result.extractedText,
+                    pageCount: result.pageCount,
+                    status: result.extractedText.isEmpty ? .error : .ready
+                )
+                chunks = result.chunks
             } else {
                 chunks = chunkingService.chunkText(source.extractedText ?? "", sourceId: source.id)
             }

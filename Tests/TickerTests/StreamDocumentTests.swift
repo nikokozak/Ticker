@@ -1648,14 +1648,17 @@ final class StreamDocumentTests: XCTestCase {
         ])
         try addOutline(to: document, labels: ["1 Opening", "2 Storage", "3 Closing"])
 
-        let chunks = try ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0))
-            .chunkPDF(document: document, sourceId: UUID())
+        let result = try ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0))
+            .extractAndChunkPDF(document: document, sourceId: UUID())
+        let chunks = result.chunks
 
         XCTAssertEqual(chunks.count, 3)
         XCTAssertEqual(chunks.map(\.pageStart), [1, 2, 3])
         XCTAssertEqual(chunks.map(\.pageEnd), [1, 2, 3])
         XCTAssertEqual(chunks.map(\.sectionPath), ["1 Opening", "2 Storage", "3 Closing"])
         XCTAssertTrue(chunks[1].text.contains("caliper phrase"))
+        XCTAssertEqual(result.pageCount, 3)
+        XCTAssertTrue(result.extractedText.contains("--- Page 2 ---"))
     }
 
     func test_sourceChunksAndFTSRowsAreRemovedWhenSourceIsDeleted() throws {
@@ -2348,6 +2351,8 @@ final class StreamDocumentTests: XCTestCase {
 
             let sourceService = SourceService(persistence: service)
             let source = try sourceService.addSource(from: pdfURL, to: stream.id)
+            XCTAssertEqual(source.status, .pending)
+            XCTAssertNil(source.extractedText)
             let ingestService = IngestService(
                 persistence: service,
                 sourceService: sourceService,
@@ -2371,6 +2376,9 @@ final class StreamDocumentTests: XCTestCase {
 
             let reloaded = try XCTUnwrap(service.loadSource(id: source.id))
             XCTAssertEqual(reloaded.indexStatus, .ready)
+            XCTAssertEqual(reloaded.status, .ready)
+            XCTAssertEqual(reloaded.pageCount, 1)
+            XCTAssertTrue(reloaded.extractedText?.contains("anvil phrase") == true)
             XCTAssertFalse(try service.loadSourceChunks(sourceId: source.id).isEmpty)
             lock.lock()
             let capturedStatuses = statuses

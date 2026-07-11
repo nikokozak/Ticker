@@ -94,8 +94,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 return
             }
 
-            // Must run on main thread for NSOpenPanel
-            await MainActor.run {
+            let selectedURL = await MainActor.run { () -> URL? in
                 let panel = NSOpenPanel()
                 panel.canChooseFiles = true
                 panel.canChooseDirectories = false
@@ -104,18 +103,18 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 let markdownType = UTType(filenameExtension: "md") ?? UTType.plainText
                 panel.allowedContentTypes = [.pdf, .plainText, .text, .sourceCode, markdownType, .png, .jpeg, .heic, .image]
                 panel.message = "Select a file to attach"
+                return panel.runModal() == .OK ? panel.url : nil
+            }
+            guard let selectedURL else { return }
 
-                if panel.runModal() == .OK, let url = panel.url {
-                    do {
-                        let source = try sourceService.addSource(from: url, to: streamId)
-                        let sourcePayload = StreamCodec.encodeSource(source)
-                        bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
-                        ingestService?.enqueue(source: source)
-                    } catch {
-                        DebugLog.log("[WebViewManager] Failed to add source (\(DebugLog.errorSummary(error)))")
-                        bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
-                    }
-                }
+            do {
+                let source = try sourceService.addSource(from: selectedURL, to: streamId)
+                let sourcePayload = StreamCodec.encodeSource(source)
+                await bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+                ingestService?.enqueue(source: source)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to add source (\(DebugLog.errorSummary(error)))")
+                await bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
             }
 
         case "removeSource":

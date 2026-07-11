@@ -1534,6 +1534,20 @@ final class PersistenceService {
         }
     }
 
+    func updateSourceExtraction(
+        _ sourceId: UUID,
+        text: String?,
+        pageCount: Int?,
+        status: SourceStatus
+    ) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE sources SET extracted_text = ?, page_count = ?, status = ? WHERE id = ?",
+                arguments: [text, pageCount, status.rawValue, sourceId.uuidString]
+            )
+        }
+    }
+
     func saveSourceLastPageIndex(sourceId: UUID, pageIndex: Int) throws {
         try dbQueue.write { db in
             try db.execute(

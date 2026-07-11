@@ -273,38 +273,30 @@ final class WebViewManager: NSObject {
         return imageExtensions.contains(url.pathExtension.lowercased())
     }
 
-    private func withSecurityScopedAccess<T>(_ url: URL, _ work: () throws -> T) rethrows -> T {
-        let didStart = url.startAccessingSecurityScopedResource()
-        defer {
-            if didStart {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-        return try work()
-    }
-
     @MainActor
     private func processDroppedImage(_ url: URL, streamId: UUID) {
-        do {
-            let imageData = try withSecurityScopedAccess(url) { try Data(contentsOf: url) }
-            let relativePath = try assetService.saveImage(
-                data: imageData,
-                streamId: streamId,
-                filename: url.lastPathComponent
-            )
+        let assetService = assetService
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let relativePath = try await Task.detached(priority: .utility) {
+                    let didStart = url.startAccessingSecurityScopedResource()
+                    defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+                    return try assetService.saveImage(from: url, streamId: streamId)
+                }.value
+                let assetUrl = "ticker-asset:///\(relativePath)"
 
-            let assetUrl = "ticker-asset:///\(relativePath)"
-
-            bridgeService.send(BridgeMessage(type: "imageDropped", payload: [
-                "relativePath": AnyCodable(relativePath),
-                "assetUrl": AnyCodable(assetUrl),
-                "streamId": AnyCodable(streamId.uuidString)
-            ]))
-        } catch {
-            DebugLog.log("[WebViewManager] Failed to import dropped image (\(DebugLog.errorSummary(error)))")
-            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
-                "error": AnyCodable("Could not import that image.")
-            ]))
+                bridgeService.send(BridgeMessage(type: "imageDropped", payload: [
+                    "relativePath": AnyCodable(relativePath),
+                    "assetUrl": AnyCodable(assetUrl),
+                    "streamId": AnyCodable(streamId.uuidString)
+                ]))
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to import dropped image (\(DebugLog.errorSummary(error)))")
+                bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                    "error": AnyCodable("Could not import that image.")
+                ]))
+            }
         }
     }
 
@@ -317,17 +309,25 @@ final class WebViewManager: NSObject {
             return
         }
 
-        do {
-            let source = try withSecurityScopedAccess(url) { try sourceService.addSource(from: url, to: streamId) }
-            let sourcePayload = StreamCodec.encodeSource(source)
-            bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
-            ingestService?.enqueue(source: source)
-            if source.fileType == .pdf {
-                openSourceReference(source, sourceService: sourceService)
+        let ingestService = ingestService
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let source = try await Task.detached(priority: .utility) {
+                    let didStart = url.startAccessingSecurityScopedResource()
+                    defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+                    return try sourceService.addSource(from: url, to: streamId)
+                }.value
+                let sourcePayload = StreamCodec.encodeSource(source)
+                bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+                ingestService?.enqueue(source: source)
+                if source.fileType == .pdf {
+                    openSourceReference(source, sourceService: sourceService)
+                }
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to import dropped document (\(DebugLog.errorSummary(error)))")
+                bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
             }
-        } catch {
-            DebugLog.log("[WebViewManager] Failed to import dropped document (\(DebugLog.errorSummary(error)))")
-            bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
         }
     }
 
