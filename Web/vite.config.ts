@@ -1,5 +1,19 @@
 import { defineConfig, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const outputDirectory = fileURLToPath(new URL('../Sources/Ticker/Resources', import.meta.url));
+
+function cleanWebOutput(): Plugin {
+  return {
+    name: 'clean-web-output',
+    buildStart() {
+      rmSync(`${outputDirectory}/assets`, { recursive: true, force: true });
+      rmSync(`${outputDirectory}/index.html`, { force: true });
+    },
+  };
+}
 
 // Remove crossorigin attributes from HTML output.
 // When loaded via file:// in WKWebView, crossorigin triggers CORS mode
@@ -14,7 +28,7 @@ function removeCrossorigin(): Plugin {
 }
 
 export default defineConfig(({ command }) => ({
-  plugins: [react(), ...(command === 'build' ? [removeCrossorigin()] : [])],
+  plugins: [react(), ...(command === 'build' ? [cleanWebOutput(), removeCrossorigin()] : [])],
   server: {
     port: 6660,
     strictPort: true,

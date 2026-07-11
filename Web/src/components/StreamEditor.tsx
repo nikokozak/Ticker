@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownKeymap, markdownLanguage } from '@codemirror/lang-markdown';
-import { languages } from '@codemirror/language-data';
 import { Decoration, EditorView, keymap } from '@codemirror/view';
 import { Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
@@ -2722,7 +2721,7 @@ export function StreamEditor({
     clickToDocumentEndExtension,
     aiWritingExtension,
     editorFindExtension,
-    markdown({ base: markdownLanguage, codeLanguages: languages }),
+    markdown({ base: markdownLanguage }),
     // basicSetup's default Enter shadows the markdown bindings.
     // Bullet lines get our always-tight continuation; everything
     // else falls through to markdownKeymap (quote continuation,
