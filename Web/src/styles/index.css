@@ -1515,6 +1515,13 @@ body {
   transform: translateX(-50%);
 }
 
+/* Disabled buttons swallow mouse events (WebKit fires mouseleave on the
+   parent when the pointer crosses one), which read as "pointer left the
+   popover" and hid it under a resting cursor. */
+.provenance-popover button:disabled {
+  pointer-events: none;
+}
+
 .cm-provenance-tooltip {
   max-width: 320px;
   padding: var(--space-2) var(--space-2) var(--space-1);

@@ -586,6 +586,7 @@ export function StreamEditor({
   const provenanceHoverTimerRef = useRef<number | null>(null);
   const provenanceHideTimerRef = useRef<number | null>(null);
   const provenanceSpanIdRef = useRef<string | null>(null);
+  const provenancePinnedRef = useRef(false);
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
   const markdownContentRef = useRef(stream.document?.markdown ?? '');
   const revisionRef = useRef(stream.document?.revision ?? 0);
@@ -1766,20 +1767,40 @@ export function StreamEditor({
       provenanceHoverTimerRef.current = null;
     }
     cancelProvenancePopoverHide();
+    provenancePinnedRef.current = false;
     provenanceSpanIdRef.current = null;
     setProvenancePopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [cancelProvenancePopoverHide]);
 
   // Grace period so the pointer can travel from the hovered span into the
   // popover (and across gaps between spans) without it vanishing mid-flight.
+  // While the pointer is inside the popover (pinned), nothing may hide it —
+  // only leaving it, clicking an action, or toggling the overlay off.
   const scheduleProvenancePopoverHide = useCallback(() => {
     cancelProvenancePopoverHide();
+    if (provenancePinnedRef.current) return;
     provenanceHideTimerRef.current = window.setTimeout(() => {
       provenanceHideTimerRef.current = null;
+      if (provenancePinnedRef.current) return;
       provenanceSpanIdRef.current = null;
       setProvenancePopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
     }, 400);
   }, [cancelProvenancePopoverHide]);
+
+  const pinProvenancePopover = useCallback(() => {
+    provenancePinnedRef.current = true;
+    cancelProvenancePopoverHide();
+    // A retarget resting from just before entry must not fire while inside.
+    if (provenanceHoverTimerRef.current !== null) {
+      window.clearTimeout(provenanceHoverTimerRef.current);
+      provenanceHoverTimerRef.current = null;
+    }
+  }, [cancelProvenancePopoverHide]);
+
+  const unpinProvenancePopover = useCallback(() => {
+    provenancePinnedRef.current = false;
+    scheduleProvenancePopoverHide();
+  }, [scheduleProvenancePopoverHide]);
 
   const showProvenancePopover = useCallback((span: Span, anchorPos: number) => {
     if (provenanceSpanIdRef.current === span.spanId) return;
@@ -3141,8 +3162,8 @@ export function StreamEditor({
           ref={provenancePopoverRef}
           className="cm-provenance-tooltip provenance-popover"
           style={{ left: `${provenancePopover.left}px`, top: `${provenancePopover.top}px` }}
-          onMouseEnter={cancelProvenancePopoverHide}
-          onMouseLeave={scheduleProvenancePopoverHide}
+          onMouseEnter={pinProvenancePopover}
+          onMouseLeave={unpinProvenancePopover}
         >
           <div className="cm-provenance-tooltip-line">
             {originLine(provenancePopover.span, sources)}
