@@ -889,6 +889,8 @@ body {
   display: inline-flex;
   flex-direction: column;
   align-items: stretch;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
   padding: var(--space-1);
   border-radius: var(--radius);
   background: var(--surface-raised);
@@ -900,6 +902,8 @@ body {
 .selection-action-row {
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: var(--space-1);
 }
 
@@ -979,12 +983,21 @@ body {
   top: calc(100% + var(--space-1));
   transform: translateX(-50%);
   z-index: 1;
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
   padding: var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-raised);
   box-shadow: var(--overlay-shadow);
+}
+
+.selection-action-submenu-panel--right {
+  right: 0;
+  left: auto;
+  transform: none;
 }
 
 .selection-action-source-scope {
@@ -1025,8 +1038,11 @@ body {
   position: fixed;
   z-index: 930;
   transform: translateX(-50%);
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr) auto auto;
   align-items: center;
+  box-sizing: border-box;
+  width: min(540px, calc(100vw - 16px));
   gap: var(--space-2);
   padding: var(--space-2);
   border-radius: var(--radius);
@@ -1054,11 +1070,13 @@ body {
 }
 
 .link-edit-input--label {
-  width: 150px;
+  width: 100%;
+  min-width: 0;
 }
 
 .link-edit-input--url {
-  width: 260px;
+  width: 100%;
+  min-width: 0;
 }
 
 .link-edit-button {
@@ -1082,6 +1100,20 @@ body {
 .link-edit-button--remove:hover {
   color: var(--danger);
   background: var(--danger-soft);
+}
+
+@media (max-width: 480px) {
+  .link-edit-popover {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .link-edit-input {
+    grid-column: 1 / -1;
+  }
+
+  .link-edit-button {
+    width: 100%;
+  }
 }
 
 .document-editor-shell {
@@ -1533,7 +1565,8 @@ body {
 }
 
 .cm-provenance-tooltip {
-  max-width: 320px;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
   padding: var(--space-2) var(--space-2) var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius);

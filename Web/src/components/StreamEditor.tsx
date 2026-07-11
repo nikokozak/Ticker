@@ -557,7 +557,7 @@ export function StreamEditor({
   const [exchangeOverlay, setExchangeOverlay] = useState<ExchangeOverlayState | null>(null);
   const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
-  const [showRewriteMenu, setShowRewriteMenu] = useState(false);
+  const [selectionMenuPanel, setSelectionMenuPanel] = useState<'ai' | 'more' | null>(null);
   const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState>({
     visible: false,
     left: 0,
@@ -922,7 +922,7 @@ export function StreamEditor({
     setExchangeOverlay(null);
     setSourceScope(stream.sourceScope ?? 'auto');
     setIsProvenanceXrayVisible(false);
-    setShowRewriteMenu(false);
+    setSelectionMenuPanel(null);
     const rawFormatting = rawFormattingByStream.get(stream.id) ?? false;
     setShowRawFormatting(rawFormatting);
     promptContextRef.current = null;
@@ -1676,7 +1676,7 @@ export function StreamEditor({
 
   const hideSelectionMenu = useCallback(() => {
     clearSelectionMenuTimer();
-    setShowRewriteMenu(false);
+    setSelectionMenuPanel(null);
     setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearSelectionMenuTimer]);
 
@@ -1904,6 +1904,7 @@ export function StreamEditor({
     getSelectionMenuPlacement,
     pdfPaneState.streamId,
     pdfPaneState.visible,
+    selectionMenuPanel,
     stream.id,
   ]);
 
@@ -2921,222 +2922,171 @@ export function StreamEditor({
           style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
         >
           <div className="selection-action-row">
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--bold"
-            title="Bold"
-            aria-label="Bold"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat('**')}
-          >
-            B
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--italic"
-            title="Italic"
-            aria-label="Italic"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat('*')}
-          >
-            I
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--underline"
-            title="Underline"
-            aria-label="Underline"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat(UNDERLINE_MARK)}
-          >
-            U
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--code"
-            title="Code"
-            aria-label="Code"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat('`')}
-          >
-            &lt;/&gt;
-          </button>
-          <span className="selection-action-divider" aria-hidden="true" />
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--text"
-            title="Heading 1"
-            aria-label="Heading 1"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('h1')}
-          >
-            H1
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--text"
-            title="Heading 2"
-            aria-label="Heading 2"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('h2')}
-          >
-            H2
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--text"
-            title="Heading 3"
-            aria-label="Heading 3"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('h3')}
-          >
-            H3
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format"
-            title="Quote"
-            aria-label="Quote"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('quote')}
-          >
-            ❝
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format"
-            title="Bullet list"
-            aria-label="Bullet list"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('bullet')}
-          >
-            •
-          </button>
-          <button
-            type="button"
-            className="selection-action-button"
-            title="Add link"
-            aria-label="Add link"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={handleSelectionCreateLink}
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-              <path d="M10.6 13.4a1 1 0 010-1.4l2.8-2.8a1 1 0 011.4 1.4l-2.8 2.8a1 1 0 01-1.4 0zm-3.5 3.5a3.5 3.5 0 010-5l1.8-1.8 1.4 1.4-1.8 1.8a1.5 1.5 0 002.2 2.2l1.8-1.8 1.4 1.4-1.8 1.8a3.5 3.5 0 01-5 0zm9.8-4.8l-1.4-1.4 1.8-1.8a1.5 1.5 0 00-2.2-2.2l-1.8 1.8-1.4-1.4 1.8-1.8a3.5 3.5 0 015 5z" />
-            </svg>
-          </button>
-          {canLinkSelectionToPDF && (
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--format selection-action-button--bold"
+              title="Bold"
+              aria-label="Bold"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => handleSelectionFormat('**')}
+            >
+              B
+            </button>
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--format selection-action-button--italic"
+              title="Italic"
+              aria-label="Italic"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => handleSelectionFormat('*')}
+            >
+              I
+            </button>
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--format selection-action-button--underline"
+              title="Underline"
+              aria-label="Underline"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => handleSelectionFormat(UNDERLINE_MARK)}
+            >
+              U
+            </button>
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--format selection-action-button--code"
+              title="Code"
+              aria-label="Code"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => handleSelectionFormat('`')}
+            >
+              &lt;/&gt;
+            </button>
             <button
               type="button"
               className="selection-action-button"
-              title="Link to PDF"
-              aria-label="Link to PDF"
+              title="Add link"
+              aria-label="Add link"
               onMouseDown={(event) => event.preventDefault()}
-              onClick={handleSelectionLinkToPDF}
+              onClick={handleSelectionCreateLink}
             >
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                <path d="M8.8 12.9a1 1 0 010-1.4l3.7-3.7a3.4 3.4 0 114.8 4.8l-1.5 1.5-.7-.7 1.5-1.5a2.4 2.4 0 10-3.4-3.4l-3.7 3.7a1 1 0 001.4 1.4l2.5-2.5.7.7-2.5 2.5a2 2 0 01-2.8 0zm-2.1 7a3.4 3.4 0 010-4.8l1.5-1.5.7.7-1.5 1.5a2.4 2.4 0 103.4 3.4l3.7-3.7a1 1 0 00-1.4-1.4l-2.5 2.5-.7-.7 2.5-2.5a2 2 0 112.8 2.8l-3.7 3.7a3.4 3.4 0 01-4.8 0z" />
+                <path d="M10.6 13.4a1 1 0 010-1.4l2.8-2.8a1 1 0 011.4 1.4l-2.8 2.8a1 1 0 01-1.4 0zm-3.5 3.5a3.5 3.5 0 010-5l1.8-1.8 1.4 1.4-1.8 1.8a1.5 1.5 0 002.2 2.2l1.8-1.8 1.4 1.4-1.8 1.8a3.5 3.5 0 01-5 0zm9.8-4.8l-1.4-1.4 1.8-1.8a1.5 1.5 0 00-2.2-2.2l-1.8 1.8-1.4-1.4 1.8-1.8a3.5 3.5 0 015 5z" />
               </svg>
             </button>
-          )}
-          </div>
-          <div className="selection-action-row">
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            title="Ask"
-            aria-label="Ask"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionVerb('ask')}
-            disabled={isAiThinking}
-          >
-            Ask
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            title="Challenge"
-            aria-label="Challenge"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionVerb('challenge')}
-            disabled={isAiThinking}
-          >
-            Challenge
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            title="Define"
-            aria-label="Define"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionVerb('define')}
-            disabled={isAiThinking}
-          >
-            Define
-          </button>
-          <div className="selection-action-submenu">
-            <button
-              type="button"
-              className="selection-action-button selection-action-button--text selection-action-button--ai"
-              title="Rewrite"
-              aria-label="Rewrite"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => setShowRewriteMenu((value) => !value)}
-              disabled={isAiThinking}
-            >
-              Rewrite ▾
-            </button>
-            {showRewriteMenu && (
-              <div className="selection-action-submenu-panel">
-                <button
-                  type="button"
-                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
-                  title="Develop (replaces)"
-                  aria-label="Develop (replaces)"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => handleSelectionVerb('develop')}
-                >
-                  Develop (replaces)
-                </button>
-                <button
-                  type="button"
-                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
-                  title="Rewrite with instructions (replaces)"
-                  aria-label="Rewrite with instructions (replaces)"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={openRewritePrompt}
-                >
-                  With instructions…
-                </button>
-              </div>
-            )}
-          </div>
-          <span className="selection-action-divider" aria-hidden="true" />
-          {isProvenanceXrayVisible && (
-            <>
+            <span className="selection-action-divider" aria-hidden="true" />
+            <div className="selection-action-submenu">
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-button--ai"
+                title="AI actions"
+                aria-label="AI actions"
+                aria-expanded={selectionMenuPanel === 'ai'}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setSelectionMenuPanel((panel) => panel === 'ai' ? null : 'ai')}
+                disabled={isAiThinking}
+              >
+                AI ▾
+              </button>
+              {selectionMenuPanel === 'ai' && (
+                <div className="selection-action-submenu-panel selection-action-submenu-panel--right">
+                  {(['ask', 'develop', 'challenge', 'define'] as const).map((verb) => (
+                    <button
+                      key={verb}
+                      type="button"
+                      className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => handleSelectionVerb(verb)}
+                    >
+                      {verb[0].toUpperCase() + verb.slice(1)}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={openRewritePrompt}
+                  >
+                    Rewrite…
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="selection-action-submenu">
               <button
                 type="button"
                 className="selection-action-button selection-action-button--text"
-                title="Dissolve provenance in selection"
-                aria-label="Dissolve provenance in selection"
+                title="More formatting and context actions"
+                aria-label="More actions"
+                aria-expanded={selectionMenuPanel === 'more'}
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={handleSelectionDissolve}
-                disabled={selectionDissolveSpanIds.length === 0}
+                onClick={() => setSelectionMenuPanel((panel) => panel === 'more' ? null : 'more')}
               >
-                Dissolve
+                More
               </button>
-              <span className="selection-action-divider" aria-hidden="true" />
-            </>
-          )}
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-source-scope"
-            title="Cycle source scope"
-            aria-label="Cycle source scope"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={cycleSourceScope}
-          >
-            Sources: {formatSourceScope(sourceScope)}
-          </button>
+              {selectionMenuPanel === 'more' && (
+                <div className="selection-action-submenu-panel selection-action-submenu-panel--right">
+                  {(['h1', 'h2', 'h3'] as const).map((format) => (
+                    <button
+                      key={format}
+                      type="button"
+                      className="selection-action-button selection-action-button--format selection-action-button--text"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => handleSelectionLineFormat(format)}
+                    >
+                      {format.toUpperCase()}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="selection-action-button selection-action-button--text"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleSelectionLineFormat('quote')}
+                  >
+                    Quote
+                  </button>
+                  <button
+                    type="button"
+                    className="selection-action-button selection-action-button--text"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleSelectionLineFormat('bullet')}
+                  >
+                    List
+                  </button>
+                  {canLinkSelectionToPDF && (
+                    <button
+                      type="button"
+                      className="selection-action-button selection-action-button--text"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={handleSelectionLinkToPDF}
+                    >
+                      Link to PDF
+                    </button>
+                  )}
+                  {isProvenanceXrayVisible && (
+                    <button
+                      type="button"
+                      className="selection-action-button selection-action-button--text"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={handleSelectionDissolve}
+                      disabled={selectionDissolveSpanIds.length === 0}
+                    >
+                      Dissolve
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="selection-action-button selection-action-button--text selection-action-source-scope"
+                    title="Cycle source scope"
+                    aria-label="Cycle source scope"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={cycleSourceScope}
+                  >
+                    Sources: {formatSourceScope(sourceScope)}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
