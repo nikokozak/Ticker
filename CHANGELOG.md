@@ -68,6 +68,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Queued editor saves now capture live text, provenance, and revision together instead of letting an older snapshot overwrite a newer external append.
 - In-editor AI no longer autosaves temporary deletions or partial output, and leaving a stream mid-request restores the original passage before saving.
 - Deleting a PDF link and autosaving no longer destroys its backing highlight, so Undo restores a working link.
 - The editor header, stream list, dialogs, and selection disclosures now remain usable at the 300 px minimum window width, including very long titles.

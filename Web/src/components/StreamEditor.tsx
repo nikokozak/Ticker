@@ -999,29 +999,40 @@ export function StreamEditor({
     }
     if (queuedSaveContentRef.current === contentToSave) return saveQueueRef.current;
 
-    const view = editorViewRef.current;
-    const spans = view ? serializeFieldSpans(currentSpans(view.state), contentToSave) : [];
     queuedSaveContentRef.current = contentToSave;
     setSaveState('saving');
 
     const save = async () => {
+      // A prior save may still be in flight. Capture content, spans, and the
+      // revision together only when this queued save actually executes so an
+      // old snapshot can never adopt a revision advanced by an external append.
+      const view = editorViewRef.current;
+      const latestContent = view?.state.doc.toString() ?? markdownContentRef.current;
+      markdownContentRef.current = latestContent;
+      if (!isStreamDocumentDirty(latestContent, lastSavedContentRef.current)) {
+        if (queuedSaveContentRef.current === contentToSave) queuedSaveContentRef.current = null;
+        setSaveState('saved');
+        return;
+      }
+
+      const spans = view ? serializeFieldSpans(currentSpans(view.state), latestContent) : [];
       const baseRevision = revisionRef.current;
       try {
         const response = await bridge.sendAsync<{ revision: number }>('saveStreamDocument', {
           streamId: stream.id,
-          markdown: contentToSave,
+          markdown: latestContent,
           baseRevision,
           spans,
         });
         if (Number.isFinite(response.revision)) {
           revisionRef.current = response.revision;
         }
-        lastSavedContentRef.current = contentToSave;
-        if (markdownContentRef.current === contentToSave) {
+        lastSavedContentRef.current = latestContent;
+        if (markdownContentRef.current === latestContent) {
           setSaveState('saved');
         }
       } catch (error) {
-        if (markdownContentRef.current === contentToSave) {
+        if (markdownContentRef.current === latestContent) {
           setSaveState('error');
         }
         addToast('Changes could not be saved. Your edits are still in the editor.', 'error');
