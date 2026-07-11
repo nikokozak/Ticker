@@ -186,6 +186,17 @@ export function isStreamDocumentDirty(content: string, lastSavedContent: string)
   return content !== lastSavedContent;
 }
 
+export function shouldScheduleEditorAutosave(docChanged: boolean, hasActiveDocumentAI: boolean): boolean {
+  return docChanged && !hasActiveDocumentAI;
+}
+
+export function documentAIRollbackChange(
+  range: { from: number; to: number },
+  originalText: string
+) {
+  return { from: range.from, to: range.to, insert: originalText };
+}
+
 export function activeAIOperationsAfter(
   current: ReadonlySet<string>,
   requestId: string,
@@ -785,13 +796,37 @@ export function StreamEditor({
   // writing range survives it: mapping the range through a doc-wide replace
   // collapses it to {0, docLength}, so the completion handler would then
   // overwrite the ENTIRE stream with the AI passage. Abort before reloading.
-  const abortInFlightDocumentAI = useCallback(() => {
+  const discardInFlightDocumentAI = useCallback(() => {
     const active = aiRequestRef.current;
     if (!active) return;
     bridge.send({ type: 'cancelDocumentAI', payload: { requestId: active.id } });
     aiRequestRef.current = null;
     const view = editorViewRef.current;
     if (view) dispatchAiRangeClear(view);
+    setAiStatus('idle');
+    hideAiFeedback();
+  }, [hideAiFeedback]);
+
+  const rollbackInFlightDocumentAI = useCallback(() => {
+    const active = aiRequestRef.current;
+    if (!active) return;
+
+    bridge.send({ type: 'cancelDocumentAI', payload: { requestId: active.id } });
+    const view = editorViewRef.current;
+    const range = view ? getAiWritingRange(view.state) : null;
+    aiRequestRef.current = null;
+
+    if (view && range) {
+      view.dispatch({
+        changes: documentAIRollbackChange(range, active.originalText),
+        selection: { anchor: range.from + active.originalText.length },
+        effects: setAiWritingRangeEffect.of(null),
+        annotations: Transaction.addToHistory.of(false),
+      });
+    } else if (view) {
+      dispatchAiRangeClear(view);
+    }
+
     setAiStatus('idle');
     hideAiFeedback();
   }, [hideAiFeedback]);
@@ -1105,7 +1140,7 @@ export function StreamEditor({
           return;
         }
 
-        abortInFlightDocumentAI();
+        discardInFlightDocumentAI();
 
         const view = editorViewRef.current;
         const spans = payloadSpansForDoc(message.payload?.spans, markdown);
@@ -1147,7 +1182,7 @@ export function StreamEditor({
             localRevision: revisionRef.current,
             appendRevision: revision,
           });
-          abortInFlightDocumentAI();
+          discardInFlightDocumentAI();
           bridge.send({ type: 'loadStream', payload: { id: stream.id } });
           return;
         }
@@ -1226,6 +1261,7 @@ export function StreamEditor({
         const requestId = message.payload?.requestId as string | undefined;
         const error = message.payload?.error as string | undefined;
         if (!requestId || requestId !== active.id) return;
+        aiRequestRef.current = null;
 
         const errorCode = message.payload?.errorCode as string | undefined;
         const recovery = documentAIErrorRecovery(active.originalText, errorCode);
@@ -1273,7 +1309,6 @@ export function StreamEditor({
         }
 
         setAiStatus('idle');
-        aiRequestRef.current = null;
         if (recovery.silent) {
           hideAiFeedback();
         } else {
@@ -1286,11 +1321,11 @@ export function StreamEditor({
       if (message.type === 'documentAIComplete') {
         const requestId = message.payload?.requestId as string | undefined;
         if (!requestId || requestId !== active.id) return;
+        aiRequestRef.current = null;
 
         const view = editorViewRef.current;
         if (!view) {
           setAiStatus('idle');
-          aiRequestRef.current = null;
           hideAiFeedback();
           return;
         }
@@ -1310,7 +1345,6 @@ export function StreamEditor({
           }
           view.focus();
           setAiStatus('idle');
-          aiRequestRef.current = null;
           showAiErrorFeedback('AI returned empty output.');
           addToast('AI returned empty output.', 'warning');
           return;
@@ -1319,7 +1353,6 @@ export function StreamEditor({
         const range = getAiWritingRange(view.state);
         if (!range) {
           setAiStatus('idle');
-          aiRequestRef.current = null;
           hideAiFeedback();
           return;
         }
@@ -1352,7 +1385,6 @@ export function StreamEditor({
           });
           view.focus();
           setAiStatus('idle');
-          aiRequestRef.current = null;
           hideAiFeedback();
           return;
         }
@@ -1391,14 +1423,13 @@ export function StreamEditor({
         view.focus();
 
         setAiStatus('idle');
-        aiRequestRef.current = null;
         hideAiFeedback();
         return;
       }
     });
 
     return () => unsubscribe();
-  }, [abortInFlightDocumentAI, addToast, clearQuickPanelPending, hideAiFeedback, showAiErrorFeedback, stream.id]);
+  }, [addToast, clearQuickPanelPending, discardInFlightDocumentAI, hideAiFeedback, showAiErrorFeedback, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
@@ -2166,7 +2197,12 @@ export function StreamEditor({
 
   const selectionMenuExtension = useMemo<Extension>(() => [
     EditorView.updateListener.of((update) => {
-      if (update.docChanged) scheduleAutosave(update.view);
+      if (update.docChanged) {
+        markdownContentRef.current = update.state.doc.toString();
+      }
+      if (shouldScheduleEditorAutosave(update.docChanged, aiRequestRef.current !== null)) {
+        scheduleAutosave(update.view);
+      }
 
       if (update.docChanged && pendingPDFAnchorSelectionRef.current) {
         pendingPDFAnchorSelectionRef.current = mapPendingPDFAnchorSelection(
@@ -2240,6 +2276,18 @@ export function StreamEditor({
         ? { from: to, insert: prefix }
         : null;
 
+    const requestId = crypto.randomUUID();
+    aiRequestRef.current = {
+      id: requestId,
+      buffer: '',
+      mode: options.mode,
+      verb: options.verb ?? 'develop',
+      originalText,
+      prefix,
+      anchorTo: to,
+      parentRequestId: options.parentRequestId,
+    };
+
     view.dispatch({
       changes: initialChange ?? undefined,
       selection: { anchor: rangeTo },
@@ -2254,17 +2302,6 @@ export function StreamEditor({
     });
     view.focus();
 
-    const requestId = crypto.randomUUID();
-    aiRequestRef.current = {
-      id: requestId,
-      buffer: '',
-      mode: options.mode,
-      verb: options.verb ?? 'develop',
-      originalText,
-      prefix,
-      anchorTo: to,
-      parentRequestId: options.parentRequestId,
-    };
     setAiStatus('thinking');
     showAiWritingFeedback();
 
@@ -2553,14 +2590,14 @@ export function StreamEditor({
 
   useEffect(() => {
     return () => {
+      rollbackInFlightDocumentAI();
       if (autosaveTimerRef.current !== null) {
         window.clearTimeout(autosaveTimerRef.current);
         autosaveTimerRef.current = null;
       }
       void saveNow();
-      abortInFlightDocumentAI();
     };
-  }, [abortInFlightDocumentAI, saveNow]);
+  }, [rollbackInFlightDocumentAI, saveNow]);
 
   useEffect(() => {
     return () => {

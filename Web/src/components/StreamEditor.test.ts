@@ -3,12 +3,39 @@ import { history, undo } from '@codemirror/commands';
 import { describe, expect, it } from 'vitest';
 import { addSpans, currentSpans, provenanceField } from '../extensions/ProvenanceField';
 import { fnv1a } from '../utils/fnv1a';
-import { activeAIOperationsAfter, buildDocumentAIProvenanceSpan, documentAIErrorRecovery, isStreamDocumentDirty, nextSourceScope } from './StreamEditor';
+import {
+  activeAIOperationsAfter,
+  buildDocumentAIProvenanceSpan,
+  documentAIErrorRecovery,
+  documentAIRollbackChange,
+  isStreamDocumentDirty,
+  nextSourceScope,
+  shouldScheduleEditorAutosave,
+} from './StreamEditor';
 
 describe('isStreamDocumentDirty', () => {
   it('only reports content that differs from the last successful save', () => {
     expect(isStreamDocumentDirty('edited', 'saved')).toBe(true);
     expect(isStreamDocumentDirty('saved', 'saved')).toBe(false);
+  });
+});
+
+describe('document AI save ownership', () => {
+  it('suppresses autosave for temporary AI document changes', () => {
+    expect(shouldScheduleEditorAutosave(true, true)).toBe(false);
+    expect(shouldScheduleEditorAutosave(true, false)).toBe(true);
+    expect(shouldScheduleEditorAutosave(false, false)).toBe(false);
+  });
+
+  it('restores the exact original range before teardown saves', () => {
+    let state = EditorState.create({ doc: 'Keep this tail' });
+    state = state.update({ changes: { from: 0, to: 9, insert: 'AI partial' } }).state;
+
+    state = state.update({
+      changes: documentAIRollbackChange({ from: 0, to: 10 }, 'Keep this'),
+    }).state;
+
+    expect(state.doc.toString()).toBe('Keep this tail');
   });
 });
 
