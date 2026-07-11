@@ -3911,6 +3911,14 @@ final class StreamDocumentTests: XCTestCase {
                 streamId: stream.id,
                 markdown: "A globally findable phrase."
             )
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Global Manual.pdf",
+                extractedText: "A globally findable source phrase.",
+                aiExcluded: true,
+                chunks: [(0, "A globally findable source phrase.", 3, 3, nil)]
+            )
 
             let searchService = SearchService(
                 persistence: service,
@@ -3925,6 +3933,36 @@ final class StreamDocumentTests: XCTestCase {
 
             XCTAssertTrue(results.currentStreamResults.isEmpty)
             XCTAssertEqual(results.otherStreamResults.first?.streamId, stream.id.uuidString)
+            XCTAssertTrue(results.otherStreamResults.contains {
+                $0.sourceType.rawValue == "chunk" && $0.sourceName == "Global Manual.pdf"
+            })
+        }
+    }
+
+    func test_hybridSearchGroupsOtherStreamSourceMatches() async throws {
+        try await withTempPersistenceService { service in
+            let current = Stream(title: "Current")
+            let other = Stream(title: "Other")
+            try service.saveStream(current)
+            try service.saveStream(other)
+            _ = try saveRetrievalSource(
+                in: service,
+                streamId: other.id,
+                displayName: "Remote Notes.md",
+                extractedText: "The copper astrolabe appears here.",
+                chunks: [(0, "The copper astrolabe appears here.", 1, 1, nil)]
+            )
+
+            let results = try await SearchService(
+                persistence: service,
+                retrieval: RetrievalService(persistence: service)
+            ).hybridSearch(query: "copper astrolabe", currentStreamId: current.id, limit: 5)
+
+            XCTAssertTrue(results.currentStreamResults.isEmpty)
+            let match = try XCTUnwrap(results.otherStreamResults.first)
+            XCTAssertEqual(match.streamId, other.id.uuidString)
+            XCTAssertEqual(match.streamTitle, "Other")
+            XCTAssertEqual(match.sourceName, "Remote Notes.md")
         }
     }
 

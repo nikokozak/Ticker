@@ -46,3 +46,9 @@ struct RetrievedChunk {
     let score: Double
     var semanticMatch = false
 }
+
+struct GlobalSourceChunkMatch {
+    let streamId: UUID
+    let streamTitle: String
+    let chunk: RetrievedChunk
+}

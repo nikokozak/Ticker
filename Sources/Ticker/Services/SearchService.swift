@@ -17,7 +17,7 @@ final class SearchService {
 
     /// Perform text search across stream documents and indexed source chunks.
     /// With no current stream (searching from the stream list) all matches land in
-    /// `otherStreamResults` and source chunks are skipped.
+    /// `otherStreamResults`.
     func hybridSearch(
         query: String,
         currentStreamId: UUID?,
@@ -34,7 +34,7 @@ final class SearchService {
         var currentStreamResults = currentTextResults.map { documentResult($0, query: query) }
         var otherStreamResults = otherTextResults.map { documentResult($0, query: query) }
 
-        // 3. Source chunk search, current stream only.
+        // 3. Preserve hybrid retrieval for the current stream.
         if let currentStreamId {
             let currentStreamTitle = try persistence.getStreamTitle(id: currentStreamId) ?? "Untitled"
             let chunkResults = try retrieval.retrieve(
@@ -44,24 +44,33 @@ final class SearchService {
             )
 
             for chunkResult in chunkResults {
-                let snippet = truncate(chunkResult.text, maxLength: 150)
-                let shortTitle = SourceShortTitle.derive(displayName: chunkResult.sourceName)
-
-                currentStreamResults.append(SearchResult(
-                    id: chunkResult.id.uuidString,
-                    streamId: currentStreamId.uuidString,
-                    streamTitle: currentStreamTitle,
-                    sourceType: .chunk,
-                    title: shortTitle,
-                    shortTitle: shortTitle,
-                    snippet: snippet,
-                    sourceId: chunkResult.sourceId.uuidString,
-                    sourceName: chunkResult.sourceName
+                currentStreamResults.append(self.chunkResult(
+                    chunkResult,
+                    streamId: currentStreamId,
+                    streamTitle: currentStreamTitle
                 ))
             }
         }
 
-        // 5. Deduplicate within each category
+        // 4. Lexical source search across every other stream (or every stream
+        // when Search was opened from the list).
+        if let ftsQuery = RetrievalService.sanitizedFTSQuery(query) {
+            let globalChunks = try persistence.searchSourceChunksGlobally(
+                matching: ftsQuery.matchExpression,
+                excludingStreamId: currentStreamId,
+                limit: limit,
+                excludeAIPrivateSources: false
+            )
+            otherStreamResults.append(contentsOf: globalChunks.map { match in
+                chunkResult(
+                    match.chunk,
+                    streamId: match.streamId,
+                    streamTitle: match.streamTitle
+                )
+            })
+        }
+
+        // 5. Deduplicate within each category.
         currentStreamResults = deduplicateResults(currentStreamResults)
         otherStreamResults = deduplicateResults(otherStreamResults)
 
@@ -72,6 +81,25 @@ final class SearchService {
     }
 
     // MARK: - Private Helpers
+
+    private func chunkResult(
+        _ chunk: RetrievedChunk,
+        streamId: UUID,
+        streamTitle: String
+    ) -> SearchResult {
+        let shortTitle = SourceShortTitle.derive(displayName: chunk.sourceName)
+        return SearchResult(
+            id: chunk.id.uuidString,
+            streamId: streamId.uuidString,
+            streamTitle: streamTitle,
+            sourceType: .chunk,
+            title: shortTitle,
+            shortTitle: shortTitle,
+            snippet: truncate(chunk.text, maxLength: 150),
+            sourceId: chunk.sourceId.uuidString,
+            sourceName: chunk.sourceName
+        )
+    }
 
     private func documentResult(_ textResult: StreamDocumentSearchResult, query: String) -> SearchResult {
         SearchResult(
