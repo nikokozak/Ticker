@@ -32,10 +32,7 @@ struct ServiceContainer {
 
         self.chunkingService = ChunkingService()
 
-        let orchestrator = AIOrchestrator(
-            proxyService: proxyService,
-            settings: settingsService
-        )
+        let orchestrator = AIOrchestrator(proxyService: proxyService)
         self.orchestrator = orchestrator
 
         do {

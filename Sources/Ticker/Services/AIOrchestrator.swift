@@ -5,7 +5,6 @@ import Foundation
 /// Freshness is the answering model's call: the proxy offers it a web_search
 /// tool on every request, so no client-side intent classification exists.
 final class AIOrchestrator {
-    private let settings: SettingsService
     private var retrievalService: RetrievalService?
 
     /// Proxy service - the sole LLM provider in proxy-only mode
@@ -13,10 +12,8 @@ final class AIOrchestrator {
 
     init(
         proxyService: ProxyLLMService,
-        settings: SettingsService = .shared,
         retrievalService: RetrievalService? = nil
     ) {
-        self.settings = settings
         self.retrievalService = retrievalService
         self.proxyService = proxyService
     }
@@ -226,15 +223,12 @@ final class AIOrchestrator {
 
 enum OrchestratorError: LocalizedError {
     case noProviderAvailable
-    case providerNotFound(String)
     case sourceRetrievalFailed
 
     var errorDescription: String? {
         switch self {
         case .noProviderAvailable:
             return "AI is not available. Please activate your device key in Settings."
-        case .providerNotFound(let id):
-            return "Provider '\(id)' not found"
         case .sourceRetrievalFailed:
             return "Source retrieval failed — answer not generated"
         }
