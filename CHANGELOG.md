@@ -47,6 +47,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- Delete, AI prompt, Search, Sources, and Exchange now share native modal behavior with contained focus, Escape and outside-click dismissal, and focus restoration.
 - The selection toolbar now keeps common formatting and one AI entry in view, moves secondary actions behind disclosure, and fits alongside the link and provenance popovers at the 300 px window minimum.
 - Stream lists now load bounded previews and cached word counts instead of transferring every document in full.
 - Provenance spans now avoid unnecessary rehashing during edits and preserve distinct adjacent source attribution.

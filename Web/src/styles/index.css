@@ -591,15 +591,14 @@ body {
   border-bottom: 1px solid var(--color-border);
 }
 
-/* Delete confirmation dialog */
-.delete-confirm-overlay {
-  position: fixed;
-  inset: 0;
+/* Shared native modal behavior */
+.modal-dialog {
+  color: inherit;
+  padding: 0;
+}
+
+.modal-dialog::backdrop {
   background: var(--overlay-scrim);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
   animation: overlay-enter var(--duration-fast) ease;
 }
 
@@ -609,12 +608,13 @@ body {
 }
 
 .delete-confirm-dialog {
+  box-sizing: border-box;
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--spacing-xl);
-  max-width: 400px;
-  width: 90%;
+  width: min(400px, calc(100vw - 32px));
+  margin: auto;
   box-shadow: var(--overlay-shadow);
   backdrop-filter: var(--overlay-backdrop);
   animation: dialog-enter var(--duration-base) cubic-bezier(0.16, 1, 0.3, 1);
@@ -645,19 +645,12 @@ body {
   line-height: var(--line-height-relaxed);
 }
 
-.ai-prompt-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 940;
-  background: var(--overlay-scrim);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-lg);
-}
-
 .ai-prompt-dialog {
-  width: min(520px, 92vw);
+  box-sizing: border-box;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  margin: auto;
+  overflow-y: auto;
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1756,20 +1749,10 @@ body {
 
 /* ==================== Sources Modal ==================== */
 
-.sources-modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 950;
-  background: var(--overlay-scrim);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-xl);
-}
-
 .sources-modal {
   width: min(560px, calc(100vw - 32px));
   max-height: min(680px, calc(100vh - 64px));
+  margin: auto;
   display: flex;
   flex-direction: column;
   background: var(--surface-raised);
@@ -2050,26 +2033,13 @@ body {
 
 /* ==================== Search Modal ==================== */
 
-.search-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--overlay-scrim);
-  display: flex;
-  justify-content: center;
-  padding-top: 15vh;
-  z-index: 1000;
-}
-
 .search-modal {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  width: 100%;
-  max-width: 560px;
+  width: min(560px, calc(100vw - 32px));
   max-height: 60vh;
+  margin: 15vh auto auto;
   display: flex;
   flex-direction: column;
   box-shadow: var(--overlay-shadow);
@@ -2284,19 +2254,10 @@ body {
 
 /* ==================== Exchange Overlay ==================== */
 
-.exchange-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  justify-content: center;
-  padding: 12vh var(--spacing-lg) var(--spacing-lg);
-  background: var(--overlay-scrim);
-}
-
 .exchange-modal {
-  width: min(720px, 100%);
+  width: min(720px, calc(100vw - 32px));
   max-height: 76vh;
+  margin: 12vh auto auto;
   overflow-y: auto;
   background: var(--surface-raised);
   border: 1px solid var(--border);

@@ -10,6 +10,7 @@ import { tags as t } from '@lezer/highlight';
 import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON, type AIOperationState } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
+import { Modal } from './Modal';
 import { EyeIcon, XIcon } from './icons';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
@@ -2818,43 +2819,48 @@ export function StreamEditor({
       </header>
 
       {showDeleteConfirm && (
-        <div className="delete-confirm-overlay" onClick={() => setShowDeleteConfirm(false)}>
-          <div className="delete-confirm-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>Delete this stream?</h2>
-            <p>This will permanently delete "{title}" and all its contents. This cannot be undone.</p>
-            <div className="delete-confirm-actions">
-              <button
-                className="delete-confirm-cancel"
-                onClick={() => setShowDeleteConfirm(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="delete-confirm-delete"
-                onClick={() => {
-                  setShowDeleteConfirm(false);
-                  onDelete();
-                }}
-              >
-                Delete
-              </button>
-            </div>
+        <Modal
+          className="delete-confirm-dialog"
+          aria-labelledby="delete-confirm-title"
+          onRequestClose={() => setShowDeleteConfirm(false)}
+        >
+          <h2 id="delete-confirm-title">Delete this stream?</h2>
+          <p>This will permanently delete "{title}" and all its contents. This cannot be undone.</p>
+          <div className="delete-confirm-actions">
+            <button
+              className="delete-confirm-cancel"
+              onClick={() => setShowDeleteConfirm(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="delete-confirm-delete"
+              onClick={() => {
+                setShowDeleteConfirm(false);
+                onDelete();
+              }}
+            >
+              Delete
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {showPrompt && (
-        <div className="ai-prompt-overlay" onClick={closePrompt}>
-          <div className="ai-prompt-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>
-              {promptIntent.kind === 'redevelop' ? 'Re-develop' : promptIntent.kind === 'rewrite' ? 'Rewrite' : 'Ask'}
-            </h2>
-            <p>
-              {promptIntent.kind === 'ask'
-                ? 'Selection will be attached as context.'
-                : `will replace: ${promptIntent.preview}`}
-            </p>
-            <textarea
+        <Modal
+          className="ai-prompt-dialog"
+          aria-labelledby="ai-prompt-title"
+          onRequestClose={closePrompt}
+        >
+          <h2 id="ai-prompt-title">
+            {promptIntent.kind === 'redevelop' ? 'Re-develop' : promptIntent.kind === 'rewrite' ? 'Rewrite' : 'Ask'}
+          </h2>
+          <p>
+            {promptIntent.kind === 'ask'
+              ? 'Selection will be attached as context.'
+              : `will replace: ${promptIntent.preview}`}
+          </p>
+          <textarea
               className="ai-prompt-input"
               value={promptValue}
               onChange={(event) => setPromptValue(event.target.value)}
@@ -2876,8 +2882,8 @@ export function StreamEditor({
               }
               autoFocus
               rows={5}
-            />
-            <div className="ai-prompt-actions">
+          />
+          <div className="ai-prompt-actions">
               <button
                 className="ai-prompt-source-scope"
                 type="button"
@@ -2901,9 +2907,8 @@ export function StreamEditor({
               >
                 {promptIntent.kind === 'redevelop' ? 'Re-develop' : promptIntent.kind === 'rewrite' ? 'Rewrite' : 'Ask'}
               </button>
-            </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {exchangeOverlay && (
