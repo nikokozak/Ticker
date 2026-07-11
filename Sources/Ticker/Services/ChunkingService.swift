@@ -37,6 +37,17 @@ final class ChunkingService {
         self.config = config
     }
 
+    func chunkText(_ text: String, sourceId: UUID) -> [SourceChunk] {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        return chunkPages(
+            [PageText(page: 1, text: text)],
+            sourceId: sourceId,
+            sectionPath: nil,
+            startingSeq: 0
+        )
+    }
+
     func chunkPDF(
         document: PDFDocument,
         sourceId: UUID,

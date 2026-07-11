@@ -144,40 +144,38 @@ final class IngestService: @unchecked Sendable {
         do {
             try Task.checkCancellation()
 
-            guard var source = try persistence.loadSource(id: queuedSource.id) else { return }
+            guard let source = try persistence.loadSource(id: queuedSource.id) else { return }
             guard source.indexStatus == .pending || source.indexStatus == .failed else { return }
 
-            source.indexStatus = .indexing
             try writeIndexStatus(source.id, .indexing)
             emit(.indexing, progress: 0, force: true)
 
-            guard source.fileType == .pdf else {
-                try persistence.saveSourceChunks([], for: source.id)
-                emit(persistCompletionStatus(source.id, desired: .ready))
-                return
+            let chunks: [SourceChunk]
+            if source.fileType == .pdf {
+                let url = try sourceService.accessFile(source)
+                defer { url.stopAccessingSecurityScopedResource() }
+
+                try Task.checkCancellation()
+
+                guard let document = PDFDocument(url: url) else {
+                    throw IngestError.openFailed
+                }
+
+                if document.isLocked {
+                    throw IngestError.noReadableText
+                }
+
+                chunks = try chunkingService.chunkPDF(
+                    document: document,
+                    sourceId: source.id,
+                    progress: { progress in
+                        emit(.indexing, progress: min(0.95, max(0, progress * 0.95)))
+                    },
+                    shouldCancel: { Task.isCancelled }
+                )
+            } else {
+                chunks = chunkingService.chunkText(source.extractedText ?? "", sourceId: source.id)
             }
-
-            let url = try sourceService.accessFile(source)
-            defer { url.stopAccessingSecurityScopedResource() }
-
-            try Task.checkCancellation()
-
-            guard let document = PDFDocument(url: url) else {
-                throw IngestError.openFailed
-            }
-
-            if document.isLocked {
-                throw IngestError.noReadableText
-            }
-
-            let chunks = try chunkingService.chunkPDF(
-                document: document,
-                sourceId: source.id,
-                progress: { progress in
-                    emit(.indexing, progress: min(0.95, max(0, progress * 0.95)))
-                },
-                shouldCancel: { Task.isCancelled }
-            )
 
             try Task.checkCancellation()
 

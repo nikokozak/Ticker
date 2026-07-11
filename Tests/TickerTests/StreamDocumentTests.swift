@@ -2370,6 +2370,59 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_ingestServiceIndexesExtractedTextMarkdownAndOCR() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Non-PDF Ingest")
+            try service.saveStream(stream)
+            let sources = [
+                SourceReference(
+                    streamId: stream.id,
+                    displayName: "Notes.txt",
+                    fileType: .text,
+                    bookmarkData: Data(),
+                    status: .ready,
+                    extractedText: "Plain text remains retrievable after passthrough limits."
+                ),
+                SourceReference(
+                    streamId: stream.id,
+                    displayName: "Notes.md",
+                    fileType: .markdown,
+                    bookmarkData: Data(),
+                    status: .ready,
+                    extractedText: "# Markdown\n\nIndexed markdown remains retrievable."
+                ),
+                SourceReference(
+                    streamId: stream.id,
+                    displayName: "Scan.png",
+                    fileType: .image,
+                    bookmarkData: Data(),
+                    status: .ready,
+                    extractedText: "Recognized image text remains retrievable."
+                )
+            ]
+            try sources.forEach(service.saveSource)
+
+            let ingest = IngestService(
+                persistence: service,
+                sourceService: SourceService(persistence: service),
+                chunkingService: ChunkingService(config: .init(targetTokens: 20, overlapTokens: 0))
+            )
+            let ready = expectation(description: "all non-PDF sources indexed")
+            ready.expectedFulfillmentCount = sources.count
+            ingest.onStatusChange = { update in
+                if update.status == .ready { ready.fulfill() }
+            }
+
+            sources.forEach(ingest.enqueue)
+            wait(for: [ready], timeout: 5)
+
+            for source in sources {
+                XCTAssertEqual(try service.loadSource(id: source.id)?.indexStatus, .ready)
+                XCTAssertFalse(try service.loadSourceChunks(sourceId: source.id).isEmpty)
+            }
+        }
+    }
+
     func test_v23MigrationCreatesEmptyChunkEmbeddingCache() throws {
         try withTempPersistenceServiceAndURL { _, dbURL, _ in
             let dbQueue = try DatabaseQueue(path: dbURL.path)
@@ -2484,7 +2537,8 @@ final class StreamDocumentTests: XCTestCase {
                 displayName: "Notes.txt",
                 fileType: .text,
                 bookmarkData: Data(),
-                status: .ready
+                status: .ready,
+                extractedText: "Terminal status fixture"
             )
             try service.saveSource(source)
 

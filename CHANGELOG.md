@@ -62,6 +62,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Text, Markdown, and OCR image sources now build retrieval chunks instead of reporting ready with no searchable content.
 - Quick Panel AI answers, provenance, and exchange receipts now save in one transaction instead of leaving partial history when a database write fails.
 - Overlapping Quick Panel AI requests now keep independent activity state, failures no longer write operational text into notes, and external captures no longer occupy local editor Undo history.
 - Source retrieval no longer treats one strong word shared with a multi-word question as sufficient lexical evidence.
