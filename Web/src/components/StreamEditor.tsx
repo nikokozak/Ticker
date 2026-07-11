@@ -72,7 +72,47 @@ type PromptIntent = {
   verb: DocumentAIVerb;
   parentRequestId?: string;
   preview: string;
+} | {
+  kind: 'pdfSection';
+  request: PDFSectionActionRequest;
 };
+
+export interface PDFSectionActionRequest {
+  action: 'ask' | 'summarize';
+  streamId: string;
+  sourceId: string;
+  shortTitle: string;
+  sectionTitle: string;
+  page: number;
+}
+
+export function parsePDFSectionActionRequest(
+  payload: Record<string, unknown> | undefined,
+  currentStreamId: string
+): PDFSectionActionRequest | null {
+  const action = payload?.action;
+  const streamId = payload?.streamId;
+  const sourceId = payload?.sourceId;
+  const shortTitle = payload?.shortTitle;
+  const sectionTitle = payload?.sectionTitle;
+  const page = Number(payload?.page);
+  if (
+    (action !== 'ask' && action !== 'summarize')
+    || streamId !== currentStreamId
+    || typeof sourceId !== 'string'
+    || typeof shortTitle !== 'string'
+    || typeof sectionTitle !== 'string'
+    || !sourceId
+    || !shortTitle.trim()
+    || !sectionTitle.trim()
+    || !Number.isInteger(page)
+    || page < 1
+  ) {
+    return null;
+  }
+
+  return { action, streamId, sourceId, shortTitle, sectionTitle, page };
+}
 
 interface ExchangeOverlayState {
   exchange: AIExchangeJSON;
@@ -633,8 +673,8 @@ export function StreamEditor({
   const sourceIndexStatusesRef = useRef<Map<string, SourceReference['indexStatus']>>(new Map());
   const showPromptRef = useRef(showPrompt);
   const isAiThinkingRef = useRef(false);
-  const quickPanelPendingRef = useRef(false);
-  const quickPanelAIOperationsRef = useRef<Set<string>>(new Set());
+  const appendAIPendingRef = useRef(false);
+  const appendAIOperationsRef = useRef<Set<string>>(new Set());
   const aiRequestRef = useRef<{
     id: string;
     buffer: string;
@@ -782,9 +822,9 @@ export function StreamEditor({
     setAiFeedback((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearAiFeedbackTimer]);
 
-  const clearQuickPanelPending = useCallback(() => {
-    if (!quickPanelPendingRef.current) return;
-    quickPanelPendingRef.current = false;
+  const clearAppendAIPending = useCallback(() => {
+    if (!appendAIPendingRef.current) return;
+    appendAIPendingRef.current = false;
     editorViewRef.current?.dispatch({
       effects: setPendingAppend.of(false),
       annotations: Transaction.addToHistory.of(false),
@@ -939,8 +979,8 @@ export function StreamEditor({
     setSaveState('saved');
     setAiStatus('idle');
     hideAiFeedback();
-    quickPanelAIOperationsRef.current = new Set();
-    clearQuickPanelPending();
+    appendAIOperationsRef.current = new Set();
+    clearAppendAIPending();
     clearSourceIndexNoticeTimer();
     setSourceIndexNotice(null);
     setFloatingMenu({
@@ -985,7 +1025,7 @@ export function StreamEditor({
       persistNewUnanchoredMarginNotes(stream.marginNotes, notes);
       dispatchAiRangeClear(view);
     }
-  }, [clearQuickPanelPending, clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
+  }, [clearAppendAIPending, clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
 
   useEffect(() => {
     applyMarginNotesToEditor(stream.marginNotes);
@@ -1132,27 +1172,28 @@ export function StreamEditor({
       }
 
       if (message.type === 'aiOperationChanged') {
-        if (message.payload?.streamId !== stream.id || message.payload?.origin !== 'quickPanel') return;
+        const origin = message.payload?.origin;
+        if (message.payload?.streamId !== stream.id || (origin !== 'quickPanel' && origin !== 'pdfSection')) return;
         const requestId = message.payload?.requestId;
         const operationState = message.payload?.state;
         const validStates: AIOperationState[] = ['queued', 'preparing', 'generating', 'saving', 'succeeded', 'failed', 'canceled'];
         if (typeof requestId !== 'string' || !validStates.includes(operationState as AIOperationState)) return;
 
-        quickPanelAIOperationsRef.current = activeAIOperationsAfter(
-          quickPanelAIOperationsRef.current,
+        appendAIOperationsRef.current = activeAIOperationsAfter(
+          appendAIOperationsRef.current,
           requestId,
           operationState as AIOperationState
         );
 
-        if (quickPanelAIOperationsRef.current.size === 0) {
-          clearQuickPanelPending();
+        if (appendAIOperationsRef.current.size === 0) {
+          clearAppendAIPending();
           return;
         }
 
         const view = editorViewRef.current;
         if (!view) return;
-        if (!quickPanelPendingRef.current) {
-          quickPanelPendingRef.current = true;
+        if (!appendAIPendingRef.current) {
+          appendAIPendingRef.current = true;
           view.dispatch({
             effects: [
               setPendingAppend.of(true),
@@ -1462,7 +1503,7 @@ export function StreamEditor({
     });
 
     return () => unsubscribe();
-  }, [addToast, clearQuickPanelPending, discardInFlightDocumentAI, hideAiFeedback, rollbackInFlightDocumentAI, saveNow, showAiErrorFeedback, stream.id]);
+  }, [addToast, clearAppendAIPending, discardInFlightDocumentAI, hideAiFeedback, rollbackInFlightDocumentAI, saveNow, showAiErrorFeedback, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
@@ -1741,6 +1782,31 @@ export function StreamEditor({
     setSelectionMenuPanel(null);
     setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearSelectionMenuTimer]);
+
+  useEffect(() => bridge.onMessage((message) => {
+    if (message.type !== 'pdfSectionActionRequested') return;
+    const request = parsePDFSectionActionRequest(message.payload, stream.id);
+    if (!request) return;
+
+    if (request.action === 'summarize') {
+      bridge.send({
+        type: 'runPdfSectionAI',
+        payload: {
+          action: request.action,
+          streamId: request.streamId,
+          sourceId: request.sourceId,
+          page: request.page,
+        },
+      });
+      return;
+    }
+
+    hideSelectionMenu();
+    promptContextRef.current = null;
+    setPromptValue('');
+    setPromptIntent({ kind: 'pdfSection', request });
+    setShowPrompt(true);
+  }), [hideSelectionMenu, stream.id]);
 
   const hideLinkPopover = useCallback(() => {
     setLinkPopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
@@ -2523,8 +2589,26 @@ export function StreamEditor({
 
   const handlePromptSend = useCallback(() => {
     const prompt = promptValue.trim();
+    if (!prompt && promptIntent.kind !== 'redevelop') return;
+
+    if (promptIntent.kind === 'pdfSection') {
+      const request = promptIntent.request;
+      closePrompt();
+      bridge.send({
+        type: 'runPdfSectionAI',
+        payload: {
+          action: 'ask',
+          streamId: request.streamId,
+          sourceId: request.sourceId,
+          page: request.page,
+          prompt,
+        },
+      });
+      return;
+    }
+
     const context = promptContextRef.current;
-    if ((!prompt && promptIntent.kind !== 'redevelop') || !context) return;
+    if (!context) return;
 
     closePrompt();
 
@@ -2920,12 +3004,20 @@ export function StreamEditor({
           onRequestClose={closePrompt}
         >
           <h2 id="ai-prompt-title">
-            {promptIntent.kind === 'redevelop' ? 'Re-develop' : promptIntent.kind === 'rewrite' ? 'Rewrite' : 'Ask'}
+            {promptIntent.kind === 'redevelop'
+              ? 'Re-develop'
+              : promptIntent.kind === 'rewrite'
+                ? 'Rewrite'
+                : promptIntent.kind === 'pdfSection'
+                  ? 'Ask this section'
+                  : 'Ask'}
           </h2>
           <p>
             {promptIntent.kind === 'ask'
               ? 'Selection will be attached as context.'
-              : `will replace: ${promptIntent.preview}`}
+              : promptIntent.kind === 'pdfSection'
+                ? `“${promptIntent.request.sectionTitle}” from ${promptIntent.request.shortTitle} will be attached as context.`
+                : `will replace: ${promptIntent.preview}`}
           </p>
           <textarea
               className="ai-prompt-input"
@@ -2945,20 +3037,25 @@ export function StreamEditor({
                   ? 'Edit the prompt…'
                   : promptIntent.kind === 'rewrite'
                     ? 'How should this be rewritten? (e.g. "condense to one sentence")'
-                    : 'Ask a question or continue the line of thought…'
+                    : promptIntent.kind === 'pdfSection'
+                      ? 'Ask about this section…'
+                      : 'Ask a question or continue the line of thought…'
               }
               autoFocus
+              maxLength={promptIntent.kind === 'pdfSection' ? 32_000 : undefined}
               rows={5}
           />
           <div className="ai-prompt-actions">
-              <button
-                className="ai-prompt-source-scope"
-                type="button"
-                onClick={cycleSourceScope}
-                title="Cycle source scope"
-              >
-                Sources: {formatSourceScope(sourceScope)}
-              </button>
+              {promptIntent.kind !== 'pdfSection' && (
+                <button
+                  className="ai-prompt-source-scope"
+                  type="button"
+                  onClick={cycleSourceScope}
+                  title="Cycle source scope"
+                >
+                  Sources: {formatSourceScope(sourceScope)}
+                </button>
+              )}
               <button
                 className="ai-prompt-cancel"
                 type="button"
@@ -2972,7 +3069,13 @@ export function StreamEditor({
                 onClick={handlePromptSend}
                 disabled={promptIntent.kind !== 'redevelop' && !promptValue.trim()}
               >
-                {promptIntent.kind === 'redevelop' ? 'Re-develop' : promptIntent.kind === 'rewrite' ? 'Rewrite' : 'Ask'}
+                {promptIntent.kind === 'redevelop'
+                  ? 'Re-develop'
+                  : promptIntent.kind === 'rewrite'
+                    ? 'Rewrite'
+                    : promptIntent.kind === 'pdfSection'
+                      ? 'Ask section'
+                      : 'Ask'}
               </button>
           </div>
         </Modal>

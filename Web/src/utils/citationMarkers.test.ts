@@ -122,6 +122,26 @@ describe('swapCitationMarkers', () => {
     );
   });
 
+  it('accepts the observed provider closing-brace typo', () => {
+    expect(swapCitationMarkers('Provider typo.【1|"exact supporting words"}', citations)).toBe(
+      'Provider typo. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=exact%20supporting%20words)'
+    );
+  });
+
+  it('keeps braces inside a valid quoted marker', () => {
+    expect(swapCitationMarkers('Code quote.【1|"pushes {x} onto the stack"】', citations)).toBe(
+      'Code quote. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=pushes%20%7Bx%7D%20onto%20the%20stack)'
+    );
+  });
+
+  it('does not merge a typo marker with a later citation', () => {
+    expect(
+      swapCitationMarkers('First.【1|"alpha"} prose Second.【2|"beta"】', citations)
+    ).toBe(
+      'First. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=alpha) prose Second. [Guide p.8](ticker-pdf://source-2?page=8&chunk=chunk-2&q=beta)'
+    );
+  });
+
   it('treats a malformed quoted marker as a plain marker', () => {
     expect(swapCitationMarkers('Malformed quote.【1|"missing close】', citations)).toBe(
       'Malformed quote. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1)'

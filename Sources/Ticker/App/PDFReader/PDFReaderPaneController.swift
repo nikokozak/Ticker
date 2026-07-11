@@ -7,6 +7,17 @@ struct PDFHighlightLinkPayload {
     let highlight: PDFHighlightRecord
 }
 
+enum PDFSectionAction: String {
+    case ask
+    case summarize
+}
+
+struct PDFSectionActionPayload {
+    let action: PDFSectionAction
+    let descriptor: PDFSectionDescriptor
+    let page: Int
+}
+
 private enum PDFReaderPanePresentationError: LocalizedError {
     case couldNotOpenPDFSource
     case notEnoughHorizontalSpace
@@ -290,8 +301,10 @@ final class PDFReaderPaneController: NSViewController {
     var onLinkSelection: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
     var onAnchorPlaced: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
     var onAnchorPickCancelled: ((UUID) -> Void)?
+    var onSectionAction: (@MainActor (PDFSectionActionPayload) -> Void)?
     var onPageChanged: ((UUID, Int) -> Void)?
     var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
+    var sectionProvider: ((UUID, UUID, Int) throws -> PDFSectionDescriptor)?
     var onClose: (() -> Void)?
 
     private let pdfPaneView = PDFPaneAppearanceObservingView(frame: .zero)
@@ -303,6 +316,7 @@ final class PDFReaderPaneController: NSViewController {
     private let pdfPaneStatusField = NSTextField(labelWithString: "")
     private let pdfPaneHintIconView = NSImageView(frame: .zero)
     private let pdfPaneOutlineButton = NSButton(title: "", target: nil, action: nil)
+    private let pdfPaneSectionActionsButton = NSButton(title: "", target: nil, action: nil)
     private let pdfPaneLinkButton = NSButton(title: "", target: nil, action: nil)
     private let pdfPaneCloseButton = NSButton(title: "", target: nil, action: nil)
     private let pdfFindBarView = NSView(frame: .zero)
@@ -344,6 +358,7 @@ final class PDFReaderPaneController: NSViewController {
     private var pdfPaneTransientMessage: String?
     private var pdfOutlineEntries: [PDFOutlineSidebarEntry] = []
     private var isPDFOutlineVisible = false
+    private var pendingPDFSectionAction: (descriptor: PDFSectionDescriptor, page: Int)?
 
     deinit {
         pdfFindDebounceWorkItem?.cancel()
@@ -643,6 +658,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneStatusField.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneHintIconView.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneOutlineButton.translatesAutoresizingMaskIntoConstraints = false
+        pdfPaneSectionActionsButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneLinkButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneCloseButton.translatesAutoresizingMaskIntoConstraints = false
         pdfFindBarView.translatesAutoresizingMaskIntoConstraints = false
@@ -700,6 +716,22 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneOutlineButton.isHidden = true
         pdfPaneOutlineButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         pdfPaneOutlineButton.setContentHuggingPriority(.required, for: .horizontal)
+
+        pdfPaneSectionActionsButton.target = self
+        pdfPaneSectionActionsButton.action = #selector(handlePDFSectionActions)
+        pdfPaneSectionActionsButton.bezelStyle = .texturedRounded
+        pdfPaneSectionActionsButton.controlSize = .small
+        pdfPaneSectionActionsButton.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+        pdfPaneSectionActionsButton.imagePosition = .imageOnly
+        pdfPaneSectionActionsButton.imageScaling = .scaleProportionallyDown
+        pdfPaneSectionActionsButton.isBordered = true
+        pdfPaneSectionActionsButton.showsBorderOnlyWhileMouseInside = true
+        pdfPaneSectionActionsButton.contentTintColor = NativePalette.textMuted
+        pdfPaneSectionActionsButton.toolTip = "Section actions"
+        pdfPaneSectionActionsButton.setAccessibilityLabel("PDF section actions")
+        pdfPaneSectionActionsButton.isEnabled = false
+        pdfPaneSectionActionsButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        pdfPaneSectionActionsButton.setContentHuggingPriority(.required, for: .horizontal)
 
         pdfPaneLinkButton.target = self
         pdfPaneLinkButton.action = #selector(handlePDFPaneLinkSelection)
@@ -812,6 +844,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneHeaderView.addSubview(pdfPaneHintIconView)
         pdfPaneHeaderView.addSubview(pdfPaneStatusField)
         pdfPaneHeaderView.addSubview(pdfPaneOutlineButton)
+        pdfPaneHeaderView.addSubview(pdfPaneSectionActionsButton)
         pdfPaneHeaderView.addSubview(pdfPaneLinkButton)
         pdfPaneHeaderView.addSubview(pdfPaneCloseButton)
         pdfPaneHeaderView.addSubview(headerSeparator)
@@ -872,7 +905,12 @@ final class PDFReaderPaneController: NSViewController {
             pdfPaneLinkButton.widthAnchor.constraint(equalToConstant: 28),
             pdfPaneLinkButton.heightAnchor.constraint(equalToConstant: 28),
 
-            pdfPaneOutlineButton.trailingAnchor.constraint(equalTo: pdfPaneLinkButton.leadingAnchor, constant: -8),
+            pdfPaneSectionActionsButton.trailingAnchor.constraint(equalTo: pdfPaneLinkButton.leadingAnchor, constant: -8),
+            pdfPaneSectionActionsButton.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
+            pdfPaneSectionActionsButton.widthAnchor.constraint(equalToConstant: 28),
+            pdfPaneSectionActionsButton.heightAnchor.constraint(equalToConstant: 28),
+
+            pdfPaneOutlineButton.trailingAnchor.constraint(equalTo: pdfPaneSectionActionsButton.leadingAnchor, constant: -8),
             pdfPaneOutlineButton.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
             pdfPaneOutlineButton.heightAnchor.constraint(equalToConstant: 28),
 
@@ -968,6 +1006,10 @@ final class PDFReaderPaneController: NSViewController {
         rebuildPDFOutlineSidebar()
         pdfPaneOutlineButton.isHidden = pdfOutlineEntries.isEmpty
         pdfPaneOutlineButtonWidthConstraint?.constant = pdfOutlineEntries.isEmpty ? 0 : 28
+        pdfPaneSectionActionsButton.isEnabled = !pdfOutlineEntries.isEmpty
+        pdfPaneSectionActionsButton.toolTip = pdfOutlineEntries.isEmpty
+            ? "Section actions require a PDF outline"
+            : "Section actions"
         if pdfOutlineEntries.isEmpty {
             setPDFOutlineVisible(false)
         }
@@ -1035,6 +1077,63 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         pdfPanePDFView.go(to: destination)
+    }
+
+    @objc private func handlePDFSectionActions() {
+        guard let context = activePDFContext,
+              let document = pdfPanePDFView.document,
+              let currentPage = pdfPanePDFView.currentPage,
+              let sectionProvider else {
+            showPDFPaneMessage("No section is available on this page.")
+            return
+        }
+
+        let page = document.index(for: currentPage) + 1
+        do {
+            let descriptor = try sectionProvider(context.streamId, context.sourceId, page)
+            pendingPDFSectionAction = (descriptor, page)
+
+            let menu = NSMenu()
+            let ask = NSMenuItem(
+                title: "Ask about “\(descriptor.sectionTitle)”…",
+                action: #selector(handlePDFSectionAsk),
+                keyEquivalent: ""
+            )
+            ask.target = self
+            menu.addItem(ask)
+
+            let summarize = NSMenuItem(
+                title: "Summarize “\(descriptor.sectionTitle)”",
+                action: #selector(handlePDFSectionSummarize),
+                keyEquivalent: ""
+            )
+            summarize.target = self
+            menu.addItem(summarize)
+            menu.popUp(
+                positioning: nil,
+                at: NSPoint(x: 0, y: pdfPaneSectionActionsButton.bounds.minY - 4),
+                in: pdfPaneSectionActionsButton
+            )
+        } catch {
+            showPDFPaneMessage(error.localizedDescription)
+        }
+    }
+
+    @objc private func handlePDFSectionAsk() {
+        sendPDFSectionAction(.ask)
+    }
+
+    @objc private func handlePDFSectionSummarize() {
+        sendPDFSectionAction(.summarize)
+    }
+
+    private func sendPDFSectionAction(_ action: PDFSectionAction) {
+        guard let pendingPDFSectionAction else { return }
+        onSectionAction?(PDFSectionActionPayload(
+            action: action,
+            descriptor: pendingPDFSectionAction.descriptor,
+            page: pendingPDFSectionAction.page
+        ))
     }
 
     private func setPDFOutlineVisible(_ visible: Bool) {
@@ -1350,6 +1449,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPageSaveWorkItem?.cancel()
         pdfPaneMessageWorkItem?.cancel()
         pdfPaneTransientMessage = nil
+        pendingPDFSectionAction = nil
         resetPDFFindState()
         if let current = activePDFContext {
             current.fileURL.stopAccessingSecurityScopedResource()

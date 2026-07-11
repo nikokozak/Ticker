@@ -1076,7 +1076,7 @@ final class StreamDocumentTests: XCTestCase {
         let recorder = BridgeMessageRecorder()
         let handler = await AIMessageHandler(
             sendToWeb: { recorder.send($0) },
-            routeDocumentAI: { _, _, _, _, _, _, _, onComplete, _, _ in
+            routeDocumentAI: { _, _, _, _, _, _, _, _, onComplete, _, _ in
                 onComplete(SourceContext(text: "", chunks: [], mode: .unavailable))
             }
         )
@@ -1146,7 +1146,7 @@ final class StreamDocumentTests: XCTestCase {
         let provider = SlowDocumentAIProvider()
         let handler = AIMessageHandler(
             sendToWeb: { recorder.send($0) },
-            routeDocumentAI: { _, _, _, _, _, systemPrompt, onChunk, onComplete, _, _ in
+            routeDocumentAI: { _, _, _, _, _, _, systemPrompt, onChunk, onComplete, _, _ in
                 await provider.stream(
                     systemPrompt: systemPrompt,
                     onChunk: onChunk,
@@ -1200,7 +1200,7 @@ final class StreamDocumentTests: XCTestCase {
         let handler = AIMessageHandler(
             aiOperations: registry,
             sendToWeb: { _ in },
-            routeDocumentAI: { _, _, _, _, _, _, _, _, _, _ in }
+            routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in }
         )
 
         await handler.handle(BridgeMessage(type: "cancelAIOperation", payload: [
@@ -1223,7 +1223,7 @@ final class StreamDocumentTests: XCTestCase {
             let handler = AIMessageHandler(
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
-                routeDocumentAI: { _, _, _, _, _, _, onChunk, onComplete, _, onModelSelected in
+                routeDocumentAI: { _, _, _, _, _, _, _, onChunk, onComplete, _, onModelSelected in
                     onModelSelected?("provider/model")
                     onChunk("Raw [1]")
                     onComplete(SourceContext(
@@ -1754,6 +1754,100 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertTrue(chunks[1].text.contains("caliper phrase"))
         XCTAssertEqual(result.pageCount, 3)
         XCTAssertTrue(result.extractedText.contains("--- Page 2 ---"))
+    }
+
+    func test_pdfSectionContextUsesOneIndexedPathForTitleAndOrderedManifest() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Reading")
+            try service.saveStream(stream)
+            let source = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [
+                    (2, "Later section text.", 6, 6, "Part I > Storage"),
+                    (0, "Opening section text.", 4, 5, "Part I > Storage"),
+                    (3, "Different section.", 7, 7, "Part I > Closing"),
+                ]
+            )
+            let retrieval = RetrievalService(persistence: service)
+
+            let resolved = try retrieval.resolvePDFSection(sourceId: source.id, streamId: stream.id, page: 5)
+            let assembled = try retrieval.assemblePDFSectionContext(sourceId: source.id, streamId: stream.id, page: 5)
+
+            XCTAssertEqual(resolved.sectionPath, "Part I > Storage")
+            XCTAssertEqual(resolved.sectionTitle, "Storage")
+            XCTAssertEqual(resolved.pageStart, 4)
+            XCTAssertEqual(resolved.pageEnd, 6)
+            XCTAssertEqual(assembled.descriptor, resolved)
+            XCTAssertEqual(assembled.sourceContext.chunks.map(\.seq), [0, 2])
+            XCTAssertEqual(assembled.sourceContext.mode, .retrieved)
+            XCTAssertTrue(assembled.sourceContext.text.contains("[1] Manual, p.4–5 (§Part I > Storage):"))
+            XCTAssertTrue(assembled.sourceContext.text.contains("[2] Manual, p.6 (§Part I > Storage):"))
+        }
+    }
+
+    func test_pdfSectionContextRejectsPrivateUnindexedAndUnsectionedSources() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Reading")
+            try service.saveStream(stream)
+            let privateSource = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Private.pdf",
+                extractedText: "private",
+                aiExcluded: true,
+                chunks: [(0, "Private section.", 1, 1, "Private")]
+            )
+            let pendingSource = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Pending.pdf",
+                extractedText: "",
+                indexStatus: .indexing
+            )
+            let flatSource = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Flat.pdf",
+                extractedText: "flat",
+                chunks: [(0, "Flat text.", 1, 1, nil)]
+            )
+            let retrieval = RetrievalService(persistence: service)
+
+            XCTAssertThrowsError(try retrieval.resolvePDFSection(sourceId: privateSource.id, streamId: stream.id, page: 1)) {
+                XCTAssertEqual($0 as? PDFSectionContextError, .sourceExcluded)
+            }
+            XCTAssertThrowsError(try retrieval.resolvePDFSection(sourceId: pendingSource.id, streamId: stream.id, page: 1)) {
+                XCTAssertEqual($0 as? PDFSectionContextError, .indexing)
+            }
+            XCTAssertThrowsError(try retrieval.resolvePDFSection(sourceId: flatSource.id, streamId: stream.id, page: 1)) {
+                XCTAssertEqual($0 as? PDFSectionContextError, .noSection)
+            }
+        }
+    }
+
+    func test_pdfSectionContextRejectsReferenceMaterialOverRequestBudget() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Reading")
+            try service.saveStream(stream)
+            let oversized = String(repeating: "x", count: (RetrievalService.maxPDFSectionReferenceTokens + 1) * 4)
+            let source = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Long.pdf",
+                extractedText: oversized,
+                chunks: [(0, oversized, 1, 1, "Long section")]
+            )
+
+            XCTAssertThrowsError(
+                try RetrievalService(persistence: service)
+                    .assemblePDFSectionContext(sourceId: source.id, streamId: stream.id, page: 1)
+            ) {
+                XCTAssertEqual($0 as? PDFSectionContextError, .sectionTooLong)
+            }
+        }
     }
 
     func test_sameNameImageImportsKeepBothAssetsImmutable() throws {
@@ -3303,6 +3397,221 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(
             CitationMarkerSwap.swap(text, manifest: manifest, mode: .markdownLink),
             "Use the stack carefully. [Manual \\[draft\\] p.4](ticker-pdf://11111111-1111-1111-1111-111111111111?page=4&chunk=22222222-2222-2222-2222-222222222222&q=stack%20words)"
+        )
+    }
+
+    func test_citationMarkerSwapToleratesProviderClosingBraceTypo() throws {
+        let sourceId = try XCTUnwrap(UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+        let chunkId = try XCTUnwrap(UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
+        let secondChunkId = try XCTUnwrap(UUID(uuidString: "33333333-3333-3333-3333-333333333333"))
+        let manifest = [
+            DocumentAICitationManifestEntry(
+                n: 1,
+                chunkId: chunkId,
+                sourceId: sourceId,
+                page: 165,
+                shortTitle: "Manual"
+            ),
+            DocumentAICitationManifestEntry(
+                n: 2,
+                chunkId: secondChunkId,
+                sourceId: sourceId,
+                page: 166,
+                shortTitle: "Manual"
+            )
+        ]
+        let text = #"Read this.【1|"The word UNUSED places on the stack"}"#
+
+        XCTAssertEqual(
+            CitationMarkerSwap.swap(text, manifest: manifest, mode: .markdownLink),
+            "Read this. [Manual p.165](ticker-pdf://11111111-1111-1111-1111-111111111111?page=165&chunk=22222222-2222-2222-2222-222222222222&q=The%20word%20UNUSED%20places%20on%20the%20stack)"
+        )
+        XCTAssertEqual(
+            CitationMarkerSwap.swap(
+                #"Read this.【1|"pushes {x} onto the stack"】"#,
+                manifest: manifest,
+                mode: .markdownLink
+            ),
+            "Read this. [Manual p.165](ticker-pdf://11111111-1111-1111-1111-111111111111?page=165&chunk=22222222-2222-2222-2222-222222222222&q=pushes%20%7Bx%7D%20onto%20the%20stack)"
+        )
+        XCTAssertEqual(
+            CitationMarkerSwap.swap(
+                #"First.【1|"alpha"} prose Second.【2|"beta"】"#,
+                manifest: manifest,
+                mode: .markdownLink
+            ),
+            "First. [Manual p.165](ticker-pdf://11111111-1111-1111-1111-111111111111?page=165&chunk=22222222-2222-2222-2222-222222222222&q=alpha) prose Second. [Manual p.166](ticker-pdf://11111111-1111-1111-1111-111111111111?page=166&chunk=33333333-3333-3333-3333-333333333333&q=beta)"
+        )
+    }
+
+    func test_pdfSectionAIMarkdownBuildsLinkedSummaryAndQuotedQuestion() throws {
+        let sourceId = try XCTUnwrap(UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+        let descriptor = PDFSectionDescriptor(
+            streamId: UUID(),
+            sourceId: sourceId,
+            sourceName: "Manual.pdf",
+            shortTitle: "Manual",
+            sectionPath: "Part I > Storage [draft]",
+            sectionTitle: "Storage [draft]",
+            pageStart: 4,
+            pageEnd: 6
+        )
+
+        XCTAssertEqual(
+            PDFSectionAIMarkdown.fragment(
+                action: .summarize,
+                descriptor: descriptor,
+                prompt: nil,
+                response: " Summary body. "
+            ),
+            "### [Storage \\[draft\\]](ticker-pdf://11111111-1111-1111-1111-111111111111?page=4)\n\nSummary body."
+        )
+        XCTAssertEqual(
+            PDFSectionAIMarkdown.fragment(
+                action: .ask,
+                descriptor: descriptor,
+                prompt: "First line\nSecond line",
+                response: "Answer."
+            ),
+            "### Asked of [Storage \\[draft\\]](ticker-pdf://11111111-1111-1111-1111-111111111111?page=4)\n\n> First line\n> Second line\n\nAnswer."
+        )
+    }
+
+    @MainActor
+    func test_pdfSectionAIAppendsCitedResponseWithAtomicReceipt() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Reading")
+            try service.saveStream(stream)
+            let source = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [(0, "Opening section text supports the answer.", 4, 4, "Part I > Storage")]
+            )
+            let retrieval = RetrievalService(persistence: service)
+            let registry = AIOperationRegistry()
+            let recorder = BridgeMessageRecorder()
+            let handler = AIMessageHandler(
+                persistence: service,
+                retrievalService: retrieval,
+                aiOperations: registry,
+                sendToWeb: { recorder.send($0) },
+                routeDocumentAI: { _, _, routedImages, routedStreamId, _, context, systemPrompt, onChunk, onComplete, _, onModelSelected in
+                    XCTAssertTrue(routedImages.isEmpty)
+                    XCTAssertNil(routedStreamId)
+                    XCTAssertEqual(context?.chunks.map(\.sourceId), [source.id])
+                    XCTAssertEqual(systemPrompt, Prompts.pdfSectionSummary)
+                    onModelSelected?("provider/model")
+                    onChunk(#"Storage is supported.【1|"Opening section text supports"】"#)
+                    onComplete(context)
+                }
+            )
+
+            await handler.handle(BridgeMessage(type: "runPdfSectionAI", payload: [
+                "action": AnyCodable("summarize"),
+                "streamId": AnyCodable(stream.id.uuidString),
+                "sourceId": AnyCodable(source.id.uuidString),
+                "page": AnyCodable(4)
+            ]))
+
+            try await waitUntil {
+                registry.operations.values.first?.state == .succeeded
+            }
+
+            let requestId = try XCTUnwrap(registry.operations.keys.first)
+            let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            let exchange = try XCTUnwrap(service.loadExchange(requestId: requestId))
+            let spans = try service.loadSpans(streamId: stream.id)
+            XCTAssertTrue(document.markdown.contains("### [Storage](ticker-pdf://\(source.id.uuidString)?page=4)"))
+            XCTAssertTrue(document.markdown.contains("[Manual p.4](ticker-pdf://\(source.id.uuidString)?page=4&chunk="))
+            XCTAssertEqual(exchange.verb, "summarize")
+            XCTAssertTrue(exchange.responseRaw.contains("【1"))
+            XCTAssertEqual(spans.count, 1)
+            XCTAssertEqual(spans[0].requestId, requestId)
+            XCTAssertEqual(spans[0].textHash, FNV1a.hash(document.markdown))
+
+            let append = try XCTUnwrap(recorder.messages(ofType: "streamDocumentAppended").first)
+            XCTAssertEqual(append.payload?["source"]?.value as? String, "pdfSectionAI")
+            XCTAssertEqual(append.payload?["revision"]?.intValue, 1)
+        }
+    }
+
+    @MainActor
+    func test_cancelledPDFSectionAIDoesNotAppendLateCompletion() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Reading")
+            try service.saveStream(stream)
+            let source = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Manual.pdf",
+                extractedText: largeExtractedText(),
+                chunks: [(0, "Opening section text.", 4, 4, "Part I > Storage")]
+            )
+            let registry = AIOperationRegistry()
+            let provider = SlowDocumentAIProvider()
+            let handler = AIMessageHandler(
+                persistence: service,
+                retrievalService: RetrievalService(persistence: service),
+                aiOperations: registry,
+                sendToWeb: { _ in },
+                routeDocumentAI: { _, _, _, _, _, context, systemPrompt, onChunk, onComplete, _, _ in
+                    await provider.stream(
+                        systemPrompt: systemPrompt,
+                        onChunk: onChunk,
+                        onComplete: { _ in onComplete(context) }
+                    )
+                }
+            )
+
+            await handler.handle(BridgeMessage(type: "runPdfSectionAI", payload: [
+                "action": AnyCodable("summarize"),
+                "streamId": AnyCodable(stream.id.uuidString),
+                "sourceId": AnyCodable(source.id.uuidString),
+                "page": AnyCodable(4)
+            ]))
+            try await waitUntil {
+                registry.operations.values.first?.state == .generating
+            }
+            let requestId = try XCTUnwrap(registry.operations.keys.first)
+
+            await handler.handle(BridgeMessage(type: "cancelAIOperation", payload: [
+                "requestId": AnyCodable(requestId)
+            ]))
+            try await waitUntil { await provider.cancelled() }
+
+            XCTAssertEqual(registry.operations[requestId]?.state, .canceled)
+            XCTAssertNil(try service.loadStreamDocument(streamId: stream.id))
+            XCTAssertNil(try service.loadExchange(requestId: requestId))
+        }
+    }
+
+    @MainActor
+    func test_pdfSectionAIRejectsOversizedQuestionBeforeRouting() async {
+        let registry = AIOperationRegistry()
+        var didRoute = false
+        let handler = AIMessageHandler(
+            aiOperations: registry,
+            sendToWeb: { _ in },
+            routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in
+                didRoute = true
+            }
+        )
+
+        await handler.handle(BridgeMessage(type: "runPdfSectionAI", payload: [
+            "action": AnyCodable("ask"),
+            "streamId": AnyCodable(UUID().uuidString),
+            "sourceId": AnyCodable(UUID().uuidString),
+            "page": AnyCodable(1),
+            "prompt": AnyCodable(String(repeating: "x", count: (PDFSectionAIAction.maxPromptTokens + 1) * 4))
+        ]))
+
+        XCTAssertFalse(didRoute)
+        XCTAssertEqual(registry.operations.values.first?.state, .failed)
+        XCTAssertEqual(
+            registry.operations.values.first?.message,
+            "That section question is too long. Shorten it and try again."
         )
     }
 

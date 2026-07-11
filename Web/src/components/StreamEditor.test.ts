@@ -10,6 +10,7 @@ import {
   documentAIRollbackChange,
   isStreamDocumentDirty,
   nextSourceScope,
+  parsePDFSectionActionRequest,
   shouldScheduleEditorAutosave,
 } from './StreamEditor';
 
@@ -72,6 +73,24 @@ describe('activeAIOperationsAfter', () => {
 
     active = activeAIOperationsAfter(active, 'request-2', 'failed');
     expect(active.size).toBe(0);
+  });
+});
+
+describe('parsePDFSectionActionRequest', () => {
+  it('accepts a current-stream section action and rejects stale or malformed payloads', () => {
+    const payload = {
+      action: 'ask',
+      streamId: 'stream-1',
+      sourceId: 'source-1',
+      shortTitle: 'Manual',
+      sectionTitle: 'Storage',
+      page: 4,
+    };
+
+    expect(parsePDFSectionActionRequest(payload, 'stream-1')).toEqual(payload);
+    expect(parsePDFSectionActionRequest(payload, 'stream-2')).toBeNull();
+    expect(parsePDFSectionActionRequest({ ...payload, page: 0 }, 'stream-1')).toBeNull();
+    expect(parsePDFSectionActionRequest({ ...payload, action: 'rewrite' }, 'stream-1')).toBeNull();
   });
 });
 

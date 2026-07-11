@@ -11,6 +11,7 @@ final class WebViewManager: NSObject {
     let persistence: PersistenceService?
     private let sourceService: SourceService?
     private let ingestService: IngestService?
+    private let retrievalService: RetrievalService?
     let orchestrator: AIOrchestrator
     private let assetService: AssetService
     private var currentStreamIdForFileDrops: UUID?
@@ -50,6 +51,7 @@ final class WebViewManager: NSObject {
         self.persistence = container.persistence
         self.sourceService = container.sourceService
         self.ingestService = container.ingestService
+        self.retrievalService = container.retrievalService
         self.assetService = container.assetService
         super.init()
         if let streamHandler = StreamMessageHandler(container: container, delegate: self) {
@@ -139,6 +141,18 @@ final class WebViewManager: NSObject {
                 return []
             }
         }
+        pdfPaneController.sectionProvider = { [weak self] streamId, sourceId, page in
+            guard let retrievalService = self?.retrievalService else {
+                throw PDFSectionContextError.serviceUnavailable
+            }
+            // ponytail: Reuse the proven chunk read on a user click; add a metadata-only
+            // query only if profiling shows large-book menu latency.
+            return try retrievalService.resolvePDFSection(
+                sourceId: sourceId,
+                streamId: streamId,
+                page: page
+            )
+        }
         pdfPaneController.onLinkSelection = { [weak self] payload in
             guard let self else { return false }
             guard let persistence = self.persistence else {
@@ -175,6 +189,9 @@ final class WebViewManager: NSObject {
             Task { @MainActor in
                 self?.sendPDFAnchorPickCancelled(streamId: streamId)
             }
+        }
+        pdfPaneController.onSectionAction = { [weak self] payload in
+            self?.sendPDFSectionActionRequested(payload)
         }
         pdfPaneController.onPageChanged = { [weak self] sourceId, pageIndex in
             guard let self, let persistence = self.persistence else { return }
@@ -400,6 +417,21 @@ final class WebViewManager: NSObject {
         bridgeService.send(BridgeMessage(
             type: "pdfAnchorPickCancelled",
             payload: ["streamId": AnyCodable(streamId.uuidString)]
+        ))
+    }
+
+    @MainActor
+    private func sendPDFSectionActionRequested(_ payload: PDFSectionActionPayload) {
+        bridgeService.send(BridgeMessage(
+            type: "pdfSectionActionRequested",
+            payload: [
+                "action": AnyCodable(payload.action.rawValue),
+                "streamId": AnyCodable(payload.descriptor.streamId.uuidString),
+                "sourceId": AnyCodable(payload.descriptor.sourceId.uuidString),
+                "shortTitle": AnyCodable(payload.descriptor.shortTitle),
+                "sectionTitle": AnyCodable(payload.descriptor.sectionTitle),
+                "page": AnyCodable(payload.page)
+            ]
         ))
     }
 

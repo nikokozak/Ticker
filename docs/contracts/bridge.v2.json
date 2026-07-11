@@ -65,6 +65,9 @@
         "requiredPayloadKeys": ["visible"],
         "optionalPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle"]
       },
+      "pdfSectionActionRequested": {
+        "requiredPayloadKeys": ["action", "streamId", "sourceId", "shortTitle", "sectionTitle", "page"]
+      },
       "pdfAnchorPlaced": {
         "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page"]
       },
@@ -206,6 +209,10 @@
       },
       "retrySourceIndexing": {
         "requiredPayloadKeys": ["sourceId"]
+      },
+      "runPdfSectionAI": {
+        "requiredPayloadKeys": ["action", "streamId", "sourceId", "page"],
+        "optionalPayloadKeys": ["prompt"]
       },
       "setSourceAIExclusion": {
         "requiredPayloadKeys": ["sourceId", "excluded"]

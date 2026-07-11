@@ -1,6 +1,8 @@
 import type { DocumentAICitation } from '../types';
 
-const CITATION_MARKER_PATTERN = /【(\d+)(?:\|([^】]*))?】/g;
+// Some providers occasionally close an otherwise valid marker with `}`.
+// Keep quoted braces intact while accepting that observed closing typo.
+const CITATION_MARKER_PATTERN = /【(\d+)(?:\|(["“”][^】【]*?["“”]|[^】}]*))?[】}]/g;
 const QUOTE_DELIMITERS = new Set(['"', '“', '”']);
 const MAX_QUOTE_QUERY_LENGTH = 200;
 

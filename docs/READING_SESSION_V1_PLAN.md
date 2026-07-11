@@ -65,7 +65,7 @@ Not in this milestone:
 6. **No editor rebuild for navigation.** Reverse navigation is a one-shot full-document Markdown-link scan, not a continuously maintained index. It must not depend on CodeMirror's lazily parsed syntax tree.
 7. **AI privacy remains a boundary.** A source marked excluded from AI must reject a section AI request with an honest failure state.
 8. **Indexing remains non-blocking.** The PDF stays readable. A section request made before chunks are ready fails plainly and can be retried; it never sends guessed or unrelated context.
-9. **Long sections fail honestly.** v1 uses one prepared section context. Expose the existing `LLMRequest` 100,000-token truncation budget as a shared constant and cap section reference material below it using the same `LLMRequest.estimateTokens` heuristic, reserving 12,000 tokens for the system prompt, wrappers, user query, and response. Over-ceiling input fails before `AIOrchestrator.route` is called. Multi-pass summaries belong to the later summary-tree work.
+9. **Long sections fail honestly.** v1 uses one prepared section context. Expose the existing `LLMRequest` 100,000-token truncation budget as a shared constant and cap section reference material below it using the same `LLMRequest.estimateTokens` heuristic, reserving 12,000 tokens for the system prompt, wrappers, user query, and response. Ask prompts are capped at 8,000 estimated tokens inside that reserve. Over-ceiling input fails before `AIOrchestrator.route` is called. Multi-pass summaries belong to the later summary-tree work.
 10. **Editor correctness stays unchanged.** Section outputs arrive through the existing revision-gap and conflict protections; in-editor document AI keeps its current one-undo behavior.
 
 ## Functional architecture
@@ -259,6 +259,7 @@ The operation registry transitions to `failed` with concise user text. It never 
 - Unit: generated section Markdown is valid, page-linked, and uses trusted citation swaps.
 - Unit: AI handler appends response + span + exchange atomically and never appends after cancellation.
 - Unit: context at or below the 88,000-token reference ceiling is accepted; over-ceiling context produces the typed failure and the injected route closure is never called.
+- Unit: an Ask prompt above the 8,000-token reserve fails before routing.
 - Unit: pure context-merge cases cover explicit + retrieved, explicit + nil, explicit + unavailable, assembled-only identity, and both nil.
 - Unit: current document AI tests prove an absent explicit context preserves retrieval behavior; a Quick Panel seam test proves captured context survives while retrieved chunks remain available for citations.
 - Unit: a section request routes its prepared context with `streamId: nil`.

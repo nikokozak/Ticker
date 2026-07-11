@@ -74,6 +74,10 @@ enum Prompts {
     Answer the question or continue the line of thought, grounded in the provided context. Never reply with a clarifying question or a menu of options — your text is inserted into the document, so there is no conversation to ask into. Commit to the most reasonable reading of the query, note a load-bearing assumption in passing if you must, and give a complete, final answer. Output only the answer prose. \(verbFormatting)
     """
 
+    static let pdfSectionSummary = """
+    Summarize the supplied PDF section faithfully and concisely. Cover its central argument, important evidence, and conclusion without inventing material outside the section. Output only the summary body; the application adds the section heading. \(verbFormatting)
+    """
+
     static let verbRewrite = """
     Rewrite the provided passage following the instruction exactly — including any required length, tone, or structure. Preserve the passage's meaning unless the instruction says otherwise. Output only the rewritten passage.
     """
