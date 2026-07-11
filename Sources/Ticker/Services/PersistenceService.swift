@@ -1842,12 +1842,49 @@ final class PersistenceService {
         matching ftsQuery: String,
         streamId: UUID,
         limit: Int,
-        excludeAIPrivateSources: Bool = true
+        excludeAIPrivateSources: Bool = true,
+        requiringAtLeastTwoOf queryTerms: [String]? = nil
     ) throws -> [RetrievedChunk] {
         let aiExclusionPredicate = excludeAIPrivateSources ? "AND s.ai_excluded = 0" : ""
 
         return try dbQueue.read { db in
-            try Row.fetchAll(
+            let chunkIDs: Set<UUID>?
+            if let queryTerms {
+                var counts: [UUID: Int] = [:]
+                for term in Set(queryTerms) {
+                    let rows = try Row.fetchAll(
+                        db,
+                        sql: """
+                            SELECT c.id
+                            FROM source_chunks_fts
+                            JOIN source_chunks c ON c.id = source_chunks_fts.chunk_id
+                            JOIN sources s ON s.id = c.source_id
+                            WHERE source_chunks_fts MATCH ?
+                              AND s.stream_id = ?
+                              \(aiExclusionPredicate)
+                        """,
+                        arguments: ["\"\(term)\"", streamId.uuidString]
+                    )
+                    for row in rows {
+                        guard let id = UUID(uuidString: row["id"]) else { continue }
+                        counts[id, default: 0] += 1
+                    }
+                }
+                chunkIDs = Set(counts.compactMap { $0.value >= 2 ? $0.key : nil })
+            } else {
+                chunkIDs = nil
+            }
+            if chunkIDs?.isEmpty == true { return [] }
+
+            let sortedChunkIDs = chunkIDs?.sorted { $0.uuidString < $1.uuidString }
+            let chunkPredicate = sortedChunkIDs.map {
+                "AND c.id IN (\(Array(repeating: "?", count: $0.count).joined(separator: ",")))"
+            } ?? ""
+            var arguments: StatementArguments = [ftsQuery, streamId.uuidString]
+            for id in sortedChunkIDs ?? [] { arguments += [id.uuidString] }
+            arguments += [limit]
+
+            return try Row.fetchAll(
                 db,
                 sql: """
                     SELECT
@@ -1866,10 +1903,11 @@ final class PersistenceService {
                     WHERE source_chunks_fts MATCH ?
                       AND s.stream_id = ?
                       \(aiExclusionPredicate)
+                      \(chunkPredicate)
                     ORDER BY score ASC
                     LIMIT ?
                 """,
-                arguments: [ftsQuery, streamId.uuidString, limit]
+                arguments: arguments
             ).map { row in
                 RetrievedChunk(
                     id: UUID(uuidString: row["id"])!,

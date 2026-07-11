@@ -1777,7 +1777,7 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
-    func test_semanticBudgetExceededFallsBackToExactBM25() throws {
+    func test_semanticBudgetOrFailureFallsBackToExactBM25() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Budget fallback")
             try service.saveStream(stream)
@@ -1798,9 +1798,58 @@ final class StreamDocumentTests: XCTestCase {
                 operatingPoint: .init(cosineFloor: 0.3, rrfK: 60),
                 queryBudget: 0.001
             ).retrieve(query: "anvil receipt", streamId: stream.id)
+            let failed = try RetrievalService(
+                persistence: service,
+                embeddingProvider: TestEmbeddingProvider { _ in
+                    throw NSError(domain: "RetrievalTest", code: 1)
+                },
+                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60)
+            ).retrieve(query: "anvil receipt", streamId: stream.id)
 
             XCTAssertEqual(actual.map(\.id), baseline.map(\.id))
             XCTAssertEqual(actual.map(\.score), baseline.map(\.score))
+            XCTAssertEqual(failed.map(\.id), baseline.map(\.id))
+            XCTAssertEqual(failed.map(\.score), baseline.map(\.score))
+        }
+    }
+
+    func test_retrievalTermCoverageFiltersBeforeTopK() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Coverage Before Limit")
+            try service.saveStream(stream)
+            let rareTerms = (0..<8).map { "rareterm\($0)" }
+            let distractors: [RetrievalChunkFixture] = rareTerms.enumerated().map { index, term in
+                (index, String(repeating: "\(term) ", count: 80), index + 1, index + 1, nil)
+            }
+            let sharedFillers: [RetrievalChunkFixture] = (0..<100).map { index in
+                let term = index < 50 ? "sharedalpha" : "sharedbeta"
+                return (100 + index, "\(term) filler \(index)", 100 + index, 100 + index, nil)
+            }
+            let genericFillers: [RetrievalChunkFixture] = (0..<1_000).map { index in
+                (1_000 + index, "unrelated filler document \(index)", 1_000 + index, 1_000 + index, nil)
+            }
+            let relevantText = String(repeating: "sharedalpha sharedbeta ", count: 40)
+            let source = try saveRetrievalSource(
+                in: service,
+                streamId: stream.id,
+                displayName: "Coverage.pdf",
+                extractedText: largeExtractedText(),
+                chunks: distractors + sharedFillers + genericFillers + [(999, relevantText, 999, 999, nil)]
+            )
+            let relevantID = try XCTUnwrap(
+                service.loadSourceChunks(sourceId: source.id).first { $0.seq == 999 }?.id
+            )
+            let query = (rareTerms + ["sharedalpha", "sharedbeta"]).joined(separator: " ")
+            let retrieval = RetrievalService(persistence: service)
+
+            XCTAssertFalse(
+                try retrieval.retrieve(query: query, streamId: stream.id, applyThreshold: false)
+                    .contains { $0.id == relevantID }
+            )
+            XCTAssertEqual(
+                try retrieval.retrieve(query: query, streamId: stream.id).map(\.id),
+                [relevantID]
+            )
         }
     }
 

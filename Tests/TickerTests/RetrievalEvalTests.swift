@@ -37,23 +37,27 @@ final class RetrievalEvalTests: XCTestCase {
         let goldenURL = root.appendingPathComponent("tools/retrieval-eval/golden.json")
         let outputURL = root.appendingPathComponent("tools/retrieval-eval/baseline.json")
         let golden = try JSONDecoder().decode(Golden.self, from: Data(contentsOf: goldenURL))
-        let bm25 = try Self.bm25Results(golden: golden)
+        let (bm25, latency) = try Self.bm25Results(golden: golden)
         let cases = golden.cases.map { item -> CaseResult in
             let retrieved = bm25[item.id, default: []]
-            let found = item.expected.filter(Set(retrieved).contains).count
+            let expected = item.bm25Expected ?? item.expected
+            let found = expected.filter(Set(retrieved).contains).count
             return CaseResult(
                 id: item.id,
                 className: item.className,
-                expected: item.expected,
+                expected: expected,
                 retrieved: retrieved,
-                recall: item.expected.isEmpty ? (retrieved.isEmpty ? 1 : 0) : Double(found) / Double(item.expected.count)
+                recall: expected.isEmpty ? (retrieved.isEmpty ? 1 : 0) : Double(found) / Double(expected.count)
             )
         }
         let report = Report(cases: cases)
         print(report.table)
+        let latencyLine = String(format: "BM25 retrieval latency: p50 %.3fms, p95 %.3fms", latency.p50Ms, latency.p95Ms)
+        print(latencyLine)
         try Self.validateKnownFailures(golden: golden, report: report)
         try JSONEncoder.pretty.encode(report).write(to: outputURL, options: .atomic)
-        try (report.table + "\n").write(to: outputURL.appendingPathExtension("table"), atomically: true, encoding: .utf8)
+        try (report.table + "\n" + latencyLine + "\n")
+            .write(to: outputURL.appendingPathExtension("table"), atomically: true, encoding: .utf8)
     }
 
     func testHybridSweep() async throws {
@@ -80,7 +84,7 @@ final class RetrievalEvalTests: XCTestCase {
             return
         }
 
-        let bm25 = try Self.bm25Results(golden: golden)
+        let (bm25, _) = try Self.bm25Results(golden: golden)
         let coldStart = ContinuousClock.now
         _ = try await provider.embed([golden.cases[0].query])
         let coldQueryMs = Self.milliseconds(coldStart.duration(to: .now))
@@ -153,9 +157,10 @@ final class RetrievalEvalTests: XCTestCase {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", value))!
     }
 
-    private static func bm25Results(golden: Golden) throws -> [String: [String]] {
+    private static func bm25Results(golden: Golden) throws -> ([String: [String]], Latency) {
         let fileManager = FileManager.default
-        return try Dictionary(uniqueKeysWithValues: golden.cases.map { item in
+        var latenciesMs: [Double] = []
+        let results = try Dictionary(uniqueKeysWithValues: golden.cases.map { item in
             let directory = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? fileManager.removeItem(at: directory) }
@@ -182,10 +187,16 @@ final class RetrievalEvalTests: XCTestCase {
                 }
                 try persistence.saveSourceChunks(chunks, for: source.id)
             }
+            let start = ContinuousClock.now
             let retrieved = try RetrievalService(persistence: persistence)
                 .retrieve(query: item.query, streamId: stream.id).compactMap { productionToGolden[$0.id] }
+            latenciesMs.append(milliseconds(start.duration(to: .now)))
             return (item.id, retrieved)
         })
+        return (results, Latency(
+            p50Ms: percentile(latenciesMs, 0.50),
+            p95Ms: percentile(latenciesMs, 0.95)
+        ))
     }
 
     private static func hybridReport(
@@ -303,11 +314,12 @@ private struct Golden: Decodable {
     let cases: [GoldenCase]
 
     func corpus(for item: GoldenCase) -> [CorpusChunk] {
-        corpus.filter { includes($0, for: item) }
+        corpus.filter { includes($0, for: item) }.flatMap(\.expanded)
     }
 
     func includes(_ chunk: CorpusChunk, for item: GoldenCase) -> Bool {
-        item.corpusFilter?.contains { chunk.id.hasPrefix($0) } ?? true
+        item.corpusFilter?.contains { chunk.id.hasPrefix($0) }
+            ?? !chunk.id.hasPrefix("coverage-")
     }
 }
 
@@ -318,6 +330,18 @@ private struct CorpusChunk: Decodable {
     let pageEnd: Int
     let sectionPath: String
     let text: String
+    let copies: Int?
+
+    var expanded: [Self] {
+        let count = copies ?? 1
+        return (0..<count).map { copy in
+            Self(
+                id: count == 1 ? id : "\(id)-\(copy)", sourceName: sourceName,
+                pageStart: pageStart, pageEnd: pageEnd, sectionPath: sectionPath,
+                text: text, copies: nil
+            )
+        }
+    }
 }
 
 private struct GoldenCase: Decodable {
@@ -325,11 +349,12 @@ private struct GoldenCase: Decodable {
     let className: String
     let query: String
     let expected: [String]
+    let bm25Expected: [String]?
     let corpusFilter: [String]?
     let knownFailure: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, query, expected, corpusFilter, knownFailure
+        case id, query, expected, bm25Expected, corpusFilter, knownFailure
         case className = "class"
     }
 }
