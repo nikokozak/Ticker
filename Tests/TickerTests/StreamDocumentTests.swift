@@ -46,6 +46,19 @@ final class TickerURLCommandTests: XCTestCase {
     }
 }
 
+private final class TestEmbeddingProvider: EmbeddingProvider {
+    let modelId = "test-model"
+    private let embedBlock: ([String]) throws -> [[Float]]
+
+    init(embed: @escaping ([String]) throws -> [[Float]]) {
+        embedBlock = embed
+    }
+
+    var isReady: Bool { true }
+    func prepare() async -> Bool { true }
+    func embed(_ texts: [String]) async throws -> [[Float]] { try embedBlock(texts) }
+}
+
 final class QuickPanelMarkdownFormatterTests: XCTestCase {
     func test_buildFragment_includesSelectedTextAsBlockquoteWithAttribution() throws {
         let context = QuickPanelContext(
@@ -739,13 +752,10 @@ final class StreamDocumentTests: XCTestCase {
             }
             XCTAssertTrue(ftsExists)
 
-            let legacyEmbeddingTableIsGone = try dbQueue.read { db in
-                try Row.fetchOne(
-                    db,
-                    sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunk_embeddings'"
-                ) == nil
+            let embeddingColumns: [String] = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(chunk_embeddings)").map { $0["name"] }
             }
-            XCTAssertTrue(legacyEmbeddingTableIsGone)
+            XCTAssertEqual(embeddingColumns, ["chunk_id", "model_id", "dims", "vector"])
 
             let ftsCount: Int = try dbQueue.read { db in
                 try Row.fetchOne(db, sql: "SELECT COUNT(*) AS count FROM source_chunks_fts")?["count"] ?? -1
@@ -1731,6 +1741,95 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_hybridRetrievalAppliesCosineFloor() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Semantic floor")
+            try service.saveStream(stream)
+            let source = try saveRetrievalSource(
+                in: service, streamId: stream.id, displayName: "Concepts.pdf",
+                extractedText: largeExtractedText(), chunks: [(0, "orthogonal source wording", 1, 1, nil)]
+            )
+            let chunk = try XCTUnwrap(service.loadSourceChunks(sourceId: source.id).first)
+            try service.saveChunkEmbeddings([[0.4, 0.9165]], for: [chunk], modelId: "test-model")
+            let provider = TestEmbeddingProvider { _ in [[1, 0]] }
+
+            let gated = RetrievalService(
+                persistence: service, embeddingProvider: provider,
+                operatingPoint: .init(cosineFloor: 0.5, rrfK: 60), semanticDisabled: { false }
+            )
+            let passing = RetrievalService(
+                persistence: service, embeddingProvider: provider,
+                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60), semanticDisabled: { false }
+            )
+
+            XCTAssertTrue(try gated.retrieve(query: "conceptual question", streamId: stream.id).isEmpty)
+            XCTAssertEqual(try passing.retrieve(query: "conceptual question", streamId: stream.id).map(\.id), [chunk.id])
+        }
+    }
+
+    func test_reciprocalRankFusionOrder() {
+        XCTAssertNotNil(RetrievalOperatingPoint.bundled())
+        XCTAssertEqual(
+            RetrievalService.reciprocalRankFuse(
+                bm25: ["a", "b"], semantic: ["b", "c"], rrfK: 60, limit: 3
+            ),
+            ["b", "a", "c"]
+        )
+    }
+
+    func test_semanticBudgetExceededFallsBackToExactBM25() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Budget fallback")
+            try service.saveStream(stream)
+            let source = try saveRetrievalSource(
+                in: service, streamId: stream.id, displayName: "Lexical.pdf",
+                extractedText: largeExtractedText(), chunks: [(0, "anvil anvil anvil receipt", 1, 1, nil)]
+            )
+            let chunk = try XCTUnwrap(service.loadSourceChunks(sourceId: source.id).first)
+            try service.saveChunkEmbeddings([[1, 0]], for: [chunk], modelId: "test-model")
+            let baseline = try RetrievalService(persistence: service)
+                .retrieve(query: "anvil receipt", streamId: stream.id)
+            let slow = TestEmbeddingProvider { _ in
+                Thread.sleep(forTimeInterval: 0.05)
+                return [[1, 0]]
+            }
+            let actual = try RetrievalService(
+                persistence: service, embeddingProvider: slow,
+                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60),
+                semanticDisabled: { false }, queryBudget: 0.001
+            ).retrieve(query: "anvil receipt", streamId: stream.id)
+
+            XCTAssertEqual(actual.map(\.id), baseline.map(\.id))
+            XCTAssertEqual(actual.map(\.score), baseline.map(\.score))
+        }
+    }
+
+    func test_semanticKillSwitchFallsBackWithoutEmbedding() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Kill switch")
+            try service.saveStream(stream)
+            let source = try saveRetrievalSource(
+                in: service, streamId: stream.id, displayName: "Lexical.pdf",
+                extractedText: largeExtractedText(), chunks: [(0, "anvil anvil anvil receipt", 1, 1, nil)]
+            )
+            let chunk = try XCTUnwrap(service.loadSourceChunks(sourceId: source.id).first)
+            try service.saveChunkEmbeddings([[1, 0]], for: [chunk], modelId: "test-model")
+            let baseline = try RetrievalService(persistence: service)
+                .retrieve(query: "anvil receipt", streamId: stream.id)
+            let provider = TestEmbeddingProvider { _ in
+                XCTFail("kill switch must skip embedding")
+                return [[1, 0]]
+            }
+            let actual = try RetrievalService(
+                persistence: service, embeddingProvider: provider,
+                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60), semanticDisabled: { true }
+            ).retrieve(query: "anvil receipt", streamId: stream.id)
+
+            XCTAssertEqual(actual.map(\.id), baseline.map(\.id))
+            XCTAssertEqual(actual.map(\.score), baseline.map(\.score))
+        }
+    }
+
     func test_retrievalSingleSourceFloorReturnsBestChunkWhenAllQueryTokensMatchOnlyWeakly() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Weak Matches")
@@ -2223,6 +2322,75 @@ final class StreamDocumentTests: XCTestCase {
             lock.unlock()
             XCTAssertTrue(capturedStatuses.contains(.indexing))
             XCTAssertTrue(capturedStatuses.contains(.ready))
+        }
+    }
+
+    func test_v23MigrationCreatesEmptyChunkEmbeddingCache() throws {
+        try withTempPersistenceServiceAndURL { _, dbURL, _ in
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let columns: [String] = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(chunk_embeddings)").map { $0["name"] }
+            }
+            let count = try dbQueue.read { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM chunk_embeddings")!
+            }
+            XCTAssertEqual(columns, ["chunk_id", "model_id", "dims", "vector"])
+            XCTAssertEqual(count, 0)
+        }
+    }
+
+    func test_modelIdMismatchIsMissingEmbedding() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Model mismatch")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id, displayName: "Notes.txt", fileType: .text,
+                bookmarkData: Data(), status: .ready, indexStatus: .ready
+            )
+            try service.saveSource(source)
+            let chunk = SourceChunk(sourceId: source.id, seq: 0, text: "cached text", pageStart: 1, pageEnd: 1)
+            try service.saveSourceChunks([chunk], for: source.id)
+            try service.saveChunkEmbeddings([[1, 0]], for: [chunk], modelId: "old-model")
+
+            XCTAssertEqual(
+                try service.loadChunksMissingEmbeddings(streamId: stream.id, modelId: "new-model").map(\.id),
+                [chunk.id]
+            )
+            XCTAssertTrue(try service.loadChunksMissingEmbeddings(streamId: stream.id, modelId: "old-model").isEmpty)
+        }
+    }
+
+    func test_ingestEmbeddingFailureLeavesFTSReady() throws {
+        try withTempPersistenceServiceAndURL { service, _, fileManager in
+            let stream = Stream(title: "Embedding failure")
+            try service.saveStream(stream)
+            let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { try? fileManager.removeItem(at: tempDir) }
+            let pdfURL = tempDir.appendingPathComponent("Ready.pdf")
+            try makePDFData(pages: ["FTS survives an embedding provider failure."]).write(to: pdfURL)
+            let sourceService = SourceService(persistence: service)
+            let source = try sourceService.addSource(from: pdfURL, to: stream.id)
+            let embeddingAttempted = expectation(description: "embedding attempted")
+            let provider = TestEmbeddingProvider { _ in
+                embeddingAttempted.fulfill()
+                throw TestPDFError.creationFailed
+            }
+            let ingest = IngestService(
+                persistence: service,
+                sourceService: sourceService,
+                chunkingService: ChunkingService(config: .init(targetTokens: 200, overlapTokens: 0)),
+                embeddingProvider: provider
+            )
+            let ready = expectation(description: "FTS ready")
+            ingest.onStatusChange = { if $0.status == .ready { ready.fulfill() } }
+
+            ingest.enqueue(source: source)
+            wait(for: [ready, embeddingAttempted], timeout: 5)
+
+            XCTAssertEqual(try service.loadSource(id: source.id)?.indexStatus, .ready)
+            XCTAssertFalse(try service.loadSourceChunks(sourceId: source.id).isEmpty)
+            XCTAssertFalse(try service.loadChunksMissingEmbeddings(streamId: stream.id, modelId: provider.modelId).isEmpty)
         }
     }
 

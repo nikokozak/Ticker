@@ -15,28 +15,35 @@ final class IngestService: @unchecked Sendable {
     private enum IngestError: Error {
         case noReadableText
         case openFailed
+        case embeddingUnavailable
     }
 
     private let persistence: PersistenceService
     private let sourceService: SourceService
     private let chunkingService: ChunkingService
     private let writeIndexStatus: (UUID, SourceIndexStatus) throws -> Void
+    private let embeddingProvider: EmbeddingProvider?
     private let stateQueue = DispatchQueue(label: "com.ticker.source-ingest")
 
     private var queuedSources: [SourceReference] = []
     private var queuedIds = Set<UUID>()
     private var currentSourceId: UUID?
     private var currentTask: Task<Void, Never>?
+    private var embeddingStreamIds: [UUID] = []
+    private var currentEmbeddingStreamId: UUID?
+    private var embeddingTask: Task<Void, Never>?
 
     init(
         persistence: PersistenceService,
         sourceService: SourceService,
         chunkingService: ChunkingService,
+        embeddingProvider: EmbeddingProvider? = nil,
         writeIndexStatus: ((UUID, SourceIndexStatus) throws -> Void)? = nil
     ) {
         self.persistence = persistence
         self.sourceService = sourceService
         self.chunkingService = chunkingService
+        self.embeddingProvider = embeddingProvider
         self.writeIndexStatus = writeIndexStatus ?? persistence.updateSourceIndexStatus
     }
 
@@ -60,8 +67,19 @@ final class IngestService: @unchecked Sendable {
                 source.indexStatus = statuses[source.id] ?? source.indexStatus
                 enqueue(source: source)
             }
+            enqueueEmbeddingPass(for: streamId)
         } catch {
             DebugLog.log("IngestService: Failed to enqueue pending sources (\(DebugLog.errorSummary(error)))")
+        }
+    }
+
+    func enqueueEmbeddingPass(for streamId: UUID) {
+        guard embeddingProvider != nil else { return }
+        stateQueue.async {
+            guard self.currentEmbeddingStreamId != streamId,
+                  !self.embeddingStreamIds.contains(streamId) else { return }
+            self.embeddingStreamIds.append(streamId)
+            self.startNextEmbeddingPassIfNeeded()
         }
     }
 
@@ -169,6 +187,7 @@ final class IngestService: @unchecked Sendable {
 
             try persistence.saveSourceChunks(chunks, for: source.id)
             emit(persistCompletionStatus(source.id, desired: .ready))
+            enqueueEmbeddingPass(for: source.streamId)
         } catch is CancellationError {
             emit(persistCompletionStatus(queuedSource.id, desired: .pending))
         } catch IngestError.noReadableText {
@@ -177,6 +196,34 @@ final class IngestService: @unchecked Sendable {
         } catch {
             DebugLog.log("IngestService: Failed sourceId=\(queuedSource.id) (\(DebugLog.errorSummary(error)))")
             emit(persistCompletionStatus(queuedSource.id, desired: .failed))
+        }
+    }
+
+    private func startNextEmbeddingPassIfNeeded() {
+        guard embeddingTask == nil, let provider = embeddingProvider,
+              !embeddingStreamIds.isEmpty else { return }
+        let streamId = embeddingStreamIds.removeFirst()
+        currentEmbeddingStreamId = streamId
+        embeddingTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard await provider.prepare() else { throw IngestError.embeddingUnavailable }
+                let chunks = try self.persistence.loadChunksMissingEmbeddings(
+                    streamId: streamId, modelId: provider.modelId
+                )
+                for start in stride(from: 0, to: chunks.count, by: 32) {
+                    let batch = Array(chunks[start..<min(start + 32, chunks.count)])
+                    let vectors = try await provider.embed(batch.map(\.text))
+                    try self.persistence.saveChunkEmbeddings(vectors, for: batch, modelId: provider.modelId)
+                }
+            } catch {
+                DebugLog.log("IngestService: Embedding pass failed streamId=\(streamId) (\(DebugLog.errorSummary(error)))")
+            }
+            self.stateQueue.async {
+                self.embeddingTask = nil
+                self.currentEmbeddingStreamId = nil
+                self.startNextEmbeddingPassIfNeeded()
+            }
         }
     }
 

@@ -24,6 +24,7 @@ export default defineConfig(({ command }) => ({
   base: command === 'build' ? './' : '/',
   build: {
     outDir: '../Sources/Ticker/Resources',
-    emptyOutDir: true,
+    // Preserve bundled native resources (for example Core ML models).
+    emptyOutDir: false,
   },
 }));

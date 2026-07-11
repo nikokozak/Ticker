@@ -53,10 +53,15 @@ struct ServiceContainer {
                 }
             )
 
+            let embeddingProvider = MiniLMEmbeddingProvider()
+            // Warm the model off the critical path so the first query's semantic
+            // leg doesn't hit a cold start (queries never wait on prepare).
+            Task.detached(priority: .utility) { _ = await embeddingProvider.prepare() }
             let ingestService = IngestService(
                 persistence: persistence,
                 sourceService: sourceService,
-                chunkingService: chunkingService
+                chunkingService: chunkingService,
+                embeddingProvider: embeddingProvider
             )
             ingestService.onStatusChange = { [bridgeService] update in
                 var payload: [String: AnyCodable] = [
@@ -75,7 +80,10 @@ struct ServiceContainer {
             }
             self.ingestService = ingestService
 
-            let retrievalService = RetrievalService(persistence: persistence)
+            let retrievalService = RetrievalService(
+                persistence: persistence,
+                embeddingProvider: embeddingProvider
+            )
             self.retrievalService = retrievalService
             orchestrator.setRetrievalService(retrievalService)
 

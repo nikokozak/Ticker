@@ -9,7 +9,12 @@ tools/contracts/node_modules/
 Web/dist/
 
 # Build output
-Sources/Ticker/Resources/
+Sources/Ticker/Resources/*
+!Sources/Ticker/Resources/MiniLM/
+Sources/Ticker/Resources/MiniLM/*
+!Sources/Ticker/Resources/MiniLM/MiniLM.mlmodelc/
+!Sources/Ticker/Resources/MiniLM/MiniLM.mlmodelc/**
+!Sources/Ticker/Resources/MiniLM/vocab.txt
 
 # Swift profiling
 default.profraw
@@ -35,6 +40,8 @@ Web/.vite/
 
 # Sparkle CLI tools (downloaded separately)
 tools/sparkle/
+tools/retrieval-eval/.venv/
+tools/retrieval-eval/MiniLM.mlpackage/
 
 # Local release config (do not commit)
 tickerctl.local.sh

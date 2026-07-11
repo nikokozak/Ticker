@@ -70,6 +70,16 @@ describe('aiWritingExtension', () => {
     expect(decorations[0].spec.widget).toBeDefined();
   });
 
+  it('keeps the pending widget while the range holds only the newline prefix', () => {
+    let state = EditorState.create({ doc: 'hello\n\n', extensions: [aiWritingExtension] });
+    state = state.update({ effects: setAiWritingRangeEffect.of({ from: 5, to: 7 }) }).state;
+
+    const decorations = collectDecorations(state);
+    expect(decorations).toHaveLength(1);
+    expect(decorations[0].from).toBe(7);
+    expect(decorations[0].spec.widget).toBeDefined();
+  });
+
   it('switches to the writing-range highlight once content streams in', () => {
     let state = EditorState.create({ doc: 'hello world', extensions: [aiWritingExtension] });
     state = state.update({ effects: setAiWritingRangeEffect.of({ from: 5, to: 11 }) }).state;
