@@ -370,9 +370,10 @@ final class AIMessageHandler: BridgeMessageHandler {
         }
     }
 
-    private static func cleanedDocumentContext(_ context: String) -> String? {
+    nonisolated static func cleanedDocumentContext(_ context: String) -> String? {
         let cleaned = context
-            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "<u>", with: "")
+            .replacingOccurrences(of: "</u>", with: "")
             .replacingOccurrences(of: "&nbsp;", with: " ")
             .replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "&lt;", with: "<")

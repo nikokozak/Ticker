@@ -1047,6 +1047,16 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_documentAIContextCleaningOnlyRemovesUnderlineStorageTags() {
+        XCTAssertEqual(
+            AIMessageHandler.cleanedDocumentContext(
+                #"<u>underlined</u> while x < y and Array<T> stays; <custom> is literal &amp; visible"#
+            ),
+            #"underlined while x < y and Array<T> stays; <custom> is literal & visible"#
+        )
+        XCTAssertNil(AIMessageHandler.cleanedDocumentContext("<u></u>"))
+    }
+
     @MainActor
     func test_documentAICancelStopsSlowStreamingProvider() async throws {
         let recorder = BridgeMessageRecorder()

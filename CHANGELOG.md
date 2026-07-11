@@ -62,6 +62,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- AI context cleaning now removes only Ticker’s exact underline tags, preserving comparisons, generic types, and code-like angle brackets.
 - Removing a source now cancels its queued or active indexing work first, and failed status writes stop after a bounded retry instead of recurring forever.
 - Text, Markdown, and OCR image sources now build retrieval chunks instead of reporting ready with no searchable content.
 - Quick Panel AI answers, provenance, and exchange receipts now save in one transaction instead of leaving partial history when a database write fails.
