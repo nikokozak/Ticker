@@ -47,6 +47,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- The main window, Quick Panel, and PDF pane now share the editor’s neutral surfaces and sienna accent, and Quick Panel names its background action “develop + save.”
 - Delete, AI prompt, Search, Sources, and Exchange now share native modal behavior with contained focus, Escape and outside-click dismissal, and focus restoration.
 - The selection toolbar now keeps common formatting and one AI entry in view, moves secondary actions behind disclosure, and fits alongside the link and provenance popovers at the 300 px window minimum.
 - Stream lists now load bounded previews and cached word counts instead of transferring every document in full.

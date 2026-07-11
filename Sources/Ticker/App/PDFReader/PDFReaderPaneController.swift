@@ -23,50 +23,14 @@ private enum PDFReaderPanePresentationError: LocalizedError {
 
 private enum PDFPaneStyle {
     static let trafficLightSafeLeading: CGFloat = 84
-
-    static let background = dynamicColor(
-        light: NSColor(red: 251 / 255, green: 251 / 255, blue: 250 / 255, alpha: 1),
-        dark: NSColor(red: 28 / 255, green: 28 / 255, blue: 27 / 255, alpha: 1)
-    )
-    static let surface = dynamicColor(
-        light: NSColor(red: 244 / 255, green: 244 / 255, blue: 242 / 255, alpha: 1),
-        dark: NSColor(red: 36 / 255, green: 36 / 255, blue: 35 / 255, alpha: 1)
-    )
-    static let text = dynamicColor(
-        light: NSColor(red: 31 / 255, green: 31 / 255, blue: 29 / 255, alpha: 1),
-        dark: NSColor(red: 243 / 255, green: 242 / 255, blue: 237 / 255, alpha: 1)
-    )
-    static let textMuted = dynamicColor(
-        light: NSColor(red: 111 / 255, green: 111 / 255, blue: 104 / 255, alpha: 1),
-        dark: NSColor(red: 170 / 255, green: 167 / 255, blue: 157 / 255, alpha: 1)
-    )
-    static let accent = dynamicColor(
-        light: NSColor(red: 37 / 255, green: 99 / 255, blue: 235 / 255, alpha: 1),
-        dark: NSColor(red: 138 / 255, green: 168 / 255, blue: 255 / 255, alpha: 1)
-    )
-    static let separator = dynamicColor(
-        light: NSColor(red: 31 / 255, green: 31 / 255, blue: 29 / 255, alpha: 0.08),
-        dark: NSColor(red: 243 / 255, green: 242 / 255, blue: 237 / 255, alpha: 0.08)
-    )
-
-    private static func dynamicColor(light: NSColor, dark: NSColor) -> NSColor {
-        NSColor(name: nil) { appearance in
-            switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
-            case .darkAqua:
-                return dark
-            default:
-                return light
-            }
-        }
-    }
 }
 
 private enum PDFHighlightAnnotationStyle {
     static let contentsPrefix = "ticker-pdf-highlight:"
     static let color = NSColor.systemYellow.withAlphaComponent(0.32)
     static let pulseColor = NSColor.systemYellow.withAlphaComponent(0.62)
-    static let markerColor = PDFPaneStyle.accent.withAlphaComponent(0.38)
-    static let markerPulseColor = PDFPaneStyle.accent.withAlphaComponent(0.74)
+    static let markerColor = NativePalette.accent.withAlphaComponent(0.38)
+    static let markerPulseColor = NativePalette.accent.withAlphaComponent(0.74)
     static let markerSize: CGFloat = 14
     static let escapeKeyCode: UInt16 = 53
 }
@@ -645,12 +609,12 @@ final class PDFReaderPaneController: NSViewController {
     private func applyPDFPaneAppearanceColors() {
         pdfPaneView.effectiveAppearance.performAsCurrentDrawingAppearance {
             for view in paneBackgroundLayerViews {
-                view.layer?.backgroundColor = PDFPaneStyle.background.cgColor
+                view.layer?.backgroundColor = NativePalette.background.cgColor
             }
             for view in paneSeparatorLayerViews {
-                view.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
+                view.layer?.backgroundColor = NativePalette.separator.cgColor
             }
-            let resolvedSurface = NSColor(cgColor: PDFPaneStyle.surface.cgColor) ?? PDFPaneStyle.surface
+            let resolvedSurface = NSColor(cgColor: NativePalette.surface.cgColor) ?? NativePalette.surface
             pdfPanePDFView.backgroundColor = resolvedSurface
             pdfOutlineScrollView.backgroundColor = resolvedSurface
             pdfFindSearchField.backgroundColor = resolvedSurface
@@ -701,7 +665,7 @@ final class PDFReaderPaneController: NSViewController {
         ))
 
         pdfPaneTitleField.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        pdfPaneTitleField.textColor = PDFPaneStyle.text
+        pdfPaneTitleField.textColor = NativePalette.text
         pdfPaneTitleField.lineBreakMode = .byTruncatingMiddle
         pdfPaneTitleField.maximumNumberOfLines = 1
         pdfPaneTitleField.usesSingleLineMode = true
@@ -710,7 +674,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneTitleField.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         pdfPaneStatusField.font = NSFont.systemFont(ofSize: 11, weight: .regular)
-        pdfPaneStatusField.textColor = PDFPaneStyle.textMuted
+        pdfPaneStatusField.textColor = NativePalette.textMuted
         pdfPaneStatusField.lineBreakMode = .byTruncatingTail
         pdfPaneStatusField.maximumNumberOfLines = 1
         pdfPaneStatusField.usesSingleLineMode = true
@@ -720,7 +684,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneHintIconView.image = NSImage(systemSymbolName: "cursorarrow.click", accessibilityDescription: nil)
             ?? NSImage(systemSymbolName: "link", accessibilityDescription: nil)
         pdfPaneHintIconView.imageScaling = .scaleProportionallyDown
-        pdfPaneHintIconView.contentTintColor = PDFPaneStyle.accent
+        pdfPaneHintIconView.contentTintColor = NativePalette.accent
         pdfPaneHintIconView.isHidden = true
 
         pdfPaneOutlineButton.target = self
@@ -732,7 +696,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneOutlineButton.imageScaling = .scaleProportionallyDown
         pdfPaneOutlineButton.isBordered = true
         pdfPaneOutlineButton.showsBorderOnlyWhileMouseInside = true
-        pdfPaneOutlineButton.contentTintColor = PDFPaneStyle.textMuted
+        pdfPaneOutlineButton.contentTintColor = NativePalette.textMuted
         pdfPaneOutlineButton.toolTip = "Show outline"
         pdfPaneOutlineButton.setAccessibilityLabel("Toggle PDF outline")
         pdfPaneOutlineButton.setButtonType(.toggle)
@@ -765,7 +729,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneCloseButton.imageScaling = .scaleProportionallyDown
         pdfPaneCloseButton.isBordered = true
         pdfPaneCloseButton.showsBorderOnlyWhileMouseInside = true
-        pdfPaneCloseButton.contentTintColor = PDFPaneStyle.textMuted
+        pdfPaneCloseButton.contentTintColor = NativePalette.textMuted
         pdfPaneCloseButton.toolTip = "Close PDF"
         pdfPaneCloseButton.setAccessibilityLabel("Close PDF")
         pdfPaneCloseButton.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -778,7 +742,7 @@ final class PDFReaderPaneController: NSViewController {
 
         pdfFindSearchField.placeholderString = "Find in document"
         pdfFindSearchField.font = NSFont.systemFont(ofSize: 13)
-        pdfFindSearchField.textColor = PDFPaneStyle.text
+        pdfFindSearchField.textColor = NativePalette.text
         pdfFindSearchField.controlSize = .small
         pdfFindSearchField.isBordered = false
         pdfFindSearchField.drawsBackground = true
@@ -791,7 +755,7 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         pdfFindCounterField.font = NSFont.systemFont(ofSize: 12)
-        pdfFindCounterField.textColor = PDFPaneStyle.textMuted
+        pdfFindCounterField.textColor = NativePalette.textMuted
         pdfFindCounterField.alignment = .right
         pdfFindCounterField.stringValue = ""
         pdfFindCounterField.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -997,7 +961,7 @@ final class PDFReaderPaneController: NSViewController {
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
         button.isBordered = false
-        button.contentTintColor = PDFPaneStyle.textMuted
+        button.contentTintColor = NativePalette.textMuted
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         button.setContentHuggingPriority(.required, for: .horizontal)
     }
@@ -1045,7 +1009,7 @@ final class PDFReaderPaneController: NSViewController {
             button.isBordered = false
             button.alignment = .left
             button.font = NSFont.systemFont(ofSize: 12)
-            button.contentTintColor = entry.destination == nil ? PDFPaneStyle.textMuted : PDFPaneStyle.text
+            button.contentTintColor = entry.destination == nil ? NativePalette.textMuted : NativePalette.text
             button.isEnabled = entry.destination != nil
             button.lineBreakMode = .byTruncatingTail
             button.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -1317,8 +1281,8 @@ final class PDFReaderPaneController: NSViewController {
         let hasMatches = !pdfFindMatches.isEmpty
         pdfFindPreviousButton.isEnabled = hasMatches
         pdfFindNextButton.isEnabled = hasMatches
-        pdfFindPreviousButton.contentTintColor = hasMatches ? PDFPaneStyle.textMuted : PDFPaneStyle.textMuted.withAlphaComponent(0.45)
-        pdfFindNextButton.contentTintColor = hasMatches ? PDFPaneStyle.textMuted : PDFPaneStyle.textMuted.withAlphaComponent(0.45)
+        pdfFindPreviousButton.contentTintColor = hasMatches ? NativePalette.textMuted : NativePalette.textMuted.withAlphaComponent(0.45)
+        pdfFindNextButton.contentTintColor = hasMatches ? NativePalette.textMuted : NativePalette.textMuted.withAlphaComponent(0.45)
     }
 
     private func firstResponderIsInPDFPane() -> Bool {
@@ -1839,7 +1803,7 @@ final class PDFReaderPaneController: NSViewController {
         } else {
             setPDFPaneHeader(displayName: nil)
         }
-        pdfPaneTitleField.textColor = PDFPaneStyle.text
+        pdfPaneTitleField.textColor = NativePalette.text
         updatePDFPaneStatus()
         handlePDFPaneSelectionChanged()
 
@@ -1850,7 +1814,7 @@ final class PDFReaderPaneController: NSViewController {
 
     private func setPDFPaneLinkButtonEnabled(_ enabled: Bool) {
         pdfPaneLinkButton.isEnabled = enabled
-        pdfPaneLinkButton.contentTintColor = enabled ? PDFPaneStyle.accent : PDFPaneStyle.textMuted
+        pdfPaneLinkButton.contentTintColor = enabled ? NativePalette.accent : NativePalette.textMuted
     }
 
     private func updatePDFPaneStatus() {
