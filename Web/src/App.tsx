@@ -1,15 +1,63 @@
 import { useEffect, useRef, useState } from 'react';
-import { bridge, Stream, StreamSummary } from './types';
+import { bridge, Stream, StreamSummary, type AIOperationState } from './types';
 import { StreamEditor } from './components/StreamEditor';
 import { SearchModal } from './components/SearchModal';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
-import { DocumentIcon, KeyIcon, Spinner } from './components/icons';
+import { DocumentIcon, KeyIcon, Spinner, XIcon } from './components/icons';
 import { useToastStore } from './store/toastStore';
 import { debugError, debugLog } from './utils/debug';
 import { deserializeProvenanceSpans } from './utils/provenanceSpans';
 
 type View = 'list' | 'stream' | 'settings';
+
+const AI_OPERATION_STATES: AIOperationState[] = [
+  'queued',
+  'preparing',
+  'generating',
+  'saving',
+  'succeeded',
+  'failed',
+  'canceled',
+];
+
+export interface AIOperationActivity {
+  requestId: string;
+  streamId: string;
+  verb: string;
+  origin: string;
+  state: AIOperationState;
+  message?: string;
+  updatedAt: number;
+}
+
+export function parseAIOperationActivity(
+  payload: Record<string, unknown> | undefined,
+  updatedAt = Date.now()
+): AIOperationActivity | null {
+  const requestId = payload?.requestId;
+  const streamId = payload?.streamId;
+  const verb = payload?.verb;
+  const origin = payload?.origin;
+  const state = payload?.state;
+  if (typeof requestId !== 'string'
+      || typeof streamId !== 'string'
+      || typeof verb !== 'string'
+      || typeof origin !== 'string'
+      || !AI_OPERATION_STATES.includes(state as AIOperationState)) {
+    return null;
+  }
+
+  return {
+    requestId,
+    streamId,
+    verb,
+    origin,
+    state: state as AIOperationState,
+    ...(typeof payload?.message === 'string' ? { message: payload.message } : {}),
+    updatedAt,
+  };
+}
 
 // Proxy auth state (matches Swift ProxyAuthState enum)
 type ProxyAuthState =
@@ -84,11 +132,13 @@ export function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingStream, setIsLoadingStream] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [aiOperations, setAIOperations] = useState<Map<string, AIOperationActivity>>(new Map());
   const addToast = useToastStore((state) => state.addToast);
   const viewRef = useRef(view);
   const currentStreamIdRef = useRef<string | null>(currentStream?.id ?? null);
   const streamLoadSequenceRef = useRef(0);
   const pendingStreamLoadRequestIdRef = useRef<number | null>(null);
+  const aiOperationDismissTimersRef = useRef<Map<string, number>>(new Map());
 
   const requestStreamLoad = (id: string) => {
     const requestId = ++streamLoadSequenceRef.current;
@@ -175,6 +225,33 @@ export function App() {
             addToast('Ticker could not complete that action. Try again.', 'error');
           }
           break;
+        case 'aiOperationChanged': {
+          const operation = parseAIOperationActivity(message.payload);
+          if (!operation) break;
+
+          const previousTimer = aiOperationDismissTimersRef.current.get(operation.requestId);
+          if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+          aiOperationDismissTimersRef.current.delete(operation.requestId);
+
+          setAIOperations((current) => {
+            const next = new Map(current);
+            next.set(operation.requestId, operation);
+            return next;
+          });
+
+          if (operation.state === 'succeeded' || operation.state === 'failed' || operation.state === 'canceled') {
+            const timeout = window.setTimeout(() => {
+              aiOperationDismissTimersRef.current.delete(operation.requestId);
+              setAIOperations((current) => {
+                const next = new Map(current);
+                next.delete(operation.requestId);
+                return next;
+              });
+            }, operation.state === 'failed' ? 10_000 : 4_000);
+            aiOperationDismissTimersRef.current.set(operation.requestId, timeout);
+          }
+          break;
+        }
         case 'proxyAuthState':
           // State change pushed from Swift
           setProxyAuthState(message.payload?.state as ProxyAuthState);
@@ -253,7 +330,13 @@ export function App() {
       bridge.send({ type: 'loadStreams' });
     }, 100);
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      for (const timeout of aiOperationDismissTimersRef.current.values()) {
+        window.clearTimeout(timeout);
+      }
+      aiOperationDismissTimersRef.current.clear();
+    };
   }, [addToast]);
 
   const handleCreateStream = () => {
@@ -376,7 +459,74 @@ export function App() {
         onNavigateToSource={handleNavigateToSource}
       />
       <ToastStack />
+      <AIActivityCapsule
+        operations={[...aiOperations.values()].sort((a, b) => b.updatedAt - a.updatedAt)}
+        streams={streams}
+        currentStream={currentStream}
+        onCancel={(requestId) => bridge.send({ type: 'cancelAIOperation', payload: { requestId } })}
+      />
     </>
+  );
+}
+
+interface AIActivityCapsuleProps {
+  operations: AIOperationActivity[];
+  streams: StreamSummary[];
+  currentStream: Stream | null;
+  onCancel: (requestId: string) => void;
+}
+
+function AIActivityCapsule({ operations, streams, currentStream, onCancel }: AIActivityCapsuleProps) {
+  if (operations.length === 0) return null;
+
+  const streamTitle = (streamId: string) => {
+    if (currentStream?.id === streamId) return currentStream.title;
+    return streams.find((stream) => stream.id === streamId)?.title ?? 'Stream';
+  };
+
+  const labelFor = (state: AIOperationState) => {
+    switch (state) {
+      case 'queued': return 'Queued';
+      case 'preparing': return 'Preparing context';
+      case 'generating': return 'AI is writing';
+      case 'saving': return 'Saving answer';
+      case 'succeeded': return 'Answer saved';
+      case 'failed': return 'AI request failed';
+      case 'canceled': return 'Canceled';
+    }
+  };
+
+  return (
+    <section className="ai-activity-capsule" aria-label="AI activity" aria-live="polite">
+      {operations.slice(0, 4).map((operation) => {
+        const isActive = operation.state !== 'succeeded'
+          && operation.state !== 'failed'
+          && operation.state !== 'canceled';
+        return (
+          <div className="ai-activity-row" data-state={operation.state} key={operation.requestId}>
+            {isActive ? <Spinner className="ai-activity-spinner" /> : <span className="ai-activity-dot" aria-hidden="true" />}
+            <span className="ai-activity-copy">
+              <span className="ai-activity-label">{labelFor(operation.state)}</span>
+              <span className="ai-activity-stream">{streamTitle(operation.streamId)}</span>
+              {operation.state === 'failed' && operation.message && (
+                <span className="ai-activity-message">{operation.message}</span>
+              )}
+            </span>
+            {isActive && (
+              <button
+                type="button"
+                className="ai-activity-cancel"
+                onClick={() => onCancel(operation.requestId)}
+                aria-label={`Stop AI work for ${streamTitle(operation.streamId)}`}
+              >
+                <XIcon size={12} /> Stop
+              </button>
+            )}
+          </div>
+        );
+      })}
+      {operations.length > 4 && <div className="ai-activity-more">+{operations.length - 4} more</div>}
+    </section>
   );
 }
 

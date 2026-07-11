@@ -5,6 +5,7 @@ struct ServiceContainer {
     let settingsService: SettingsService
     let deviceKeyService: DeviceKeyService
     let bridgeService: BridgeService
+    let aiOperations: AIOperationRegistry
     let assetService: AssetService
     let proxyService: ProxyLLMService
     let chunkingService: ChunkingService
@@ -23,6 +24,7 @@ struct ServiceContainer {
         self.settingsService = settingsService
         self.deviceKeyService = deviceKeyService
         self.bridgeService = BridgeService()
+        self.aiOperations = AIOperationRegistry()
         self.assetService = AssetService()
 
         let proxyService = ProxyLLMService(deviceKeyService: deviceKeyService)

@@ -79,11 +79,13 @@ private enum DocumentAIVerb: String {
 final class AIMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
         "thinkDocument",
-        "cancelDocumentAI"
+        "cancelDocumentAI",
+        "cancelAIOperation"
     ]
 
     private let assetService: AssetService
     private let persistence: PersistenceService?
+    private let aiOperations: AIOperationRegistry
     private let sendToWeb: (BridgeMessage) -> Void
     private let sendBridgeErrorMessage: (String, String) async -> Void
     private let isProxyUsable: () async -> Bool
@@ -104,6 +106,7 @@ final class AIMessageHandler: BridgeMessageHandler {
     init?(container: ServiceContainer) {
         self.assetService = container.assetService
         self.persistence = container.persistence
+        self.aiOperations = container.aiOperations
         self.sendToWeb = { [bridgeService = container.bridgeService] message in
             bridgeService.send(message)
         }
@@ -134,6 +137,7 @@ final class AIMessageHandler: BridgeMessageHandler {
     init(
         assetService: AssetService = AssetService(),
         persistence: PersistenceService? = nil,
+        aiOperations: AIOperationRegistry = AIOperationRegistry(),
         sendToWeb: @escaping (BridgeMessage) -> Void,
         sendBridgeErrorMessage: @escaping (String, String) async -> Void = { _, _ in },
         isProxyUsable: @escaping () async -> Bool = { true },
@@ -152,6 +156,7 @@ final class AIMessageHandler: BridgeMessageHandler {
     ) {
         self.assetService = assetService
         self.persistence = persistence
+        self.aiOperations = aiOperations
         self.sendToWeb = sendToWeb
         self.sendBridgeErrorMessage = sendBridgeErrorMessage
         self.isProxyUsable = isProxyUsable
@@ -337,6 +342,15 @@ final class AIMessageHandler: BridgeMessageHandler {
                     "errorCode": AnyCodable("cancelled")
                 ]
             ))
+
+        case "cancelAIOperation":
+            guard let payload = message.payload,
+                  let requestId = payload["requestId"]?.value as? String else {
+                DebugLog.log("[AIMessageHandler] Invalid cancelAIOperation payload")
+                await sendBridgeErrorMessage(message.type, "Invalid cancelAIOperation payload")
+                return
+            }
+            aiOperations.cancel(requestId)
 
         default:
             DebugLog.log("[AIMessageHandler] Unknown message type: \(message.type)")

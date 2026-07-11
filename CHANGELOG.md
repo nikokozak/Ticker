@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- A global AI Activity Capsule now follows Quick Panel work across streams, shows each phase and outcome, and lets you stop an active request.
 - Underline joins bold and italic: ⌘U and a U button in the selection menu (stored as `<u>` in the markdown substrate, rendered with the tags concealed).
 - AI answers now use rudimentary Markdown structure — bolded key terms, short paragraphs, lists and headings where they genuinely organize the material — instead of uniformly flat prose.
 - Source answers now use on-device semantic retrieval alongside lexical matching, improving paraphrase recall while preserving the existing fallback behavior.

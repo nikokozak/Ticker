@@ -3201,6 +3201,116 @@ body {
   }
 }
 
+/* ==================== AI Activity ==================== */
+
+.ai-activity-capsule {
+  position: fixed;
+  top: calc(var(--window-chrome-safe-top) + var(--space-2));
+  right: var(--space-4);
+  z-index: 940;
+  width: min(320px, calc(100vw - var(--space-4) - var(--space-4)));
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--overlay-shadow);
+  color: var(--color-text-secondary);
+  backdrop-filter: var(--overlay-backdrop);
+  animation: ai-status-enter var(--duration-fast) ease-out;
+}
+
+.ai-activity-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: var(--space-1) var(--space-2);
+}
+
+.ai-activity-row + .ai-activity-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ai-activity-spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+}
+
+.ai-activity-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+}
+
+.ai-activity-row[data-state='succeeded'] .ai-activity-dot {
+  background: var(--color-success);
+}
+
+.ai-activity-row[data-state='failed'] .ai-activity-dot {
+  background: var(--color-error);
+}
+
+.ai-activity-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  line-height: var(--line-height-tight);
+}
+
+.ai-activity-label {
+  color: var(--color-text);
+  font-size: var(--type-ui-small);
+  font-weight: 500;
+}
+
+.ai-activity-stream,
+.ai-activity-message,
+.ai-activity-more {
+  color: var(--color-text-tertiary);
+  font-size: var(--type-ui-caption);
+}
+
+.ai-activity-stream,
+.ai-activity-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-activity-row[data-state='failed'] .ai-activity-label,
+.ai-activity-row[data-state='failed'] .ai-activity-message {
+  color: var(--color-error);
+}
+
+.ai-activity-cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--type-ui-caption);
+  cursor: pointer;
+}
+
+.ai-activity-cancel:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.ai-activity-more {
+  padding: var(--space-1) var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
 /* ==================== Toasts ==================== */
 
 /* Toasts share the document-ai-status-pill idiom: quiet pill, kind-colored dot. */

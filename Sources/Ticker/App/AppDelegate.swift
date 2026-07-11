@@ -520,7 +520,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func setupQuickPanel(container: ServiceContainer) {
         // Initialize Quick Panel manager on main actor
         Task { @MainActor in
-            let manager = QuickPanelManager()
+            let manager = QuickPanelManager(aiOperations: container.aiOperations)
             self.quickPanelManager = manager
             manager.configure(container: container)
             manager.configureLocalSelectionProvider(QuickPanelLocalSelectionProvider(

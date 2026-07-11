@@ -122,6 +122,9 @@
       "cancelDocumentAI": {
         "requiredPayloadKeys": ["requestId"]
       },
+      "cancelAIOperation": {
+        "requiredPayloadKeys": ["requestId"]
+      },
       "clearProxyDeviceKey": {
         "requiredPayloadKeys": [],
         "requiredCallbackId": true

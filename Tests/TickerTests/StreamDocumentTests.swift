@@ -1097,6 +1097,28 @@ final class StreamDocumentTests: XCTestCase {
     }
 
     @MainActor
+    func test_cancelAIOperationRoutesToSharedRegistry() async {
+        let registry = AIOperationRegistry()
+        let requestId = registry.begin(streamId: UUID(), verb: "develop", origin: "quickPanel")
+        let task = Task<Void, Never> {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+        }
+        registry.attach(task, to: requestId)
+        let handler = AIMessageHandler(
+            aiOperations: registry,
+            sendToWeb: { _ in },
+            routeDocumentAI: { _, _, _, _, _, _, _, _, _, _ in }
+        )
+
+        await handler.handle(BridgeMessage(type: "cancelAIOperation", payload: [
+            "requestId": AnyCodable(requestId)
+        ]))
+
+        XCTAssertTrue(task.isCancelled)
+        XCTAssertEqual(registry.operations[requestId]?.state, .canceled)
+    }
+
+    @MainActor
     func test_documentAICompletionSavesExchangeReceipt() async throws {
         try await withTempPersistenceService { service in
             let stream = Stream(title: "Exchange Receipt")

@@ -1076,13 +1076,6 @@ export function StreamEditor({
           operationState as AIOperationState
         );
 
-        if (operationState === 'failed') {
-          const messageText = typeof message.payload?.message === 'string'
-            ? message.payload.message
-            : 'Quick Panel AI request failed. Try again.';
-          addToast(messageText, 'error');
-        }
-
         if (quickPanelAIOperationsRef.current.size === 0) {
           clearQuickPanelPending();
           return;
@@ -1100,7 +1093,6 @@ export function StreamEditor({
             annotations: Transaction.addToHistory.of(false),
           });
         }
-        showAiWritingFeedback();
         return;
       }
 
@@ -1406,7 +1398,7 @@ export function StreamEditor({
     });
 
     return () => unsubscribe();
-  }, [abortInFlightDocumentAI, addToast, clearQuickPanelPending, hideAiFeedback, showAiErrorFeedback, showAiWritingFeedback, stream.id]);
+  }, [abortInFlightDocumentAI, addToast, clearQuickPanelPending, hideAiFeedback, showAiErrorFeedback, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {

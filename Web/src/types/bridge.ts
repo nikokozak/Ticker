@@ -42,6 +42,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'addSource',
   'beginPdfAnchorPick',
   'cancelDocumentAI',
+  'cancelAIOperation',
   'clearProxyDeviceKey',
   'createStream',
   'deleteStream',
