@@ -83,11 +83,22 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 await bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: [
                     "streams": payload["streams"]!
                 ]))
-                if let restoreId = delegate?.consumeLastOpenStreamIdForLaunchRestore() {
-                    try await sendStreamLoaded(id: restoreId)
-                }
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load streams (\(DebugLog.errorSummary(error)))")
+                await bridgeService.send(BridgeMessage(
+                    type: "streamsLoadFailed",
+                    payload: ["reason": AnyCodable("unavailable")]
+                ))
+                return
+            }
+
+            if let restoreId = delegate?.consumeLastOpenStreamIdForLaunchRestore() {
+                do {
+                    try await sendStreamLoaded(id: restoreId)
+                } catch {
+                    DebugLog.log("[StreamMessageHandler] Failed to restore last stream (\(DebugLog.errorSummary(error)))")
+                    await sendStreamLoadFailed(id: restoreId, requestId: nil, reason: "unavailable")
+                }
             }
 
         case "loadStream":
@@ -102,6 +113,11 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 try await sendStreamLoaded(id: id, requestId: payload["requestId"]?.intValue)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load stream (\(DebugLog.errorSummary(error)))")
+                await sendStreamLoadFailed(
+                    id: id,
+                    requestId: payload["requestId"]?.intValue,
+                    reason: "unavailable"
+                )
             }
 
         case "createStream":
@@ -306,7 +322,10 @@ final class StreamMessageHandler: BridgeMessageHandler {
     }
 
     func sendStreamLoaded(id: UUID, requestId: Int? = nil) async throws {
-        guard let stream = try persistence.loadStream(id: id) else { return }
+        guard let stream = try persistence.loadStream(id: id) else {
+            await sendStreamLoadFailed(id: id, requestId: requestId, reason: "notFound")
+            return
+        }
         delegate?.setCurrentStreamIdForFileDrops(id)
         await delegate?.closePDFPaneIfShowingDifferentStream(id)
         let document = try persistence.loadOrCreateStreamDocument(streamId: id)
@@ -325,6 +344,17 @@ final class StreamMessageHandler: BridgeMessageHandler {
         }
         await bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
         ingestService?.enqueuePendingSources(for: id)
+    }
+
+    private func sendStreamLoadFailed(id: UUID, requestId: Int?, reason: String) async {
+        var payload: [String: AnyCodable] = [
+            "id": AnyCodable(id.uuidString),
+            "reason": AnyCodable(reason)
+        ]
+        if let requestId {
+            payload["requestId"] = AnyCodable(requestId)
+        }
+        await bridgeService.send(BridgeMessage(type: "streamLoadFailed", payload: payload))
     }
 
     private func decodeSpans(_ value: Any?, streamId: UUID) -> [ProvenanceSpan]? {

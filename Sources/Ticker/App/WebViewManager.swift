@@ -624,14 +624,6 @@ final class WebViewManager: NSObject {
 
         Task { [weak self] in
             guard let self else { return }
-            guard persistence != nil else {
-                DebugLog.log("[WebViewManager] Persistence not available")
-                await bridgeService.reject(
-                    message,
-                    reason: "Ticker storage is unavailable. Restart the app and try again."
-                )
-                return
-            }
             await bridgeRouter.route(message)
         }
     }

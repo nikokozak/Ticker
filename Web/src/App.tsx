@@ -10,6 +10,7 @@ import { debugError, debugLog } from './utils/debug';
 import { deserializeProvenanceSpans } from './utils/provenanceSpans';
 
 type View = 'list' | 'stream' | 'settings';
+type StorageState = 'checking' | 'ready' | 'unavailable';
 
 const AI_OPERATION_STATES: AIOperationState[] = [
   'queued',
@@ -131,6 +132,7 @@ export function App() {
   const [currentStream, setCurrentStream] = useState<Stream | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingStream, setIsLoadingStream] = useState(false);
+  const [streamListError, setStreamListError] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [aiOperations, setAIOperations] = useState<Map<string, AIOperationActivity>>(new Map());
   const addToast = useToastStore((state) => state.addToast);
@@ -148,6 +150,7 @@ export function App() {
 
   // Proxy auth state - gates main UI until key is validated
   const [proxyAuthState, setProxyAuthState] = useState<ProxyAuthState>('validating');
+  const [storageState, setStorageState] = useState<StorageState>('checking');
   const isAuthGated = proxyAuthState !== 'active' && proxyAuthState !== 'degradedOffline';
 
   // Load initial proxy auth state
@@ -165,7 +168,14 @@ export function App() {
   // Load global editor typography settings on app startup.
   useEffect(() => {
     bridge.send({ type: 'loadSettings' });
+    bridge.send({ type: 'loadStorageState' });
   }, []);
+
+  useEffect(() => {
+    if (storageState !== 'ready') return undefined;
+    const timeout = window.setTimeout(() => bridge.send({ type: 'loadStreams' }), 100);
+    return () => window.clearTimeout(timeout);
+  }, [storageState]);
 
   useEffect(() => {
     viewRef.current = view;
@@ -256,9 +266,24 @@ export function App() {
           // State change pushed from Swift
           setProxyAuthState(message.payload?.state as ProxyAuthState);
           break;
+        case 'storageStateChanged': {
+          const state = message.payload?.state;
+          if (state !== 'ready' && state !== 'unavailable') break;
+          setStorageState(state);
+          if (state === 'unavailable') {
+            setIsLoading(false);
+            setIsLoadingStream(false);
+          }
+          break;
+        }
         case 'streamsLoaded':
           setStreams((message.payload?.streams as StreamSummary[]) || []);
+          setStreamListError(null);
           setIsLoading(false);
+          break;
+        case 'streamsLoadFailed':
+          setIsLoading(false);
+          setStreamListError('Ticker could not load your streams.');
           break;
         case 'streamLoaded': {
           const requestId = message.payload?.requestId;
@@ -288,6 +313,19 @@ export function App() {
           setCurrentStream(loadedStream);
           setIsLoadingStream(false);
           setView('stream');
+          break;
+        }
+        case 'streamLoadFailed': {
+          const requestId = message.payload?.requestId;
+          if (!shouldAcceptStreamLoaded(requestId, pendingStreamLoadRequestIdRef.current)) break;
+          pendingStreamLoadRequestIdRef.current = null;
+          setIsLoadingStream(false);
+          addToast(
+            message.payload?.reason === 'notFound'
+              ? 'That stream no longer exists.'
+              : 'Ticker could not open that stream. Try again.',
+            'error'
+          );
           break;
         }
         case 'marginNotesChanged': {
@@ -324,11 +362,6 @@ export function App() {
           break;
       }
     });
-
-    // Request initial data after a short delay to ensure bridge is ready
-    setTimeout(() => {
-      bridge.send({ type: 'loadStreams' });
-    }, 100);
 
     return () => {
       unsubscribe();
@@ -405,11 +438,42 @@ export function App() {
     setView('list');
   };
 
+  const handleCopyDiagnostics = async () => {
+    try {
+      const result = await bridge.sendAsync<{ bundle: Record<string, unknown> }>('getSupportBundle');
+      await navigator.clipboard.writeText(JSON.stringify(result.bundle, null, 2));
+      addToast('Diagnostics copied to clipboard.', 'success');
+    } catch {
+      addToast('Diagnostics could not be copied.', 'error');
+    }
+  };
+
+  const handleRetryStreamList = () => {
+    setStreamListError(null);
+    setIsLoading(true);
+    bridge.send({ type: 'loadStreams' });
+  };
+
   let viewContent: JSX.Element;
 
   // Always allow settings view (for key entry)
   if (view === 'settings') {
     viewContent = <Settings onClose={handleCloseSettings} />;
+  } else if (storageState === 'unavailable') {
+    viewContent = (
+      <StorageGate
+        onOpenSettings={handleOpenSettings}
+        onCopyDiagnostics={handleCopyDiagnostics}
+        onQuit={() => bridge.send({ type: 'quitApp' })}
+      />
+    );
+  } else if (storageState === 'checking') {
+    viewContent = (
+      <div className="loading-state">
+        <Spinner className="loading-spinner" />
+        <p>Opening notes...</p>
+      </div>
+    );
   } else if (isAuthGated) {
     // Gate main UI until authenticated
     viewContent = (
@@ -439,9 +503,11 @@ export function App() {
         streams={streams}
         isLoading={isLoading}
         isLoadingStream={isLoadingStream}
+        error={streamListError}
         onSelect={handleSelectStream}
         onCreate={handleCreateStream}
         onSettings={handleOpenSettings}
+        onRetry={handleRetryStreamList}
       />
     );
   }
@@ -534,9 +600,11 @@ interface StreamListViewProps {
   streams: StreamSummary[];
   isLoading: boolean;
   isLoadingStream: boolean;
+  error: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onSettings: () => void;
+  onRetry: () => void;
 }
 
 function formatRelativeTime(dateString: string): string {
@@ -577,7 +645,7 @@ function formatStreamMetadata(stream: StreamSummary): string {
   return segments.join(' · ');
 }
 
-function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreate, onSettings }: StreamListViewProps) {
+function StreamListView({ streams, isLoading, isLoadingStream, error, onSelect, onCreate, onSettings, onRetry }: StreamListViewProps) {
   // Sort streams by updatedAt (most recent first)
   const sortedStreams = [...streams].sort((a, b) =>
     new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -599,6 +667,13 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
           <div className="loading-state">
             <Spinner className="loading-spinner" />
             <p>Loading...</p>
+          </div>
+        ) : error ? (
+          <div className="empty-state">
+            <div className="empty-state-icon"><DocumentIcon size={56} /></div>
+            <h2>Streams unavailable</h2>
+            <p>{error}</p>
+            <button onClick={onRetry} className="primary-button">Try again</button>
           </div>
         ) : streams.length === 0 ? (
           <div className="empty-state">
@@ -632,6 +707,32 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
             </button>
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+interface StorageGateProps {
+  onOpenSettings: () => void;
+  onCopyDiagnostics: () => void;
+  onQuit: () => void;
+}
+
+function StorageGate({ onOpenSettings, onCopyDiagnostics, onQuit }: StorageGateProps) {
+  return (
+    <div className="auth-gate">
+      <div className="auth-gate-content">
+        <div className="auth-gate-icon"><DocumentIcon size={48} /></div>
+        <h1>Notes unavailable</h1>
+        <p>
+          Ticker could not open its local database. Settings and diagnostics are still available;
+          quit and reopen Ticker after checking disk access.
+        </p>
+        <div className="storage-gate-actions">
+          <button type="button" className="primary-button" onClick={onOpenSettings}>Open Settings</button>
+          <button type="button" className="settings-support-bundle-btn" onClick={onCopyDiagnostics}>Copy Diagnostics</button>
+          <button type="button" className="settings-button" onClick={onQuit}>Quit Ticker</button>
+        </div>
       </div>
     </div>
   );

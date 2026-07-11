@@ -2600,6 +2600,20 @@ body {
   min-width: 180px;
 }
 
+.storage-gate-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.storage-gate-actions .primary-button,
+.storage-gate-actions .settings-support-bundle-btn,
+.storage-gate-actions .settings-button {
+  min-width: 0;
+}
+
 /* Usage Display */
 .usage-display {
   display: flex;

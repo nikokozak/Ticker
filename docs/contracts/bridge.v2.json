@@ -74,6 +74,9 @@
       "settingsLoaded": {
         "requiredPayloadKeys": ["settings"]
       },
+      "storageStateChanged": {
+        "requiredPayloadKeys": ["state"]
+      },
       "sourceAdded": {
         "requiredPayloadKeys": ["source"]
       },
@@ -100,6 +103,10 @@
         "requiredPayloadKeys": ["stream", "spans", "marginNotes"],
         "optionalPayloadKeys": ["scrollOffset", "sourceScope", "requestId"]
       },
+      "streamLoadFailed": {
+        "requiredPayloadKeys": ["id", "reason"],
+        "optionalPayloadKeys": ["requestId"]
+      },
       "streamTitleUpdated": {
         "requiredPayloadKeys": ["id", "title"]
       },
@@ -108,6 +115,9 @@
       },
       "streamsLoaded": {
         "requiredPayloadKeys": ["streams"]
+      },
+      "streamsLoadFailed": {
+        "requiredPayloadKeys": ["reason"]
       }
     }
   },
@@ -154,6 +164,9 @@
       "loadSettings": {
         "requiredPayloadKeys": []
       },
+      "loadStorageState": {
+        "requiredPayloadKeys": []
+      },
       "loadStream": {
         "requiredPayloadKeys": ["id"],
         "optionalPayloadKeys": ["requestId"]
@@ -170,6 +183,9 @@
       },
       "openSource": {
         "requiredPayloadKeys": ["sourceId"]
+      },
+      "quitApp": {
+        "requiredPayloadKeys": []
       },
       "openPdfDestination": {
         "requiredPayloadKeys": ["streamId"],
