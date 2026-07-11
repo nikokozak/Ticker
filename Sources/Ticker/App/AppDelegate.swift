@@ -517,24 +517,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Quick Panel Setup
 
+    @MainActor
     private func setupQuickPanel(container: ServiceContainer) {
-        // Initialize Quick Panel manager on main actor
-        Task { @MainActor in
-            let manager = QuickPanelManager(aiOperations: container.aiOperations)
-            self.quickPanelManager = manager
-            manager.configure(container: container)
-            manager.configureLocalSelectionProvider(QuickPanelLocalSelectionProvider(
-                pdfSelection: { [weak self] in
-                    self?.webViewManager?.currentPDFSelectionText()
-                },
-                editorSelection: { [weak self] in
-                    guard let webViewManager = self?.webViewManager else {
-                        return nil
-                    }
-                    return await webViewManager.requestEditorSelection()
+        let manager = QuickPanelManager(aiOperations: container.aiOperations)
+        quickPanelManager = manager
+        manager.configure(container: container)
+        manager.configureLocalSelectionProvider(QuickPanelLocalSelectionProvider(
+            pdfSelection: { [weak self] in
+                self?.webViewManager?.currentPDFSelectionText()
+            },
+            editorSelection: { [weak self] in
+                guard let webViewManager = self?.webViewManager else {
+                    return nil
                 }
-            ))
-        }
+                return await webViewManager.requestEditorSelection()
+            }
+        ))
 
         // Initialize hotkey service
         hotkeyService = HotkeyService()

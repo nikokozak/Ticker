@@ -24,7 +24,7 @@ final class WebViewManager: NSObject {
     private var didConsumeLaunchStreamRestore = false
     private var pendingLaunchOpenStreamId: UUID?
     private var pendingEditorSelectionRequests: [String: (String?) -> Void] = [:]
-    private let editorSelectionTimeoutNanoseconds: UInt64 = 50_000_000
+    private let editorSelectionTimeoutNanoseconds: UInt64 = 300_000_000
 
     @MainActor
     init(container: ServiceContainer) {
@@ -590,7 +590,7 @@ final class WebViewManager: NSObject {
             ))
 
             Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: self?.editorSelectionTimeoutNanoseconds ?? 50_000_000)
+                try? await Task.sleep(nanoseconds: self?.editorSelectionTimeoutNanoseconds ?? 300_000_000)
                 guard let resolver = self?.pendingEditorSelectionRequests.removeValue(forKey: requestId) else {
                     return
                 }

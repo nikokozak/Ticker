@@ -635,6 +635,44 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertTrue(gate.owns(requestB))
     }
 
+    func test_ephemeralConversationDiscardsIncompleteTurnOnCancel() {
+        var conversation = EphemeralConversation(
+            isStreaming: true,
+            currentResponse: "partial response",
+            turns: [
+                ConversationTurn(role: .user, content: "Earlier", contextIncluded: false),
+                ConversationTurn(role: .assistant, content: "Complete", contextIncluded: false),
+                ConversationTurn(role: .user, content: "Interrupted", contextIncluded: false),
+            ]
+        )
+
+        conversation.discardStreamingTurn()
+
+        XCTAssertFalse(conversation.isStreaming)
+        XCTAssertEqual(conversation.currentResponse, "")
+        XCTAssertEqual(conversation.turns.map(\.content), ["Earlier", "Complete"])
+    }
+
+    @MainActor
+    func test_quickPanelReloadDropsDeletedStreamSelection() throws {
+        try withTempPersistenceService { service in
+            let first = Stream(title: "First", updatedAt: Date(timeIntervalSince1970: 1))
+            let second = Stream(title: "Second", updatedAt: Date(timeIntervalSince1970: 2))
+            try service.saveStream(first)
+            try service.saveStream(second)
+            let manager = QuickPanelManager(persistence: service)
+
+            manager.loadAvailableStreams()
+            XCTAssertEqual(manager.selectedStreamId, second.id)
+
+            try service.deleteStream(id: second.id)
+            manager.loadAvailableStreams()
+
+            XCTAssertEqual(manager.selectedStreamId, first.id)
+            XCTAssertEqual(manager.availableStreams.map(\.id), [first.id])
+        }
+    }
+
     func test_v14MigrationCreatesPDFHighlightsTable() throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -55,6 +55,15 @@ struct EphemeralConversation: Equatable {
         currentResponse = ""
         turns = []
     }
+
+    mutating func discardStreamingTurn() {
+        guard isStreaming else { return }
+        isStreaming = false
+        currentResponse = ""
+        if turns.last?.role == .user {
+            turns.removeLast()
+        }
+    }
 }
 
 struct QuickPanelLocalSelectionProvider {
@@ -460,7 +469,7 @@ final class QuickPanelManager: ObservableObject {
         streamingGeneration.invalidate()
         streamingTask?.cancel()
         streamingTask = nil
-        ephemeralConversation.isStreaming = false
+        ephemeralConversation.discardStreamingTurn()
     }
 
     /// Reset state for new session
@@ -575,8 +584,8 @@ final class QuickPanelManager: ObservableObject {
             return
         }
 
-        // Cancel any existing streaming task
-        streamingTask?.cancel()
+        // Cancel any existing incomplete turn before starting another one.
+        cancelStreaming()
         let generation = streamingGeneration.begin()
 
         // Build context for first turn only
@@ -662,7 +671,7 @@ final class QuickPanelManager: ObservableObject {
                     Task { @MainActor in
                         guard let self, self.streamingGeneration.owns(generation) else { return }
                         self.error = err.localizedDescription
-                        self.ephemeralConversation.isStreaming = false
+                        self.ephemeralConversation.discardStreamingTurn()
                         self.streamingTask = nil
                         self.streamingGeneration.invalidate()
                     }
@@ -955,7 +964,10 @@ final class QuickPanelManager: ObservableObject {
         guard let persistence = persistence else { return }
         do {
             availableStreams = try persistence.loadStreamSummaries()
-            // Pre-select most recent if none selected
+            if let selectedStreamId,
+               !availableStreams.contains(where: { $0.id == selectedStreamId }) {
+                self.selectedStreamId = nil
+            }
             if selectedStreamId == nil, let first = availableStreams.first {
                 selectedStreamId = first.id
             }
@@ -991,10 +1003,11 @@ final class QuickPanelManager: ObservableObject {
             throw QuickPanelError.persistenceNotConfigured
         }
 
-        // Use selected stream if set
-        if let selectedId = selectedStreamId {
+        if let selectedId = selectedStreamId,
+           try persistence.loadStream(id: selectedId) != nil {
             return (selectedId, false)
         }
+        selectedStreamId = nil
 
         // Fall back to most recently modified stream
         if let recentStreamId = try persistence.getRecentlyModifiedStreamId() {
