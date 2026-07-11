@@ -2993,29 +2993,6 @@ export function StreamEditor({
               >
                 AI ▾
               </button>
-              {selectionMenuPanel === 'ai' && (
-                <div className="selection-action-submenu-panel selection-action-submenu-panel--right">
-                  {(['ask', 'develop', 'challenge', 'define'] as const).map((verb) => (
-                    <button
-                      key={verb}
-                      type="button"
-                      className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => handleSelectionVerb(verb)}
-                    >
-                      {verb[0].toUpperCase() + verb.slice(1)}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={openRewritePrompt}
-                  >
-                    Rewrite…
-                  </button>
-                </div>
-              )}
             </div>
             <div className="selection-action-submenu">
               <button
@@ -3029,70 +3006,93 @@ export function StreamEditor({
               >
                 More
               </button>
-              {selectionMenuPanel === 'more' && (
-                <div className="selection-action-submenu-panel selection-action-submenu-panel--right">
-                  {(['h1', 'h2', 'h3'] as const).map((format) => (
-                    <button
-                      key={format}
-                      type="button"
-                      className="selection-action-button selection-action-button--format selection-action-button--text"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => handleSelectionLineFormat(format)}
-                    >
-                      {format.toUpperCase()}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    className="selection-action-button selection-action-button--text"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => handleSelectionLineFormat('quote')}
-                  >
-                    Quote
-                  </button>
-                  <button
-                    type="button"
-                    className="selection-action-button selection-action-button--text"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => handleSelectionLineFormat('bullet')}
-                  >
-                    List
-                  </button>
-                  {canLinkSelectionToPDF && (
-                    <button
-                      type="button"
-                      className="selection-action-button selection-action-button--text"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={handleSelectionLinkToPDF}
-                    >
-                      Link to PDF
-                    </button>
-                  )}
-                  {isProvenanceXrayVisible && (
-                    <button
-                      type="button"
-                      className="selection-action-button selection-action-button--text"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={handleSelectionDissolve}
-                      disabled={selectionDissolveSpanIds.length === 0}
-                    >
-                      Dissolve
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="selection-action-button selection-action-button--text selection-action-source-scope"
-                    title="Cycle source scope"
-                    aria-label="Cycle source scope"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={cycleSourceScope}
-                  >
-                    Sources: {formatSourceScope(sourceScope)}
-                  </button>
-                </div>
-              )}
             </div>
           </div>
+          {selectionMenuPanel === 'ai' && (
+            <div className="selection-action-submenu-panel">
+              {(['ask', 'develop', 'challenge', 'define'] as const).map((verb) => (
+                <button
+                  key={verb}
+                  type="button"
+                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => handleSelectionVerb(verb)}
+                >
+                  {verb[0].toUpperCase() + verb.slice(1)}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={openRewritePrompt}
+              >
+                Rewrite…
+              </button>
+            </div>
+          )}
+          {selectionMenuPanel === 'more' && (
+            <div className="selection-action-submenu-panel">
+              {(['h1', 'h2', 'h3'] as const).map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  className="selection-action-button selection-action-button--format selection-action-button--text"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => handleSelectionLineFormat(format)}
+                >
+                  {format.toUpperCase()}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => handleSelectionLineFormat('quote')}
+              >
+                Quote
+              </button>
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => handleSelectionLineFormat('bullet')}
+              >
+                List
+              </button>
+              {canLinkSelectionToPDF && (
+                <button
+                  type="button"
+                  className="selection-action-button selection-action-button--text"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={handleSelectionLinkToPDF}
+                >
+                  Link to PDF
+                </button>
+              )}
+              {isProvenanceXrayVisible && (
+                <button
+                  type="button"
+                  className="selection-action-button selection-action-button--text"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={handleSelectionDissolve}
+                  disabled={selectionDissolveSpanIds.length === 0}
+                >
+                  Dissolve
+                </button>
+              )}
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-source-scope"
+                title="Cycle source scope"
+                aria-label="Cycle source scope"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={cycleSourceScope}
+              >
+                Sources: {formatSourceScope(sourceScope)}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
