@@ -36,7 +36,7 @@ export function isAllowedExternalURL(rawURL: string): boolean {
 }
 
 export function buildLinkEditChange(oldRange: LinkEditRange, label: string, url: string): LinkEditChange | null {
-  const nextLabel = label.trim().replace(/\\/g, '\\\\').replace(/\]/g, '\\]');
+  const nextLabel = label.trim().replace(/\\/g, '\\\\').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
   const nextURL = url.trim();
   if (!nextLabel || !nextURL) return null;
   return {
@@ -44,6 +44,10 @@ export function buildLinkEditChange(oldRange: LinkEditRange, label: string, url:
     to: oldRange.to,
     insert: `[${nextLabel}](${nextURL})`,
   };
+}
+
+function unescapeMarkdownLinkLabel(label: string): string {
+  return label.replace(/\\([\\[\]])/g, '$1');
 }
 
 function linkInfoFromNode(view: EditorView, linkNode: SyntaxNode): MarkdownLinkInfo | null {
@@ -72,7 +76,7 @@ function linkInfoFromNode(view: EditorView, linkNode: SyntaxNode): MarkdownLinkI
     to: linkNode.to,
     labelFrom,
     labelTo,
-    label: view.state.doc.sliceString(labelFrom, labelTo),
+    label: unescapeMarkdownLinkLabel(view.state.doc.sliceString(labelFrom, labelTo)),
     url: view.state.doc.sliceString(urlFrom, urlTo),
     lineFrom: line.from,
   };

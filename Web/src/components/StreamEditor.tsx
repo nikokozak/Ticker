@@ -36,6 +36,7 @@ import { deserializeProvenanceSpans, serializeProvenanceSpans } from '../utils/p
 import {
   beginPDFAnchorPick,
   buildPDFAnchorLinkEdit,
+  buildPDFQuoteSnippet,
   buildTickerPDFLinkURL,
   mapPendingPDFAnchorSelection,
   type PendingPDFAnchorSelection,
@@ -1481,14 +1482,12 @@ export function StreamEditor({
       if (!sourceId || !highlightId) return;
 
       const pageNumber = Number.isFinite(page) ? Math.max(1, Math.round(page as number)) : 1;
-      const linkUrl = `ticker-pdf://${sourceId}?highlight=${encodeURIComponent(highlightId)}&page=${pageNumber}`;
-      const compactQuote = (quote || '').trim().replace(/\s+/g, ' ');
-      const quoteLine = compactQuote ? `> ${compactQuote}\n` : '';
+      const linkUrl = buildTickerPDFLinkURL({ sourceId, highlightId, page: pageNumber });
       const linkLabel = `${shortTitle || sourceName || 'PDF'} p.${pageNumber}`;
-      const snippet = `\n${quoteLine}[${linkLabel}](${linkUrl})\n`;
+      const snippet = buildPDFQuoteSnippet({ quote: quote || '', linkLabel, linkURL: linkUrl });
 
       insertTextAtCursor(snippet);
-      addToast('Linked PDF selection inserted into stream.', 'success');
+      addToast('Added PDF quote to stream.', 'success');
     });
 
     return () => unsubscribe();
@@ -1563,7 +1562,7 @@ export function StreamEditor({
         ],
       });
       view.focus();
-      addToast('Linked selection to PDF.', 'success');
+      addToast('Anchored selection in PDF.', 'success');
     });
 
     return () => unsubscribe();
@@ -3135,7 +3134,7 @@ export function StreamEditor({
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={handleSelectionLinkToPDF}
                 >
-                  Link to PDF
+                  Anchor in PDF
                 </button>
               )}
               {isProvenanceXrayVisible && (

@@ -3257,18 +3257,18 @@ final class StreamDocumentTests: XCTestCase {
                 chunkId: chunkId,
                 sourceId: sourceId,
                 page: 4,
-                shortTitle: "Manual"
+                shortTitle: "Manual [draft]"
             )
         ]
         let text = #"Use the stack carefully.【1|"stack words"】"#
 
         XCTAssertEqual(
             CitationMarkerSwap.swap(text, manifest: manifest, mode: .plainLabel),
-            "Use the stack carefully. (Manual p.4)"
+            "Use the stack carefully. (Manual [draft] p.4)"
         )
         XCTAssertEqual(
             CitationMarkerSwap.swap(text, manifest: manifest, mode: .markdownLink),
-            "Use the stack carefully. [Manual p.4](ticker-pdf://11111111-1111-1111-1111-111111111111?page=4&chunk=22222222-2222-2222-2222-222222222222&q=stack%20words)"
+            "Use the stack carefully. [Manual \\[draft\\] p.4](ticker-pdf://11111111-1111-1111-1111-111111111111?page=4&chunk=22222222-2222-2222-2222-222222222222&q=stack%20words)"
         )
     }
 

@@ -128,6 +128,7 @@ final class WebViewManager: NSObject {
         ])
     }
 
+    @MainActor
     private func configurePDFPaneCallbacks() {
         pdfPaneController.highlightsProvider = { [weak self] sourceId in
             guard let self, let persistence = self.persistence else { return [] }
@@ -139,33 +140,35 @@ final class WebViewManager: NSObject {
             }
         }
         pdfPaneController.onLinkSelection = { [weak self] payload in
-            Task { @MainActor in
-                guard let self, let persistence = self.persistence else { return }
-                do {
-                    try persistence.savePDFHighlight(payload.highlight)
-                    self.sendPDFHighlightLinked(payload)
-                } catch {
-                    DebugLog.log("[WebViewManager] Failed to save PDF highlight (\(DebugLog.errorSummary(error)))")
-                    self.sendSourceError("Could not save PDF highlight.")
-                }
+            guard let self else { return false }
+            guard let persistence = self.persistence else {
+                self.sendSourceError("Could not save PDF highlight.")
+                return false
+            }
+            do {
+                try persistence.savePDFHighlight(payload.highlight)
+                self.sendPDFHighlightLinked(payload)
+                return true
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save PDF highlight (\(DebugLog.errorSummary(error)))")
+                self.sendSourceError("Could not save PDF highlight.")
+                return false
             }
         }
         pdfPaneController.onAnchorPlaced = { [weak self] payload in
-            Task { @MainActor in
-                guard let self else { return }
-                guard let persistence = self.persistence else {
-                    self.sendSourceError("Could not save PDF anchor.")
-                    self.sendPDFAnchorPickCancelled(streamId: payload.streamId)
-                    return
-                }
-                do {
-                    try persistence.savePDFHighlight(payload.highlight)
-                    self.sendPDFAnchorPlaced(payload)
-                } catch {
-                    DebugLog.log("[WebViewManager] Failed to save PDF anchor (\(DebugLog.errorSummary(error)))")
-                    self.sendSourceError("Could not save PDF anchor.")
-                    self.sendPDFAnchorPickCancelled(streamId: payload.streamId)
-                }
+            guard let self else { return false }
+            guard let persistence = self.persistence else {
+                self.sendSourceError("Could not save PDF anchor.")
+                return false
+            }
+            do {
+                try persistence.savePDFHighlight(payload.highlight)
+                self.sendPDFAnchorPlaced(payload)
+                return true
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save PDF anchor (\(DebugLog.errorSummary(error)))")
+                self.sendSourceError("Could not save PDF anchor.")
+                return false
             }
         }
         pdfPaneController.onAnchorPickCancelled = { [weak self] streamId in

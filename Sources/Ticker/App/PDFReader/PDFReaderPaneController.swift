@@ -287,8 +287,8 @@ private struct PDFOutlineSidebarEntry {
 }
 
 final class PDFReaderPaneController: NSViewController {
-    var onLinkSelection: ((PDFHighlightLinkPayload) -> Void)?
-    var onAnchorPlaced: ((PDFHighlightLinkPayload) -> Void)?
+    var onLinkSelection: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
+    var onAnchorPlaced: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
     var onAnchorPickCancelled: ((UUID) -> Void)?
     var onPageChanged: ((UUID, Int) -> Void)?
     var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
@@ -705,14 +705,14 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneLinkButton.action = #selector(handlePDFPaneLinkSelection)
         pdfPaneLinkButton.bezelStyle = .texturedRounded
         pdfPaneLinkButton.controlSize = .small
-        pdfPaneLinkButton.image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)
+        pdfPaneLinkButton.image = NSImage(systemSymbolName: "text.quote", accessibilityDescription: nil)
             ?? NSImage(systemSymbolName: "link", accessibilityDescription: nil)
         pdfPaneLinkButton.imagePosition = .imageOnly
         pdfPaneLinkButton.imageScaling = .scaleProportionallyDown
         pdfPaneLinkButton.isBordered = true
         pdfPaneLinkButton.showsBorderOnlyWhileMouseInside = true
-        pdfPaneLinkButton.toolTip = "Link selection to stream"
-        pdfPaneLinkButton.setAccessibilityLabel("Link selection to stream")
+        pdfPaneLinkButton.toolTip = "Add selected quote to stream"
+        pdfPaneLinkButton.setAccessibilityLabel("Add selected quote to stream")
         pdfPaneLinkButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         pdfPaneLinkButton.setContentHuggingPriority(.required, for: .horizontal)
         setPDFPaneLinkButtonEnabled(false)
@@ -1432,13 +1432,15 @@ final class PDFReaderPaneController: NSViewController {
             quote: quote,
             createdAt: Date()
         )
-        applyHighlight(highlight)
-
-        onLinkSelection?(PDFHighlightLinkPayload(
+        let payload = PDFHighlightLinkPayload(
             streamId: context.streamId,
             sourceName: context.sourceName,
             highlight: highlight
-        ))
+        )
+        guard onLinkSelection?(payload) == true else { return }
+
+        applyHighlight(highlight)
+        pdfPanePDFView.clearSelection()
     }
 
     private func highlightRects(for selection: PDFSelection) -> [PDFHighlightRect] {
@@ -1740,13 +1742,16 @@ final class PDFReaderPaneController: NSViewController {
             createdAt: Date()
         )
 
-        applyHighlight(highlight)
-        exitAnchorPickMode(notifyCancelled: false)
-        onAnchorPlaced?(PDFHighlightLinkPayload(
+        let payload = PDFHighlightLinkPayload(
             streamId: context.streamId,
             sourceName: context.sourceName,
             highlight: highlight
-        ))
+        )
+        let didSave = onAnchorPlaced?(payload) == true
+        exitAnchorPickMode(notifyCancelled: !didSave)
+        if didSave {
+            applyHighlight(highlight)
+        }
     }
 
     private func enforceAnchorPickCursor(for event: NSEvent) {
@@ -1825,7 +1830,7 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         let showHint = isAnchorPickMode
-        let hintText = "Click a spot to link · Esc to cancel"
+        let hintText = "Click a spot to anchor · Esc to cancel"
 
         pdfPaneHintIconView.isHidden = !showHint
         pdfPaneStatusLeadingConstraint?.isActive = !showHint

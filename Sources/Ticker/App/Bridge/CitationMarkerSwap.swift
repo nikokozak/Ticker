@@ -112,6 +112,7 @@ enum CitationMarkerSwap {
     private static func escapeMarkdownLabel(_ label: String) -> String {
         label
             .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "[", with: "\\[")
             .replacingOccurrences(of: "]", with: "\\]")
     }
 }

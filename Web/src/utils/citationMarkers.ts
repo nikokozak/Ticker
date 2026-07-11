@@ -29,6 +29,7 @@ function markdownLinkLabel(citation: DocumentAICitation, pageOnlyLabel: boolean)
 function escapeMarkdownLabel(label: string): string {
   return label
     .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
     .replace(/\]/g, '\\]');
 }
 

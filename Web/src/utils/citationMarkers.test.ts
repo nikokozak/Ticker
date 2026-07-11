@@ -88,6 +88,13 @@ describe('swapCitationMarkers', () => {
     );
   });
 
+  it('escapes both brackets in source-prefixed labels', () => {
+    const bracketed = { ...citations[1], shortTitle: 'Guide [draft]' };
+    expect(swapCitationMarkers('Disambiguate this.【2】', [citations[0], bracketed])).toBe(
+      'Disambiguate this. [Guide \\[draft\\] p.8](ticker-pdf://source-2?page=8&chunk=chunk-2)'
+    );
+  });
+
   it('inserts exactly one space before a swapped link', () => {
     expect(swapCitationMarkers('Crowded  【1】', citations)).toBe(
       'Crowded [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1)'

@@ -1,6 +1,10 @@
 import { ChangeSet } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
-import { buildPDFAnchorLinkEdit, mapPendingPDFAnchorSelection } from './pdfAnchorSelection';
+import {
+  buildPDFAnchorLinkEdit,
+  buildPDFQuoteSnippet,
+  mapPendingPDFAnchorSelection,
+} from './pdfAnchorSelection';
 
 describe('pdf anchor selection helpers', () => {
   it('maps a pending selection through document changes and wraps it', () => {
@@ -25,5 +29,15 @@ describe('pdf anchor selection helpers', () => {
     const changes = ChangeSet.of([{ from, to, insert: '' }], text.length);
 
     expect(mapPendingPDFAnchorSelection({ from, to }, changes)).toBeNull();
+  });
+
+  it('builds a compact PDF quote with an escaped source link', () => {
+    expect(buildPDFQuoteSnippet({
+      quote: '  A wrapped\nPDF   quote.  ',
+      linkLabel: 'Guide \\ [draft] p.7',
+      linkURL: 'ticker-pdf://source?highlight=h1&page=7',
+    })).toBe(
+      '\n> A wrapped PDF quote.\n[Guide \\\\ \\[draft\\] p.7](ticker-pdf://source?highlight=h1&page=7)\n'
+    );
   });
 });

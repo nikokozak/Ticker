@@ -261,6 +261,12 @@ export function buildMarkdownConcealDecorations(view: EditorView, ensureInitialP
           return;
         }
 
+        if (node.name === 'Escape' && node.matchContext(['Link'])) {
+          const decoration = concealRange(node.from, Math.min(node.from + 1, node.to));
+          if (decoration) decorations.push(decoration);
+          return;
+        }
+
         // Citation-style links (ticker-pdf): syntax always concealed; ⌥-click is
         // the only way to see it raw.
         if (LINK_CONCEAL_NODE_NAMES.has(node.name) && node.matchContext(['Link'])) {
