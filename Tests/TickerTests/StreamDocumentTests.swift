@@ -1755,11 +1755,11 @@ final class StreamDocumentTests: XCTestCase {
 
             let gated = RetrievalService(
                 persistence: service, embeddingProvider: provider,
-                operatingPoint: .init(cosineFloor: 0.5, rrfK: 60), semanticDisabled: { false }
+                operatingPoint: .init(cosineFloor: 0.5, rrfK: 60)
             )
             let passing = RetrievalService(
                 persistence: service, embeddingProvider: provider,
-                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60), semanticDisabled: { false }
+                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60)
             )
 
             XCTAssertTrue(try gated.retrieve(query: "conceptual question", streamId: stream.id).isEmpty)
@@ -1796,33 +1796,7 @@ final class StreamDocumentTests: XCTestCase {
             let actual = try RetrievalService(
                 persistence: service, embeddingProvider: slow,
                 operatingPoint: .init(cosineFloor: 0.3, rrfK: 60),
-                semanticDisabled: { false }, queryBudget: 0.001
-            ).retrieve(query: "anvil receipt", streamId: stream.id)
-
-            XCTAssertEqual(actual.map(\.id), baseline.map(\.id))
-            XCTAssertEqual(actual.map(\.score), baseline.map(\.score))
-        }
-    }
-
-    func test_semanticKillSwitchFallsBackWithoutEmbedding() throws {
-        try withTempPersistenceService { service in
-            let stream = Stream(title: "Kill switch")
-            try service.saveStream(stream)
-            let source = try saveRetrievalSource(
-                in: service, streamId: stream.id, displayName: "Lexical.pdf",
-                extractedText: largeExtractedText(), chunks: [(0, "anvil anvil anvil receipt", 1, 1, nil)]
-            )
-            let chunk = try XCTUnwrap(service.loadSourceChunks(sourceId: source.id).first)
-            try service.saveChunkEmbeddings([[1, 0]], for: [chunk], modelId: "test-model")
-            let baseline = try RetrievalService(persistence: service)
-                .retrieve(query: "anvil receipt", streamId: stream.id)
-            let provider = TestEmbeddingProvider { _ in
-                XCTFail("kill switch must skip embedding")
-                return [[1, 0]]
-            }
-            let actual = try RetrievalService(
-                persistence: service, embeddingProvider: provider,
-                operatingPoint: .init(cosineFloor: 0.3, rrfK: 60), semanticDisabled: { true }
+                queryBudget: 0.001
             ).retrieve(query: "anvil receipt", streamId: stream.id)
 
             XCTAssertEqual(actual.map(\.id), baseline.map(\.id))

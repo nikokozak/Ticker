@@ -5,7 +5,6 @@ final class RetrievalService {
     private let persistence: PersistenceService
     private let embeddingProvider: EmbeddingProvider?
     private let operatingPoint: RetrievalOperatingPoint?
-    private let semanticDisabled: () -> Bool
     private let queryBudget: TimeInterval
 
     private static let topK = 8
@@ -30,16 +29,11 @@ final class RetrievalService {
         persistence: PersistenceService,
         embeddingProvider: EmbeddingProvider? = nil,
         operatingPoint: RetrievalOperatingPoint? = nil,
-        semanticDisabled: @escaping () -> Bool = {
-            // ponytail: One-release emergency switch; delete retrieval.semantic.disabled by 2026-08-10.
-            UserDefaults.standard.bool(forKey: "retrieval.semantic.disabled")
-        },
         queryBudget: TimeInterval = 0.1 // ponytail: hard 100ms wall; tune only from measured release telemetry.
     ) {
         self.persistence = persistence
         self.embeddingProvider = embeddingProvider
         self.operatingPoint = operatingPoint ?? RetrievalOperatingPoint.bundled()
-        self.semanticDisabled = semanticDisabled
         self.queryBudget = queryBudget
     }
 
@@ -173,7 +167,7 @@ final class RetrievalService {
         bm25: [RetrievedChunk],
         excludeAIPrivateSources: Bool
     ) -> [RetrievedChunk]? {
-        guard !semanticDisabled(), let provider = embeddingProvider, let operatingPoint else { return nil }
+        guard let provider = embeddingProvider, let operatingPoint else { return nil }
         do {
             let embedded = try persistence.loadChunkEmbeddings(
                 streamId: streamId,
