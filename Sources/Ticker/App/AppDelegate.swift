@@ -73,6 +73,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var onboardingWindow: NSWindow?
     private var didCompleteStartup = false
     private var skipLastStreamRestore = false
+    private var isWaitingForEditorFlush = false
 
     // Menu bar (status item)
     private var statusItem: NSStatusItem?
@@ -227,6 +228,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSEvent.removeMonitor(pdfFindKeyMonitor)
             self.pdfFindKeyMonitor = nil
         }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard didCompleteStartup, let webViewManager else { return .terminateNow }
+        guard !isWaitingForEditorFlush else { return .terminateLater }
+
+        isWaitingForEditorFlush = true
+        Task { @MainActor [weak self] in
+            await webViewManager.requestEditorFlush()
+            guard let self, self.isWaitingForEditorFlush else { return }
+            self.isWaitingForEditorFlush = false
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {

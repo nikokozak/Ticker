@@ -187,6 +187,13 @@ export function App() {
     // Subscribe to bridge messages
     const unsubscribe = bridge.onMessage((message) => {
       switch (message.type) {
+        case 'flushEditor': {
+          const requestId = message.payload?.requestId;
+          if (typeof requestId === 'string' && viewRef.current !== 'stream') {
+            bridge.send({ type: 'editorFlushed', payload: { requestId } });
+          }
+          break;
+        }
         case 'bridgeError':
           if (import.meta.env.DEV) {
             const originalType = String(message.payload?.originalType ?? 'unknown');

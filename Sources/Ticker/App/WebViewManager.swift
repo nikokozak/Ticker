@@ -25,6 +25,8 @@ final class WebViewManager: NSObject {
     private var pendingLaunchOpenStreamId: UUID?
     private var pendingEditorSelectionRequests: [String: (String?) -> Void] = [:]
     private let editorSelectionTimeoutNanoseconds: UInt64 = 300_000_000
+    private var pendingEditorFlushRequests: [String: () -> Void] = [:]
+    private let editorFlushTimeoutNanoseconds: UInt64 = 1_500_000_000
 
     @MainActor
     init(container: ServiceContainer) {
@@ -600,6 +602,26 @@ final class WebViewManager: NSObject {
     }
 
     @MainActor
+    func requestEditorFlush() async {
+        await withCheckedContinuation { continuation in
+            let requestId = UUID().uuidString
+            pendingEditorFlushRequests[requestId] = {
+                continuation.resume()
+            }
+
+            bridgeService.send(BridgeMessage(
+                type: "flushEditor",
+                payload: ["requestId": AnyCodable(requestId)]
+            ))
+
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: self?.editorFlushTimeoutNanoseconds ?? 1_500_000_000)
+                self?.resolveEditorFlush(requestId: requestId)
+            }
+        }
+    }
+
+    @MainActor
     private func resolveEditorSelectionResponse(_ message: BridgeMessage) {
         guard let requestId = message.payload?["requestId"]?.value as? String else {
             return
@@ -611,8 +633,19 @@ final class WebViewManager: NSObject {
         resolver(text)
     }
 
+    @MainActor
+    private func resolveEditorFlush(requestId: String) {
+        pendingEditorFlushRequests.removeValue(forKey: requestId)?()
+    }
+
     private func handleMessage(_ message: BridgeMessage) {
         switch message.type {
+        case "editorFlushed":
+            guard let requestId = message.payload?["requestId"]?.value as? String else { return }
+            Task { @MainActor [weak self] in
+                self?.resolveEditorFlush(requestId: requestId)
+            }
+            return
         case "editorSelection":
             Task { @MainActor [weak self] in
                 self?.resolveEditorSelectionResponse(message)

@@ -43,6 +43,9 @@
       "fileDropError": {
         "requiredPayloadKeys": ["error"]
       },
+      "flushEditor": {
+        "requiredPayloadKeys": ["requestId"]
+      },
       "getEditorSelection": {
         "requiredPayloadKeys": ["requestId"]
       },
@@ -144,6 +147,9 @@
       },
       "deleteStream": {
         "requiredPayloadKeys": ["id"]
+      },
+      "editorFlushed": {
+        "requiredPayloadKeys": ["requestId"]
       },
       "editorSelection": {
         "requiredPayloadKeys": ["requestId", "text"]

@@ -1109,6 +1109,27 @@ export function StreamEditor({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
+      if (message.type === 'flushEditor') {
+        const requestId = message.payload?.requestId;
+        if (typeof requestId !== 'string') return;
+
+        rollbackInFlightDocumentAI();
+        if (autosaveTimerRef.current !== null) {
+          window.clearTimeout(autosaveTimerRef.current);
+          autosaveTimerRef.current = null;
+        }
+
+        void (async () => {
+          await saveNow();
+          const content = editorViewRef.current?.state.doc.toString() ?? markdownContentRef.current;
+          if (isStreamDocumentDirty(content, lastSavedContentRef.current)) {
+            await saveNow();
+          }
+          bridge.send({ type: 'editorFlushed', payload: { requestId } });
+        })();
+        return;
+      }
+
       if (message.type === 'aiOperationChanged') {
         if (message.payload?.streamId !== stream.id || message.payload?.origin !== 'quickPanel') return;
         const requestId = message.payload?.requestId;
@@ -1440,7 +1461,7 @@ export function StreamEditor({
     });
 
     return () => unsubscribe();
-  }, [addToast, clearQuickPanelPending, discardInFlightDocumentAI, hideAiFeedback, showAiErrorFeedback, stream.id]);
+  }, [addToast, clearQuickPanelPending, discardInFlightDocumentAI, hideAiFeedback, rollbackInFlightDocumentAI, saveNow, showAiErrorFeedback, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
