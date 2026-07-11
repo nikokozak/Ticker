@@ -130,34 +130,38 @@ struct PDFPaneOpeningLayout: Equatable {
     let paneWidth: CGFloat
     let shouldResizeWindow: Bool
 
+    /// Accordion semantics: the editor must not change size when the pane
+    /// opens. The window widens by exactly the pane width (right edge grows),
+    /// slides left only when the screen edge would clip it, and never changes
+    /// height or vertical position. The editor only shrinks by whatever width
+    /// the screen genuinely cannot provide.
     static func calculate(
         currentFrame: CGRect,
         visibleFrame: CGRect,
         isNativeFullscreen: Bool
     ) -> PDFPaneOpeningLayout {
+        let paneWidth = floor(currentFrame.width * 0.5)
         if isNativeFullscreen || currentFrame.width >= visibleFrame.width {
             return PDFPaneOpeningLayout(
                 targetWindowFrame: currentFrame,
-                paneWidth: floor(currentFrame.width * 0.5),
+                paneWidth: paneWidth,
                 shouldResizeWindow: false
             )
         }
 
-        let height = min(currentFrame.height, visibleFrame.height)
-        let minY = visibleFrame.minY
-        let maxY = visibleFrame.maxY - height
-        let y = min(max(currentFrame.origin.y, minY), maxY)
+        let targetWidth = min(currentFrame.width + paneWidth, visibleFrame.width)
+        let x = min(max(currentFrame.origin.x, visibleFrame.minX), visibleFrame.maxX - targetWidth)
         let targetFrame = CGRect(
-            x: visibleFrame.minX,
-            y: y,
-            width: visibleFrame.width,
-            height: height
+            x: x,
+            y: currentFrame.origin.y,
+            width: targetWidth,
+            height: currentFrame.height
         )
 
         return PDFPaneOpeningLayout(
             targetWindowFrame: targetFrame,
-            paneWidth: floor(targetFrame.width * 0.5),
-            shouldResizeWindow: true
+            paneWidth: paneWidth,
+            shouldResizeWindow: targetFrame != currentFrame
         )
     }
 }

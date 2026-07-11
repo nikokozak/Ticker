@@ -2723,27 +2723,32 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
-    func test_pdfPaneOpeningLayoutExpandsToVisibleFrameWidthAndSplitsEvenly() throws {
+    func test_pdfPaneOpeningLayoutWidensByPaneWidthKeepingEditorSize() throws {
+        // Accordion: the window grows by exactly the pane width; the editor's
+        // share (900) and the origin are untouched when the screen has room.
         let layout = PDFPaneOpeningLayout.calculate(
             currentFrame: CGRect(x: 220, y: 120, width: 900, height: 700),
-            visibleFrame: CGRect(x: 0, y: 25, width: 1440, height: 875),
+            visibleFrame: CGRect(x: 0, y: 25, width: 1600, height: 875),
             isNativeFullscreen: false
         )
 
-        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: 120, width: 1440, height: 700))
-        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 220, y: 120, width: 1350, height: 700))
+        XCTAssertEqual(layout.paneWidth, 450)
+        XCTAssertEqual(layout.targetWindowFrame.width - layout.paneWidth, 900) // editor unchanged
         XCTAssertTrue(layout.shouldResizeWindow)
     }
 
-    func test_pdfPaneOpeningLayoutClampsHeightAndVerticalPositionInsideVisibleFrame() throws {
+    func test_pdfPaneOpeningLayoutSlidesLeftOnlyWhenScreenEdgeClips() throws {
+        // Not enough room on the right: the window slides left just enough to
+        // fit, and never changes height or vertical position.
         let layout = PDFPaneOpeningLayout.calculate(
             currentFrame: CGRect(x: 220, y: -200, width: 900, height: 900),
             visibleFrame: CGRect(x: 0, y: 25, width: 1440, height: 800),
             isNativeFullscreen: false
         )
 
-        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: 25, width: 1440, height: 800))
-        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 90, y: -200, width: 1350, height: 900))
+        XCTAssertEqual(layout.paneWidth, 450)
         XCTAssertTrue(layout.shouldResizeWindow)
     }
 
@@ -2777,7 +2782,7 @@ final class StreamDocumentTests: XCTestCase {
         )
         let maxWidth = PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: visibleFrame.width)
 
-        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertEqual(layout.paneWidth, 450)
         XCTAssertGreaterThan(layout.paneWidth, PDFPaneWidthPolicy.minimumPDFPaneWidth)
         XCTAssertLessThan(layout.paneWidth, maxWidth)
     }
