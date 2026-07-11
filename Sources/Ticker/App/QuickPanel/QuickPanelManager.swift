@@ -576,7 +576,9 @@ final class QuickPanelManager: ObservableObject {
                 streamId: streamIdForAI,
                 sourceScope: sourceScopeForAI,
                 priorCells: priorCells,
-                sourceContext: contextForAI,
+                sourceContext: contextForAI.map {
+                    SourceContext(text: $0, chunks: [], mode: .passthrough)
+                },
                 systemPromptOverride: Prompts.quickPanelChat,
                 onChunk: { [weak self] chunk in
                     responseRaw += chunk
@@ -1001,7 +1003,7 @@ final class QuickPanelManager: ObservableObject {
                 query: prompt,
                 streamId: nil,
                 priorCells: [],
-                sourceContext: documentMarkdown,
+                sourceContext: SourceContext(text: documentMarkdown, chunks: [], mode: .passthrough),
                 includeHeading: false,
                 onChunk: { [weak self] chunk in
                     responseMarkdown += chunk

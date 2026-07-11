@@ -35,7 +35,7 @@ final class AIOrchestrator {
     ///     the relevance cutoff; retrieval must see only what the user wrote.
     ///   - sourceScope: User override for source-context assembly on stream-backed document AI
     ///   - priorCells: Conversation history (each has "content", "type", optionally "imageURLs")
-    ///   - sourceContext: Explicit non-stream context (used by Quick Panel/document AI)
+    ///   - sourceContext: Explicit context (captured text or a prepared retrieved section)
     ///   - systemPromptOverride: Optional system prompt override (used for ephemeral Quick Panel "ask" mode)
     ///   - includeHeading: If true, use prompt that requires "## Heading" on first line (for think flow)
     ///   - onModelSelected: Called with the model ID when provider is selected
@@ -46,7 +46,7 @@ final class AIOrchestrator {
         retrievalQuery: String? = nil,
         sourceScope: SourceScope = .auto,
         priorCells: [[String: Any]],
-        sourceContext: String? = nil,
+        sourceContext: SourceContext? = nil,
         systemPromptOverride: String? = nil,
         includeHeading: Bool = false,
         onChunk: @escaping (String) -> Void,
@@ -58,9 +58,7 @@ final class AIOrchestrator {
         // If device key is not active, the proxy will return an auth error.
         // Note: We don't call onModelSelected here; the proxy will tell us the resolved model via headers
 
-        var contextToUse = sourceContext.flatMap { context -> SourceContext? in
-            context.isEmpty ? nil : SourceContext(text: context, chunks: [], mode: .passthrough)
-        }
+        var contextToUse = sourceContext
         if let streamId, let retrievalService {
             do {
                 // ponytail: Keep the proven synchronous retrieval API for search/eval,
@@ -73,7 +71,7 @@ final class AIOrchestrator {
                     )
                 }
                 if let assembledContext = try await retrievalTask.value {
-                    contextToUse = assembledContext
+                    contextToUse = Self.mergeContexts(explicit: sourceContext, assembled: assembledContext)
                     switch assembledContext.mode {
                     case .passthrough:
                         DebugLog.log("AIOrchestrator: Using source passthrough context")
@@ -84,8 +82,10 @@ final class AIOrchestrator {
                         break
                     }
                 } else {
-                    contextToUse = nil
-                    DebugLog.log("AIOrchestrator: No source context passed threshold")
+                    contextToUse = Self.mergeContexts(explicit: sourceContext, assembled: nil)
+                    DebugLog.log(sourceContext == nil
+                        ? "AIOrchestrator: No source context passed threshold"
+                        : "AIOrchestrator: No source context passed threshold; keeping explicit context")
                 }
             } catch {
                 DebugLog.log("AIOrchestrator: Source retrieval failed (\(DebugLog.errorSummary(error)))")
@@ -93,7 +93,10 @@ final class AIOrchestrator {
                     onError(OrchestratorError.sourceRetrievalFailed)
                     return
                 }
-                contextToUse = SourceContext(text: "", chunks: [], mode: .unavailable)
+                contextToUse = Self.mergeContexts(
+                    explicit: sourceContext,
+                    assembled: SourceContext(text: "", chunks: [], mode: .unavailable)
+                )
             }
         }
 
@@ -125,6 +128,22 @@ final class AIOrchestrator {
     }
 
     // MARK: - Private
+
+    static func mergeContexts(explicit: SourceContext?, assembled: SourceContext?) -> SourceContext? {
+        guard let explicit, !explicit.text.isEmpty else { return assembled }
+        guard explicit.mode == .passthrough else { return explicit }
+        guard let assembled,
+              assembled.mode != .unavailable,
+              !assembled.text.isEmpty else {
+            return explicit
+        }
+
+        return SourceContext(
+            text: "\(explicit.text)\n\n---\n\n\(assembled.text)",
+            chunks: assembled.chunks,
+            mode: assembled.mode
+        )
+    }
 
     private func buildRequest(
         query: String,

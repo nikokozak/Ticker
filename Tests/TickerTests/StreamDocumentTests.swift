@@ -1096,6 +1096,40 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_orchestratorMergesCapturedAndRetrievedContextWithoutLosingCitations() {
+        let captured = SourceContext(text: "captured verbatim", chunks: [], mode: .passthrough)
+        let chunk = RetrievedChunk(
+            id: UUID(), sourceId: UUID(), sourceName: "Manual", seq: 0,
+            text: "retrieved passage", pageStart: 4, pageEnd: 4,
+            sectionPath: "Storage", score: -10
+        )
+        let retrieved = SourceContext(text: "[1] Manual, p.4:\nretrieved passage", chunks: [chunk], mode: .retrieved)
+
+        let merged = AIOrchestrator.mergeContexts(explicit: captured, assembled: retrieved)
+
+        XCTAssertEqual(merged?.text, "captured verbatim\n\n---\n\n[1] Manual, p.4:\nretrieved passage")
+        XCTAssertEqual(merged?.chunks.map(\.id), [chunk.id])
+        XCTAssertEqual(merged?.mode, .retrieved)
+    }
+
+    func test_orchestratorPreservesCapturedContextWhenRetrievalIsAbsentOrUnavailable() {
+        let captured = SourceContext(text: "captured verbatim", chunks: [], mode: .passthrough)
+        let unavailable = SourceContext(text: "", chunks: [], mode: .unavailable)
+
+        XCTAssertEqual(AIOrchestrator.mergeContexts(explicit: captured, assembled: nil)?.text, captured.text)
+        XCTAssertEqual(
+            AIOrchestrator.mergeContexts(explicit: captured, assembled: unavailable)?.mode,
+            .passthrough
+        )
+    }
+
+    func test_orchestratorLeavesAssembledOrEmptyContextUnchanged() {
+        let assembled = SourceContext(text: "source text", chunks: [], mode: .passthrough)
+
+        XCTAssertEqual(AIOrchestrator.mergeContexts(explicit: nil, assembled: assembled)?.text, assembled.text)
+        XCTAssertNil(AIOrchestrator.mergeContexts(explicit: nil, assembled: nil))
+    }
+
     func test_documentAIContextCleaningOnlyRemovesUnderlineStorageTags() {
         XCTAssertEqual(
             AIMessageHandler.cleanedDocumentContext(
