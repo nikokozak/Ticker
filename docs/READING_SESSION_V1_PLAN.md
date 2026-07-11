@@ -208,7 +208,8 @@ The operation registry transitions to `failed` with concise user text. It never 
 
 ### Generation and append
 
-- Change `AIOrchestrator.route`'s existing explicit `sourceContext` parameter from `String?` to `SourceContext?`. Quick Panel wraps its two explicit strings as `.passthrough`; document AI continues to pass no explicit context. An explicit context skips stream retrieval. Do not add a second overlapping context parameter.
+- Change `AIOrchestrator.route`'s existing explicit `sourceContext` parameter from `String?` to `SourceContext?`. Quick Panel wraps its two explicit strings as `.passthrough`; document AI continues to pass no explicit context. Do not add a second overlapping context parameter.
+- Preserve the Roadmap 2 rule that captured context is never displaced by retrieval. When Quick Panel supplies captured context and a stream ID, retrieval still runs and a pure merge keeps captured text first while retaining the assembled context's chunks and mode for citations. Nil or unavailable assembled context falls back to the explicit capture. Section AI supplies its prepared `.retrieved` context with `streamId: nil`, so no additional retrieval or precedence flag is needed.
 - Keep the existing injected `AIMessageHandler` routing seam by passing the typed context through the existing route closure, not by creating another AI handler or service.
 - Section summary prompt: faithful, concise summary of the supplied section; output body only.
 - Section ask prompt: existing ask behavior, constrained by the prepared section context.
@@ -249,7 +250,7 @@ The operation registry transitions to `failed` with concise user text. It never 
 
 - Contract: two new messages; no changed payload requirements on existing messages.
 - Persistence: no migration and no new SQL. Only existing reads plus `appendToStreamDocument(..., spans:, exchange:)`.
-- AI: the existing explicit context becomes typed; Quick Panel wraps passthrough text and ordinary document AI retains its old no-explicit-context behavior.
+- AI: the existing explicit context becomes typed; Quick Panel wraps passthrough text and merges it with retrieved stream context, ordinary document AI retains its old no-explicit-context behavior, and section AI passes a prepared context with no stream ID.
 - Editor: one new prompt intent and existing append-operation origin filtering; no CodeMirror state model changes.
 
 ### Checks
@@ -258,7 +259,9 @@ The operation registry transitions to `failed` with concise user text. It never 
 - Unit: generated section Markdown is valid, page-linked, and uses trusted citation swaps.
 - Unit: AI handler appends response + span + exchange atomically and never appends after cancellation.
 - Unit: context at or below the 88,000-token reference ceiling is accepted; over-ceiling context produces the typed failure and the injected route closure is never called.
-- Unit: current document AI tests prove an absent explicit context preserves retrieval behavior; Quick Panel tests prove wrapped passthrough behavior is unchanged.
+- Unit: pure context-merge cases cover explicit + retrieved, explicit + nil, explicit + unavailable, assembled-only identity, and both nil.
+- Unit: current document AI tests prove an absent explicit context preserves retrieval behavior; a Quick Panel seam test proves captured context survives while retrieved chunks remain available for citations.
+- Unit: a section request routes its prepared context with `streamId: nil`.
 - Contract checker passes.
 - Manual: Ask opens the existing modal with the right section name; cancel is inert.
 - Manual: Ask and Summarize show one visible operation, support Stop, append once, flash the arrival, persist after reload, and open all generated citations correctly.
