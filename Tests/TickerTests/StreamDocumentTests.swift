@@ -2812,14 +2812,6 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(PDFPaneWidthPolicy.clampPDFPaneWidth(20, hostWidth: 260), 260)
     }
 
-    func test_pdfPaneWindowRestoreUsesSavedFrameExceptInFullscreen() throws {
-        let saved = CGRect(x: 120, y: 80, width: 900, height: 700)
-
-        XCTAssertEqual(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: false), saved)
-        XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: true))
-        XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: nil, isNativeFullscreen: false))
-    }
-
     func test_pdfFindNavigationWrapsNextAndPrevious() throws {
         XCTAssertEqual(PDFFindNavigation.nextIndex(currentIndex: nil, matchCount: 3), 0)
         XCTAssertEqual(PDFFindNavigation.nextIndex(currentIndex: 0, matchCount: 3), 1)

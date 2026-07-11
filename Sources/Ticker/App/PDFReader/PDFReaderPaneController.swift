@@ -203,12 +203,6 @@ enum PDFPaneWidthPolicy {
     }
 }
 
-enum PDFPaneWindowRestore {
-    static func targetFrame(savedFrame: CGRect?, isNativeFullscreen: Bool) -> CGRect? {
-        isNativeFullscreen ? nil : savedFrame
-    }
-}
-
 enum PDFCitationNavigator {
     static func normalizeQuote(_ quote: String) -> String {
         NormalizedTextMap.build(from: quote).normalized
@@ -356,7 +350,9 @@ final class PDFReaderPaneController: NSViewController {
     private let pdfOutlineStackView = NSStackView(frame: .zero)
     private let pdfPanePDFView = PDFView(frame: .zero)
     private var pdfPaneWidthConstraint: NSLayoutConstraint?
-    private var paneTransitionConstraint: NSLayoutConstraint?
+    /// True while the pane's open expanded the window, so close knows to
+    /// give that width back (computed from the current frame, never saved).
+    private var didExpandWindowForPDFPane = false
     private var pdfFindBarHeightConstraint: NSLayoutConstraint?
     private var pdfOutlineWidthConstraint: NSLayoutConstraint?
     private var pdfPaneOutlineButtonWidthConstraint: NSLayoutConstraint?
@@ -367,7 +363,6 @@ final class PDFReaderPaneController: NSViewController {
     private let minimumPDFPaneWidth = PDFPaneWidthPolicy.minimumPDFPaneWidth
     private let minimumEditorPaneWidth = PDFPaneWidthPolicy.minimumEditorPaneWidth
     private var pdfPaneResizeStartWidth: CGFloat = 0
-    private var prePDFPaneWindowFrame: CGRect?
     private var activePDFContext: (streamId: UUID, sourceId: UUID, sourceName: String, fileURL: URL)?
     private var isAnchorPickMode = false
     private var anchorPickMouseMonitor: Any?
@@ -563,31 +558,11 @@ final class PDFReaderPaneController: NSViewController {
     }
 
     @discardableResult
-    /// Window frame animation runs on NSWindow's own clock and ignores
-    /// NSAnimationContext, so a pane-width constraint can never stay in
-    /// lockstep with it — the editor visibly stretches from the drift. During
-    /// window-resizing transitions the EDITOR width is pinned instead
-    /// (pane = host − editor), so the pane absorbs every point of window
-    /// growth by construction, whatever the animation timing.
-    private func beginPaneTransition(editorWidth: CGFloat) {
-        guard let host = view.superview else { return }
-        paneTransitionConstraint?.isActive = false
-        pdfPaneWidthConstraint?.isActive = false
-        let pinned = pdfPaneView.widthAnchor.constraint(equalTo: host.widthAnchor, constant: -editorWidth)
-        pinned.isActive = true
-        paneTransitionConstraint = pinned
-        host.layoutSubtreeIfNeeded()
-    }
-
-    private func endPaneTransition(paneWidth: CGFloat) {
-        guard let widthConstraint = pdfPaneWidthConstraint else { return }
-        paneTransitionConstraint?.isActive = false
-        paneTransitionConstraint = nil
-        widthConstraint.constant = paneWidth
-        widthConstraint.isActive = true
-        view.superview?.layoutSubtreeIfNeeded()
-    }
-
+    /// No animation, by design. NSWindow frame animation runs on its own
+    /// clock and cannot be synchronized with Auto Layout, so every animated
+    /// variant visibly stretched the editor. Instead the window frame and the
+    /// pane width change in the SAME layout pass: one paint, the pane is
+    /// simply there (or gone), and the editor never moves or resizes.
     func setVisible(_ visible: Bool) -> Bool {
         guard let widthConstraint = pdfPaneWidthConstraint else { return false }
 
@@ -603,9 +578,6 @@ final class PDFReaderPaneController: NSViewController {
 
             if let window = view.window {
                 let isFullscreen = window.styleMask.contains(.fullScreen)
-                if prePDFPaneWindowFrame == nil, !isFullscreen {
-                    prePDFPaneWindowFrame = window.frame
-                }
                 let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? window.frame
                 let layout = PDFPaneOpeningLayout.calculate(
                     currentFrame: window.frame,
@@ -619,43 +591,19 @@ final class PDFReaderPaneController: NSViewController {
                 paneWidth = preferredPDFPaneWidth
             }
 
-            guard paneWidth >= minimumPDFPaneWidth else {
-                prePDFPaneWindowFrame = nil
-                return false
-            }
+            guard paneWidth >= minimumPDFPaneWidth else { return false }
 
+            widthConstraint.constant = paneWidth
             pdfPaneView.isHidden = false
             isPDFPaneVisible = true
-
+            didExpandWindowForPDFPane = false
             if shouldResizeWindow,
                let window = view.window,
                let targetWindowFrame {
-                beginPaneTransition(editorWidth: targetWindowFrame.width - paneWidth)
-                let settleDelay = window.animationResizeTime(targetWindowFrame) + 0.05
-                window.setFrame(targetWindowFrame, display: true, animate: true)
-                DispatchQueue.main.asyncAfter(deadline: .now() + settleDelay) { [weak self] in
-                    guard let self, self.isPDFPaneVisible else { return }
-                    self.endPaneTransition(paneWidth: self.pdfPaneView.frame.width)
-                }
-            } else {
-                // Fullscreen / full-width (no room to grow) or no window yet:
-                // slide the pane open in place — the editor shrinks, there is
-                // no alternative. Window is static, so view animation is safe.
-                paneTransitionConstraint?.isActive = false
-                paneTransitionConstraint = nil
-                widthConstraint.isActive = true
-                if view.window != nil {
-                    NSAnimationContext.runAnimationGroup { context in
-                        context.duration = 0.26
-                        context.allowsImplicitAnimation = true
-                        widthConstraint.animator().constant = paneWidth
-                        view.superview?.layoutSubtreeIfNeeded()
-                    }
-                } else {
-                    widthConstraint.constant = paneWidth
-                    view.superview?.layoutSubtreeIfNeeded()
-                }
+                window.setFrame(targetWindowFrame, display: false)
+                didExpandWindowForPDFPane = true
             }
+            view.superview?.layoutSubtreeIfNeeded()
             return true
         }
 
@@ -667,42 +615,27 @@ final class PDFReaderPaneController: NSViewController {
 
         exitAnchorPickMode(notifyCancelled: true)
         dismissPDFFindBar(clearQuery: true, restoreFocus: false)
-        let restoreFrame = PDFPaneWindowRestore.targetFrame(
-            savedFrame: prePDFPaneWindowFrame,
-            isNativeFullscreen: view.window?.styleMask.contains(.fullScreen) == true
-        )
-        prePDFPaneWindowFrame = nil
-        isPDFPaneVisible = false
 
-        if let window = view.window, let restoreFrame {
-            // Mirror of the open: editor pinned at its restored width, the
-            // window shrink squeezes only the pane. Teardown waits for the
-            // animation so the document doesn't blank mid-slide; reopening
-            // mid-animation flips isPDFPaneVisible back, voiding the block.
-            beginPaneTransition(editorWidth: restoreFrame.width)
-            let settleDelay = window.animationResizeTime(restoreFrame) + 0.05
-            window.setFrame(restoreFrame, display: true, animate: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + settleDelay) { [weak self] in
-                guard let self, !self.isPDFPaneVisible else { return }
-                self.endPaneTransition(paneWidth: 0)
-                self.pdfPaneView.isHidden = true
-                self.releaseActivePDFContext()
-            }
-        } else {
-            paneTransitionConstraint?.isActive = false
-            paneTransitionConstraint = nil
-            widthConstraint.isActive = true
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.26
-                context.allowsImplicitAnimation = true
-                widthConstraint.animator().constant = 0
-                view.superview?.layoutSubtreeIfNeeded()
-            }, completionHandler: { [weak self] in
-                guard let self, !self.isPDFPaneVisible else { return }
-                self.pdfPaneView.isHidden = true
-                self.releaseActivePDFContext()
-            })
+        // Inverse of the open, computed from the CURRENT frame — never from a
+        // saved one, which goes stale the moment the user resizes anything:
+        // the left edge moves right by the pane's width and the editor keeps
+        // its exact on-screen size and position.
+        let paneWidth = pdfPaneView.frame.width
+        widthConstraint.constant = 0
+        pdfPaneView.isHidden = true
+        isPDFPaneVisible = false
+        if didExpandWindowForPDFPane,
+           let window = view.window,
+           !window.styleMask.contains(.fullScreen),
+           paneWidth > 0 {
+            var frame = window.frame
+            frame.origin.x += paneWidth
+            frame.size.width -= paneWidth
+            window.setFrame(frame, display: false)
         }
+        didExpandWindowForPDFPane = false
+        view.superview?.layoutSubtreeIfNeeded()
+        releaseActivePDFContext()
         return true
     }
 
