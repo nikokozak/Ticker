@@ -23,6 +23,11 @@ enum Prompts {
       passage reads as complete on its own — like an interviewee restating the reporter's
       question ("What causes tides?" → "Tides are caused by…"). Never quote the question
       verbatim, and never open with a bare "Yes/No" that needs the question to make sense.
+    - ALWAYS answer. Never reply with a clarifying question or a menu of options ("do you
+      want a timeline or a summary?") — there is no conversation to ask into; your text IS
+      the document. Commit to the most reasonable reading, note a load-bearing assumption
+      in passing if you must, and give a complete, final answer. The author re-develops the
+      passage if they wanted a different angle.
     - Be concrete and specific. No filler, no hedging.
     - Match the surrounding document's tone and terminology when context is provided.
     """
@@ -47,6 +52,11 @@ enum Prompts {
       passage reads as complete on its own — like an interviewee restating the reporter's
       question ("What causes tides?" → "Tides are caused by…"). Never quote the question
       verbatim, and never open with a bare "Yes/No" that needs the question to make sense.
+    - ALWAYS answer. Never reply with a clarifying question or a menu of options ("do you
+      want a timeline or a summary?") — there is no conversation to ask into; your text IS
+      the document. Commit to the most reasonable reading, note a load-bearing assumption
+      in passing if you must, and give a complete, final answer. The author re-develops the
+      passage if they wanted a different angle.
     - Be concrete and specific. No filler, no hedging.
     - Match the surrounding document's tone and terminology when context is provided.
     """
@@ -61,7 +71,7 @@ enum Prompts {
     """
 
     static let verbAsk = """
-    Answer the question or continue the line of thought, grounded in the provided context. Output only the answer prose. \(verbFormatting)
+    Answer the question or continue the line of thought, grounded in the provided context. Never reply with a clarifying question or a menu of options — your text is inserted into the document, so there is no conversation to ask into. Commit to the most reasonable reading of the query, note a load-bearing assumption in passing if you must, and give a complete, final answer. Output only the answer prose. \(verbFormatting)
     """
 
     static let verbRewrite = """
