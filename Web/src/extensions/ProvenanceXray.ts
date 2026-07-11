@@ -206,18 +206,23 @@ const provenanceXrayPlugin = ViewPlugin.fromClass(class {
  * The popover itself is a React element in StreamEditor, positioned by the
  * same rules as the selection menu. CM's hoverTooltip positions against
  * scrollDOM geometry, which the page-scrolls layout breaks (tooltip pinned
- * to the top-right regardless of pointer). This extension only reports which
- * span is under the pointer.
+ * to the top-right regardless of pointer). This extension only reports what
+ * is under the pointer: onSpanHover fires on EVERY mousemove over a span
+ * (the React side does rest-detection with it — an AI answer is stored as
+ * many sibling fragments, so a pointer traveling toward the popover crosses
+ * other spans and must not retarget it), onSpanHoverEnd on leaving spans.
  */
 export function provenanceXrayExtension(options: ProvenanceXrayOptions): Extension {
-  let lastSpanId: string | null = null;
+  let wasOverSpan = false;
 
   const report = (span: Span | null, pos: number) => {
-    const spanId = span?.spanId ?? null;
-    if (spanId === lastSpanId) return;
-    lastSpanId = spanId;
-    if (span) options.onSpanHover(span, pos);
-    else options.onSpanHoverEnd();
+    if (span) {
+      wasOverSpan = true;
+      options.onSpanHover(span, pos);
+    } else if (wasOverSpan) {
+      wasOverSpan = false;
+      options.onSpanHoverEnd();
+    }
   };
 
   return [

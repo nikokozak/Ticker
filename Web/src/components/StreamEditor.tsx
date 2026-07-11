@@ -1771,14 +1771,14 @@ export function StreamEditor({
   }, [cancelProvenancePopoverHide]);
 
   // Grace period so the pointer can travel from the hovered span into the
-  // popover (and between spans) without the popover vanishing under it.
+  // popover (and across gaps between spans) without it vanishing mid-flight.
   const scheduleProvenancePopoverHide = useCallback(() => {
     cancelProvenancePopoverHide();
     provenanceHideTimerRef.current = window.setTimeout(() => {
       provenanceHideTimerRef.current = null;
       provenanceSpanIdRef.current = null;
       setProvenancePopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
-    }, 240);
+    }, 400);
   }, [cancelProvenancePopoverHide]);
 
   const showProvenancePopover = useCallback((span: Span, anchorPos: number) => {
@@ -2642,7 +2642,12 @@ export function StreamEditor({
     cancelProvenancePopoverHide();
     if (provenanceHoverTimerRef.current !== null) {
       window.clearTimeout(provenanceHoverTimerRef.current);
+      provenanceHoverTimerRef.current = null;
     }
+    // Pointer is over the span whose popover is already showing — keep it.
+    if (provenanceSpanIdRef.current === span.spanId) return;
+    // Rest-detection: this fires per mousemove, so the timer restarts while
+    // the pointer is traveling and only a pointer at rest shows/retargets.
     provenanceHoverTimerRef.current = window.setTimeout(() => {
       provenanceHoverTimerRef.current = null;
       showProvenancePopover(span, pos);
