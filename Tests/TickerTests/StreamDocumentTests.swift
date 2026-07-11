@@ -2570,6 +2570,48 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_ingestServiceStopsRetryingWhenStatusStorageKeepsFailing() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Bounded Status Retry")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Notes.txt",
+                fileType: .text,
+                bookmarkData: Data(),
+                status: .ready,
+                extractedText: "Bounded retry fixture"
+            )
+            try service.saveSource(source)
+
+            let lock = NSLock()
+            var attempts = 0
+            let ingest = IngestService(
+                persistence: service,
+                sourceService: SourceService(persistence: service),
+                chunkingService: ChunkingService(),
+                writeIndexStatus: { _, _ in
+                    lock.lock()
+                    attempts += 1
+                    lock.unlock()
+                    throw TestPDFError.creationFailed
+                }
+            )
+            let failed = expectation(description: "storage failure surfaced")
+            ingest.onStatusChange = { update in
+                if update.status == .failed { failed.fulfill() }
+            }
+
+            ingest.enqueue(source: source)
+            wait(for: [failed], timeout: 2)
+
+            lock.lock()
+            let finalAttempts = attempts
+            lock.unlock()
+            XCTAssertEqual(finalAttempts, 3)
+        }
+    }
+
     func test_savePDFHighlightRoundTripsRects() throws {
         try withTempPersistenceService { service in
             let source = try savePDFSource(in: service)

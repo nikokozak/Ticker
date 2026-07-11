@@ -84,7 +84,7 @@ final class IngestService: @unchecked Sendable {
     }
 
     func cancel(sourceId: UUID? = nil) {
-        stateQueue.async {
+        stateQueue.sync {
             if let sourceId {
                 self.queuedSources.removeAll { source in
                     if source.id == sourceId {
@@ -226,31 +226,17 @@ final class IngestService: @unchecked Sendable {
     }
 
     private func persistCompletionStatus(_ sourceId: UUID, desired: SourceIndexStatus) -> SourceIndexStatus {
-        for _ in 0..<2 {
-            do {
-                try writeIndexStatus(sourceId, desired)
-                return desired
-            } catch {
-                DebugLog.log("IngestService: Failed to persist terminal status (\(DebugLog.errorSummary(error)))")
+        let statuses: [SourceIndexStatus] = desired == .failed ? [.failed] : [desired, .failed]
+        for status in statuses {
+            for _ in 0..<2 {
+                do {
+                    try writeIndexStatus(sourceId, status)
+                    return status
+                } catch {
+                    DebugLog.log("IngestService: Failed to persist terminal status (\(DebugLog.errorSummary(error)))")
+                }
             }
-        }
-
-        do {
-            try writeIndexStatus(sourceId, .failed)
-        } catch {
-            queueFailedStatus(sourceId)
         }
         return .failed
-    }
-
-    private func queueFailedStatus(_ sourceId: UUID) {
-        stateQueue.asyncAfter(deadline: .now() + 1) { [weak self] in
-            guard let self else { return }
-            do {
-                try self.writeIndexStatus(sourceId, .failed)
-            } catch {
-                self.queueFailedStatus(sourceId)
-            }
-        }
     }
 }

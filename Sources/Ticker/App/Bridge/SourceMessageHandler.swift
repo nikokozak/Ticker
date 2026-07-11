@@ -128,6 +128,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 return
             }
             do {
+                ingestService?.cancel(sourceId: id)
                 try sourceService.removeSource(id: id)
                 await bridgeService.send(BridgeMessage(type: "sourceRemoved", payload: ["id": AnyCodable(id.uuidString)]))
             } catch {
