@@ -496,32 +496,6 @@ final class PDFReaderPaneController: NSViewController {
         navigateToHighlight(id: highlightId, page: pageNumber)
     }
 
-    func removeHighlightAnnotations(ids: [String]) {
-        guard !ids.isEmpty,
-              let document = pdfPanePDFView.document else {
-            return
-        }
-
-        let tags = Set(ids.map { id in
-            let normalizedId = UUID(uuidString: id)?.uuidString ?? id
-            return "\(PDFHighlightAnnotationStyle.contentsPrefix)\(normalizedId)"
-        })
-        var didRemove = false
-
-        for index in 0..<document.pageCount {
-            guard let page = document.page(at: index) else { continue }
-            let annotations = page.annotations
-            for annotation in annotations where annotation.contents.map(tags.contains) == true {
-                page.removeAnnotation(annotation)
-                didRemove = true
-            }
-        }
-
-        if didRemove {
-            pdfPanePDFView.needsDisplay = true
-        }
-    }
-
     @discardableResult
     /// No animation, by design. NSWindow frame animation runs on its own
     /// clock and cannot be synchronized with Auto Layout, so every animated
