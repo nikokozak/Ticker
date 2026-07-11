@@ -41,6 +41,12 @@ struct StreamSummary: Identifiable, Codable {
     let previewPrefix: String?
 }
 
+enum StreamTitleResolution: Equatable {
+    case notFound
+    case unique(UUID)
+    case ambiguous
+}
+
 /// Canonical stream editor document (Markdown)
 struct StreamDocument: Codable {
     let streamId: UUID

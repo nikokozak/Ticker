@@ -266,7 +266,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             case .append(let selector, let text):
                 guard let streamId = try resolveTickerStream(selector, persistence: persistence) else {
-                    DebugLog.log("[TickerURL] Append ignored; stream not found")
                     return
                 }
                 let span = ProvenanceSpan(
@@ -298,9 +297,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if try persistence.loadStream(id: id) != nil {
                 return id
             }
+            DebugLog.log("[TickerURL] Append ignored; stream ID not found: \(id.uuidString)")
             return nil
         case .title(let title):
-            return try persistence.loadStreamSummaries().first { $0.title == title }?.id
+            switch try persistence.resolveUniqueStreamTitle(title) {
+            case .unique(let id):
+                return id
+            case .notFound:
+                DebugLog.log("[TickerURL] Append ignored; stream title not found: \(title)")
+                return nil
+            case .ambiguous:
+                DebugLog.log("[TickerURL] Append ignored; duplicate title requires a stream UUID: \(title)")
+                return nil
+            }
         }
     }
 

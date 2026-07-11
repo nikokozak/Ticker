@@ -646,6 +646,22 @@ final class PersistenceService {
         }
     }
 
+    func resolveUniqueStreamTitle(_ title: String) throws -> StreamTitleResolution {
+        try dbQueue.read { db in
+            let ids = try String.fetchAll(
+                db,
+                sql: "SELECT id FROM streams WHERE title = ? ORDER BY updated_at DESC LIMIT 2",
+                arguments: [title]
+            ).compactMap(UUID.init(uuidString:))
+
+            switch ids.count {
+            case 0: return .notFound
+            case 1: return .unique(ids[0])
+            default: return .ambiguous
+            }
+        }
+    }
+
     func loadStream(id: UUID) throws -> Stream? {
         try dbQueue.read { db in
             guard let streamRow = try Row.fetchOne(db, sql: "SELECT * FROM streams WHERE id = ?", arguments: [id.uuidString]) else {

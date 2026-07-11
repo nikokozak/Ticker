@@ -65,6 +65,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- `ticker://append` now refuses ambiguous duplicate stream titles and directs reliable automation to the stream UUID instead of picking an arbitrary match.
 - Search now includes source passages from every stream, including locally searchable sources marked Private for AI.
 - Opening a PDF pane no longer overwrites the saved editor-only window frame; autosave resumes after the pane collapses.
 - Quick Panel setup is now synchronous, deleted stream targets are discarded before saving, editor selection capture has a realistic timeout, and canceled chat turns leave no hidden partial response.

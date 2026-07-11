@@ -635,6 +635,21 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertTrue(gate.owns(requestB))
     }
 
+    func test_streamTitleResolutionRejectsAmbiguousAutomationTarget() throws {
+        try withTempPersistenceService { service in
+            let first = Stream(title: "Duplicate")
+            let second = Stream(title: "Duplicate")
+            let unique = Stream(title: "Unique")
+            try service.saveStream(first)
+            try service.saveStream(second)
+            try service.saveStream(unique)
+
+            XCTAssertEqual(try service.resolveUniqueStreamTitle("Duplicate"), .ambiguous)
+            XCTAssertEqual(try service.resolveUniqueStreamTitle("Unique"), .unique(unique.id))
+            XCTAssertEqual(try service.resolveUniqueStreamTitle("Missing"), .notFound)
+        }
+    }
+
     func test_ephemeralConversationDiscardsIncompleteTurnOnCancel() {
         var conversation = EphemeralConversation(
             isStreaming: true,
