@@ -5,59 +5,72 @@ export interface InlineMarkToggle {
   newSelection: EditorSelection;
 }
 
+/** Symmetric markers ('**', '*', '`') pass a string; asymmetric pairs
+ * (underline's '<u>'/'</u>') pass open/close explicitly. */
+export interface InlineMarkPair {
+  open: string;
+  close: string;
+}
+
+export type InlineMarker = string | InlineMarkPair;
+
+function normalizeMarker(marker: InlineMarker): InlineMarkPair {
+  return typeof marker === 'string' ? { open: marker, close: marker } : marker;
+}
+
 export function toggleInlineMark(
   state: EditorState,
   selection: SelectionRange,
-  marker: string,
+  marker: InlineMarker,
 ): InlineMarkToggle | null {
-  if (!marker || selection.empty) return null;
+  const mark = normalizeMarker(marker);
+  if (!mark.open || !mark.close || selection.empty) return null;
 
   const { from, to } = selection;
   if (state.sliceDoc(from, to).includes('\n')) {
-    return toggleMultilineInlineMark(state, from, to, marker);
+    return toggleMultilineInlineMark(state, from, to, mark);
   }
 
-  return toggleSingleLineInlineMark(state, from, to, marker);
+  return toggleSingleLineInlineMark(state, from, to, mark);
 }
 
 function toggleSingleLineInlineMark(
   state: EditorState,
   from: number,
   to: number,
-  marker: string,
+  mark: InlineMarkPair,
 ): InlineMarkToggle | null {
   const core = trimmedRange(state, from, to);
   if (!core) return null;
 
-  const markerLength = marker.length;
   const selectedText = state.sliceDoc(core.from, core.to);
 
-  if (isExactlyWrapped(selectedText, marker)) {
+  if (isExactlyWrapped(selectedText, mark)) {
     return {
       changes: [
-        { from: core.from, to: core.from + markerLength },
-        { from: core.to - markerLength, to: core.to },
+        { from: core.from, to: core.from + mark.open.length },
+        { from: core.to - mark.close.length, to: core.to },
       ],
-      newSelection: EditorSelection.single(core.from, core.to - markerLength * 2),
+      newSelection: EditorSelection.single(core.from, core.to - mark.open.length - mark.close.length),
     };
   }
 
-  if (hasOutsideMarkers(state, core.from, core.to, marker)) {
+  if (hasOutsideMarkers(state, core.from, core.to, mark)) {
     return {
       changes: [
-        { from: core.from - markerLength, to: core.from },
-        { from: core.to, to: core.to + markerLength },
+        { from: core.from - mark.open.length, to: core.from },
+        { from: core.to, to: core.to + mark.close.length },
       ],
-      newSelection: EditorSelection.single(core.from - markerLength, core.to - markerLength),
+      newSelection: EditorSelection.single(core.from - mark.open.length, core.to - mark.open.length),
     };
   }
 
   return {
     changes: [
-      { from: core.from, insert: marker },
-      { from: core.to, insert: marker },
+      { from: core.from, insert: mark.open },
+      { from: core.to, insert: mark.close },
     ],
-    newSelection: EditorSelection.single(core.from + markerLength, core.to + markerLength),
+    newSelection: EditorSelection.single(core.from + mark.open.length, core.to + mark.open.length),
   };
 }
 
@@ -76,26 +89,26 @@ function toggleMultilineInlineMark(
   state: EditorState,
   from: number,
   to: number,
-  marker: string,
+  mark: InlineMarkPair,
 ): InlineMarkToggle | null {
   const cores = trimmedLineRanges(state, from, to);
   if (cores.length === 0) return null;
 
-  const unwrapActions = cores.map((core) => unwrapActionForRange(state, core, marker));
+  const unwrapActions = cores.map((core) => unwrapActionForRange(state, core, mark));
   if (unwrapActions.every((action): action is UnwrapAction => action !== null)) {
-    return unwrapLineRanges(unwrapActions, marker);
+    return unwrapLineRanges(unwrapActions, mark);
   }
 
   const rangesToWrap = cores.filter((_core, index) => unwrapActions[index] === null);
   if (rangesToWrap.length === 0) return null;
-  return wrapLineRanges(rangesToWrap, marker);
+  return wrapLineRanges(rangesToWrap, mark);
 }
 
-function wrapLineRanges(ranges: TextRange[], marker: string): InlineMarkToggle {
+function wrapLineRanges(ranges: TextRange[], mark: InlineMarkPair): InlineMarkToggle {
   const changes: ChangeSpec[] = [];
   for (const range of ranges) {
-    changes.push({ from: range.from, insert: marker });
-    changes.push({ from: range.to, insert: marker });
+    changes.push({ from: range.from, insert: mark.open });
+    changes.push({ from: range.to, insert: mark.close });
   }
 
   const firstRange = ranges[0];
@@ -109,13 +122,12 @@ function wrapLineRanges(ranges: TextRange[], marker: string): InlineMarkToggle {
   };
 }
 
-function unwrapLineRanges(actions: UnwrapAction[], marker: string): InlineMarkToggle {
-  const markerLength = marker.length;
+function unwrapLineRanges(actions: UnwrapAction[], mark: InlineMarkPair): InlineMarkToggle {
   const changes: ChangeSpec[] = [];
 
   for (const action of actions) {
-    changes.push({ from: action.range.from, to: action.range.from + markerLength });
-    changes.push({ from: action.range.to - markerLength, to: action.range.to });
+    changes.push({ from: action.range.from, to: action.range.from + mark.open.length });
+    changes.push({ from: action.range.to - mark.close.length, to: action.range.to });
   }
 
   const firstAction = actions[0];
@@ -129,23 +141,22 @@ function unwrapLineRanges(actions: UnwrapAction[], marker: string): InlineMarkTo
   };
 }
 
-function unwrapActionForRange(state: EditorState, range: TextRange, marker: string): UnwrapAction | null {
-  const markerLength = marker.length;
+function unwrapActionForRange(state: EditorState, range: TextRange, mark: InlineMarkPair): UnwrapAction | null {
   const selectedText = state.sliceDoc(range.from, range.to);
 
-  if (isExactlyWrapped(selectedText, marker)) {
+  if (isExactlyWrapped(selectedText, mark)) {
     return {
       range,
-      contentFrom: range.from + markerLength,
-      contentTo: range.to - markerLength,
+      contentFrom: range.from + mark.open.length,
+      contentTo: range.to - mark.close.length,
     };
   }
 
-  if (hasOutsideMarkers(state, range.from, range.to, marker)) {
+  if (hasOutsideMarkers(state, range.from, range.to, mark)) {
     return {
       range: {
-        from: range.from - markerLength,
-        to: range.to + markerLength,
+        from: range.from - mark.open.length,
+        to: range.to + mark.close.length,
       },
       contentFrom: range.from,
       contentTo: range.to,
@@ -207,20 +218,19 @@ function mapPositionAcrossDeletions(position: number, changes: ChangeSpec[]): nu
   return mapped;
 }
 
-function isExactlyWrapped(text: string, marker: string): boolean {
-  if (text.length < marker.length * 2) return false;
-  if (marker === '*') {
+function isExactlyWrapped(text: string, mark: InlineMarkPair): boolean {
+  if (text.length < mark.open.length + mark.close.length) return false;
+  if (mark.open === '*' && mark.close === '*') {
     return countLeading(text, '*') % 2 === 1 && countTrailing(text, '*') % 2 === 1;
   }
-  return text.startsWith(marker) && text.endsWith(marker);
+  return text.startsWith(mark.open) && text.endsWith(mark.close);
 }
 
-function hasOutsideMarkers(state: EditorState, from: number, to: number, marker: string): boolean {
-  const markerLength = marker.length;
-  if (from < markerLength || to + markerLength > state.doc.length) return false;
-  if (state.sliceDoc(from - markerLength, from) !== marker) return false;
-  if (state.sliceDoc(to, to + markerLength) !== marker) return false;
-  if (marker === '*') {
+function hasOutsideMarkers(state: EditorState, from: number, to: number, mark: InlineMarkPair): boolean {
+  if (from < mark.open.length || to + mark.close.length > state.doc.length) return false;
+  if (state.sliceDoc(from - mark.open.length, from) !== mark.open) return false;
+  if (state.sliceDoc(to, to + mark.close.length) !== mark.close) return false;
+  if (mark.open === '*' && mark.close === '*') {
     return countRepeatedBefore(state, from, '*') % 2 === 1
       && countRepeatedAfter(state, to, '*') % 2 === 1;
   }

@@ -13,13 +13,21 @@ enum Prompts {
     Rules:
     - Write flowing prose paragraphs. No greetings, no framing ("Here is…", "Certainly"), no
       closing summary, no offers of further help.
-    - Use a heading or a list ONLY when the content is genuinely enumerable (steps, ingredients,
-      API fields). Never use lists as the default shape. Never produce lists of bolded
+    - The document renders Markdown — format so the passage scans well: **bold** the few
+      load-bearing terms, *italicize* genuine emphasis, and break anything longer than a short
+      paragraph into several short ones.
+    - Use a heading or a list when it genuinely organizes the material (steps, ingredients,
+      comparisons, API fields) — never as the default shape, and never as lists of bolded
       term-colon-definition pairs.
     - When responding to a question, fold its substance into your opening sentence so the
       passage reads as complete on its own — like an interviewee restating the reporter's
       question ("What causes tides?" → "Tides are caused by…"). Never quote the question
       verbatim, and never open with a bare "Yes/No" that needs the question to make sense.
+    - ALWAYS answer. Never reply with a clarifying question or a menu of options ("do you
+      want a timeline or a summary?") — there is no conversation to ask into; your text IS
+      the document. Commit to the most reasonable reading, note a load-bearing assumption
+      in passing if you must, and give a complete, final answer. The author re-develops the
+      passage if they wanted a different angle.
     - Be concrete and specific. No filler, no hedging.
     - Match the surrounding document's tone and terminology when context is provided.
     """
@@ -34,23 +42,36 @@ enum Prompts {
     Rules:
     - Write flowing prose paragraphs. No greetings, no framing ("Here is…", "Certainly"), no
       closing summary, no offers of further help.
-    - Use a heading or a list ONLY when the content is genuinely enumerable (steps, ingredients,
-      API fields). Never use lists as the default shape. Never produce lists of bolded
+    - The document renders Markdown — format so the passage scans well: **bold** the few
+      load-bearing terms, *italicize* genuine emphasis, and break anything longer than a short
+      paragraph into several short ones.
+    - Use a heading or a list when it genuinely organizes the material (steps, ingredients,
+      comparisons, API fields) — never as the default shape, and never as lists of bolded
       term-colon-definition pairs.
     - When responding to a question, fold its substance into your opening sentence so the
       passage reads as complete on its own — like an interviewee restating the reporter's
       question ("What causes tides?" → "Tides are caused by…"). Never quote the question
       verbatim, and never open with a bare "Yes/No" that needs the question to make sense.
+    - ALWAYS answer. Never reply with a clarifying question or a menu of options ("do you
+      want a timeline or a summary?") — there is no conversation to ask into; your text IS
+      the document. Commit to the most reasonable reading, note a load-bearing assumption
+      in passing if you must, and give a complete, final answer. The author re-develops the
+      passage if they wanted a different angle.
     - Be concrete and specific. No filler, no hedging.
     - Match the surrounding document's tone and terminology when context is provided.
     """
 
+    /// Appended to document-AI verbs whose answers can run long enough to need shape.
+    static let verbFormatting = """
+    Your output lands in a Markdown document: bold the few load-bearing terms, italicize genuine emphasis, and split long answers into short paragraphs. Use a list or heading only when the material is genuinely enumerable — never lists of bolded term-colon-definition pairs.
+    """
+
     static let verbDevelop = """
-    Develop the following passage into a fuller, clearer version of the same idea. Preserve the author's voice and intent; deepen, do not pad. Output only the developed passage.
+    Develop the following passage into a fuller, clearer version of the same idea. Preserve the author's voice and intent; deepen, do not pad. Output only the developed passage. \(verbFormatting)
     """
 
     static let verbAsk = """
-    Answer the question or continue the line of thought, grounded in the provided context. Output only the answer prose.
+    Answer the question or continue the line of thought, grounded in the provided context. Never reply with a clarifying question or a menu of options — your text is inserted into the document, so there is no conversation to ask into. Commit to the most reasonable reading of the query, note a load-bearing assumption in passing if you must, and give a complete, final answer. Output only the answer prose. \(verbFormatting)
     """
 
     static let verbRewrite = """

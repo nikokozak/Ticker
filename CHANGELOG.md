@@ -5,6 +5,8 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Underline joins bold and italic: ⌘U and a U button in the selection menu (stored as `<u>` in the markdown substrate, rendered with the tags concealed).
+- AI answers now use rudimentary Markdown structure — bolded key terms, short paragraphs, lists and headings where they genuinely organize the material — instead of uniformly flat prose.
 - Source answers now use on-device semantic retrieval alongside lexical matching, improving paraphrase recall while preserving the existing fallback behavior.
 - The Rewrite menu gained "With instructions…": describe how the selection should be rewritten and the AI replaces it accordingly. Re-develop with an edited prompt now actually obeys the prompt (it previously deferred to the fixed "develop" instruction and near-restated the passage).
 - In-editor AI now shows the same pulsing-dots indicator at the exact insertion point while waiting for the first chunk, matching quick-panel dispatches.
@@ -59,6 +61,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- The PDF pane now follows the app's light/dark theme: page margins and pane backgrounds previously stayed light in dark mode, and opening/closing no longer warps the window across the screen — the pane and window frame animate together.
 - The provenance-overlay popover now follows the hovered text and positions like the selection menu; it previously rendered cramped at the top-right of the stream regardless of the pointer.
 - Device-key changes now report disk-write failures in Settings and leave the durable key and in-memory auth state unchanged.
 - Source indexing can no longer remain stuck after terminal status-write failures, and refreshed file bookmarks now persist after stale recovery.

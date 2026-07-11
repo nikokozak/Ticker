@@ -164,8 +164,10 @@ export function buildMarkdownConcealDecorations(view: EditorView, ensureInitialP
   const tree = markdownTreeForDecorations(view, ensureInitialParse);
   const rawLineFrom = view.state.field(revealRawLinksField, false);
   let skipLink: { from: number; to: number } | null = null;
+  let pendingUnderlineOpen: { from: number; to: number } | null = null;
 
   for (const visibleRange of view.visibleRanges) {
+    pendingUnderlineOpen = null;
     tree.iterate({
       from: visibleRange.from,
       to: visibleRange.to,
@@ -230,6 +232,25 @@ export function buildMarkdownConcealDecorations(view: EditorView, ensureInitialP
             }
             if (codeLine.to >= to || codeLine.number >= view.state.doc.lines) break;
             codeLine = view.state.doc.line(codeLine.number + 1);
+          }
+          return;
+        }
+
+        // Underline rides inline HTML (<u>…</u>) — markdown has no syntax for
+        // it. Only PAIRED tags conceal; an unmatched tag stays visibly raw so
+        // it can be seen and deleted.
+        if (node.name === 'HTMLTag') {
+          const tag = view.state.doc.sliceString(node.from, node.to);
+          if (/^<u\s*>$/i.test(tag)) {
+            pendingUnderlineOpen = { from: node.from, to: node.to };
+          } else if (/^<\/u\s*>$/i.test(tag) && pendingUnderlineOpen && pendingUnderlineOpen.to < node.from) {
+            const open = pendingUnderlineOpen;
+            pendingUnderlineOpen = null;
+            const openConceal = concealRange(open.from, open.to);
+            const closeConceal = concealRange(node.from, node.to);
+            if (openConceal) decorations.push(openConceal);
+            decorations.push(Decoration.mark({ class: 'cm-md-underline' }).range(open.to, node.from));
+            if (closeConceal) decorations.push(closeConceal);
           }
           return;
         }

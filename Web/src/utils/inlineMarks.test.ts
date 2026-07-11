@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EditorSelection, EditorState } from '@codemirror/state';
-import { toggleInlineMark } from './inlineMarks';
+import { toggleInlineMark, type InlineMarker } from './inlineMarks';
 
 interface ToggleResult {
   doc: string;
@@ -9,7 +9,7 @@ interface ToggleResult {
   selected: string;
 }
 
-function maybeToggle(doc: string, from: number, to: number, marker: string) {
+function maybeToggle(doc: string, from: number, to: number, marker: InlineMarker) {
   const state = EditorState.create({
     doc,
     selection: EditorSelection.range(from, to),
@@ -17,7 +17,7 @@ function maybeToggle(doc: string, from: number, to: number, marker: string) {
   return toggleInlineMark(state, state.selection.main, marker);
 }
 
-function toggle(doc: string, from: number, to: number, marker: string): ToggleResult {
+function toggle(doc: string, from: number, to: number, marker: InlineMarker): ToggleResult {
   const state = EditorState.create({
     doc,
     selection: EditorSelection.range(from, to),
@@ -126,5 +126,42 @@ describe('toggleInlineMark', () => {
       to: 10,
       selected: 'one \n two',
     });
+  });
+
+  const underline = { open: '<u>', close: '</u>' };
+
+  it('wraps with asymmetric underline markers', () => {
+    expect(toggle('Hello world', 6, 11, underline)).toEqual({
+      doc: 'Hello <u>world</u>',
+      from: 9,
+      to: 14,
+      selected: 'world',
+    });
+  });
+
+  it('unwraps a selection that exactly includes underline markers', () => {
+    expect(toggle('<u>world</u>', 0, 12, underline)).toEqual({
+      doc: 'world',
+      from: 0,
+      to: 5,
+      selected: 'world',
+    });
+  });
+
+  it('unwraps underline markers just outside the selection', () => {
+    expect(toggle('<u>world</u>', 3, 8, underline)).toEqual({
+      doc: 'world',
+      from: 0,
+      to: 5,
+      selected: 'world',
+    });
+  });
+
+  it('round-trips a multi-line underline wrap', () => {
+    const first = toggle('one\ntwo', 0, 7, underline);
+    expect(first.doc).toBe('<u>one</u>\n<u>two</u>');
+
+    const second = toggle(first.doc, first.from, first.to, underline);
+    expect(second.doc).toBe('one\ntwo');
   });
 });

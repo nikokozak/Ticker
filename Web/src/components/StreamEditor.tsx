@@ -40,7 +40,7 @@ import {
   mapPendingPDFAnchorSelection,
   type PendingPDFAnchorSelection,
 } from '../utils/pdfAnchorSelection';
-import { toggleInlineMark } from '../utils/inlineMarks';
+import { toggleInlineMark, type InlineMarker } from '../utils/inlineMarks';
 import { continueBulletListOnEnter, toggleLineFormat, type LineFormat } from '../utils/lineFormats';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 
@@ -129,11 +129,13 @@ interface PDFPaneState {
 }
 
 const SELECTION_MENU_DELAY_MS = 180;
+/** Markdown has no underline syntax; inline HTML is the portable substrate. */
+const UNDERLINE_MARK: InlineMarker = { open: '<u>', close: '</u>' };
 const AI_ERROR_FEEDBACK_MS = 2200;
 const AI_INDEXING_NOTICE_MS = 4000;
 
-/** Keymap command for ⌘B/⌘I: toggle an inline markdown marker on the selection. */
-function toggleInlineMarkCommand(marker: string) {
+/** Keymap command for ⌘B/⌘I/⌘U: toggle an inline markdown marker on the selection. */
+function toggleInlineMarkCommand(marker: InlineMarker) {
   return (view: EditorView): boolean => {
     const edit = toggleInlineMark(view.state, view.state.selection.main, marker);
     if (edit) {
@@ -2331,7 +2333,7 @@ export function StreamEditor({
     setShowPrompt(true);
   }, [addToast, getSelectionContext, hideSelectionMenu, isAiThinking]);
 
-  const handleSelectionFormat = useCallback((marker: string) => {
+  const handleSelectionFormat = useCallback((marker: InlineMarker) => {
     const view = editorViewRef.current;
     if (!view) {
       hideSelectionMenu();
@@ -2714,6 +2716,7 @@ export function StreamEditor({
       { key: 'Enter', run: continueBulletListOnEnter },
       { key: 'Mod-b', run: toggleInlineMarkCommand('**') },
       { key: 'Mod-i', run: toggleInlineMarkCommand('*') },
+      { key: 'Mod-u', run: toggleInlineMarkCommand(UNDERLINE_MARK) },
       ...markdownKeymap,
     ])),
     syntaxHighlighting(markdownHighlightStyle),
@@ -2924,6 +2927,16 @@ export function StreamEditor({
             onClick={() => handleSelectionFormat('*')}
           >
             I
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--format selection-action-button--underline"
+            title="Underline"
+            aria-label="Underline"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => handleSelectionFormat(UNDERLINE_MARK)}
+          >
+            U
           </button>
           <button
             type="button"

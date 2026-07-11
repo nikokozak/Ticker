@@ -2723,27 +2723,36 @@ final class StreamDocumentTests: XCTestCase {
         )
     }
 
-    func test_pdfPaneOpeningLayoutExpandsToVisibleFrameWidthAndSplitsEvenly() throws {
+    func test_pdfPaneOpeningLayoutGrowsLeftwardKeepingEditorSizeAndRightEdge() throws {
+        // Accordion, pane on the LEFT: the window grows leftward by the pane
+        // width — the right edge (the editor) and the editor's 800pt share
+        // stay exactly where they were.
         let layout = PDFPaneOpeningLayout.calculate(
-            currentFrame: CGRect(x: 220, y: 120, width: 900, height: 700),
-            visibleFrame: CGRect(x: 0, y: 25, width: 1440, height: 875),
+            currentFrame: CGRect(x: 800, y: 120, width: 800, height: 700),
+            visibleFrame: CGRect(x: 0, y: 25, width: 1600, height: 875),
             isNativeFullscreen: false
         )
 
-        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: 120, width: 1440, height: 700))
-        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: 120, width: 1600, height: 700))
+        XCTAssertEqual(layout.paneWidth, 800)
+        XCTAssertEqual(layout.targetWindowFrame.width - layout.paneWidth, 800) // editor unchanged
+        XCTAssertEqual(layout.targetWindowFrame.maxX, 1600) // right edge fixed
         XCTAssertTrue(layout.shouldResizeWindow)
     }
 
-    func test_pdfPaneOpeningLayoutClampsHeightAndVerticalPositionInsideVisibleFrame() throws {
+    func test_pdfPaneOpeningLayoutSlidesRightOnlyWhenLeftEdgeClips() throws {
+        // Not enough room to the left: the window slides right just enough to
+        // fit the pane — translating the editor, never resizing it — and
+        // height and vertical position stay untouched.
         let layout = PDFPaneOpeningLayout.calculate(
-            currentFrame: CGRect(x: 220, y: -200, width: 900, height: 900),
+            currentFrame: CGRect(x: 100, y: -200, width: 900, height: 900),
             visibleFrame: CGRect(x: 0, y: 25, width: 1440, height: 800),
             isNativeFullscreen: false
         )
 
-        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: 25, width: 1440, height: 800))
-        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertEqual(layout.targetWindowFrame, CGRect(x: 0, y: -200, width: 1440, height: 900))
+        XCTAssertEqual(layout.paneWidth, 540)
+        XCTAssertEqual(layout.targetWindowFrame.width - layout.paneWidth, 900) // editor unchanged
         XCTAssertTrue(layout.shouldResizeWindow)
     }
 
@@ -2777,7 +2786,7 @@ final class StreamDocumentTests: XCTestCase {
         )
         let maxWidth = PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: visibleFrame.width)
 
-        XCTAssertEqual(layout.paneWidth, 720)
+        XCTAssertEqual(layout.paneWidth, 540)
         XCTAssertGreaterThan(layout.paneWidth, PDFPaneWidthPolicy.minimumPDFPaneWidth)
         XCTAssertLessThan(layout.paneWidth, maxWidth)
     }
@@ -2801,14 +2810,6 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(PDFPaneWidthPolicy.maxAllowedPDFPaneWidth(hostWidth: 260), 260)
         XCTAssertEqual(PDFPaneWidthPolicy.clampPDFPaneWidth(900, hostWidth: 260), 260)
         XCTAssertEqual(PDFPaneWidthPolicy.clampPDFPaneWidth(20, hostWidth: 260), 260)
-    }
-
-    func test_pdfPaneWindowRestoreUsesSavedFrameExceptInFullscreen() throws {
-        let saved = CGRect(x: 120, y: 80, width: 900, height: 700)
-
-        XCTAssertEqual(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: false), saved)
-        XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: saved, isNativeFullscreen: true))
-        XCTAssertNil(PDFPaneWindowRestore.targetFrame(savedFrame: nil, isNativeFullscreen: false))
     }
 
     func test_pdfFindNavigationWrapsNextAndPrevious() throws {

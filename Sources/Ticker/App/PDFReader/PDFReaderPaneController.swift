@@ -130,6 +130,13 @@ struct PDFPaneOpeningLayout: Equatable {
     let paneWidth: CGFloat
     let shouldResizeWindow: Bool
 
+    /// Accordion semantics — the pane lives on the LEFT of the editor. The
+    /// pane opens at its classic size (half the screen, capped by what the
+    /// screen and the editor's minimum allow), the window grows leftward by
+    /// exactly the pane width so the editor keeps its size, and the right
+    /// edge (the editor) stays put unless the left screen edge would clip the
+    /// pane — then the window slides right, translating but never resizing
+    /// the editor. Height and vertical position are never touched.
     static func calculate(
         currentFrame: CGRect,
         visibleFrame: CGRect,
@@ -143,21 +150,25 @@ struct PDFPaneOpeningLayout: Equatable {
             )
         }
 
-        let height = min(currentFrame.height, visibleFrame.height)
-        let minY = visibleFrame.minY
-        let maxY = visibleFrame.maxY - height
-        let y = min(max(currentFrame.origin.y, minY), maxY)
+        let desiredPaneWidth = floor(visibleFrame.width * 0.5)
+        let growth = max(0, visibleFrame.width - currentFrame.width)
+        let rawPaneWidth = max(min(desiredPaneWidth, growth), PDFPaneWidthPolicy.minimumPDFPaneWidth)
+        let targetWidth = min(currentFrame.width + rawPaneWidth, visibleFrame.width)
+        let paneWidth = PDFPaneWidthPolicy.clampPDFPaneWidth(rawPaneWidth, hostWidth: targetWidth)
+
+        let idealX = currentFrame.maxX - targetWidth // right edge fixed
+        let x = min(max(idealX, visibleFrame.minX), visibleFrame.maxX - targetWidth)
         let targetFrame = CGRect(
-            x: visibleFrame.minX,
-            y: y,
-            width: visibleFrame.width,
-            height: height
+            x: x,
+            y: currentFrame.origin.y,
+            width: targetWidth,
+            height: currentFrame.height
         )
 
         return PDFPaneOpeningLayout(
             targetWindowFrame: targetFrame,
-            paneWidth: floor(targetFrame.width * 0.5),
-            shouldResizeWindow: true
+            paneWidth: paneWidth,
+            shouldResizeWindow: targetFrame != currentFrame
         )
     }
 }
@@ -189,12 +200,6 @@ enum PDFPaneWidthPolicy {
         )
         let minValue = min(minimumPDFPaneWidth, maxValue)
         return min(max(proposed, minValue), maxValue)
-    }
-}
-
-enum PDFPaneWindowRestore {
-    static func targetFrame(savedFrame: CGRect?, isNativeFullscreen: Bool) -> CGRect? {
-        isNativeFullscreen ? nil : savedFrame
     }
 }
 
@@ -288,6 +293,18 @@ private final class PDFPaneResizeHandleView: NSView {
     }
 }
 
+/// CALayer colors and PDFView's background are one-shot snapshots, not
+/// appearance-dynamic like control text — they must be re-applied whenever the
+/// effective appearance (settings theme or system) changes.
+private final class PDFPaneAppearanceObservingView: NSView {
+    var onEffectiveAppearanceChange: (() -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onEffectiveAppearanceChange?()
+    }
+}
+
 private final class PDFPaneFindSearchField: NSSearchField {
     var onKeyDown: ((NSEvent) -> Bool)?
 
@@ -313,8 +330,10 @@ final class PDFReaderPaneController: NSViewController {
     var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
     var onClose: (() -> Void)?
 
-    private let pdfPaneView = NSView(frame: .zero)
+    private let pdfPaneView = PDFPaneAppearanceObservingView(frame: .zero)
     private let pdfPaneHeaderView = NSView(frame: .zero)
+    private var paneBackgroundLayerViews: [NSView] = []
+    private var paneSeparatorLayerViews: [NSView] = []
     private let pdfPaneResizeHandle = PDFPaneResizeHandleView(frame: .zero)
     private let pdfPaneTitleField = NSTextField(labelWithString: "")
     private let pdfPaneStatusField = NSTextField(labelWithString: "")
@@ -331,6 +350,9 @@ final class PDFReaderPaneController: NSViewController {
     private let pdfOutlineStackView = NSStackView(frame: .zero)
     private let pdfPanePDFView = PDFView(frame: .zero)
     private var pdfPaneWidthConstraint: NSLayoutConstraint?
+    /// True while the pane's open expanded the window, so close knows to
+    /// give that width back (computed from the current frame, never saved).
+    private var didExpandWindowForPDFPane = false
     private var pdfFindBarHeightConstraint: NSLayoutConstraint?
     private var pdfOutlineWidthConstraint: NSLayoutConstraint?
     private var pdfPaneOutlineButtonWidthConstraint: NSLayoutConstraint?
@@ -341,7 +363,6 @@ final class PDFReaderPaneController: NSViewController {
     private let minimumPDFPaneWidth = PDFPaneWidthPolicy.minimumPDFPaneWidth
     private let minimumEditorPaneWidth = PDFPaneWidthPolicy.minimumEditorPaneWidth
     private var pdfPaneResizeStartWidth: CGFloat = 0
-    private var prePDFPaneWindowFrame: CGRect?
     private var activePDFContext: (streamId: UUID, sourceId: UUID, sourceName: String, fileURL: URL)?
     private var isAnchorPickMode = false
     private var anchorPickMouseMonitor: Any?
@@ -537,6 +558,11 @@ final class PDFReaderPaneController: NSViewController {
     }
 
     @discardableResult
+    /// No animation, by design. NSWindow frame animation runs on its own
+    /// clock and cannot be synchronized with Auto Layout, so every animated
+    /// variant visibly stretched the editor. Instead the window frame and the
+    /// pane width change in the SAME layout pass: one paint, the pane is
+    /// simply there (or gone), and the editor never moves or resizes.
     func setVisible(_ visible: Bool) -> Bool {
         guard let widthConstraint = pdfPaneWidthConstraint else { return false }
 
@@ -552,9 +578,6 @@ final class PDFReaderPaneController: NSViewController {
 
             if let window = view.window {
                 let isFullscreen = window.styleMask.contains(.fullScreen)
-                if prePDFPaneWindowFrame == nil, !isFullscreen {
-                    prePDFPaneWindowFrame = window.frame
-                }
                 let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? window.frame
                 let layout = PDFPaneOpeningLayout.calculate(
                     currentFrame: window.frame,
@@ -568,21 +591,19 @@ final class PDFReaderPaneController: NSViewController {
                 paneWidth = preferredPDFPaneWidth
             }
 
-            guard paneWidth >= minimumPDFPaneWidth else {
-                prePDFPaneWindowFrame = nil
-                return false
-            }
+            guard paneWidth >= minimumPDFPaneWidth else { return false }
 
             widthConstraint.constant = paneWidth
-            view.superview?.layoutSubtreeIfNeeded()
             pdfPaneView.isHidden = false
             isPDFPaneVisible = true
-
+            didExpandWindowForPDFPane = false
             if shouldResizeWindow,
                let window = view.window,
                let targetWindowFrame {
-                window.setFrame(targetWindowFrame, display: true, animate: true)
+                window.setFrame(targetWindowFrame, display: false)
+                didExpandWindowForPDFPane = true
             }
+            view.superview?.layoutSubtreeIfNeeded()
             return true
         }
 
@@ -594,27 +615,55 @@ final class PDFReaderPaneController: NSViewController {
 
         exitAnchorPickMode(notifyCancelled: true)
         dismissPDFFindBar(clearQuery: true, restoreFocus: false)
-        let restoreFrame = PDFPaneWindowRestore.targetFrame(
-            savedFrame: prePDFPaneWindowFrame,
-            isNativeFullscreen: view.window?.styleMask.contains(.fullScreen) == true
-        )
-        prePDFPaneWindowFrame = nil
+
+        // Inverse of the open, computed from the CURRENT frame — never from a
+        // saved one, which goes stale the moment the user resizes anything:
+        // the left edge moves right by the pane's width and the editor keeps
+        // its exact on-screen size and position.
+        let paneWidth = pdfPaneView.frame.width
         widthConstraint.constant = 0
-        view.superview?.layoutSubtreeIfNeeded()
         pdfPaneView.isHidden = true
         isPDFPaneVisible = false
-        if let window = view.window,
-           let restoreFrame {
-            window.setFrame(restoreFrame, display: true, animate: true)
+        if didExpandWindowForPDFPane,
+           let window = view.window,
+           !window.styleMask.contains(.fullScreen),
+           paneWidth > 0 {
+            var frame = window.frame
+            frame.origin.x += paneWidth
+            frame.size.width -= paneWidth
+            window.setFrame(frame, display: false)
         }
+        didExpandWindowForPDFPane = false
+        view.superview?.layoutSubtreeIfNeeded()
         releaseActivePDFContext()
         return true
+    }
+
+    /// Layer backgrounds and PDFKit's margin color snapshot the appearance at
+    /// assignment time — resolve them under the pane's effective appearance and
+    /// re-run on every appearance change (settings theme toggle, system switch).
+    private func applyPDFPaneAppearanceColors() {
+        pdfPaneView.effectiveAppearance.performAsCurrentDrawingAppearance {
+            for view in paneBackgroundLayerViews {
+                view.layer?.backgroundColor = PDFPaneStyle.background.cgColor
+            }
+            for view in paneSeparatorLayerViews {
+                view.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
+            }
+            let resolvedSurface = NSColor(cgColor: PDFPaneStyle.surface.cgColor) ?? PDFPaneStyle.surface
+            pdfPanePDFView.backgroundColor = resolvedSurface
+            pdfOutlineScrollView.backgroundColor = resolvedSurface
+            pdfFindSearchField.backgroundColor = resolvedSurface
+        }
     }
 
     private func configurePDFPane() {
         pdfPaneView.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneView.wantsLayer = true
-        pdfPaneView.layer?.backgroundColor = PDFPaneStyle.background.cgColor
+        paneBackgroundLayerViews.append(pdfPaneView)
+        pdfPaneView.onEffectiveAppearanceChange = { [weak self] in
+            self?.applyPDFPaneAppearanceColors()
+        }
         pdfPaneView.isHidden = true
 
         pdfPaneWidthConstraint = pdfPaneView.widthAnchor.constraint(equalToConstant: 0)
@@ -623,11 +672,11 @@ final class PDFReaderPaneController: NSViewController {
         let divider = NSView(frame: .zero)
         divider.translatesAutoresizingMaskIntoConstraints = false
         divider.wantsLayer = true
-        divider.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
+        paneSeparatorLayerViews.append(divider)
 
         pdfPaneHeaderView.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneHeaderView.wantsLayer = true
-        pdfPaneHeaderView.layer?.backgroundColor = PDFPaneStyle.background.cgColor
+        paneBackgroundLayerViews.append(pdfPaneHeaderView)
         pdfPaneResizeHandle.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneTitleField.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneStatusField.translatesAutoresizingMaskIntoConstraints = false
@@ -723,7 +772,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneCloseButton.setContentHuggingPriority(.required, for: .horizontal)
 
         pdfFindBarView.wantsLayer = true
-        pdfFindBarView.layer?.backgroundColor = PDFPaneStyle.background.cgColor
+        paneBackgroundLayerViews.append(pdfFindBarView)
         pdfFindBarView.isHidden = true
         pdfFindBarView.alphaValue = 0
 
@@ -733,7 +782,6 @@ final class PDFReaderPaneController: NSViewController {
         pdfFindSearchField.controlSize = .small
         pdfFindSearchField.isBordered = false
         pdfFindSearchField.drawsBackground = true
-        pdfFindSearchField.backgroundColor = PDFPaneStyle.surface
         pdfFindSearchField.focusRingType = .none
         pdfFindSearchField.delegate = self
         pdfFindSearchField.sendsSearchStringImmediately = true
@@ -761,7 +809,6 @@ final class PDFReaderPaneController: NSViewController {
         )
 
         pdfOutlineScrollView.drawsBackground = true
-        pdfOutlineScrollView.backgroundColor = PDFPaneStyle.surface
         pdfOutlineScrollView.hasVerticalScroller = true
         pdfOutlineScrollView.hasHorizontalScroller = false
         pdfOutlineScrollView.borderType = .noBorder
@@ -777,7 +824,6 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.displayMode = .singlePageContinuous
         pdfPanePDFView.displayDirection = .vertical
         pdfPanePDFView.displaysAsBook = false
-        pdfPanePDFView.backgroundColor = PDFPaneStyle.surface
         let pageControllerSelector = NSSelectorFromString("usePageViewController:withViewOptions:")
         if pdfPanePDFView.responds(to: pageControllerSelector) {
             pdfPanePDFView.perform(pageControllerSelector, with: NSNumber(value: true), with: nil)
@@ -786,12 +832,14 @@ final class PDFReaderPaneController: NSViewController {
         let headerSeparator = NSView(frame: .zero)
         headerSeparator.translatesAutoresizingMaskIntoConstraints = false
         headerSeparator.wantsLayer = true
-        headerSeparator.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
+        paneSeparatorLayerViews.append(headerSeparator)
 
         let findSeparator = NSView(frame: .zero)
         findSeparator.translatesAutoresizingMaskIntoConstraints = false
         findSeparator.wantsLayer = true
-        findSeparator.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
+        paneSeparatorLayerViews.append(findSeparator)
+
+        applyPDFPaneAppearanceColors()
 
         pdfPaneView.addSubview(divider)
         pdfPaneView.addSubview(pdfPaneResizeHandle)
