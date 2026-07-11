@@ -544,14 +544,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.triggerQuickPanelToggle()
         }
 
-        // Register deprecated screenshot hotkey (Cmd+;).
-        // We keep the binding for discoverability while app-initiated capture is disabled.
-        hotkeyService?.register(config: .screenshot) { [weak self] in
-            Task { @MainActor in
-                self?.handleDeprecatedScreenshotHotkey()
-            }
-        }
-
         // Register Main Window toggle hotkey (Ctrl+Space)
         hotkeyService?.register(config: .mainWindow) { [weak self] in
             Task { @MainActor in
@@ -560,14 +552,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    /// Deprecated until we migrate to a Sequoia-style picker flow.
-    /// Users can still attach screenshots by capturing to clipboard with macOS, then pressing Cmd+L.
-    @MainActor
-    private func handleDeprecatedScreenshotHotkey() {
-        quickPanelManager?.showWithStatusMessage(
-            "Screenshot mode is deprecated. Use macOS screenshot shortcuts, then press Cmd+L."
-        )
-    }
 }
 
 extension AppDelegate: SPUUpdaterDelegate {

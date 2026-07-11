@@ -627,7 +627,6 @@ final class SelectionReaderService {
             panelPosition: position,
             clipboardImage: clipboardImageData,
             clipboardText: clipboardText,
-            isScreenshot: false,
             selectionCaptureOutcome: selectionCaptureOutcome
         )
         DebugLog.log(
@@ -688,9 +687,6 @@ struct QuickPanelContext {
     let clipboardImage: Data?
     /// Recent user-copied clipboard text used as context when no real selection exists.
     let clipboardText: String?
-    /// True only for explicit app-initiated screenshot mode (currently deprecated).
-    /// Clipboard-derived images should keep this false.
-    let isScreenshot: Bool
     /// Outcome of the external-app selection ladder when Quick Panel was invoked.
     let selectionCaptureOutcome: SelectionCaptureOutcome
 
@@ -701,7 +697,6 @@ struct QuickPanelContext {
         panelPosition: CGPoint,
         clipboardImage: Data?,
         clipboardText: String? = nil,
-        isScreenshot: Bool,
         selectionCaptureOutcome: SelectionCaptureOutcome = .notAttempted
     ) {
         self.selectedText = selectedText
@@ -710,7 +705,6 @@ struct QuickPanelContext {
         self.panelPosition = panelPosition
         self.clipboardImage = clipboardImage
         self.clipboardText = clipboardText
-        self.isScreenshot = isScreenshot
         self.selectionCaptureOutcome = selectionCaptureOutcome
     }
 

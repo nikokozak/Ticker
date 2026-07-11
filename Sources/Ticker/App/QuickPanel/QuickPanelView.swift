@@ -163,18 +163,14 @@ struct QuickPanelView: View {
     }
 
     private func attachmentContextBadge(context: QuickPanelContext) -> some View {
-        let isScreenshot = context.isScreenshot
-        let accentColor = isScreenshot ? QuickPanelStyle.success : QuickPanelStyle.textMuted
-        let backgroundColor = isScreenshot ? QuickPanelStyle.success.opacity(0.15) : QuickPanelStyle.accent.opacity(0.1)
-
-        return HStack(spacing: Spacing.xs) {
+        HStack(spacing: Spacing.xs) {
             Image(systemName: context.hasImage ? "photo" : "text.quote")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize))
-                .foregroundColor(accentColor)
+                .foregroundColor(QuickPanelStyle.textMuted)
 
             Text(contextPreview(context))
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
-                .foregroundColor(accentColor)
+                .foregroundColor(QuickPanelStyle.textMuted)
                 .lineLimit(1)
 
             Spacer()
@@ -193,11 +189,7 @@ struct QuickPanelView: View {
         }
         .padding(.horizontal, Spacing.sm)
         .padding(.vertical, Spacing.xs)
-        .background(backgroundColor)
-        .overlay(
-            RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
-                .stroke(isScreenshot ? QuickPanelStyle.success.opacity(0.35) : Color.clear, lineWidth: 1)
-        )
+        .background(QuickPanelStyle.accent.opacity(0.1))
         .cornerRadius(QuickPanelStyle.radius)
     }
 
@@ -213,9 +205,6 @@ struct QuickPanelView: View {
     }
 
     private func contextPreview(_ context: QuickPanelContext) -> String {
-        if context.isScreenshot {
-            return "Screenshot attached"
-        }
         if let text = context.contextText {
             if text.count > 40 {
                 return String(text.prefix(37)) + "..."

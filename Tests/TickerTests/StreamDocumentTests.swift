@@ -66,8 +66,7 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
             activeApp: "Safari",
             windowTitle: "Article *Title*",
             panelPosition: CGPoint(x: 0, y: 0),
-            clipboardImage: nil,
-            isScreenshot: false
+            clipboardImage: nil
         )
 
         let fragment = try QuickPanelMarkdownFormatter.buildFragment(
@@ -95,8 +94,7 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
             windowTitle: "Shell",
             panelPosition: CGPoint(x: 0, y: 0),
             clipboardImage: nil,
-            clipboardText: " Copied line ",
-            isScreenshot: false
+            clipboardText: " Copied line "
         )
 
         let fragment = try QuickPanelMarkdownFormatter.buildFragment(
@@ -123,8 +121,7 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
             activeApp: "Safari",
             windowTitle: "Article *Title*",
             panelPosition: CGPoint(x: 0, y: 0),
-            clipboardImage: nil,
-            isScreenshot: false
+            clipboardImage: nil
         )
         let fragment = try QuickPanelMarkdownFormatter.buildFragment(
             context: context,
@@ -234,8 +231,7 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
             windowTitle: nil,
             panelPosition: CGPoint(x: 0, y: 0),
             clipboardImage: nil,
-            clipboardText: "Copied text",
-            isScreenshot: false
+            clipboardText: "Copied text"
         )
         var suppressedChangeCount: Int? = 7
 

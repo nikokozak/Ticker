@@ -340,57 +340,6 @@ final class QuickPanelManager: ObservableObject {
         )
     }
 
-    /// Show after screenshot capture with status feedback
-    func showAfterScreenshot() {
-        if isVisible {
-            hide()
-        }
-        var capturedContext = selectionService.buildContext()
-
-        // Verify clipboard has image and update context
-        if let imageData = ClipboardService.getImageData() {
-            capturedContext = QuickPanelContext(
-                selectedText: capturedContext.selectedText,
-                activeApp: capturedContext.activeApp,
-                windowTitle: capturedContext.windowTitle,
-                panelPosition: capturedContext.panelPosition,
-                clipboardImage: imageData,
-                clipboardText: capturedContext.clipboardText,
-                isScreenshot: true,
-                selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
-            )
-            // New explicit screenshot capture should always attach, even if a prior clipboard image
-            // was manually dismissed from context.
-            suppressedClipboardImageChangeCount = nil
-        }
-
-        show(with: capturedContext, showAccessibilityWarning: false)
-    }
-
-    /// Show the Quick Panel with an informational status message (no clipboard image attachment).
-    /// Useful for explaining why a screenshot capture couldn't proceed (e.g., missing permissions).
-    func showWithStatusMessage(_ message: String) {
-        if isVisible {
-            hide()
-        }
-
-        let capturedContext = selectionService.buildContext()
-        // Avoid implicitly attaching any pre-existing clipboard image — this mode is informational.
-        let contextWithoutClipboard = QuickPanelContext(
-            selectedText: capturedContext.selectedText,
-            activeApp: capturedContext.activeApp,
-            windowTitle: capturedContext.windowTitle,
-            panelPosition: capturedContext.panelPosition,
-            clipboardImage: nil,
-            clipboardText: nil,
-            isScreenshot: false,
-            selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
-        )
-
-        show(with: contextWithoutClipboard, showAccessibilityWarning: false)
-        showTimedStatusMessage(message, durationNanoseconds: 4_000_000_000)
-    }
-
     /// Show the quick panel with specific context
     private func show(with capturedContext: QuickPanelContext, showAccessibilityWarning: Bool) {
         presentationGeneration += 1
@@ -767,7 +716,6 @@ final class QuickPanelManager: ObservableObject {
             panelPosition: capturedContext.panelPosition,
             clipboardImage: nil,
             clipboardText: capturedContext.clipboardText,
-            isScreenshot: false,
             selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
         )
     }
@@ -804,7 +752,6 @@ final class QuickPanelManager: ObservableObject {
             panelPosition: capturedContext.panelPosition,
             clipboardImage: capturedContext.clipboardImage,
             clipboardText: nil,
-            isScreenshot: capturedContext.isScreenshot,
             selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
         )
     }

@@ -14,12 +14,6 @@ struct HotkeyConfig {
         id: 1
     )
 
-    static let screenshot = HotkeyConfig(
-        keyCode: 41,                    // Semicolon
-        modifiers: UInt32(cmdKey),      // Command
-        id: 2
-    )
-
     static let mainWindow = HotkeyConfig(
         keyCode: 49,                    // Space
         modifiers: UInt32(controlKey),  // Control
