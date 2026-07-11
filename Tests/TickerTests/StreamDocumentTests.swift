@@ -3273,6 +3273,43 @@ final class StreamDocumentTests: XCTestCase {
     }
 
     @MainActor
+    func test_aiOperationRegistryEmitsCorrelatedTransitionsAndStopsAtTerminalState() {
+        let registry = AIOperationRegistry()
+        var changes: [AIOperationRegistry.Operation] = []
+        registry.onChange = { changes.append($0) }
+        let streamId = UUID()
+
+        let requestId = registry.begin(streamId: streamId, verb: "develop", origin: "quickPanel")
+        registry.transition(requestId, to: .preparing)
+        registry.transition(requestId, to: .generating)
+        registry.transition(requestId, to: .generating)
+        registry.transition(requestId, to: .saving)
+        registry.transition(requestId, to: .succeeded)
+        registry.transition(requestId, to: .failed, message: "late callback")
+
+        XCTAssertEqual(changes.map(\.state), [.queued, .preparing, .generating, .saving, .succeeded])
+        XCTAssertEqual(changes.last?.requestId, requestId)
+        XCTAssertEqual(changes.last?.streamId, streamId)
+        XCTAssertEqual(changes.last?.verb, "develop")
+        XCTAssertEqual(changes.last?.origin, "quickPanel")
+    }
+
+    @MainActor
+    func test_aiOperationRegistryCancelsAttachedTask() {
+        let registry = AIOperationRegistry()
+        let requestId = registry.begin(streamId: UUID(), verb: "develop", origin: "quickPanel")
+        let task = Task<Void, Never> {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+        }
+        registry.attach(task, to: requestId)
+
+        registry.cancel(requestId)
+
+        XCTAssertTrue(task.isCancelled)
+        XCTAssertEqual(registry.operations[requestId]?.state, .canceled)
+    }
+
+    @MainActor
     func test_quickPanelAIFragmentAppendSavesExchangeAndSpan() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Quick Panel AI")

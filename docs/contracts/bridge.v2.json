@@ -6,6 +6,10 @@
       "bridgeError": {
         "requiredPayloadKeys": ["originalType", "reason"]
       },
+      "aiOperationChanged": {
+        "requiredPayloadKeys": ["requestId", "streamId", "verb", "origin", "state"],
+        "optionalPayloadKeys": ["message"]
+      },
       "callback": {
         "requiredPayloadKeys": [],
         "requiredCallbackId": true
@@ -66,12 +70,6 @@
       },
       "proxyAuthState": {
         "requiredPayloadKeys": ["state"]
-      },
-      "quickPanelAIFailed": {
-        "requiredPayloadKeys": ["streamId", "message"]
-      },
-      "quickPanelAIStarted": {
-        "requiredPayloadKeys": ["streamId"]
       },
       "settingsLoaded": {
         "requiredPayloadKeys": ["settings"]

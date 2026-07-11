@@ -7,7 +7,7 @@ import { Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type Exten
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
+import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON, type AIOperationState } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { EyeIcon, XIcon } from './icons';
@@ -184,6 +184,20 @@ export function documentAIErrorRecovery(originalText: string, errorCode: string 
 
 export function isStreamDocumentDirty(content: string, lastSavedContent: string): boolean {
   return content !== lastSavedContent;
+}
+
+export function activeAIOperationsAfter(
+  current: ReadonlySet<string>,
+  requestId: string,
+  state: AIOperationState
+): Set<string> {
+  const next = new Set(current);
+  if (state === 'succeeded' || state === 'failed' || state === 'canceled') {
+    next.delete(requestId);
+  } else {
+    next.add(requestId);
+  }
+  return next;
 }
 
 export function buildDocumentAIProvenanceSpan(options: {
@@ -608,7 +622,7 @@ export function StreamEditor({
   const showPromptRef = useRef(showPrompt);
   const isAiThinkingRef = useRef(false);
   const quickPanelPendingRef = useRef(false);
-  const quickPanelPendingTimerRef = useRef<number | null>(null);
+  const quickPanelAIOperationsRef = useRef<Set<string>>(new Set());
   const aiRequestRef = useRef<{
     id: string;
     buffer: string;
@@ -757,10 +771,6 @@ export function StreamEditor({
   }, [clearAiFeedbackTimer]);
 
   const clearQuickPanelPending = useCallback(() => {
-    if (quickPanelPendingTimerRef.current !== null) {
-      window.clearTimeout(quickPanelPendingTimerRef.current);
-      quickPanelPendingTimerRef.current = null;
-    }
     if (!quickPanelPendingRef.current) return;
     quickPanelPendingRef.current = false;
     editorViewRef.current?.dispatch({
@@ -893,6 +903,7 @@ export function StreamEditor({
     setSaveState('saved');
     setAiStatus('idle');
     hideAiFeedback();
+    quickPanelAIOperationsRef.current = new Set();
     clearQuickPanelPending();
     clearSourceIndexNoticeTimer();
     setSourceIndexNotice(null);
@@ -1052,31 +1063,44 @@ export function StreamEditor({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
-      if (message.type === 'quickPanelAIStarted') {
-        if (message.payload?.streamId !== stream.id) return;
+      if (message.type === 'aiOperationChanged') {
+        if (message.payload?.streamId !== stream.id || message.payload?.origin !== 'quickPanel') return;
+        const requestId = message.payload?.requestId;
+        const operationState = message.payload?.state;
+        const validStates: AIOperationState[] = ['queued', 'preparing', 'generating', 'saving', 'succeeded', 'failed', 'canceled'];
+        if (typeof requestId !== 'string' || !validStates.includes(operationState as AIOperationState)) return;
+
+        quickPanelAIOperationsRef.current = activeAIOperationsAfter(
+          quickPanelAIOperationsRef.current,
+          requestId,
+          operationState as AIOperationState
+        );
+
+        if (operationState === 'failed') {
+          const messageText = typeof message.payload?.message === 'string'
+            ? message.payload.message
+            : 'Quick Panel AI request failed. Try again.';
+          addToast(messageText, 'error');
+        }
+
+        if (quickPanelAIOperationsRef.current.size === 0) {
+          clearQuickPanelPending();
+          return;
+        }
+
         const view = editorViewRef.current;
         if (!view) return;
-        quickPanelPendingRef.current = true;
-        view.dispatch({
-          effects: [
-            setPendingAppend.of(true),
-            EditorView.scrollIntoView(view.state.doc.length, { y: 'nearest' }),
-          ],
-          annotations: Transaction.addToHistory.of(false),
-        });
-        showAiWritingFeedback();
-        if (quickPanelPendingTimerRef.current !== null) {
-          window.clearTimeout(quickPanelPendingTimerRef.current);
+        if (!quickPanelPendingRef.current) {
+          quickPanelPendingRef.current = true;
+          view.dispatch({
+            effects: [
+              setPendingAppend.of(true),
+              EditorView.scrollIntoView(view.state.doc.length, { y: 'nearest' }),
+            ],
+            annotations: Transaction.addToHistory.of(false),
+          });
         }
-        // Fallback: proxy idle timeout is 120s; never leave the indicator stranded.
-        quickPanelPendingTimerRef.current = window.setTimeout(clearQuickPanelPending, 130_000);
-        return;
-      }
-
-      if (message.type === 'quickPanelAIFailed') {
-        if (message.payload?.streamId !== stream.id) return;
-        clearQuickPanelPending();
-        addToast('Quick Panel AI answer could not be saved. Try again.', 'error');
+        showAiWritingFeedback();
         return;
       }
 
@@ -1121,10 +1145,6 @@ export function StreamEditor({
           return;
         }
 
-        // An append landing (answer or error fragment) ends any pending
-        // quick-panel AI presence.
-        clearQuickPanelPending();
-
         // Revision gap = this editor missed an earlier append (it wasn't
         // listening when it broadcast). Patching the fragment in and adopting
         // the payload revision would make the next autosave pass the revision
@@ -1158,6 +1178,7 @@ export function StreamEditor({
               addSpans.of(spans),
               addArrivalEffect.of({ id: arrivalId, from: insertion.from, to: insertion.insertedEnd }),
             ],
+            annotations: Transaction.addToHistory.of(false),
           });
           window.setTimeout(() => {
             if (editorViewRef.current === view) {

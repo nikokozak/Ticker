@@ -3,6 +3,7 @@ import type { AIExchangeJSON } from './models';
 
 /** Message structure for Swift ↔ JS communication */
 export const SWIFT_TO_WEB_MESSAGE_TYPES = [
+  'aiOperationChanged',
   'documentAIChunk',
   'documentAIComplete',
   'documentAIError',
@@ -16,8 +17,6 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'imageSaved',
   'marginNotesChanged',
   'proxyAuthState',
-  'quickPanelAIFailed',
-  'quickPanelAIStarted',
   'pdfAnchorPickCancelled',
   'pdfAnchorPlaced',
   'pdfHighlightLinked',
@@ -37,6 +36,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
 ] as const;
 
 export type SwiftToWebMessageType = (typeof SWIFT_TO_WEB_MESSAGE_TYPES)[number];
+export type AIOperationState = 'queued' | 'preparing' | 'generating' | 'saving' | 'succeeded' | 'failed' | 'canceled';
 
 export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'addSource',

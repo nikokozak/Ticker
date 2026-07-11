@@ -3,7 +3,7 @@ import { history, undo } from '@codemirror/commands';
 import { describe, expect, it } from 'vitest';
 import { addSpans, currentSpans, provenanceField } from '../extensions/ProvenanceField';
 import { fnv1a } from '../utils/fnv1a';
-import { buildDocumentAIProvenanceSpan, documentAIErrorRecovery, isStreamDocumentDirty, nextSourceScope } from './StreamEditor';
+import { activeAIOperationsAfter, buildDocumentAIProvenanceSpan, documentAIErrorRecovery, isStreamDocumentDirty, nextSourceScope } from './StreamEditor';
 
 describe('isStreamDocumentDirty', () => {
   it('only reports content that differs from the last successful save', () => {
@@ -33,6 +33,39 @@ describe('documentAIErrorRecovery', () => {
       restoreText: 'original text',
       silent: false,
     });
+  });
+});
+
+describe('activeAIOperationsAfter', () => {
+  it('keeps independent requests active until each reaches a terminal state', () => {
+    let active = activeAIOperationsAfter(new Set(), 'request-1', 'queued');
+    active = activeAIOperationsAfter(active, 'request-2', 'generating');
+    active = activeAIOperationsAfter(active, 'request-1', 'succeeded');
+    expect([...active]).toEqual(['request-2']);
+
+    active = activeAIOperationsAfter(active, 'request-2', 'failed');
+    expect(active.size).toBe(0);
+  });
+});
+
+describe('external append history', () => {
+  it('keeps an external append while undoing the preceding local edit', () => {
+    let state = EditorState.create({ doc: 'Saved', extensions: [history()] });
+    const dispatch = (transaction: Transaction) => {
+      state = transaction.state;
+    };
+
+    state = state.update({
+      changes: { from: state.doc.length, insert: ' local' },
+      annotations: Transaction.addToHistory.of(true),
+    }).state;
+    state = state.update({
+      changes: { from: state.doc.length, insert: '\n\nCaptured' },
+      annotations: Transaction.addToHistory.of(false),
+    }).state;
+
+    expect(undo({ state, dispatch })).toBe(true);
+    expect(state.doc.toString()).toBe('Saved\n\nCaptured');
   });
 });
 

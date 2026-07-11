@@ -130,6 +130,107 @@ struct QuickPanelStatus: Equatable {
     }
 }
 
+// MARK: - Background AI Operations
+
+final class AIOperationRegistry {
+    enum State: String, Equatable {
+        case queued
+        case preparing
+        case generating
+        case saving
+        case succeeded
+        case failed
+        case canceled
+
+        var isTerminal: Bool {
+            self == .succeeded || self == .failed || self == .canceled
+        }
+    }
+
+    struct Operation: Equatable {
+        let requestId: String
+        let streamId: UUID
+        let verb: String
+        let origin: String
+        var state: State
+        var message: String?
+    }
+
+    var onChange: ((Operation) -> Void)?
+
+    private(set) var operations: [String: Operation] = [:]
+    private var tasks: [String: Task<Void, Never>] = [:]
+
+    @discardableResult
+    func begin(streamId: UUID, verb: String, origin: String) -> String {
+        let requestId = UUID().uuidString
+        let operation = Operation(
+            requestId: requestId,
+            streamId: streamId,
+            verb: verb,
+            origin: origin,
+            state: .queued,
+            message: nil
+        )
+        operations[requestId] = operation
+        onChange?(operation)
+        return requestId
+    }
+
+    func attach(_ task: Task<Void, Never>, to requestId: String) {
+        guard let operation = operations[requestId], !operation.state.isTerminal else {
+            task.cancel()
+            return
+        }
+        tasks[requestId] = task
+    }
+
+    func transition(_ requestId: String, to state: State, message: String? = nil) {
+        guard var operation = operations[requestId],
+              canTransition(from: operation.state, to: state) else {
+            return
+        }
+
+        operation.state = state
+        operation.message = message
+        operations[requestId] = operation
+        if state.isTerminal {
+            tasks[requestId] = nil
+        }
+        onChange?(operation)
+    }
+
+    func cancel(_ requestId: String) {
+        tasks[requestId]?.cancel()
+        transition(requestId, to: .canceled)
+    }
+
+    func cancelAll() {
+        for requestId in operations.keys where operations[requestId]?.state.isTerminal == false {
+            cancel(requestId)
+        }
+    }
+
+    private func canTransition(from current: State, to next: State) -> Bool {
+        guard current != next, !current.isTerminal else { return false }
+
+        switch next {
+        case .queued:
+            return false
+        case .preparing:
+            return current == .queued
+        case .generating:
+            return current == .queued || current == .preparing
+        case .saving:
+            return current == .preparing || current == .generating
+        case .succeeded:
+            return current == .saving
+        case .failed, .canceled:
+            return true
+        }
+    }
+}
+
 /// Manages the Quick Panel lifecycle, positioning, and state
 /// Coordinates between services (cursor, selection) and the panel window
 @MainActor
@@ -177,11 +278,11 @@ final class QuickPanelManager: ObservableObject {
     private weak var bridgeService: BridgeService?
     private var assetService: AssetService?
     private weak var orchestrator: AIOrchestrator?
+    private let aiOperations: AIOperationRegistry
 
     // MARK: - Streaming Task
 
     private var streamingTask: Task<Void, Never>?
-    private var documentAITasks: [UUID: Task<Void, Never>] = [:]
     private var statusClearTask: Task<Void, Never>?
     private var saveFeedbackTask: Task<Void, Never>?
     private var streamingGeneration = StreamingGeneration()
@@ -205,18 +306,21 @@ final class QuickPanelManager: ObservableObject {
 
     init(
         persistence: PersistenceService? = nil,
-        bridgeService: BridgeService? = nil
+        bridgeService: BridgeService? = nil,
+        aiOperations: AIOperationRegistry = AIOperationRegistry()
     ) {
         let cursor = CursorPositionService()
         self.cursorService = cursor
         self.selectionService = SelectionReaderService(cursorService: cursor)
         self.persistence = persistence
         self.bridgeService = bridgeService
+        self.aiOperations = aiOperations
+        connectAIOperationsToBridge()
     }
 
     deinit {
         streamingTask?.cancel()
-        documentAITasks.values.forEach { $0.cancel() }
+        aiOperations.cancelAll()
         statusClearTask?.cancel()
         saveFeedbackTask?.cancel()
     }
@@ -232,6 +336,26 @@ final class QuickPanelManager: ObservableObject {
         self.bridgeService = bridgeService
         self.assetService = assetService ?? AssetService()
         self.orchestrator = orchestrator
+        connectAIOperationsToBridge()
+    }
+
+    private func connectAIOperationsToBridge() {
+        aiOperations.onChange = { [weak bridgeService] operation in
+            var payload: [String: AnyCodable] = [
+                "requestId": AnyCodable(operation.requestId),
+                "streamId": AnyCodable(operation.streamId.uuidString),
+                "verb": AnyCodable(operation.verb),
+                "origin": AnyCodable(operation.origin),
+                "state": AnyCodable(operation.state.rawValue)
+            ]
+            if let message = operation.message {
+                payload["message"] = AnyCodable(message)
+            }
+            bridgeService?.send(BridgeMessage(
+                type: "aiOperationChanged",
+                payload: payload
+            ))
+        }
     }
 
     func configure(container: ServiceContainer) {
@@ -819,10 +943,14 @@ final class QuickPanelManager: ObservableObject {
 
             let aiPrompt = triggerDocumentAI ? prompt : nil
             let orchestratorForAI = orchestrator
+            let aiRequestId = aiPrompt.map { _ in
+                aiOperations.begin(streamId: streamId, verb: "develop", origin: "quickPanel")
+            }
             var documentMarkdownForAI: String?
             var aiStartupError: String?
 
-            if aiPrompt != nil {
+            if let aiRequestId {
+                aiOperations.transition(aiRequestId, to: .preparing)
                 if orchestratorForAI == nil {
                     aiStartupError = "AI is not configured"
                 } else {
@@ -838,9 +966,10 @@ final class QuickPanelManager: ObservableObject {
             isLoading = false
             showStreamPickerSaveFeedbackThenHide()
 
-            if let aiPrompt {
+            if let aiPrompt, let aiRequestId {
                 if let orchestratorForAI, let documentMarkdownForAI {
                     startDocumentAI(
+                        requestId: aiRequestId,
                         streamId: streamId,
                         prompt: aiPrompt,
                         documentMarkdown: documentMarkdownForAI,
@@ -848,10 +977,10 @@ final class QuickPanelManager: ObservableObject {
                         orchestrator: orchestratorForAI
                     )
                 } else {
-                    appendQuickPanelAIError(
-                        streamId: streamId,
-                        summary: aiStartupError ?? "AI request could not start",
-                        persistence: persistence
+                    aiOperations.transition(
+                        aiRequestId,
+                        to: .failed,
+                        message: quickPanelAIErrorMessage(summary: aiStartupError ?? "AI request could not start")
                     )
                 }
             }
@@ -999,33 +1128,28 @@ final class QuickPanelManager: ObservableObject {
     }
 
     private func startDocumentAI(
+        requestId: String,
         streamId: UUID,
         prompt: String,
         documentMarkdown: String,
         persistence: PersistenceService,
         orchestrator: AIOrchestrator
     ) {
-        let taskId = UUID()
-        let requestId = taskId.uuidString
         var responseMarkdown = ""
         var selectedModel: String?
 
-        // Tell the editor work is in flight so it can show presence at the
-        // append point. Every terminal path below appends (answer or error
-        // fragment), so streamDocumentAppended doubles as the "done" signal.
-        bridgeService?.send(BridgeMessage(type: "quickPanelAIStarted", payload: [
-            "streamId": AnyCodable(streamId.uuidString)
-        ]))
-
-        documentAITasks[taskId] = Task { [weak self] in
+        let task = Task { [weak self] in
             await orchestrator.route(
                 query: prompt,
                 streamId: nil,
                 priorCells: [],
                 sourceContext: documentMarkdown,
                 includeHeading: false,
-                onChunk: { chunk in
+                onChunk: { [weak self] chunk in
                     responseMarkdown += chunk
+                    Task { @MainActor in
+                        self?.aiOperations.transition(requestId, to: .generating)
+                    }
                 },
                 onComplete: { [weak self] _ in
                     Task { @MainActor in
@@ -1033,13 +1157,14 @@ final class QuickPanelManager: ObservableObject {
 
                         let fragment = responseMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
                         if fragment.isEmpty {
-                            self.appendQuickPanelAIError(
-                                streamId: streamId,
-                                summary: "AI returned an empty response",
-                                persistence: persistence
+                            self.aiOperations.transition(
+                                requestId,
+                                to: .failed,
+                                message: self.quickPanelAIErrorMessage(summary: "AI returned an empty response")
                             )
                         } else {
-                            self.appendQuickPanelAIFragment(
+                            self.aiOperations.transition(requestId, to: .saving)
+                            let didSave = self.appendQuickPanelAIFragment(
                                 streamId: streamId,
                                 fragment: fragment,
                                 persistence: persistence,
@@ -1048,21 +1173,23 @@ final class QuickPanelManager: ObservableObject {
                                 prompt: prompt,
                                 documentMarkdown: documentMarkdown
                             )
+                            self.aiOperations.transition(
+                                requestId,
+                                to: didSave ? .succeeded : .failed,
+                                message: didSave ? nil : "Quick Panel AI answer could not be saved. Try again."
+                            )
                         }
-
-                        self.documentAITasks[taskId] = nil
                     }
                 },
                 onError: { [weak self] error in
                     Task { @MainActor in
                         guard let self else { return }
 
-                        self.appendQuickPanelAIError(
-                            streamId: streamId,
-                            summary: error.localizedDescription,
-                            persistence: persistence
+                        self.aiOperations.transition(
+                            requestId,
+                            to: .failed,
+                            message: self.quickPanelAIErrorMessage(summary: error.localizedDescription)
                         )
-                        self.documentAITasks[taskId] = nil
                     }
                 },
                 onModelSelected: { model in
@@ -1070,8 +1197,10 @@ final class QuickPanelManager: ObservableObject {
                 }
             )
         }
+        aiOperations.attach(task, to: requestId)
     }
 
+    @discardableResult
     func appendQuickPanelAIFragment(
         streamId: UUID,
         fragment: String,
@@ -1083,7 +1212,7 @@ final class QuickPanelManager: ObservableObject {
         userInput: String? = nil,
         sourceManifest: String = "[]",
         responseRaw: String? = nil
-    ) {
+    ) -> Bool {
         do {
             let spans = requestId.map { id in
                 [
@@ -1124,30 +1253,20 @@ final class QuickPanelManager: ObservableObject {
                 spans: result.spans,
                 source: "quickPanelAI"
             )
+            return true
         } catch {
             DebugLog.log("[QuickPanel] Failed to append AI response (\(DebugLog.errorSummary(error)))")
-            bridgeService?.send(BridgeMessage(type: "quickPanelAIFailed", payload: [
-                "streamId": AnyCodable(streamId.uuidString),
-                "message": AnyCodable("Quick Panel AI answer could not be saved. Try again.")
-            ]))
+            return false
         }
     }
 
-    private func appendQuickPanelAIError(streamId: UUID, summary: String, persistence: PersistenceService) {
-        appendQuickPanelAIFragment(
-            streamId: streamId,
-            fragment: quickPanelAIErrorFragment(summary: summary),
-            persistence: persistence
-        )
-    }
-
-    private func quickPanelAIErrorFragment(summary: String) -> String {
+    private func quickPanelAIErrorMessage(summary: String) -> String {
         let compact = summary
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = compact.isEmpty ? "Unknown error" : compact
         let shortened = fallback.count > 180 ? "\(fallback.prefix(177))..." : fallback
-        return "*AI request failed: \(QuickPanelMarkdownFormatter.escapeMarkdownEmphasis(shortened))*"
+        return "AI request failed: \(shortened)"
     }
 
     /// Notify the React frontend about document appends.

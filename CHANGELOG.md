@@ -61,6 +61,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Overlapping Quick Panel AI requests now keep independent activity state, failures no longer write operational text into notes, and external captures no longer occupy local editor Undo history.
 - Source retrieval no longer treats one strong word shared with a multi-word question as sufficient lexical evidence.
 - The PDF pane now follows the app's light/dark theme: page margins and pane backgrounds previously stayed light in dark mode, and opening/closing no longer warps the window across the screen — the pane and window frame animate together.
 - The provenance-overlay popover now follows the hovered text and positions like the selection menu; it previously rendered cramped at the top-right of the stream regardless of the pointer.
