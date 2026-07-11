@@ -62,6 +62,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Image imports now keep immutable unique assets, write atomically, reject oversized inputs before decoding, and prepare AI image context off the main thread.
 - PDF attachments now extract text once in the background instead of blocking the main window and repeating the work during indexing.
 - Literal Markdown entities now stay unchanged when editor context is sent to AI.
 - Stream loading now has correlated failure states, and a database startup failure leaves Settings, diagnostics, and Quit available instead of trapping the app behind loading UI.

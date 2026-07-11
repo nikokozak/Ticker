@@ -1,6 +1,6 @@
 import Foundation
+import ImageIO
 import Vision
-import AppKit
 
 /// Manages file sources: bookmarks, access, and legacy whole-document text extraction.
 final class SourceService {
@@ -155,8 +155,11 @@ final class SourceService {
     }
 
     private func extractImageText(from url: URL) throws -> (text: String, pageCount: Int?) {
-        guard let image = NSImage(contentsOf: url),
-              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        try ImageImportPolicy.validateFileSize(at: url)
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        _ = try ImageImportPolicy.metadata(for: data)
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw SourceError.extractionFailed("Could not load image")
         }
 

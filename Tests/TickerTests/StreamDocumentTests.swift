@@ -1661,6 +1661,55 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertTrue(result.extractedText.contains("--- Page 2 ---"))
     }
 
+    func test_sameNameImageImportsKeepBothAssetsImmutable() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let firstDirectory = root.appendingPathComponent("first", isDirectory: true)
+        let secondDirectory = root.appendingPathComponent("second", isDirectory: true)
+        try fileManager.createDirectory(at: firstDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: secondDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        let firstData = try makePNG(red: 255, green: 0, blue: 0)
+        let secondData = try makePNG(red: 0, green: 0, blue: 255)
+        let firstURL = firstDirectory.appendingPathComponent("image.png")
+        let secondURL = secondDirectory.appendingPathComponent("image.png")
+        try firstData.write(to: firstURL)
+        try secondData.write(to: secondURL)
+
+        let assetService = AssetService(baseDirectory: root.appendingPathComponent("assets", isDirectory: true))
+        let streamId = UUID()
+        let firstPath = try assetService.saveImage(from: firstURL, streamId: streamId)
+        let secondPath = try assetService.saveImage(from: secondURL, streamId: streamId)
+
+        XCTAssertNotEqual(firstPath, secondPath)
+        XCTAssertEqual(try Data(contentsOf: assetService.assetURL(for: firstPath)), firstData)
+        XCTAssertEqual(try Data(contentsOf: assetService.assetURL(for: secondPath)), secondData)
+    }
+
+    func test_imageImportRejectsOversizedBytesAndDimensions() throws {
+        let assetService = AssetService(baseDirectory: FileManager.default.temporaryDirectory)
+
+        XCTAssertThrowsError(
+            try assetService.saveImage(
+                data: Data(count: ImageImportPolicy.maxByteCount + 1),
+                streamId: UUID()
+            )
+        ) { error in
+            XCTAssertEqual(error.localizedDescription, "Images must be 25 MB or smaller.")
+        }
+
+        let tooWide = try makePNG(
+            width: ImageImportPolicy.maxPixelDimension + 1,
+            red: 0,
+            green: 0,
+            blue: 0
+        )
+        XCTAssertThrowsError(try assetService.saveImage(data: tooWide, streamId: UUID())) { error in
+            XCTAssertEqual(error.localizedDescription, "That image's dimensions are too large.")
+        }
+    }
+
     func test_sourceChunksAndFTSRowsAreRemovedWhenSourceIsDeleted() throws {
         try withTempPersistenceServiceAndURL { service, dbURL, _ in
             let source = try savePDFSource(in: service)
@@ -4583,6 +4632,41 @@ final class StreamDocumentTests: XCTestCase {
             throw TestPDFError.creationFailed
         }
         return document
+    }
+
+    private func makePNG(
+        width: Int = 1,
+        red: UInt8,
+        green: UInt8,
+        blue: UInt8
+    ) throws -> Data {
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: width,
+            pixelsHigh: 1,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: width * 4,
+            bitsPerPixel: 32
+        ), let bytes = bitmap.bitmapData else {
+            throw TestPDFError.creationFailed
+        }
+
+        for pixel in 0..<width {
+            let offset = pixel * 4
+            bytes[offset] = red
+            bytes[offset + 1] = green
+            bytes[offset + 2] = blue
+            bytes[offset + 3] = 255
+        }
+
+        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+            throw TestPDFError.creationFailed
+        }
+        return data
     }
 
     private func makePDFData(pages: [String]) throws -> Data {

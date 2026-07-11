@@ -307,8 +307,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
             guard let payload = message.payload,
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue),
-                  let base64Data = payload["data"]?.value as? String,
-                  let imageData = Data(base64Encoded: base64Data) else {
+                  let base64Data = payload["data"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid saveImage payload")
                 let requestId = message.payload?["requestId"]?.value as? String
                 await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveImage payload")
@@ -320,9 +319,13 @@ final class SourceMessageHandler: BridgeMessageHandler {
             }
 
             let requestId = payload["requestId"]?.value as? String
+            let assetService = assetService
 
             do {
-                let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
+                let relativePath = try await Task.detached(priority: .utility) {
+                    let imageData = try ImageImportPolicy.data(fromBase64: base64Data)
+                    return try assetService.saveImage(data: imageData, streamId: streamId)
+                }.value
                 let assetUrl = "ticker-asset:///\(relativePath)"
 
                 await bridgeService.send(BridgeMessage(type: "imageSaved", payload: [

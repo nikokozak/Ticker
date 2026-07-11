@@ -175,7 +175,10 @@ final class AIMessageHandler: BridgeMessageHandler {
             }
 
             let imageURLs = payload["imageURLs"]?.value as? [String] ?? []
-            let imageDataURLs = assetService.assetsToDataURLs(imageURLs)
+            let assetService = assetService
+            let imageDataURLs = await Task.detached(priority: .utility) {
+                assetService.assetsToDataURLs(imageURLs)
+            }.value
             if !imageDataURLs.isEmpty {
                 DebugLog.log("ThinkDocument: Converting \(imageURLs.count) images to data URLs")
             }
