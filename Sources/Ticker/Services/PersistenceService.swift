@@ -607,15 +607,11 @@ final class PersistenceService {
                     s.id, s.title, s.updated_at,
                     (SELECT COUNT(*) FROM sources WHERE stream_id = s.id) as source_count,
                     (SELECT display_name FROM sources WHERE stream_id = s.id ORDER BY added_at LIMIT 1) as source_display_name,
-                    (SELECT COUNT(*) FROM cells WHERE stream_id = s.id) as cell_count,
                     (SELECT COUNT(*) FROM margin_notes WHERE stream_id = s.id AND status = 'open' AND kind = 'question') as open_question_count,
                     LENGTH(d.markdown) as char_count,
                     d.word_count,
                     (LENGTH(d.markdown) - LENGTH(REPLACE(d.markdown, '![', ''))) / 2 as image_count,
-                    COALESCE(
-                        SUBSTR(d.markdown, 1, 2000),
-                        SUBSTR((SELECT content FROM cells WHERE stream_id = s.id ORDER BY position LIMIT 1), 1, 2000)
-                    ) as preview_prefix
+                    SUBSTR(d.markdown, 1, 2000) as preview_prefix
                 FROM streams s
                 LEFT JOIN stream_documents d ON d.stream_id = s.id
                 ORDER BY s.updated_at DESC
@@ -628,7 +624,6 @@ final class PersistenceService {
                     title: row["title"],
                     sourceCount: sourceCount,
                     sourceShortTitle: sourceCount == 1 ? sourceDisplayName.map { SourceShortTitle.derive(displayName: $0) } : nil,
-                    cellCount: row["cell_count"],
                     charCount: row["char_count"] ?? 0,
                     wordCount: row["word_count"] ?? 0,
                     imageCount: row["image_count"] ?? 0,
@@ -824,6 +819,7 @@ final class PersistenceService {
 
     func deleteStream(id: UUID) throws {
         try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM margin_suppressions WHERE stream_id = ?", arguments: [id.uuidString])
             try db.execute(sql: "DELETE FROM streams WHERE id = ?", arguments: [id.uuidString])
         }
     }

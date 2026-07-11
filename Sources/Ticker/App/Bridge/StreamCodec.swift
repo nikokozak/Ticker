@@ -126,7 +126,6 @@ enum StreamCodec {
                     "id": summary.id.uuidString,
                     "title": summary.title,
                     "sourceCount": summary.sourceCount,
-                    "cellCount": summary.cellCount,
                     "charCount": summary.charCount,
                     "wordCount": summary.wordCount,
                     "imageCount": summary.imageCount,

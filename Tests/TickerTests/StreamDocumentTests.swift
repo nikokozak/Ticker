@@ -1485,6 +1485,18 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_deleteStreamDeletesMarginSuppressions() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Disposable Margin")
+            try service.saveStream(stream)
+            try service.insertMarginSuppression(streamId: stream.id, bodyHash: "question-hash")
+
+            try service.deleteStream(id: stream.id)
+
+            XCTAssertEqual(try service.marginSuppressionHashes(streamId: stream.id), [])
+        }
+    }
+
     func test_loadStreamSummariesCountsOnlyOpenQuestions() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Questions")

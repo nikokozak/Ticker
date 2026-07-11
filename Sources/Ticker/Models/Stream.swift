@@ -26,13 +26,12 @@ struct Stream: Identifiable, Codable {
     }
 }
 
-/// Lightweight summary for list views (no cells loaded)
+/// Lightweight summary for list views.
 struct StreamSummary: Identifiable, Codable {
     let id: UUID
     let title: String
     let sourceCount: Int
     let sourceShortTitle: String?
-    let cellCount: Int
     let charCount: Int
     let wordCount: Int
     let imageCount: Int
