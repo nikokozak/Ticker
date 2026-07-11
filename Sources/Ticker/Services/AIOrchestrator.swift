@@ -66,11 +66,16 @@ final class AIOrchestrator {
         }
         if let streamId, let retrievalService {
             do {
-                if let assembledContext = try retrievalService.assembleSourceContext(
-                    query: retrievalQuery ?? query,
-                    streamId: streamId,
-                    scope: sourceScope
-                ) {
+                // ponytail: Keep the proven synchronous retrieval API for search/eval,
+                // but isolate it until query embeddings gain a native async timeout.
+                let retrievalTask = Task.detached(priority: .userInitiated) {
+                    try retrievalService.assembleSourceContext(
+                        query: retrievalQuery ?? query,
+                        streamId: streamId,
+                        scope: sourceScope
+                    )
+                }
+                if let assembledContext = try await retrievalTask.value {
                     contextToUse = assembledContext
                     switch assembledContext.mode {
                     case .passthrough:
