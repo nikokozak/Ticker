@@ -1025,7 +1025,12 @@ final class PersistenceService {
         }
     }
 
-    func appendToStreamDocument(streamId: UUID, fragment: String, spans: [ProvenanceSpan] = []) throws -> AppendResult {
+    func appendToStreamDocument(
+        streamId: UUID,
+        fragment: String,
+        spans: [ProvenanceSpan] = [],
+        exchange: AIExchange? = nil
+    ) throws -> AppendResult {
         try dbQueue.write { db in
             let now = Date().timeIntervalSince1970
             let existingMarkdown: String
@@ -1088,6 +1093,9 @@ final class PersistenceService {
             )
 
             try insertSpans(streamId: streamId, spans: validSpans, db: db)
+            if let exchange {
+                try saveExchange(exchange, db: db)
+            }
 
             return AppendResult(fragment: fragment, isNewDocument: isNewDocument, revision: newRevision, spans: validSpans)
         }
@@ -1134,32 +1142,36 @@ final class PersistenceService {
 
     func saveExchange(_ exchange: AIExchange) throws {
         try dbQueue.write { db in
-            try db.execute(
-                sql: """
-                    INSERT INTO ai_exchanges
-                        (request_id, stream_id, verb, user_input, source_manifest, response_raw, model, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(request_id) DO UPDATE SET
-                        stream_id = excluded.stream_id,
-                        verb = excluded.verb,
-                        user_input = excluded.user_input,
-                        source_manifest = excluded.source_manifest,
-                        response_raw = excluded.response_raw,
-                        model = excluded.model,
-                        created_at = excluded.created_at
-                """,
-                arguments: [
-                    exchange.requestId,
-                    exchange.streamId.uuidString,
-                    exchange.verb,
-                    exchange.userInput,
-                    exchange.sourceManifest,
-                    exchange.responseRaw,
-                    exchange.model,
-                    exchange.createdAt.timeIntervalSince1970
-                ]
-            )
+            try saveExchange(exchange, db: db)
         }
+    }
+
+    private func saveExchange(_ exchange: AIExchange, db: Database) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO ai_exchanges
+                    (request_id, stream_id, verb, user_input, source_manifest, response_raw, model, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(request_id) DO UPDATE SET
+                    stream_id = excluded.stream_id,
+                    verb = excluded.verb,
+                    user_input = excluded.user_input,
+                    source_manifest = excluded.source_manifest,
+                    response_raw = excluded.response_raw,
+                    model = excluded.model,
+                    created_at = excluded.created_at
+            """,
+            arguments: [
+                exchange.requestId,
+                exchange.streamId.uuidString,
+                exchange.verb,
+                exchange.userInput,
+                exchange.sourceManifest,
+                exchange.responseRaw,
+                exchange.model,
+                exchange.createdAt.timeIntervalSince1970
+            ]
+        )
     }
 
     func deleteOrphanExchanges(streamId: UUID) throws {

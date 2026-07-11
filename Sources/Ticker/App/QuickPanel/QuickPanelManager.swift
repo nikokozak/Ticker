@@ -1129,22 +1129,23 @@ final class QuickPanelManager: ObservableObject {
                     )
                 ]
             } ?? []
-            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment, spans: spans)
-            if let requestId {
-                do {
-                    try persistence.saveExchange(AIExchange(
-                        requestId: requestId,
-                        streamId: streamId,
-                        verb: "develop",
-                        userInput: userInput ?? "Selection:\n\(documentMarkdown ?? "")\n\nPrompt:\n\(prompt ?? "")",
-                        sourceManifest: sourceManifest,
-                        responseRaw: responseRaw ?? fragment,
-                        model: model
-                    ))
-                } catch {
-                    DebugLog.log("[QuickPanel] Failed to save AI exchange (\(DebugLog.errorSummary(error)))")
-                }
+            let exchange = requestId.map {
+                AIExchange(
+                    requestId: $0,
+                    streamId: streamId,
+                    verb: "develop",
+                    userInput: userInput ?? "Selection:\n\(documentMarkdown ?? "")\n\nPrompt:\n\(prompt ?? "")",
+                    sourceManifest: sourceManifest,
+                    responseRaw: responseRaw ?? fragment,
+                    model: model
+                )
             }
+            let result = try persistence.appendToStreamDocument(
+                streamId: streamId,
+                fragment: fragment,
+                spans: spans,
+                exchange: exchange
+            )
             notifyFrontend(
                 streamId: streamId,
                 fragment: result.fragment,

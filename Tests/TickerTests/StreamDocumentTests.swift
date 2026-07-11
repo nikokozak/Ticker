@@ -3294,6 +3294,43 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_appendToStreamDocumentRollsBackAnswerAndSpanWhenExchangeFails() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Atomic AI Append")
+            try service.saveStream(stream)
+            _ = try service.saveStreamDocument(streamId: stream.id, markdown: "Before")
+            let span = ProvenanceSpan(
+                streamId: stream.id,
+                start: 0,
+                end: UTF16Offsets.utf16Length("AI answer"),
+                origin: "ai",
+                requestId: "atomic-request",
+                textHash: FNV1a.hash("AI answer")
+            )
+            let exchange = AIExchange(
+                requestId: "atomic-request",
+                streamId: UUID(),
+                verb: "develop",
+                userInput: "Prompt",
+                sourceManifest: "[]",
+                responseRaw: "AI answer"
+            )
+
+            XCTAssertThrowsError(try service.appendToStreamDocument(
+                streamId: stream.id,
+                fragment: "AI answer",
+                spans: [span],
+                exchange: exchange
+            ))
+
+            let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(document.markdown, "Before")
+            XCTAssertEqual(document.revision, 1)
+            XCTAssertTrue(try service.loadSpans(streamId: stream.id).isEmpty)
+            XCTAssertNil(try service.loadExchange(requestId: "atomic-request"))
+        }
+    }
+
     @MainActor
     func test_aiOperationRegistryEmitsCorrelatedTransitionsAndStopsAtTerminalState() {
         let registry = AIOperationRegistry()
