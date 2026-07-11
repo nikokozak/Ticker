@@ -95,7 +95,6 @@ enum QuickPanelStatusAction: Equatable {
 struct QuickPanelStatus: Equatable {
     enum Tone: Equatable {
         case info
-        case success
         case warning
     }
 
@@ -1370,7 +1369,6 @@ enum QuickPanelMarkdownFormatter {
 enum QuickPanelError: Error, LocalizedError {
     case persistenceNotConfigured
     case assetServiceNotConfigured
-    case noActiveStream
 
     var errorDescription: String? {
         switch self {
@@ -1378,8 +1376,6 @@ enum QuickPanelError: Error, LocalizedError {
             return "Database not configured"
         case .assetServiceNotConfigured:
             return "Asset storage not configured"
-        case .noActiveStream:
-            return "No active stream"
         }
     }
 }
@@ -1388,5 +1384,4 @@ enum QuickPanelError: Error, LocalizedError {
 
 extension Notification.Name {
     static let quickPanelDidShow = Notification.Name("QuickPanelDidShow")
-    static let quickPanelDidHide = Notification.Name("QuickPanelDidHide")
 }

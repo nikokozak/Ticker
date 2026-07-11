@@ -534,63 +534,6 @@ body {
   background: var(--accent-soft);
 }
 
-/* Export menu */
-.export-menu-container {
-  position: relative;
-}
-
-.export-stream-button {
-  background: transparent;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-tertiary);
-  padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  transition: all var(--duration-fast) ease;
-}
-
-.export-stream-button:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-  background: var(--accent-soft);
-}
-
-.export-menu-dropdown {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: var(--spacing-xs);
-  background: var(--surface-raised);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--overlay-shadow);
-  z-index: 100;
-  min-width: 160px;
-  overflow: hidden;
-}
-
-.export-menu-item {
-  display: block;
-  width: 100%;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border: none;
-  background: transparent;
-  color: var(--color-text);
-  font-size: var(--font-size-sm);
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease;
-}
-
-.export-menu-item:hover {
-  background: var(--color-surface-hover);
-}
-
-.export-menu-item:not(:last-child) {
-  border-bottom: 1px solid var(--color-border);
-}
-
 /* Shared native modal behavior */
 .modal-dialog {
   color: inherit;
