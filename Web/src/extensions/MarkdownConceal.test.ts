@@ -82,6 +82,23 @@ describe('MarkdownConceal static concealment', () => {
     expect(concealRanges(buildMarkdownConcealDecorations(viewFor(back), true), doc.length).length).toBeGreaterThan(0);
   });
 
+  it('conceals paired underline tags but leaves an unmatched tag raw', () => {
+    const doc = 'a <u>keyword</u> and a stray <u> here';
+    const state = stateWithSelection(doc, 0);
+    const ranges = concealRanges(buildMarkdownConcealDecorations(viewFor(state), true), doc.length);
+
+    const openFrom = doc.indexOf('<u>');
+    const closeFrom = doc.indexOf('</u>');
+    const strayFrom = doc.indexOf('<u> here');
+    // Paired tags conceal, content between gets the underline mark, stray tag stays raw.
+    expect(ranges).toEqual([
+      [openFrom, openFrom + 3],
+      [openFrom + 3, closeFrom], // cm-md-underline mark over 'keyword'
+      [closeFrom, closeFrom + 4],
+    ]);
+    expect(ranges.some(([from]) => from === strayFrom)).toBe(false);
+  });
+
   it('leaves chip-eligible http links to the chip layer but conceals complete ticker-pdf links', () => {
     const doc = '[Safari](https://apple.com) and [Book p.3](ticker-pdf://abc?page=3)';
     const state = stateWithSelection(doc, doc.length);
