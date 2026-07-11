@@ -317,6 +317,7 @@ final class PDFReaderPaneController: NSViewController {
     /// True while the pane's open expanded the window, so close knows to
     /// give that width back (computed from the current frame, never saved).
     private var didExpandWindowForPDFPane = false
+    private var suspendedFrameAutosaveName: String?
     private var pdfFindBarHeightConstraint: NSLayoutConstraint?
     private var pdfOutlineWidthConstraint: NSLayoutConstraint?
     private var pdfPaneOutlineButtonWidthConstraint: NSLayoutConstraint?
@@ -564,6 +565,7 @@ final class PDFReaderPaneController: NSViewController {
             if shouldResizeWindow,
                let window = view.window,
                let targetWindowFrame {
+                suspendFrameAutosave(for: window)
                 window.setFrame(targetWindowFrame, display: false)
                 didExpandWindowForPDFPane = true
             }
@@ -572,6 +574,9 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         guard isPDFPaneVisible else {
+            if let window = view.window {
+                resumeFrameAutosave(for: window)
+            }
             exitAnchorPickMode(notifyCancelled: true)
             releaseActivePDFContext()
             return true
@@ -597,10 +602,28 @@ final class PDFReaderPaneController: NSViewController {
             frame.size.width -= paneWidth
             window.setFrame(frame, display: false)
         }
+        if let window = view.window {
+            resumeFrameAutosave(for: window)
+        }
         didExpandWindowForPDFPane = false
         view.superview?.layoutSubtreeIfNeeded()
         releaseActivePDFContext()
         return true
+    }
+
+    private func suspendFrameAutosave(for window: NSWindow) {
+        guard suspendedFrameAutosaveName == nil, !window.frameAutosaveName.isEmpty else { return }
+        suspendedFrameAutosaveName = window.frameAutosaveName
+        _ = window.setFrameAutosaveName("")
+    }
+
+    private func resumeFrameAutosave(for window: NSWindow) {
+        guard let name = suspendedFrameAutosaveName else { return }
+        _ = window.setFrameAutosaveName(name)
+        if !window.styleMask.contains(.fullScreen) {
+            window.saveFrame(usingName: name)
+        }
+        suspendedFrameAutosaveName = nil
     }
 
     /// Layer backgrounds and PDFKit's margin color snapshot the appearance at

@@ -65,6 +65,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Opening a PDF pane no longer overwrites the saved editor-only window frame; autosave resumes after the pane collapses.
 - Quick Panel setup is now synchronous, deleted stream targets are discarded before saving, editor selection capture has a realistic timeout, and canceled chat turns leave no hidden partial response.
 - Source-backed AI now performs local retrieval outside the main actor, keeping the window responsive during semantic query waits.
 - Image imports now keep immutable unique assets, write atomically, reject oversized inputs before decoding, and prepare AI image context off the main thread.
