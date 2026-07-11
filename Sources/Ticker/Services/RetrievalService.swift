@@ -48,12 +48,14 @@ final class RetrievalService {
             return []
         }
         let relevanceCutoff = Self.relevanceCutoff(tokenCount: ftsQuery.tokenCount)
+        let coverageTerms = applyThreshold && ftsQuery.terms.count >= 2 ? ftsQuery.terms : nil
 
         let chunks = try persistence.searchSourceChunks(
             matching: ftsQuery.matchExpression,
             streamId: streamId,
             limit: Self.topK,
-            excludeAIPrivateSources: excludeAIPrivateSources
+            excludeAIPrivateSources: excludeAIPrivateSources,
+            requiringAtLeastTwoOf: coverageTerms
         )
 
         let bm25Result: [RetrievedChunk]
@@ -238,7 +240,8 @@ final class RetrievalService {
 
         return SanitizedFTSQuery(
             matchExpression: matchExpression,
-            tokenCount: uniqueTokens.count
+            tokenCount: uniqueTokens.count,
+            terms: uniqueTokens
         )
     }
 
@@ -286,6 +289,7 @@ struct RetrievalOperatingPoint: Decodable {
 struct SanitizedFTSQuery {
     let matchExpression: String
     let tokenCount: Int
+    let terms: [String]
 }
 
 struct SourceContext {

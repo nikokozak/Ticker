@@ -1,6 +1,6 @@
 {
  "version": 1,
- "notes": "Seed set (governor-curated 2026-07-10). Corpus chunks extracted verbatim from real indexed sources except the synthetic lease class. Expected labels are judgments — refine alongside R3.1, never to make a failing metric pass. corpusFilter (chunk-id prefixes) scopes a case to a stream-shaped corpus subset; food-adjacent negatives run against a food-free stream, matching per-stream production retrieval.",
+ "notes": "Seed set (governor-curated 2026-07-10). Corpus chunks extracted verbatim from real indexed sources except synthetic lease and term-coverage classes. Expected labels are judgments — refine alongside R3.1, never to make a failing metric pass. corpusFilter scopes a case to a stream-shaped corpus subset. copies creates BM25-only corpus padding without bloating this file. bm25Expected documents intentional lexical/semantic mode differences; it is not a known-failure quarantine.",
  "corpus": [
   {
    "id": "forth-8",
@@ -201,6 +201,113 @@
    "pageEnd": 2,
    "sectionPath": "",
    "text": "RIGHT OF ENTRY. Lessor reserves the right to enter the premises at reasonable times to inspect the same, to make necessary repairs or improvements, or to show the premises to prospective tenants or purchasers, provided that Lessor shall, except in cases of emergency, give Lessee no less than twenty-four (24) hours' notice of intent to enter."
+  },
+  {
+   "id": "coverage-padding",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 1,
+   "pageEnd": 1,
+   "sectionPath": "",
+   "text": "unrelated filler document",
+   "copies": 1000
+  },
+  {
+   "id": "coverage-alpha-padding",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 2,
+   "pageEnd": 2,
+   "sectionPath": "",
+   "text": "sharedalpha filler",
+   "copies": 50
+  },
+  {
+   "id": "coverage-beta-padding",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 3,
+   "pageEnd": 3,
+   "sectionPath": "",
+   "text": "sharedbeta filler",
+   "copies": 50
+  },
+  {
+   "id": "coverage-rare-0",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 10,
+   "pageEnd": 10,
+   "sectionPath": "",
+   "text": "rareterm0 rareterm0 rareterm0 rareterm0 rareterm0 rareterm0 rareterm0 rareterm0"
+  },
+  {
+   "id": "coverage-rare-1",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 11,
+   "pageEnd": 11,
+   "sectionPath": "",
+   "text": "rareterm1 rareterm1 rareterm1 rareterm1 rareterm1 rareterm1 rareterm1 rareterm1"
+  },
+  {
+   "id": "coverage-rare-2",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 12,
+   "pageEnd": 12,
+   "sectionPath": "",
+   "text": "rareterm2 rareterm2 rareterm2 rareterm2 rareterm2 rareterm2 rareterm2 rareterm2"
+  },
+  {
+   "id": "coverage-rare-3",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 13,
+   "pageEnd": 13,
+   "sectionPath": "",
+   "text": "rareterm3 rareterm3 rareterm3 rareterm3 rareterm3 rareterm3 rareterm3 rareterm3"
+  },
+  {
+   "id": "coverage-rare-4",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 14,
+   "pageEnd": 14,
+   "sectionPath": "",
+   "text": "rareterm4 rareterm4 rareterm4 rareterm4 rareterm4 rareterm4 rareterm4 rareterm4"
+  },
+  {
+   "id": "coverage-rare-5",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 15,
+   "pageEnd": 15,
+   "sectionPath": "",
+   "text": "rareterm5 rareterm5 rareterm5 rareterm5 rareterm5 rareterm5 rareterm5 rareterm5"
+  },
+  {
+   "id": "coverage-rare-6",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 16,
+   "pageEnd": 16,
+   "sectionPath": "",
+   "text": "rareterm6 rareterm6 rareterm6 rareterm6 rareterm6 rareterm6 rareterm6 rareterm6"
+  },
+  {
+   "id": "coverage-rare-7",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 17,
+   "pageEnd": 17,
+   "sectionPath": "",
+   "text": "rareterm7 rareterm7 rareterm7 rareterm7 rareterm7 rareterm7 rareterm7 rareterm7"
+  },
+  {
+   "id": "coverage-valid",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 20,
+   "pageEnd": 20,
+   "sectionPath": "",
+   "text": "sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta sharedalpha sharedbeta"
+  },
+  {
+   "id": "coverage-repeated",
+   "sourceName": "Term Coverage (synthetic)",
+   "pageStart": 21,
+   "pageEnd": 21,
+   "sectionPath": "",
+   "text": "A maintenance log says a worn gasket caused caused caused caused caused caused caused caused caused caused caused caused caused caused caused caused a temporary pressure fluctuation in a pump."
   }
  ],
  "cases": [
@@ -297,7 +404,8 @@
    "query": "who pays when the heating breaks",
    "expected": [
     "lease-repairs"
-   ]
+   ],
+   "bm25Expected": []
   },
   {
    "id": "para-lease-privacy",
@@ -305,6 +413,18 @@
    "query": "can the owner just walk into my place whenever",
    "expected": [
     "lease-entry"
+   ]
+  },
+  {
+   "id": "para-lease-heating-single-overlap",
+   "class": "paraphrase",
+   "query": "who has to cover the bill if heating stops working",
+   "expected": [
+    "lease-repairs"
+   ],
+   "bm25Expected": [],
+   "corpusFilter": [
+    "lease"
    ]
   },
   {
@@ -450,8 +570,83 @@
    "id": "neg-history",
    "class": "negative",
    "query": "what caused the fall of the roman empire",
+   "expected": []
+  },
+  {
+   "id": "neg-history-duplicate-term",
+   "class": "negative",
+   "query": "what caused caused caused the fall of the roman empire",
    "expected": [],
-   "knownFailure": "bm25-lexical-leak: single-word overlap (caused) retrieves lease-deposit in BM25 baseline; pre-existing, tracked for a cutoff-tuning round, not an R3 regression"
+   "corpusFilter": [
+    "lease"
+   ]
+  },
+  {
+   "id": "neg-constantinople-caused",
+   "class": "negative",
+   "query": "what caused the fall of constantinople",
+   "expected": [],
+   "corpusFilter": [
+    "lease"
+   ]
+  },
+  {
+   "id": "neg-asteroid-damages",
+   "class": "negative",
+   "query": "which asteroid damages ended the cretaceous period",
+   "expected": [],
+   "corpusFilter": [
+    "lease"
+   ]
+  },
+  {
+   "id": "neg-philosophy-ordinary",
+   "class": "negative",
+   "query": "when did ordinary language philosophy begin",
+   "expected": [],
+   "corpusFilter": [
+    "lease"
+   ]
+  },
+  {
+   "id": "neg-rare-term-repeated",
+   "class": "negative",
+   "query": "what caused the fall of the roman empire",
+   "expected": [],
+   "corpusFilter": [
+    "coverage-"
+   ]
+  },
+  {
+   "id": "neg-long-paragraph-one-term",
+   "class": "negative",
+   "query": "explain what caused the roman empire to collapse across politics religion agriculture trade migration warfare law economics culture geography and diplomacy",
+   "expected": [],
+   "corpusFilter": [
+    "coverage-"
+   ]
+  },
+  {
+   "id": "lex-coverage-before-top-eight",
+   "class": "lexical",
+   "query": "rareterm0 rareterm1 rareterm2 rareterm3 rareterm4 rareterm5 rareterm6 rareterm7 sharedalpha sharedbeta",
+   "expected": [
+    "coverage-valid"
+   ],
+   "corpusFilter": [
+    "coverage-"
+   ]
+  },
+  {
+   "id": "lex-long-paragraph-two-terms",
+   "class": "lexical",
+   "query": "explain sharedalpha sharedbeta across politics religion agriculture trade migration warfare law economics culture geography and diplomacy",
+   "expected": [
+    "coverage-valid"
+   ],
+   "corpusFilter": [
+    "coverage-"
+   ]
   }
  ]
 }

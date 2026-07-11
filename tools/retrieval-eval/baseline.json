@@ -120,12 +120,12 @@
     {
       "class" : "paraphrase",
       "expected" : [
-        "lease-repairs"
+
       ],
       "id" : "para-lease-broken",
       "recall" : 1,
       "retrieved" : [
-        "lease-repairs"
+
       ]
     },
     {
@@ -135,6 +135,17 @@
       ],
       "id" : "para-lease-privacy",
       "recall" : 0,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "paraphrase",
+      "expected" : [
+
+      ],
+      "id" : "para-lease-heating-single-overlap",
+      "recall" : 1,
       "retrieved" : [
 
       ]
@@ -362,31 +373,119 @@
 
       ],
       "id" : "neg-history",
-      "recall" : 0,
+      "recall" : 1,
       "retrieved" : [
-        "lease-deposit"
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-history-duplicate-term",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-constantinople-caused",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-asteroid-damages",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-philosophy-ordinary",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-rare-term-repeated",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "negative",
+      "expected" : [
+
+      ],
+      "id" : "neg-long-paragraph-one-term",
+      "recall" : 1,
+      "retrieved" : [
+
+      ]
+    },
+    {
+      "class" : "lexical",
+      "expected" : [
+        "coverage-valid"
+      ],
+      "id" : "lex-coverage-before-top-eight",
+      "recall" : 1,
+      "retrieved" : [
+        "coverage-valid"
+      ]
+    },
+    {
+      "class" : "lexical",
+      "expected" : [
+        "coverage-valid"
+      ],
+      "id" : "lex-long-paragraph-two-terms",
+      "recall" : 1,
+      "retrieved" : [
+        "coverage-valid"
       ]
     }
   ],
   "metrics" : {
     "lexical" : {
-      "cases" : 6,
+      "cases" : 8,
       "recallAt8" : 1
     },
     "negative" : {
-      "cases" : 13,
-      "recallAt8" : 0.9230769230769231
+      "cases" : 19,
+      "recallAt8" : 1
     },
     "overall" : {
-      "cases" : 32,
-      "recallAt8" : 0.640625
+      "cases" : 41,
+      "recallAt8" : 0.7439024390243902
     },
     "paraphrase" : {
-      "cases" : 13,
-      "recallAt8" : 0.19230769230769232
+      "cases" : 14,
+      "recallAt8" : 0.25
     }
   },
   "mode" : "bm25",
-  "negativeFalseRetrievalRate" : 0.07692307692307693,
+  "negativeFalseRetrievalRate" : 0,
   "version" : 1
 }
