@@ -20,7 +20,7 @@ import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetE
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
 import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
-import { canRedevelopSpan, provenanceXrayExtension } from '../extensions/ProvenanceXray';
+import { canRedevelopSpan, originLine, provenanceXrayExtension, setProvenanceXrayVisible, type ProvenanceXrayOptions } from '../extensions/ProvenanceXray';
 import { pendingAppendField, setPendingAppend } from '../extensions/PendingAppend';
 import {
   marginNotesField,
@@ -98,6 +98,18 @@ interface LinkPopoverState {
   labelFrom: number;
   label: string;
   url: string;
+  menuWidth?: number;
+  menuHeight?: number;
+}
+
+interface ProvenancePopoverState {
+  visible: boolean;
+  left: number;
+  top: number;
+  anchorPos: number;
+  span: Span | null;
+  exchange: AIExchangeJSON | null;
+  exchangeStatus: 'idle' | 'loading' | 'loaded' | 'missing';
   menuWidth?: number;
   menuHeight?: number;
 }
@@ -263,6 +275,13 @@ const clickToDocumentEndExtension: Extension = EditorView.domEventHandlers({
   mousedown: (event, view) => {
     if (event.button !== 0 || event.defaultPrevented) return false;
     if (!(event.target instanceof Node) || !view.scrollDOM.contains(event.target)) return false;
+
+    // A precise hit on rendered content vetoes the jump outright. The
+    // estimated height map under-measures long documents (this editor's
+    // page-scrolls layout keeps scrollDOM.scrollTop at 0), so the
+    // coords-based check below can misclassify mid-document clicks as
+    // "past the end" — jumping the viewport and seeding phantom selections.
+    if (view.posAtCoords({ x: event.clientX, y: event.clientY }) !== null) return false;
 
     const endCoords = view.coordsAtPos(view.state.doc.length, 1);
     if (!endCoords) return false;
@@ -541,6 +560,15 @@ export function StreamEditor({
     label: '',
     url: '',
   });
+  const [provenancePopover, setProvenancePopover] = useState<ProvenancePopoverState>({
+    visible: false,
+    left: 0,
+    top: 0,
+    anchorPos: 0,
+    span: null,
+    exchange: null,
+    exchangeStatus: 'idle',
+  });
   const [aiFeedback, setAiFeedback] = useState<AiFeedbackState>({
     visible: false,
     kind: 'writing',
@@ -554,6 +582,11 @@ export function StreamEditor({
   const editorViewRef = useRef<EditorView | null>(null);
   const selectionActionMenuRef = useRef<HTMLDivElement>(null);
   const linkPopoverRef = useRef<HTMLDivElement>(null);
+  const provenancePopoverRef = useRef<HTMLDivElement>(null);
+  const provenanceHoverTimerRef = useRef<number | null>(null);
+  const provenanceHideTimerRef = useRef<number | null>(null);
+  const provenanceSpanIdRef = useRef<string | null>(null);
+  const provenancePinnedRef = useRef(false);
   const lastSavedContentRef = useRef(stream.document?.markdown ?? '');
   const markdownContentRef = useRef(stream.document?.markdown ?? '');
   const revisionRef = useRef(stream.document?.revision ?? 0);
@@ -1697,6 +1730,117 @@ export function StreamEditor({
     });
   }, []);
 
+  const getProvenancePopoverPlacement = useCallback((
+    view: EditorView,
+    anchorPos: number,
+    measuredMenuSize?: { width: number; height: number }
+  ): { left: number; top: number } | null => {
+    const shell = editorShellRef.current;
+    if (!shell) return null;
+
+    const coords = view.coordsAtPos(Math.min(anchorPos, view.state.doc.length));
+    if (!coords) return null;
+
+    const shellRect = shell.getBoundingClientRect();
+    const menu = provenancePopoverRef.current;
+    return computeSelectionMenuPlacement({
+      coords,
+      shellRect,
+      menuSize: measuredMenuSize ?? {
+        width: menu?.offsetWidth,
+        height: menu?.offsetHeight,
+      },
+      viewportHeight: window.innerHeight,
+    });
+  }, []);
+
+  const cancelProvenancePopoverHide = useCallback(() => {
+    if (provenanceHideTimerRef.current !== null) {
+      window.clearTimeout(provenanceHideTimerRef.current);
+      provenanceHideTimerRef.current = null;
+    }
+  }, []);
+
+  const hideProvenancePopover = useCallback(() => {
+    if (provenanceHoverTimerRef.current !== null) {
+      window.clearTimeout(provenanceHoverTimerRef.current);
+      provenanceHoverTimerRef.current = null;
+    }
+    cancelProvenancePopoverHide();
+    provenancePinnedRef.current = false;
+    provenanceSpanIdRef.current = null;
+    setProvenancePopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+  }, [cancelProvenancePopoverHide]);
+
+  // Grace period so the pointer can travel from the hovered span into the
+  // popover (and across gaps between spans) without it vanishing mid-flight.
+  // While the pointer is inside the popover (pinned), nothing may hide it —
+  // only leaving it, clicking an action, or toggling the overlay off.
+  const scheduleProvenancePopoverHide = useCallback(() => {
+    cancelProvenancePopoverHide();
+    if (provenancePinnedRef.current) return;
+    provenanceHideTimerRef.current = window.setTimeout(() => {
+      provenanceHideTimerRef.current = null;
+      if (provenancePinnedRef.current) return;
+      provenanceSpanIdRef.current = null;
+      setProvenancePopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
+    }, 400);
+  }, [cancelProvenancePopoverHide]);
+
+  const pinProvenancePopover = useCallback(() => {
+    provenancePinnedRef.current = true;
+    cancelProvenancePopoverHide();
+    // A retarget resting from just before entry must not fire while inside.
+    if (provenanceHoverTimerRef.current !== null) {
+      window.clearTimeout(provenanceHoverTimerRef.current);
+      provenanceHoverTimerRef.current = null;
+    }
+  }, [cancelProvenancePopoverHide]);
+
+  const unpinProvenancePopover = useCallback(() => {
+    provenancePinnedRef.current = false;
+    scheduleProvenancePopoverHide();
+  }, [scheduleProvenancePopoverHide]);
+
+  const showProvenancePopover = useCallback((span: Span, anchorPos: number) => {
+    if (provenanceSpanIdRef.current === span.spanId) return;
+
+    const view = editorViewRef.current;
+    if (!view) return;
+    const placement = getProvenancePopoverPlacement(view, anchorPos);
+    if (!placement) return;
+
+    provenanceSpanIdRef.current = span.spanId;
+    const wantsExchange = span.origin === 'ai' && !!span.requestId;
+    setProvenancePopover({
+      visible: true,
+      left: placement.left,
+      top: placement.top,
+      anchorPos,
+      span,
+      exchange: null,
+      exchangeStatus: wantsExchange ? 'loading' : 'idle',
+    });
+
+    if (wantsExchange) {
+      getExchange(span.requestId!)
+        .then(({ exchange }) => {
+          setProvenancePopover((previous) => (
+            previous.visible && previous.span?.spanId === span.spanId
+              ? { ...previous, exchange, exchangeStatus: exchange ? 'loaded' : 'missing' }
+              : previous
+          ));
+        })
+        .catch(() => {
+          setProvenancePopover((previous) => (
+            previous.visible && previous.span?.spanId === span.spanId
+              ? { ...previous, exchange: null, exchangeStatus: 'missing' }
+              : previous
+          ));
+        });
+    }
+  }, [getProvenancePopoverPlacement]);
+
   useLayoutEffect(() => {
     if (!floatingMenu.visible) return;
 
@@ -1791,6 +1935,44 @@ export function StreamEditor({
     pdfPaneState.visible,
     stream.id,
   ]);
+
+  useLayoutEffect(() => {
+    if (!provenancePopover.visible) return;
+
+    const menu = provenancePopoverRef.current;
+    const view = editorViewRef.current;
+    if (!menu || !view) return;
+
+    const measuredMenuSize = {
+      width: menu.offsetWidth,
+      height: menu.offsetHeight,
+    };
+    if (measuredMenuSize.width <= 0 || measuredMenuSize.height <= 0) return;
+
+    const placement = getProvenancePopoverPlacement(view, provenancePopover.anchorPos, measuredMenuSize);
+    if (!placement) return;
+
+    setProvenancePopover((previous) => {
+      if (!previous.visible) return previous;
+
+      const sameSize = previous.menuWidth === measuredMenuSize.width &&
+        previous.menuHeight === measuredMenuSize.height;
+      const samePlacement = Math.abs(previous.left - placement.left) < 0.5 &&
+        Math.abs(previous.top - placement.top) < 0.5;
+
+      if (sameSize && samePlacement) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        left: placement.left,
+        top: placement.top,
+        menuWidth: measuredMenuSize.width,
+        menuHeight: measuredMenuSize.height,
+      };
+    });
+  }, [getProvenancePopoverPlacement, provenancePopover]);
 
   const scheduleSelectionMenu = useCallback((view: EditorView) => {
     clearSelectionMenuTimer();
@@ -2339,6 +2521,13 @@ export function StreamEditor({
   }, [clearSelectionMenuTimer]);
 
   useEffect(() => {
+    return () => {
+      if (provenanceHoverTimerRef.current !== null) window.clearTimeout(provenanceHoverTimerRef.current);
+      if (provenanceHideTimerRef.current !== null) window.clearTimeout(provenanceHideTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     return () => clearAiFeedbackTimer();
   }, [clearAiFeedbackTimer]);
 
@@ -2463,18 +2652,46 @@ export function StreamEditor({
     });
   }, [stream.id]);
 
-  const provenanceXray = useMemo<Extension>(() => (
-    isProvenanceXrayVisible
-      ? provenanceXrayExtension({
-        sources,
-        isAiThinking,
-        loadExchange: getExchange,
-        onShowExchange: (exchange, span) => setExchangeOverlay({ exchange, span }),
-        onRedevelop: openRedevelopPrompt,
-        onOpenSource: handleOpenSourceById,
-      })
-      : []
-  ), [handleOpenSourceById, isAiThinking, isProvenanceXrayVisible, openRedevelopPrompt, sources]);
+  // X-ray options are a stable object mutated per render and read lazily at
+  // event time (hover), so the extension identity NEVER changes — toggling
+  // visibility must not reconfigure the editor (see ProvenanceXray.ts).
+  const xrayOptionsRef = useRef<ProvenanceXrayOptions>({
+    onSpanHover: () => {},
+    onSpanHoverEnd: () => {},
+  });
+  xrayOptionsRef.current.onSpanHover = (span, pos) => {
+    cancelProvenancePopoverHide();
+    if (provenanceHoverTimerRef.current !== null) {
+      window.clearTimeout(provenanceHoverTimerRef.current);
+      provenanceHoverTimerRef.current = null;
+    }
+    // Pointer is over the span whose popover is already showing — keep it.
+    if (provenanceSpanIdRef.current === span.spanId) return;
+    // Rest-detection: this fires per mousemove, so the timer restarts while
+    // the pointer is traveling and only a pointer at rest shows/retargets.
+    provenanceHoverTimerRef.current = window.setTimeout(() => {
+      provenanceHoverTimerRef.current = null;
+      showProvenancePopover(span, pos);
+    }, 180);
+  };
+  xrayOptionsRef.current.onSpanHoverEnd = () => {
+    if (provenanceHoverTimerRef.current !== null) {
+      window.clearTimeout(provenanceHoverTimerRef.current);
+      provenanceHoverTimerRef.current = null;
+    }
+    scheduleProvenancePopoverHide();
+  };
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- stable by design
+  const provenanceXray = useMemo<Extension>(() => provenanceXrayExtension(xrayOptionsRef.current), []);
+
+  useEffect(() => {
+    editorViewRef.current?.dispatch({
+      effects: setProvenanceXrayVisible.of(isProvenanceXrayVisible),
+      annotations: Transaction.addToHistory.of(false),
+    });
+    if (!isProvenanceXrayVisible) hideProvenancePopover();
+  }, [hideProvenancePopover, isProvenanceXrayVisible]);
 
   const editorExtensions = useMemo<Extension[]>(() => [
     EditorView.lineWrapping,
@@ -2515,6 +2732,16 @@ export function StreamEditor({
     const view = editorViewRef.current;
     if (!isProvenanceXrayVisible || !floatingMenu.visible || !view) return [];
     return spanIdsIntersectingRange(currentSpans(view.state), floatingMenu.selectionFrom, floatingMenu.selectionTo);
+  })();
+
+  // Clamped: the popover's span offsets are a snapshot and the doc can
+  // change underneath an open popover.
+  const provenancePopoverCoveredText = (() => {
+    const view = editorViewRef.current;
+    const span = provenancePopover.visible ? provenancePopover.span : null;
+    if (!view || !span) return '';
+    const docLength = view.state.doc.length;
+    return view.state.doc.sliceString(Math.min(span.start, docLength), Math.min(span.end, docLength));
   })();
 
   return (
@@ -2927,6 +3154,90 @@ export function StreamEditor({
           >
             Remove
           </button>
+        </div>
+      )}
+
+      {provenancePopover.visible && provenancePopover.span && (
+        <div
+          ref={provenancePopoverRef}
+          className="cm-provenance-tooltip provenance-popover"
+          style={{ left: `${provenancePopover.left}px`, top: `${provenancePopover.top}px` }}
+          onMouseEnter={pinProvenancePopover}
+          onMouseLeave={unpinProvenancePopover}
+        >
+          <div className="cm-provenance-tooltip-line">
+            {originLine(provenancePopover.span, sources)}
+          </div>
+          <div className="cm-provenance-tooltip-actions">
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--text"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                const view = editorViewRef.current;
+                const span = provenancePopover.span;
+                if (!view || !span) return;
+                view.dispatch({
+                  effects: dissolveSpans.of([span.spanId]),
+                  annotations: Transaction.addToHistory.of(true),
+                });
+                hideProvenancePopover();
+                view.focus();
+              }}
+            >
+              Dissolve
+            </button>
+            {provenancePopover.span.origin === 'ai' && provenancePopover.span.requestId && (
+              <>
+                <button
+                  type="button"
+                  className="selection-action-button selection-action-button--text"
+                  disabled={provenancePopover.exchangeStatus !== 'loaded'}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    const { exchange, span } = provenancePopover;
+                    if (!exchange || !span) return;
+                    setExchangeOverlay({ exchange, span });
+                    hideProvenancePopover();
+                  }}
+                >
+                  {provenancePopover.exchangeStatus === 'missing' ? 'Exchange no longer stored' : 'Show exchange'}
+                </button>
+                <button
+                  type="button"
+                  className="selection-action-button selection-action-button--text"
+                  disabled={
+                    provenancePopover.exchangeStatus !== 'loaded' ||
+                    !canRedevelopSpan(provenancePopover.span, provenancePopoverCoveredText, isAiThinking)
+                  }
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    const { exchange, span } = provenancePopover;
+                    if (!exchange || !span) return;
+                    hideProvenancePopover();
+                    openRedevelopPrompt(span, exchange);
+                  }}
+                >
+                  Re-develop
+                </button>
+              </>
+            )}
+            {provenancePopover.span.origin === 'source' && provenancePopover.span.sourceId && (
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  const sourceId = provenancePopover.span?.sourceId;
+                  if (!sourceId) return;
+                  hideProvenancePopover();
+                  handleOpenSourceById(sourceId);
+                }}
+              >
+                Open source →
+              </button>
+            )}
+          </div>
         </div>
       )}
 
