@@ -739,6 +739,10 @@ extension WebViewManager: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // Without this, a dead web content process leaves a permanent white window.
         DebugLog.log("[WebViewManager] Web content process terminated; reloading")
+        if let activeStreamId = currentStreamIdForFileDrops {
+            pendingLaunchOpenStreamId = activeStreamId
+            didConsumeLaunchStreamRestore = false
+        }
         webView.reload()
     }
 }

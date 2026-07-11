@@ -68,6 +68,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- A terminated WebKit content process now reopens the active stream from its last committed revision instead of dropping back to the stream list.
 - Quitting immediately after an edit now waits briefly for the open editor to roll back temporary AI state and flush its latest text, with one bounded save retry.
 - Queued editor saves now capture live text, provenance, and revision together instead of letting an older snapshot overwrite a newer external append.
 - In-editor AI no longer autosaves temporary deletions or partial output, and leaving a stream mid-request restores the original passage before saving.
