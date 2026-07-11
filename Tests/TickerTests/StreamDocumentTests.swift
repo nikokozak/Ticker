@@ -1052,7 +1052,7 @@ final class StreamDocumentTests: XCTestCase {
             AIMessageHandler.cleanedDocumentContext(
                 #"<u>underlined</u> while x < y and Array<T> stays; <custom> is literal &amp; visible"#
             ),
-            #"underlined while x < y and Array<T> stays; <custom> is literal & visible"#
+            #"underlined while x < y and Array<T> stays; <custom> is literal &amp; visible"#
         )
         XCTAssertNil(AIMessageHandler.cleanedDocumentContext("<u></u>"))
     }
