@@ -61,6 +61,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- The PDF pane now follows the app's light/dark theme: page margins and pane backgrounds previously stayed light in dark mode, and opening/closing no longer warps the window across the screen — the pane and window frame animate together.
 - The provenance-overlay popover now follows the hovered text and positions like the selection menu; it previously rendered cramped at the top-right of the stream regardless of the pointer.
 - Device-key changes now report disk-write failures in Settings and leave the durable key and in-memory auth state unchanged.
 - Source indexing can no longer remain stuck after terminal status-write failures, and refreshed file bookmarks now persist after stale recovery.
