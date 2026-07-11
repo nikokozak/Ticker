@@ -47,6 +47,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- Editor font, size, and line-spacing defaults now use the same validation in app startup and Settings.
 - The inactive ⌘; screenshot shortcut and its deprecated mode were removed; clipboard images still attach through ⌘L after a macOS screenshot.
 - Release builds no longer bundle unused programming-language parsers or stale web assets from earlier builds.
 - The main window, Quick Panel, and PDF pane now share the editor’s neutral surfaces and sienna accent, and Quick Panel names its background action “develop + save.”
