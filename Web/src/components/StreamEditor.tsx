@@ -648,6 +648,7 @@ export function StreamEditor({
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  const streamOverflowMenuRef = useRef<HTMLDetailsElement>(null);
   const selectionActionMenuRef = useRef<HTMLDivElement>(null);
   const linkPopoverRef = useRef<HTMLDivElement>(null);
   const provenancePopoverRef = useRef<HTMLDivElement>(null);
@@ -1387,7 +1388,6 @@ export function StreamEditor({
           hideAiFeedback();
         } else {
           showAiErrorFeedback(displayError);
-          addToast(displayError, 'error');
         }
         return;
       }
@@ -1420,7 +1420,6 @@ export function StreamEditor({
           view.focus();
           setAiStatus('idle');
           showAiErrorFeedback('AI returned empty output.');
-          addToast('AI returned empty output.', 'warning');
           return;
         }
 
@@ -2049,13 +2048,11 @@ export function StreamEditor({
       };
     });
   }, [
-    floatingMenu.left,
-    floatingMenu.menuHeight,
-    floatingMenu.menuWidth,
+    // Position and measured size are outputs of this effect. Depending on
+    // them can oscillate forever when a narrow menu wraps at a threshold.
     floatingMenu.selectionFrom,
     floatingMenu.selectionHead,
     floatingMenu.selectionTo,
-    floatingMenu.top,
     floatingMenu.visible,
     getSelectionMenuPlacement,
     pdfPaneState.streamId,
@@ -2102,7 +2099,11 @@ export function StreamEditor({
     });
   }, [
     getLinkPopoverPlacement,
-    linkPopover,
+    linkPopover.from,
+    linkPopover.label,
+    linkPopover.labelFrom,
+    linkPopover.url,
+    linkPopover.visible,
     pdfPaneState.streamId,
     pdfPaneState.visible,
     stream.id,
@@ -2144,7 +2145,13 @@ export function StreamEditor({
         menuHeight: measuredMenuSize.height,
       };
     });
-  }, [getProvenancePopoverPlacement, provenancePopover]);
+  }, [
+    getProvenancePopoverPlacement,
+    provenancePopover.anchorPos,
+    provenancePopover.exchangeStatus,
+    provenancePopover.span,
+    provenancePopover.visible,
+  ]);
 
   const scheduleSelectionMenu = useCallback((view: EditorView) => {
     clearSelectionMenuTimer();
@@ -2942,7 +2949,18 @@ export function StreamEditor({
   })();
 
   return (
-    <div className="stream-editor">
+    <div
+      className="stream-editor"
+      onPointerDownCapture={(event) => {
+        const menu = streamOverflowMenuRef.current;
+        if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+      }}
+      onKeyDownCapture={(event) => {
+        if (event.key === 'Escape' && streamOverflowMenuRef.current?.open) {
+          streamOverflowMenuRef.current.open = false;
+        }
+      }}
+    >
       <header className="stream-header">
         <button onClick={onBack} className="back-button">
           ← Back
@@ -2964,8 +2982,17 @@ export function StreamEditor({
           </h1>
         )}
         <div className="stream-header-actions">
-          <span className={`stream-save-status stream-save-status--${saveState}`}>
-            {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}
+          <span
+            className={`stream-save-status stream-save-status--${saveState}`}
+            role="status"
+            aria-live="polite"
+            aria-label={saveState === 'saving' ? 'Saving' : saveState === 'error' ? 'Save failed' : 'Saved'}
+            title={saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}
+          >
+            <span className="stream-save-status-dot" aria-hidden="true" />
+            <span className="stream-save-status-label">
+              {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}
+            </span>
           </span>
           <button
             onClick={() => setIsProvenanceXrayVisible((value) => !value)}
@@ -2986,14 +3013,34 @@ export function StreamEditor({
           >
             Sources · {sources.length}
           </button>
-          <button
-            onClick={() => setShowDeleteConfirm(true)}
-            className="delete-stream-button"
-            title="Delete stream"
-            type="button"
+          <details
+            ref={streamOverflowMenuRef}
+            className="stream-overflow-menu"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector('summary')?.focus();
+            }}
           >
-            Delete
-          </button>
+            <summary title="More stream actions" aria-label="More stream actions">
+              <span aria-hidden="true">•••</span>
+            </summary>
+            <div className="stream-overflow-panel">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.currentTarget.closest('details')!.open = false;
+                  setShowDeleteConfirm(true);
+                }}
+              >
+                Delete stream…
+              </button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -3155,29 +3202,6 @@ export function StreamEditor({
             >
               U
             </button>
-            <button
-              type="button"
-              className="selection-action-button selection-action-button--format selection-action-button--code"
-              title="Code"
-              aria-label="Code"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => handleSelectionFormat('`')}
-            >
-              &lt;/&gt;
-            </button>
-            <button
-              type="button"
-              className="selection-action-button"
-              title="Add link"
-              aria-label="Add link"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={handleSelectionCreateLink}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                <path d="M10.6 13.4a1 1 0 010-1.4l2.8-2.8a1 1 0 011.4 1.4l-2.8 2.8a1 1 0 01-1.4 0zm-3.5 3.5a3.5 3.5 0 010-5l1.8-1.8 1.4 1.4-1.8 1.8a1.5 1.5 0 002.2 2.2l1.8-1.8 1.4 1.4-1.8 1.8a3.5 3.5 0 01-5 0zm9.8-4.8l-1.4-1.4 1.8-1.8a1.5 1.5 0 00-2.2-2.2l-1.8 1.8-1.4-1.4 1.8-1.8a3.5 3.5 0 015 5z" />
-              </svg>
-            </button>
-            <span className="selection-action-divider" aria-hidden="true" />
             <div className="selection-action-submenu">
               <button
                 type="button"
@@ -3202,7 +3226,7 @@ export function StreamEditor({
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setSelectionMenuPanel((panel) => panel === 'more' ? null : 'more')}
               >
-                More
+                More ▾
               </button>
             </div>
           </div>
@@ -3230,7 +3254,23 @@ export function StreamEditor({
             </div>
           )}
           {selectionMenuPanel === 'more' && (
-            <div className="selection-action-submenu-panel">
+            <div className="selection-action-submenu-panel" aria-label="More formatting and context actions">
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-button--code"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => handleSelectionFormat('`')}
+              >
+                Code
+              </button>
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={handleSelectionCreateLink}
+              >
+                Link
+              </button>
               {(['h1', 'h2', 'h3'] as const).map((format) => (
                 <button
                   key={format}

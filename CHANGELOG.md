@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Editor chrome now prioritizes sources, tucks destructive actions into overflow, simplifies selection tools, and gives background AI work action-specific status.
 - Saved PDF highlights and point anchors now reveal their linked text in the stream when clicked, while PDF text drags continue to select normally.
 - PDF outline sections now offer Ask and Summarize actions that use only the exact indexed section, show cancellable AI progress, append cited results, and link back to the source page.
 - A global AI Activity Capsule now follows Quick Panel work across streams, shows each phase and outcome, and lets you stop an active request.

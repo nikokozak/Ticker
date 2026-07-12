@@ -485,28 +485,7 @@ body {
   margin-left: auto;
 }
 
-/* Delete stream button */
-.delete-stream-button {
-  flex: 0 0 auto;
-  background: transparent;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-tertiary);
-  padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all var(--duration-fast) ease;
-}
-
-.delete-stream-button:hover {
-  border-color: var(--color-error);
-  color: var(--color-error);
-  background: var(--danger-soft);
-}
-
-.stream-sources-button,
-.stream-xray-button {
+.stream-sources-button {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -522,8 +501,21 @@ body {
   transition: all var(--duration-fast) ease;
 }
 
-.stream-xray-button {
+.stream-xray-button,
+.stream-overflow-menu > summary {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
 }
 
 .stream-sources-button:hover,
@@ -532,6 +524,62 @@ body {
   border-color: var(--color-accent);
   color: var(--color-accent);
   background: var(--accent-soft);
+}
+
+.stream-overflow-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.stream-overflow-menu > summary {
+  list-style: none;
+  letter-spacing: 0.08em;
+}
+
+.stream-overflow-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.stream-overflow-menu > summary:hover,
+.stream-overflow-menu > summary:focus-visible,
+.stream-overflow-menu[open] > summary {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  outline: none;
+}
+
+.stream-overflow-panel {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 950;
+  min-width: 150px;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--overlay-shadow);
+  backdrop-filter: var(--overlay-backdrop);
+}
+
+.stream-overflow-panel button {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-size: var(--type-ui-small);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.stream-overflow-panel button:hover,
+.stream-overflow-panel button:focus-visible {
+  background: var(--danger-soft);
+  outline: none;
 }
 
 /* Shared native modal behavior */
@@ -810,8 +858,12 @@ body {
   flex: 0 0 auto;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
-  min-width: 56px;
+  min-width: 0;
   text-align: right;
+}
+
+.stream-save-status-dot {
+  display: none;
 }
 
 .stream-save-status--saving {
@@ -820,6 +872,20 @@ body {
 
 .stream-save-status--error {
   color: var(--color-error);
+}
+
+@media (max-width: 560px) {
+  .stream-save-status:not(.stream-save-status--error) .stream-save-status-label {
+    display: none;
+  }
+
+  .stream-save-status:not(.stream-save-status--error) .stream-save-status-dot {
+    display: block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
 }
 
 .selection-action-menu {
@@ -906,13 +972,6 @@ body {
   font-size: var(--font-size-xs);
 }
 
-.selection-action-divider {
-  width: 1px;
-  height: 18px;
-  background: var(--border-subtle);
-  margin: 0 var(--space-1);
-}
-
 .selection-action-submenu {
   position: relative;
 }
@@ -922,7 +981,7 @@ body {
   justify-content: center;
   flex-wrap: wrap;
   box-sizing: border-box;
-  max-width: calc(100vw - 24px);
+  width: min(360px, calc(100vw - 24px));
   gap: var(--space-1);
   margin-top: var(--space-1);
   padding-top: var(--space-1);
@@ -1280,7 +1339,7 @@ body {
 
 .document-ai-status-pill {
   position: fixed;
-  right: var(--space-5);
+  left: var(--space-5);
   bottom: var(--space-5);
   z-index: 930;
   display: inline-flex;
@@ -1341,7 +1400,7 @@ body {
 
 .document-ai-indexing-notice {
   position: fixed;
-  right: var(--space-5);
+  left: var(--space-5);
   bottom: calc(var(--space-5) + var(--space-7));
   z-index: 930;
   max-width: min(360px, calc(100vw - var(--space-5) - var(--space-5)));
@@ -1762,10 +1821,11 @@ body {
 
 .sources-modal-add {
   margin: var(--spacing-md) var(--spacing-lg) 0;
-  background: var(--color-text);
-  border: 1px solid var(--color-text);
-  color: var(--color-bg);
-  padding: var(--spacing-sm);
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  padding: var(--spacing-xs) var(--spacing-md);
   border-radius: var(--radius);
   cursor: pointer;
   font-size: var(--font-size-sm);
@@ -1773,8 +1833,9 @@ body {
 }
 
 .sources-modal-add:hover {
-  box-shadow: var(--control-shadow);
-  transform: translateY(-1px);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--accent-soft);
 }
 
 .sources-modal-list {
@@ -3134,10 +3195,7 @@ body {
     min-width: 0;
     margin-left: 0;
     gap: var(--space-1);
-  }
-
-  .stream-save-status {
-    display: none;
+    justify-content: flex-end;
   }
 
   .back-button,
@@ -3210,8 +3268,9 @@ body {
 
 .ai-activity-capsule {
   position: fixed;
-  top: calc(var(--window-chrome-safe-top) + var(--space-2));
+  top: auto;
   right: var(--space-4);
+  bottom: var(--space-5);
   z-index: 940;
   width: min(320px, calc(100vw - var(--space-4) - var(--space-4)));
   padding: var(--space-1);
@@ -3321,12 +3380,14 @@ body {
 /* Toasts share the document-ai-status-pill idiom: quiet pill, kind-colored dot. */
 .toast-stack {
   position: fixed;
-  right: var(--space-5);
+  left: 50%;
+  right: auto;
   bottom: var(--space-5);
+  transform: translateX(-50%);
   z-index: 9999;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: var(--spacing-sm);
   max-width: 360px;
 }
@@ -3429,4 +3490,11 @@ body {
 .toast-clear-all:hover {
   background: var(--color-surface-hover);
   color: var(--color-text);
+}
+
+@media (max-width: 560px) {
+  .toast-stack {
+    top: calc(var(--window-chrome-safe-top) + var(--space-2));
+    bottom: auto;
+  }
 }

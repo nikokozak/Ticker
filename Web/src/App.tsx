@@ -65,6 +65,18 @@ export function parseAIOperationActivity(
   };
 }
 
+export function aiOperationActionLabel(
+  operation: Pick<AIOperationActivity, 'origin' | 'verb'>
+): string {
+  if (operation.origin === 'pdfSection') {
+    return operation.verb === 'summarize'
+      ? 'Summarizing a PDF section'
+      : 'Answering a PDF section question';
+  }
+  if (operation.origin === 'quickPanel' && operation.verb === 'develop') return 'Developing';
+  return 'AI work';
+}
+
 // Proxy auth state (matches Swift ProxyAuthState enum)
 type ProxyAuthState =
   | 'unregistered'
@@ -518,14 +530,14 @@ function AIActivityCapsule({ operations, streams, currentStream, onCancel }: AIA
     return streams.find((stream) => stream.id === streamId)?.title ?? 'Stream';
   };
 
-  const labelFor = (state: AIOperationState) => {
+  const phaseLabel = (state: AIOperationState) => {
     switch (state) {
       case 'queued': return 'Queued';
-      case 'preparing': return 'Preparing context';
-      case 'generating': return 'AI is writing';
-      case 'saving': return 'Saving answer';
-      case 'succeeded': return 'Answer saved';
-      case 'failed': return 'AI request failed';
+      case 'preparing': return 'Preparing';
+      case 'generating': return 'Writing';
+      case 'saving': return 'Saving';
+      case 'succeeded': return 'Saved';
+      case 'failed': return 'Failed';
       case 'canceled': return 'Canceled';
     }
   };
@@ -540,8 +552,10 @@ function AIActivityCapsule({ operations, streams, currentStream, onCancel }: AIA
           <div className="ai-activity-row" data-state={operation.state} key={operation.requestId}>
             {isActive ? <Spinner className="ai-activity-spinner" /> : <span className="ai-activity-dot" aria-hidden="true" />}
             <span className="ai-activity-copy">
-              <span className="ai-activity-label">{labelFor(operation.state)}</span>
-              <span className="ai-activity-stream">{streamTitle(operation.streamId)}</span>
+              <span className="ai-activity-label">{aiOperationActionLabel(operation)}</span>
+              <span className="ai-activity-stream">
+                {phaseLabel(operation.state)} · {streamTitle(operation.streamId)}
+              </span>
               {operation.state === 'failed' && operation.message && (
                 <span className="ai-activity-message">{operation.message}</span>
               )}
@@ -551,7 +565,7 @@ function AIActivityCapsule({ operations, streams, currentStream, onCancel }: AIA
                 type="button"
                 className="ai-activity-cancel"
                 onClick={() => onCancel(operation.requestId)}
-                aria-label={`Stop AI work for ${streamTitle(operation.streamId)}`}
+                aria-label={`Stop AI in ${streamTitle(operation.streamId)}`}
               >
                 <XIcon size={12} /> Stop
               </button>

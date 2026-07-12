@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseAIOperationActivity, shouldAcceptStreamLoaded } from './App';
+import { aiOperationActionLabel, parseAIOperationActivity, shouldAcceptStreamLoaded } from './App';
 
 describe('shouldAcceptStreamLoaded', () => {
   it('accepts only the pending correlated response', () => {
@@ -34,5 +34,14 @@ describe('parseAIOperationActivity', () => {
 
   it('rejects unknown and incomplete states', () => {
     expect(parseAIOperationActivity({ requestId: 'request-1', state: 'paused' })).toBeNull();
+  });
+});
+
+describe('aiOperationActionLabel', () => {
+  it('attributes known operation origins without inventing unavailable context', () => {
+    expect(aiOperationActionLabel({ origin: 'quickPanel', verb: 'develop' })).toBe('Developing');
+    expect(aiOperationActionLabel({ origin: 'pdfSection', verb: 'ask' })).toBe('Answering a PDF section question');
+    expect(aiOperationActionLabel({ origin: 'pdfSection', verb: 'summarize' })).toBe('Summarizing a PDF section');
+    expect(aiOperationActionLabel({ origin: 'future', verb: 'unknown' })).toBe('AI work');
   });
 });
