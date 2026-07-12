@@ -760,14 +760,12 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneSectionActionsButton.action = #selector(handlePDFSectionActions)
         pdfPaneSectionActionsButton.bezelStyle = .texturedRounded
         pdfPaneSectionActionsButton.controlSize = .small
-        pdfPaneSectionActionsButton.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
-        pdfPaneSectionActionsButton.imagePosition = .imageOnly
-        pdfPaneSectionActionsButton.imageScaling = .scaleProportionallyDown
+        pdfPaneSectionActionsButton.title = "Section ▾"
         pdfPaneSectionActionsButton.isBordered = true
         pdfPaneSectionActionsButton.showsBorderOnlyWhileMouseInside = true
-        pdfPaneSectionActionsButton.contentTintColor = NativePalette.textMuted
-        pdfPaneSectionActionsButton.toolTip = "Section actions"
-        pdfPaneSectionActionsButton.setAccessibilityLabel("PDF section actions")
+        pdfPaneSectionActionsButton.contentTintColor = NativePalette.accent
+        pdfPaneSectionActionsButton.toolTip = "Actions for the current section"
+        pdfPaneSectionActionsButton.setAccessibilityLabel("Section actions")
         pdfPaneSectionActionsButton.isEnabled = false
         pdfPaneSectionActionsButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         pdfPaneSectionActionsButton.setContentHuggingPriority(.required, for: .horizontal)
@@ -947,7 +945,6 @@ final class PDFReaderPaneController: NSViewController {
 
             pdfPaneSectionActionsButton.trailingAnchor.constraint(equalTo: pdfPaneLinkButton.leadingAnchor, constant: -8),
             pdfPaneSectionActionsButton.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
-            pdfPaneSectionActionsButton.widthAnchor.constraint(equalToConstant: 28),
             pdfPaneSectionActionsButton.heightAnchor.constraint(equalToConstant: 28),
 
             pdfPaneOutlineButton.trailingAnchor.constraint(equalTo: pdfPaneSectionActionsButton.leadingAnchor, constant: -8),
