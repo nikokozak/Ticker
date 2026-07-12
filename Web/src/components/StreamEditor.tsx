@@ -18,7 +18,7 @@ import { editorFindExtension } from '../extensions/EditorFindPanel';
 import { markdownConcealExtension, setShowRawFormattingEffect } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
-import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
+import { findTickerPDFHighlightLink, tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
 import { canRedevelopSpan, originLine, provenanceXrayExtension, setProvenanceXrayVisible, type ProvenanceXrayOptions } from '../extensions/ProvenanceXray';
 import { pendingAppendField, setPendingAppend } from '../extensions/PendingAppend';
@@ -1533,6 +1533,34 @@ export function StreamEditor({
 
     return () => unsubscribe();
   }, [addToast, insertTextAtCursor, stream.id]);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type !== 'revealPdfHighlightInStream') return;
+
+      const payloadStreamId = message.payload?.streamId as string | undefined;
+      const sourceId = message.payload?.sourceId as string | undefined;
+      const highlightId = message.payload?.highlightId as string | undefined;
+      if (payloadStreamId !== stream.id || !sourceId || !highlightId) return;
+
+      const view = editorViewRef.current;
+      if (!view) return;
+      const match = findTickerPDFHighlightLink(view.state.doc.toString(), highlightId, sourceId);
+      if (!match) {
+        addToast('This highlight is no longer linked in the stream.', 'warning');
+        return;
+      }
+
+      view.dispatch({
+        selection: { anchor: match.from },
+        effects: EditorView.scrollIntoView(match.from, { y: 'center' }),
+        annotations: Transaction.addToHistory.of(false),
+      });
+      addToast('Showing linked highlight in stream.', 'success');
+    });
+
+    return () => unsubscribe();
+  }, [addToast, stream.id]);
 
   useEffect(() => {
     pendingPDFAnchorSelectionRef.current = null;

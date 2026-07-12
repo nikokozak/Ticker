@@ -7,6 +7,12 @@ struct PDFHighlightLinkPayload {
     let highlight: PDFHighlightRecord
 }
 
+struct PDFHighlightRevealPayload {
+    let streamId: UUID
+    let sourceId: UUID
+    let highlightId: UUID
+}
+
 enum PDFSectionAction: String {
     case ask
     case summarize
@@ -37,13 +43,40 @@ private enum PDFPaneStyle {
 }
 
 private enum PDFHighlightAnnotationStyle {
-    static let contentsPrefix = "ticker-pdf-highlight:"
     static let color = NSColor.systemYellow.withAlphaComponent(0.32)
     static let pulseColor = NSColor.systemYellow.withAlphaComponent(0.62)
     static let markerColor = NativePalette.accent.withAlphaComponent(0.38)
     static let markerPulseColor = NativePalette.accent.withAlphaComponent(0.74)
     static let markerSize: CGFloat = 14
     static let escapeKeyCode: UInt16 = 53
+}
+
+enum PDFHighlightAnnotationTag {
+    static let prefix = "ticker-pdf-highlight:"
+
+    static func contents(for highlightId: UUID) -> String {
+        "\(prefix)\(highlightId.uuidString)"
+    }
+
+    static func highlightId(from contents: String?) -> UUID? {
+        guard let contents, contents.hasPrefix(prefix) else { return nil }
+        return UUID(uuidString: String(contents.dropFirst(prefix.count)))
+    }
+}
+
+struct PDFHighlightClickTracker {
+    static let slop: CGFloat = 4
+
+    let mouseDownLocation: CGPoint
+    private(set) var exceededSlop = false
+
+    mutating func observe(_ location: CGPoint) {
+        let dx = location.x - mouseDownLocation.x
+        let dy = location.y - mouseDownLocation.y
+        if (dx * dx) + (dy * dy) > Self.slop * Self.slop {
+            exceededSlop = true
+        }
+    }
 }
 
 struct PDFCitationMatch {
@@ -302,6 +335,7 @@ final class PDFReaderPaneController: NSViewController {
     var onAnchorPlaced: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
     var onAnchorPickCancelled: ((UUID) -> Void)?
     var onSectionAction: (@MainActor (PDFSectionActionPayload) -> Void)?
+    var onRevealHighlightInStream: (@MainActor (PDFHighlightRevealPayload) -> Void)?
     var onPageChanged: ((UUID, Int) -> Void)?
     var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
     var sectionProvider: ((UUID, UUID, Int) throws -> PDFSectionDescriptor)?
@@ -347,6 +381,8 @@ final class PDFReaderPaneController: NSViewController {
     private var anchorPickMouseMonitor: Any?
     private var anchorPickKeyMonitor: Any?
     private var anchorPickCursorMonitor: Any?
+    private var pdfHighlightActivationMonitor: Any?
+    private var pdfHighlightClickTracker: PDFHighlightClickTracker?
     private var anchorPickPreviousAcceptsMouseMovedEvents: Bool?
     private var pdfFindDebounceWorkItem: DispatchWorkItem?
     private var pdfFindGeneration = 0
@@ -365,6 +401,9 @@ final class PDFReaderPaneController: NSViewController {
         pdfPageSaveWorkItem?.cancel()
         pdfPaneMessageWorkItem?.cancel()
         NotificationCenter.default.removeObserver(self)
+        if let pdfHighlightActivationMonitor {
+            NSEvent.removeMonitor(pdfHighlightActivationMonitor)
+        }
         exitAnchorPickMode(notifyCancelled: false)
         releaseActivePDFContext()
     }
@@ -817,6 +856,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.displayMode = .singlePageContinuous
         pdfPanePDFView.displayDirection = .vertical
         pdfPanePDFView.displaysAsBook = false
+        installPDFHighlightActivationMonitor()
         let pageControllerSelector = NSSelectorFromString("usePageViewController:withViewOptions:")
         if pdfPanePDFView.responds(to: pageControllerSelector) {
             pdfPanePDFView.perform(pageControllerSelector, with: NSNumber(value: true), with: nil)
@@ -1481,6 +1521,67 @@ final class PDFReaderPaneController: NSViewController {
         schedulePDFPageSave()
     }
 
+    private func installPDFHighlightActivationMonitor() {
+        guard pdfHighlightActivationMonitor == nil else { return }
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        pdfHighlightActivationMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            self?.handlePDFHighlightActivationEvent(event)
+            return event
+        }
+    }
+
+    private func handlePDFHighlightActivationEvent(_ event: NSEvent) {
+        let pointInPDFView = pdfPanePDFView.convert(event.locationInWindow, from: nil)
+
+        switch event.type {
+        case .leftMouseDown:
+            pdfHighlightClickTracker = nil
+            guard !isAnchorPickMode,
+                  event.clickCount == 1,
+                  event.window === view.window,
+                  pdfPanePDFView.bounds.contains(pointInPDFView) else {
+                return
+            }
+            pdfHighlightClickTracker = PDFHighlightClickTracker(mouseDownLocation: event.locationInWindow)
+
+        case .leftMouseDragged:
+            pdfHighlightClickTracker?.observe(event.locationInWindow)
+
+        case .leftMouseUp:
+            guard var tracker = pdfHighlightClickTracker else { return }
+            pdfHighlightClickTracker = nil
+            tracker.observe(event.locationInWindow)
+            guard !tracker.exceededSlop,
+                  !isAnchorPickMode,
+                  event.window === view.window,
+                  pdfPanePDFView.bounds.contains(pointInPDFView) else {
+                return
+            }
+            revealSavedHighlight(at: pointInPDFView)
+
+        default:
+            break
+        }
+    }
+
+    private func revealSavedHighlight(at pointInPDFView: CGPoint) {
+        guard let context = activePDFContext,
+              let page = pdfPanePDFView.page(for: pointInPDFView, nearest: false) else {
+            return
+        }
+        let pointOnPage = pdfPanePDFView.convert(pointInPDFView, to: page)
+        guard let annotation = page.annotation(at: pointOnPage),
+              let highlightId = PDFHighlightAnnotationTag.highlightId(from: annotation.contents) else {
+            return
+        }
+
+        onRevealHighlightInStream?(PDFHighlightRevealPayload(
+            streamId: context.streamId,
+            sourceId: context.sourceId,
+            highlightId: highlightId
+        ))
+    }
+
     @objc private func handlePDFPaneResizePan(_ recognizer: NSPanGestureRecognizer) {
         guard isPDFPaneVisible, let widthConstraint = pdfPaneWidthConstraint else { return }
 
@@ -1603,14 +1704,14 @@ final class PDFReaderPaneController: NSViewController {
                 annotation.interiorColor = PDFHighlightAnnotationStyle.markerColor
             }
             annotation.userName = "Ticker-Next"
-            annotation.contents = "\(PDFHighlightAnnotationStyle.contentsPrefix)\(highlight.id.uuidString)"
+            annotation.contents = PDFHighlightAnnotationTag.contents(for: highlight.id)
             page.addAnnotation(annotation)
         }
     }
 
     private func taggedAnnotations(highlightId: String) -> [PDFAnnotation] {
         guard let document = pdfPanePDFView.document else { return [] }
-        let tag = "\(PDFHighlightAnnotationStyle.contentsPrefix)\(highlightId)"
+        let tag = "\(PDFHighlightAnnotationTag.prefix)\(highlightId)"
         var annotations: [PDFAnnotation] = []
 
         for index in 0..<document.pageCount {

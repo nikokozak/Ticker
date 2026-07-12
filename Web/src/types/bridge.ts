@@ -23,6 +23,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'pdfHighlightLinked',
   'pdfPaneStateChanged',
   'pdfSectionActionRequested',
+  'revealPdfHighlightInStream',
   'settingsLoaded',
   'storageStateChanged',
   'sourceAdded',

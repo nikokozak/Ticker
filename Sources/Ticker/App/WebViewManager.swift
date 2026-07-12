@@ -193,6 +193,9 @@ final class WebViewManager: NSObject {
         pdfPaneController.onSectionAction = { [weak self] payload in
             self?.sendPDFSectionActionRequested(payload)
         }
+        pdfPaneController.onRevealHighlightInStream = { [weak self] payload in
+            self?.sendRevealPDFHighlightInStream(payload)
+        }
         pdfPaneController.onPageChanged = { [weak self] sourceId, pageIndex in
             guard let self, let persistence = self.persistence else { return }
             do {
@@ -431,6 +434,18 @@ final class WebViewManager: NSObject {
                 "shortTitle": AnyCodable(payload.descriptor.shortTitle),
                 "sectionTitle": AnyCodable(payload.descriptor.sectionTitle),
                 "page": AnyCodable(payload.page)
+            ]
+        ))
+    }
+
+    @MainActor
+    private func sendRevealPDFHighlightInStream(_ payload: PDFHighlightRevealPayload) {
+        bridgeService.send(BridgeMessage(
+            type: "revealPdfHighlightInStream",
+            payload: [
+                "streamId": AnyCodable(payload.streamId.uuidString),
+                "sourceId": AnyCodable(payload.sourceId.uuidString),
+                "highlightId": AnyCodable(payload.highlightId.uuidString)
             ]
         ))
     }

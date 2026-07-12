@@ -61,6 +61,9 @@
       "pdfHighlightLinked": {
         "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page", "quote"]
       },
+      "revealPdfHighlightInStream": {
+        "requiredPayloadKeys": ["streamId", "sourceId", "highlightId"]
+      },
       "pdfPaneStateChanged": {
         "requiredPayloadKeys": ["visible"],
         "optionalPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle"]

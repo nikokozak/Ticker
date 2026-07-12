@@ -3010,6 +3010,31 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertNil(destination.quote)
     }
 
+    func test_pdfHighlightAnnotationTagAcceptsOnlyTickerHighlightUUIDs() throws {
+        let highlightId = try XCTUnwrap(UUID(uuidString: "33333333-3333-3333-3333-333333333333"))
+
+        XCTAssertEqual(
+            PDFHighlightAnnotationTag.highlightId(
+                from: PDFHighlightAnnotationTag.contents(for: highlightId)
+            ),
+            highlightId
+        )
+        XCTAssertNil(PDFHighlightAnnotationTag.highlightId(from: nil))
+        XCTAssertNil(PDFHighlightAnnotationTag.highlightId(from: "citation-flash"))
+        XCTAssertNil(PDFHighlightAnnotationTag.highlightId(from: "\(PDFHighlightAnnotationTag.prefix)not-a-uuid"))
+    }
+
+    func test_pdfHighlightClickTrackerRejectsDragEvenWhenMouseReturnsToStart() {
+        var click = PDFHighlightClickTracker(mouseDownLocation: .zero)
+        click.observe(CGPoint(x: 3, y: 2))
+        XCTAssertFalse(click.exceededSlop)
+
+        var drag = PDFHighlightClickTracker(mouseDownLocation: .zero)
+        drag.observe(CGPoint(x: 10, y: 0))
+        drag.observe(.zero)
+        XCTAssertTrue(drag.exceededSlop)
+    }
+
     func test_tickerPDFURLParserAcceptsCitationChunkDestination() throws {
         let sourceId = try XCTUnwrap(UUID(uuidString: "44444444-4444-4444-4444-444444444444"))
         let chunkId = try XCTUnwrap(UUID(uuidString: "55555555-5555-5555-5555-555555555555"))
