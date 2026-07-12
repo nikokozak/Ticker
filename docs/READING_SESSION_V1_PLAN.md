@@ -1,8 +1,10 @@
 # Reading Session v1 — implementation plan
 
-Status: reviewed with Claude; conditional-go amendments incorporated
+Status: functional implementation verified; UI experiment ready
 
 Branch boundary: `codex/reading-session-v1` starts at stabilization commit `a58833e`
+
+Verified functional code head: `bfb24ec` (`feat(pdf): reveal linked highlights in stream`)
 
 UI experiment boundary: create `codex/reading-ui-rethink` only after the functional branch is green
 
