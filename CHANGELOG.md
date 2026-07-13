@@ -74,6 +74,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Editor selections now stay readable in dark mode, wrapped passages scroll without geometry jumps, smart apostrophes preserve the caret, and only exact Quick-window shortcuts can invoke AI.
 - Quick-window invocation no longer waits through repeated Accessibility reads after the source app has already reported that nothing is selected.
 - Quick-window saves now dismiss in one immediate motion without flashing the note, recoloring the destination, or resizing during the fade.
 - Quick Panel AI now keeps explicitly captured text when it also retrieves sources, instead of letting retrieval replace the user's chosen context.
