@@ -94,6 +94,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         CrashSessionSentinel.markLaunch()
+        ClipboardService.syncChangeCount()
         setupStatusItem()
         setupMenuBar()
         setupAppearanceObserver()

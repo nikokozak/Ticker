@@ -405,7 +405,7 @@ final class ProxyLLMService {
     // MARK: - Message Building
 
     /// Convert LLMRequest messages to proxy format
-    private func buildProxyMessages(from request: LLMRequest) -> [[String: Any]] {
+    func buildProxyMessages(from request: LLMRequest) -> [[String: Any]] {
         var messages: [[String: Any]] = [
             ["role": "system", "content": request.systemPrompt]
         ]

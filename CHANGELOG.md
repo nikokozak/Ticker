@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Quick Window AI can now see an attached clipboard image in both Ask and develop + save flows, including the first image copied after launch, and marks ephemeral turns when captured context was included.
 - Editor chrome now prioritizes sources, tucks destructive actions into overflow, simplifies selection tools, and gives background AI work action-specific status.
 - PDF section actions now use a labeled Section control instead of an ambiguous icon.
 - Saved PDF highlights and point anchors now reveal their linked text in the stream when clicked, while PDF text drags continue to select normally.

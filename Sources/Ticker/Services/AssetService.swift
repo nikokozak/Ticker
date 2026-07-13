@@ -197,23 +197,18 @@ final class AssetService: @unchecked Sendable {
             return nil
         }
 
-        // Resize image if needed and convert to JPEG for efficient encoding
-        guard let (finalData, mimeType) = resizeImageForAPI(
-            data: data,
-            metadata: metadata,
-            maxDimension: 2048
-        ) else {
-            return nil
-        }
-
-        // Convert to data URL
-        let base64 = finalData.base64EncodedString()
-        return "data:\(mimeType);base64,\(base64)"
+        return dataURL(data: data, metadata: metadata)
     }
 
     /// Convert multiple asset URLs to data URLs
     func assetsToDataURLs(_ assetURLs: [String]) -> [String] {
         assetURLs.compactMap { assetToDataURL($0) }
+    }
+
+    /// Convert in-memory image data to a data URL for API consumption.
+    func imageToDataURL(_ data: Data) -> String? {
+        guard let metadata = try? ImageImportPolicy.metadata(for: data) else { return nil }
+        return dataURL(data: data, metadata: metadata)
     }
 
     // MARK: - Private Helpers
@@ -257,6 +252,18 @@ final class AssetService: @unchecked Sendable {
         )
         guard CGImageDestinationFinalize(destination) else { return nil }
         return (output as Data, "image/jpeg")
+    }
+
+    private func dataURL(data: Data, metadata: ImageImportPolicy.Metadata) -> String? {
+        guard let (finalData, mimeType) = resizeImageForAPI(
+            data: data,
+            metadata: metadata,
+            maxDimension: 2048
+        ) else {
+            return nil
+        }
+
+        return "data:\(mimeType);base64,\(finalData.base64EncodedString())"
     }
 
     /// Get MIME type for file extension

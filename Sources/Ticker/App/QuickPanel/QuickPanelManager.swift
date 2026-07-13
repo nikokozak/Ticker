@@ -464,11 +464,22 @@ final class QuickPanelManager: ObservableObject {
         // Build context for first turn only
         let isFirstTurn = ephemeralConversation.turns.isEmpty
         let contextForAI: String? = isFirstTurn ? context?.contextText : nil
+        let queryImages: [String]
+        do {
+            queryImages = try Self.imageDataURLsForAI(
+                isFirstTurn ? context?.clipboardImage : nil,
+                using: assetService
+            )
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
         let pickedStream = try? pickedStreamForAI()
         let streamIdForAI = pickedStream?.id
         let sourceScopeForAI = pickedStream?.sourceScope ?? .auto
         let requestId = UUID().uuidString
-        let userInput = "Selection:\n\(contextForAI ?? "")\n\nPrompt:\n\(query)"
+        let capturedContext = contextForAI ?? (queryImages.isEmpty ? "" : "[Image attached]")
+        let userInput = "Selection:\n\(capturedContext)\n\nPrompt:\n\(query)"
         var responseRaw = ""
         var selectedModel: String?
 
@@ -476,7 +487,7 @@ final class QuickPanelManager: ObservableObject {
         ephemeralConversation.turns.append(ConversationTurn(
             role: .user,
             content: query,
-            contextIncluded: contextForAI != nil
+            contextIncluded: contextForAI != nil || !queryImages.isEmpty
         ))
 
         // Clear input, start streaming
@@ -498,6 +509,7 @@ final class QuickPanelManager: ObservableObject {
         streamingTask = Task { [weak self] in
             await orchestrator.route(
                 query: query,
+                queryImages: queryImages,
                 streamId: streamIdForAI,
                 sourceScope: sourceScopeForAI,
                 priorCells: priorCells,
@@ -723,6 +735,7 @@ final class QuickPanelManager: ObservableObject {
                 aiOperations.begin(streamId: streamId, verb: "develop", origin: "quickPanel")
             }
             var documentMarkdownForAI: String?
+            var queryImagesForAI: [String] = []
             var aiStartupError: String?
 
             if let aiRequestId {
@@ -735,6 +748,17 @@ final class QuickPanelManager: ObservableObject {
                     } catch {
                         aiStartupError = "Could not load document context"
                         DebugLog.log("[QuickPanel] Failed to load document context for AI (\(DebugLog.errorSummary(error)))")
+                    }
+
+                    do {
+                        queryImagesForAI = try Self.imageDataURLsForAI(
+                            context?.clipboardImage,
+                            using: assetService
+                        )
+                    } catch {
+                        documentMarkdownForAI = nil
+                        aiStartupError = error.localizedDescription
+                        DebugLog.log("[QuickPanel] Failed to prepare attached image for AI (\(DebugLog.errorSummary(error)))")
                     }
                 }
             }
@@ -750,6 +774,7 @@ final class QuickPanelManager: ObservableObject {
                         streamId: streamId,
                         prompt: aiPrompt,
                         documentMarkdown: documentMarkdownForAI,
+                        queryImages: queryImagesForAI,
                         persistence: persistence,
                         orchestrator: orchestratorForAI
                     )
@@ -933,6 +958,7 @@ final class QuickPanelManager: ObservableObject {
         streamId: UUID,
         prompt: String,
         documentMarkdown: String,
+        queryImages: [String],
         persistence: PersistenceService,
         orchestrator: AIOrchestrator
     ) {
@@ -942,6 +968,7 @@ final class QuickPanelManager: ObservableObject {
         let task = Task { [weak self] in
             await orchestrator.route(
                 query: prompt,
+                queryImages: queryImages,
                 streamId: nil,
                 priorCells: [],
                 sourceContext: SourceContext(text: documentMarkdown, chunks: [], mode: .passthrough),
@@ -999,6 +1026,14 @@ final class QuickPanelManager: ObservableObject {
             )
         }
         aiOperations.attach(task, to: requestId)
+    }
+
+    static func imageDataURLsForAI(_ imageData: Data?, using assetService: AssetService?) throws -> [String] {
+        guard let imageData else { return [] }
+        guard let dataURL = assetService?.imageToDataURL(imageData) else {
+            throw QuickPanelError.imagePreparationFailed
+        }
+        return [dataURL]
     }
 
     @discardableResult
@@ -1315,6 +1350,7 @@ enum QuickPanelMarkdownFormatter {
 enum QuickPanelError: Error, LocalizedError {
     case persistenceNotConfigured
     case assetServiceNotConfigured
+    case imagePreparationFailed
 
     var errorDescription: String? {
         switch self {
@@ -1322,6 +1358,8 @@ enum QuickPanelError: Error, LocalizedError {
             return "Database not configured"
         case .assetServiceNotConfigured:
             return "Asset storage not configured"
+        case .imagePreparationFailed:
+            return "Attached image could not be prepared for AI"
         }
     }
 }

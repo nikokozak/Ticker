@@ -450,10 +450,13 @@ struct QuickPanelView: View {
     }
 
     private func turnView(_ turn: ConversationTurn, id: Int) -> some View {
-        HStack(alignment: .top, spacing: Spacing.xs) {
+        let roleLabel = turn.role == .assistant
+            ? "AI"
+            : turn.contextIncluded ? "You · context included" : "You"
+        return HStack(alignment: .top, spacing: Spacing.xs) {
             VStack(alignment: .leading, spacing: 2) {
                 // Role indicator
-                Text(turn.role == .user ? "You" : "AI")
+                Text(roleLabel)
                     .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .medium))
                     .foregroundColor(QuickPanelStyle.textSubtle)
 
