@@ -73,6 +73,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Quick-window saves now dismiss in one immediate motion without flashing the note, recoloring the destination, or resizing during the fade.
 - Quick Panel AI now keeps explicitly captured text when it also retrieves sources, instead of letting retrieval replace the user's chosen context.
 - A terminated WebKit content process now reopens the active stream from its last committed revision instead of dropping back to the stream list.
 - Quitting immediately after an edit now waits briefly for the open editor to roll back temporary AI state and flush its latest text, with one bounded save retry.

@@ -54,8 +54,8 @@ private struct ContentHeightKey: PreferenceKey {
 /// Simplified for ticker-v2: capture mode only (no search, ask, command modes)
 struct QuickPanelView: View {
     @ObservedObject var manager: QuickPanelManager
-    @FocusState private var isInputFocused: Bool
     @State private var isPickerExpanded = false
+    @State private var inputFocusRequest = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -108,9 +108,11 @@ struct QuickPanelView: View {
             RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
                 .stroke(Color.clear, lineWidth: 1)
         )
-        .onReceive(NotificationCenter.default.publisher(for: .quickPanelDidShow)) { _ in
-            isInputFocused = true
+        .onReceive(NotificationCenter.default.publisher(for: .quickPanelWillShow)) { _ in
             isPickerExpanded = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quickPanelDidShow)) { _ in
+            inputFocusRequest &+= 1
         }
     }
 
@@ -200,7 +202,6 @@ struct QuickPanelView: View {
                 .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
         }
         .buttonStyle(.plain)
-        .disabled(manager.isInputSaveFeedbackActive)
         .help("Clear context")
     }
 
@@ -512,15 +513,14 @@ struct QuickPanelView: View {
 
     private var inputField: some View {
         let isInputDisabled = manager.isLoading ||
-            manager.ephemeralConversation.isStreaming ||
-            manager.isInputSaveFeedbackActive
+            manager.ephemeralConversation.isStreaming
 
         return HStack(spacing: Spacing.sm) {
             QuickPanelInputField(
                 text: $manager.inputText,
                 placeholder: placeholderText,
                 isLoading: isInputDisabled,
-                isShimmering: manager.isInputSaveFeedbackActive,
+                focusRequest: inputFocusRequest,
                 onSubmit: handleSubmit,
                 onCancel: { manager.handleEscape() },
                 onCmdEnter: handleCmdSubmit,
@@ -538,7 +538,7 @@ struct QuickPanelView: View {
                         .foregroundColor(canSubmit ? QuickPanelStyle.accent : QuickPanelStyle.textSubtle.opacity(0.5))
                 }
                 .buttonStyle(.plain)
-                .disabled(!canSubmit || manager.isInputSaveFeedbackActive)
+                .disabled(!canSubmit)
             }
         }
         .padding(.horizontal, Spacing.md)
@@ -656,14 +656,14 @@ struct QuickPanelView: View {
     // MARK: - Actions
 
     private func handleSubmit() {
-        guard canSubmit, !manager.isLoading, !manager.isInputSaveFeedbackActive else { return }
+        guard canSubmit, !manager.isLoading else { return }
         Task {
             await manager.handleEnter()
         }
     }
 
     private func handleCmdSubmit() {
-        guard canSubmit, !manager.isLoading, !manager.isInputSaveFeedbackActive else { return }
+        guard canSubmit, !manager.isLoading else { return }
         Task {
             await manager.handleCmdEnter()
         }
@@ -673,8 +673,7 @@ struct QuickPanelView: View {
         let hasInput = !manager.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard hasInput,
               !manager.isLoading,
-              !manager.ephemeralConversation.isStreaming,
-              !manager.isInputSaveFeedbackActive else { return }
+              !manager.ephemeralConversation.isStreaming else { return }
         Task {
             await manager.handleOptionEnter()
         }
@@ -687,7 +686,7 @@ struct QuickPanelInputField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String
     var isLoading: Bool
-    var isShimmering: Bool
+    var focusRequest: Int
     var onSubmit: () -> Void
     var onCancel: () -> Void
     var onCmdEnter: (() -> Void)?
@@ -746,7 +745,6 @@ struct QuickPanelInputField: NSViewRepresentable {
         DispatchQueue.main.async {
             textView.setSelectedRange(NSRange(location: 0, length: 0))
             context.coordinator.updateScrollViewHeight()
-            textView.window?.makeFirstResponder(textView)
         }
 
         return scrollView
@@ -755,9 +753,16 @@ struct QuickPanelInputField: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? QuickPanelTextView else { return }
 
+        context.coordinator.parent = self
         context.coordinator.isLoading = isLoading
         textView.placeholder = placeholder
-        textView.setShimmering(isShimmering)
+
+        if context.coordinator.lastFocusRequest != focusRequest {
+            context.coordinator.lastFocusRequest = focusRequest
+            DispatchQueue.main.async {
+                textView.window?.makeFirstResponder(textView)
+            }
+        }
 
         // Update text if changed externally
         if textView.string != text {
@@ -779,9 +784,11 @@ struct QuickPanelInputField: NSViewRepresentable {
         weak var textView: QuickPanelTextView?
         weak var scrollView: NSScrollView?
         var isLoading: Bool = false
+        var lastFocusRequest: Int
 
         init(_ parent: QuickPanelInputField) {
             self.parent = parent
+            self.lastFocusRequest = parent.focusRequest
         }
 
         func updateScrollViewHeight() {
@@ -845,20 +852,6 @@ class QuickPanelTextView: NSTextView {
     var placeholder: String = "" {
         didSet { needsDisplay = true }
     }
-    private var shimmerTimer: Timer?
-    private var shimmerStartedAt: Date?
-
-    deinit {
-        stopShimmer()
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil {
-            stopShimmer()
-        }
-        super.viewWillMove(toWindow: newWindow)
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
@@ -873,59 +866,6 @@ class QuickPanelTextView: NSTextView {
             y: textContainerInset.height
         )
         placeholder.draw(at: origin, withAttributes: placeholderAttributes)
-    }
-
-    func setShimmering(_ enabled: Bool) {
-        if enabled {
-            startShimmer()
-        } else {
-            stopShimmer()
-        }
-    }
-
-    private func startShimmer() {
-        guard shimmerTimer == nil else { return }
-        shimmerStartedAt = Date()
-
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] timer in
-            guard let self, let startedAt = self.shimmerStartedAt else {
-                timer.invalidate()
-                return
-            }
-
-            let progress = min(Date().timeIntervalSince(startedAt) / 0.7, 1)
-            let pulse = CGFloat(sin(progress * .pi))
-            self.applyTextColor(self.shimmerColor(pulse: pulse))
-
-            if progress >= 1 {
-                self.stopShimmer()
-            }
-        }
-
-        shimmerTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    private func stopShimmer() {
-        shimmerTimer?.invalidate()
-        shimmerTimer = nil
-        shimmerStartedAt = nil
-        applyTextColor(NSColor(QuickPanelStyle.text))
-    }
-
-    private func shimmerColor(pulse: CGFloat) -> NSColor {
-        let base = NSColor(QuickPanelStyle.text)
-        let highlight = NSColor(QuickPanelStyle.textMuted)
-        return base.blended(withFraction: 0.35 * pulse, of: highlight) ?? base
-    }
-
-    private func applyTextColor(_ color: NSColor) {
-        textColor = color
-        typingAttributes[.foregroundColor] = color
-
-        let length = (string as NSString).length
-        guard length > 0 else { return }
-        textStorage?.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: length))
     }
 
     override func keyDown(with event: NSEvent) {

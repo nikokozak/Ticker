@@ -684,6 +684,25 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func test_quickPanelEnterAppendsAndResetsWithoutFeedbackDelay() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Inbox")
+            try service.saveStream(stream)
+            let manager = QuickPanelManager(persistence: service)
+            manager.loadAvailableStreams()
+            manager.inputText = "Captured immediately"
+
+            await manager.handleEnter()
+
+            let document = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            XCTAssertEqual(document.markdown, "Captured immediately")
+            XCTAssertEqual(manager.inputText, "")
+            XCTAssertFalse(manager.isLoading)
+            XCTAssertFalse(manager.isVisible)
+        }
+    }
+
     func test_v14MigrationCreatesPDFHighlightsTable() throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

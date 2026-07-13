@@ -102,14 +102,14 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
     }
 
     /// Show with a short opacity fade. Movement/scale stay fixed to avoid visual churn.
-    func fadeIn(duration: TimeInterval = 0.12) {
+    func fadeIn(duration: TimeInterval = 0.08) {
         fadeGeneration += 1
         let generation = fadeGeneration
         alphaValue = 0
         orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             animator().alphaValue = 1
         } completionHandler: { [weak self] in
@@ -119,12 +119,12 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
     }
 
     /// Hide with a short opacity fade. Completion is ignored if a newer show/hide starts.
-    func fadeOut(duration: TimeInterval = 0.12, completion: (() -> Void)? = nil) {
+    func fadeOut(duration: TimeInterval = 0.08, completion: (() -> Void)? = nil) {
         fadeGeneration += 1
         let generation = fadeGeneration
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             animator().alphaValue = 0
         } completionHandler: { [weak self] in
@@ -135,15 +135,6 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
             self.alphaValue = 1
             completion?()
         }
-    }
-
-    /// Reset panel to initial minimum height
-    func resetToMinHeight() {
-        var newFrame = frame
-        let heightDelta = Self.minHeight - frame.height
-        newFrame.origin.y -= heightDelta
-        newFrame.size.height = Self.minHeight
-        setFrame(newFrame, display: true)
     }
 
     /// Resize panel height (animates)

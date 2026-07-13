@@ -168,7 +168,6 @@ final class QuickPanelManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var status: QuickPanelStatus?  // Temporary feedback and capture status.
-    @Published private(set) var isInputSaveFeedbackActive: Bool = false
     @Published private(set) var isStreamPickerSaveFeedbackActive: Bool = false
     @Published var ephemeralConversation = EphemeralConversation()
 
@@ -191,7 +190,6 @@ final class QuickPanelManager: ObservableObject {
 
     private var streamingTask: Task<Void, Never>?
     private var statusClearTask: Task<Void, Never>?
-    private var saveFeedbackTask: Task<Void, Never>?
     private var streamingGeneration = StreamingGeneration()
 
     // MARK: - Height Management
@@ -229,7 +227,6 @@ final class QuickPanelManager: ObservableObject {
         streamingTask?.cancel()
         aiOperations.cancelAll()
         statusClearTask?.cancel()
-        saveFeedbackTask?.cancel()
     }
 
     /// Configure services after initialization (for dependency injection)
@@ -364,26 +361,20 @@ final class QuickPanelManager: ObservableObject {
         guard let panel = panel else { return }
 
         heightDebounceTimer?.invalidate()
-        targetHeight = QuickPanelWindow.minHeight
-        panel.resetToMinHeight()
+        heightDebounceTimer = nil
+
+        // Reset transient SwiftUI state and size the hidden panel before it is ordered onscreen.
+        NotificationCenter.default.post(name: .quickPanelWillShow, object: nil)
 
         // Position at captured location
         panel.position(at: capturedContext.panelPosition)
+        preparePanelHeightForPresentation()
 
         // Show panel without bringing main window forward
+        isVisible = true
         panel.fadeIn()
         panel.makeKey()
-
-        isVisible = true
-
-        // Post notification for input focus
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NotificationCenter.default.post(name: .quickPanelDidShow, object: nil)
-        }
-
-        DispatchQueue.main.async { [weak self] in
-            self?.syncHeightToContent(animated: false)
-        }
+        NotificationCenter.default.post(name: .quickPanelDidShow, object: nil)
     }
 
     /// Hide the quick panel
@@ -391,6 +382,8 @@ final class QuickPanelManager: ObservableObject {
         presentationGeneration += 1
         let generation = presentationGeneration
         cancelFeedbackTasks()
+        heightDebounceTimer?.invalidate()
+        heightDebounceTimer = nil
         // Cancel any in-flight streaming to avoid orphan AI calls
         cancelStreaming()
 
@@ -426,57 +419,17 @@ final class QuickPanelManager: ObservableObject {
         isLoading = false
         error = nil
         status = nil
-        isInputSaveFeedbackActive = false
         isStreamPickerSaveFeedbackActive = false
     }
 
     private func cancelFeedbackTasks() {
         statusClearTask?.cancel()
         statusClearTask = nil
-        saveFeedbackTask?.cancel()
-        saveFeedbackTask = nil
-    }
-
-    private func showTimedStatusMessage(_ message: String, durationNanoseconds: UInt64) {
-        statusClearTask?.cancel()
-        isInputSaveFeedbackActive = false
-        isStreamPickerSaveFeedbackActive = false
-        let timedStatus = QuickPanelStatus(message: message, tone: .info, action: nil)
-        status = timedStatus
-
-        statusClearTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: durationNanoseconds)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, self.status == timedStatus else { return }
-                self.status = nil
-                self.statusClearTask = nil
-            }
-        }
-    }
-
-    private func showStreamPickerSaveFeedbackThenHide() {
-        statusClearTask?.cancel()
-        statusClearTask = nil
-        saveFeedbackTask?.cancel()
-        isInputSaveFeedbackActive = true
-        isStreamPickerSaveFeedbackActive = true
-        status = nil
-
-        saveFeedbackTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self else { return }
-                self.hide()
-            }
-        }
     }
 
     private func flashStreamPickerSaveFeedback(durationNanoseconds: UInt64 = 600_000_000) {
         statusClearTask?.cancel()
         statusClearTask = nil
-        isInputSaveFeedbackActive = false
         isStreamPickerSaveFeedbackActive = true
         status = nil
 
@@ -484,7 +437,7 @@ final class QuickPanelManager: ObservableObject {
             try? await Task.sleep(nanoseconds: durationNanoseconds)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self, !self.isInputSaveFeedbackActive else { return }
+                guard let self else { return }
                 self.isStreamPickerSaveFeedbackActive = false
                 self.statusClearTask = nil
             }
@@ -639,11 +592,6 @@ final class QuickPanelManager: ObservableObject {
         if ephemeralConversation.isActive {
             cancelStreaming()
             ephemeralConversation.clear()
-            return
-        }
-
-        if isInputSaveFeedbackActive {
-            hide()
             return
         }
 
@@ -820,7 +768,8 @@ final class QuickPanelManager: ObservableObject {
             }
 
             isLoading = false
-            showStreamPickerSaveFeedbackThenHide()
+            announceSave(to: streamId)
+            hide()
 
             if let aiPrompt, let aiRequestId {
                 if let orchestratorForAI, let documentMarkdownForAI {
@@ -985,6 +934,20 @@ final class QuickPanelManager: ObservableObject {
 
     private func nonEmptyTrimmed(_ text: String?) -> String? {
         QuickPanelMarkdownFormatter.nonEmptyTrimmed(text)
+    }
+
+    private func announceSave(to streamId: UUID) {
+        let title = availableStreams.first(where: { $0.id == streamId })?.title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = title.flatMap { $0.isEmpty ? nil : "Saved to \($0)" } ?? "Saved"
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+            ]
+        )
     }
 
     private func startDocumentAI(
@@ -1196,12 +1159,14 @@ final class QuickPanelManager: ObservableObject {
         )
     }
 
-    private func syncHeightToContent(animated: Bool) {
-        guard let hostingView else { return }
+    private func preparePanelHeightForPresentation() {
+        guard let hostingView, let panel else { return }
         hostingView.layoutSubtreeIfNeeded()
         let fittingHeight = hostingView.fittingSize.height
         guard fittingHeight.isFinite, fittingHeight > 0 else { return }
-        contentHeightChanged(fittingHeight, animatedGrowth: animated)
+
+        targetHeight = max(QuickPanelWindow.minHeight, min(fittingHeight, maxAllowedPanelHeight()))
+        panel.resize(toHeight: targetHeight, animated: false)
     }
 
     private func maxAllowedPanelHeight() -> CGFloat {
@@ -1211,6 +1176,7 @@ final class QuickPanelManager: ObservableObject {
 
     /// Called by SwiftUI when content height changes
     func contentHeightChanged(_ height: CGFloat) {
+        guard isVisible else { return }
         contentHeightChanged(height, animatedGrowth: false)
     }
 
@@ -1238,7 +1204,7 @@ final class QuickPanelManager: ObservableObject {
     }
 
     private func applyHeightUpdate(animated: Bool) {
-        guard let panel = panel else { return }
+        guard isVisible, let panel = panel else { return }
 
         // Skip if already animating - the completion handler will check if another update is needed
         guard !isAnimatingHeight else { return }
@@ -1254,7 +1220,7 @@ final class QuickPanelManager: ObservableObject {
 
             // Check if height changed during animation - if so, schedule another update
             let finalHeight = self.panel?.frame.height ?? 0
-            if abs(finalHeight - self.targetHeight) > 4 {
+            if self.isVisible, abs(finalHeight - self.targetHeight) > 4 {
                 self.applyHeightUpdate(animated: true)
             }
         }
@@ -1385,5 +1351,6 @@ enum QuickPanelError: Error, LocalizedError {
 // MARK: - Notification Names
 
 extension Notification.Name {
+    static let quickPanelWillShow = Notification.Name("QuickPanelWillShow")
     static let quickPanelDidShow = Notification.Name("QuickPanelDidShow")
 }
