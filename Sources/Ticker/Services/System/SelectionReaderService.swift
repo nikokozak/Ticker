@@ -209,11 +209,13 @@ final class SelectionReaderService {
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let frontmostBundleId = frontmostApp?.bundleIdentifier
         var useHintSettleBudget = false
+        var initialRead: AXSelectionRead = .unavailable
 
         let result = Self.captureExternalSelectedText(
             hasAccessibilityPermission: cursorService.hasAccessibilityPermission,
             axSelection: { [self] in
-                readSelection()
+                initialRead = readSelection()
+                return initialRead
             },
             hintAccessibilityTree: { [self] in
                 useHintSettleBudget = hintAccessibilityTree(for: frontmostApp)
@@ -223,7 +225,9 @@ final class SelectionReaderService {
                     attempts: useHintSettleBudget ? hintedSelectionReadAttempts : 1,
                     retryDelay: useHintSettleBudget ? hintedSelectionReadRetryDelay : 0,
                     retryMissingFocusedElement: useHintSettleBudget,
-                    retryEmptySelection: useHintSettleBudget
+                    // An initial .empty is authoritative; only unavailable AX trees
+                    // need the full settle budget after enabling accessibility hints.
+                    retryEmptySelection: useHintSettleBudget && initialRead == .unavailable
                 )
             },
             clipboardSelection: { [self] in
