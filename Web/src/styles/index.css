@@ -1152,6 +1152,10 @@ body {
   caret-color: var(--text);
 }
 
+.document-editor-codemirror .cm-selectionBackground {
+  background: var(--color-accent-soft) !important;
+}
+
 .document-editor-codemirror .cm-cursor,
 .document-editor-codemirror .cm-dropCursor {
   border-left-color: var(--text) !important;
