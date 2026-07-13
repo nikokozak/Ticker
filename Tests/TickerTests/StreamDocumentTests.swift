@@ -1909,6 +1909,31 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: assetService.assetURL(for: secondPath)), secondData)
     }
 
+    @MainActor
+    func test_quickPanelImageBecomesProxyVisionPart() throws {
+        let imageData = try makePNG(red: 255, green: 0, blue: 0)
+        let assetService = AssetService(baseDirectory: FileManager.default.temporaryDirectory)
+        let imageURLs = try QuickPanelManager.imageDataURLsForAI(imageData, using: assetService)
+        let request = LLMRequest(
+            systemPrompt: "Test",
+            messages: [LLMMessage(role: "user", content: "Describe this", imageURLs: imageURLs)]
+        )
+
+        let messages = ProxyLLMService().buildProxyMessages(from: request)
+        let content = try XCTUnwrap(messages.last?["content"] as? [[String: Any]])
+        let image = try XCTUnwrap(content.last?["source"] as? [String: String])
+
+        XCTAssertEqual(content.first?["text"] as? String, "Describe this")
+        XCTAssertEqual(image["type"], "base64")
+        XCTAssertEqual(image["media_type"], "image/png")
+        XCTAssertEqual(Data(base64Encoded: try XCTUnwrap(image["data"])), imageData)
+        XCTAssertThrowsError(
+            try QuickPanelManager.imageDataURLsForAI(Data("not an image".utf8), using: assetService)
+        ) { error in
+            XCTAssertEqual(error.localizedDescription, "Attached image could not be prepared for AI")
+        }
+    }
+
     func test_imageImportRejectsOversizedBytesAndDimensions() throws {
         let assetService = AssetService(baseDirectory: FileManager.default.temporaryDirectory)
 
