@@ -75,15 +75,62 @@ private enum DocumentAIVerb: String {
     }
 }
 
+enum PDFSectionAIAction: String {
+    case ask
+    case summarize
+
+    static let maxPromptTokens = 8_000
+
+    var systemPrompt: String {
+        self == .ask ? Prompts.verbAsk : Prompts.pdfSectionSummary
+    }
+}
+
+enum PDFSectionAIMarkdown {
+    static func fragment(
+        action: PDFSectionAIAction,
+        descriptor: PDFSectionDescriptor,
+        prompt: String?,
+        response: String
+    ) -> String {
+        let label = CitationMarkerSwap.escapeMarkdownLabel(descriptor.sectionTitle)
+        let url = sectionURL(sourceId: descriptor.sourceId, page: descriptor.pageStart)
+        let heading = action == .ask
+            ? "### Asked of [\(label)](\(url))"
+            : "### [\(label)](\(url))"
+        let response = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard action == .ask, let prompt else {
+            return "\(heading)\n\n\(response)"
+        }
+        let quotedPrompt = prompt
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { "> \($0)" }
+            .joined(separator: "\n")
+        return "\(heading)\n\n\(quotedPrompt)\n\n\(response)"
+    }
+
+    private static func sectionURL(sourceId: UUID, page: Int) -> String {
+        var components = URLComponents()
+        components.scheme = "ticker-pdf"
+        components.host = sourceId.uuidString
+        components.queryItems = [URLQueryItem(name: "page", value: "\(max(1, page))")]
+        return components.string ?? "ticker-pdf://\(sourceId.uuidString)?page=\(max(1, page))"
+    }
+}
+
 @MainActor
 final class AIMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
         "thinkDocument",
-        "cancelDocumentAI"
+        "runPdfSectionAI",
+        "cancelDocumentAI",
+        "cancelAIOperation"
     ]
 
     private let assetService: AssetService
     private let persistence: PersistenceService?
+    private let retrievalService: RetrievalService?
+    private let aiOperations: AIOperationRegistry
     private let sendToWeb: (BridgeMessage) -> Void
     private let sendBridgeErrorMessage: (String, String) async -> Void
     private let isProxyUsable: () async -> Bool
@@ -93,6 +140,7 @@ final class AIMessageHandler: BridgeMessageHandler {
         _ queryImages: [String],
         _ streamId: UUID?,
         _ sourceScope: SourceScope,
+        _ sourceContext: SourceContext?,
         _ systemPromptOverride: String,
         _ onChunk: @escaping (String) -> Void,
         _ onComplete: @escaping (SourceContext?) -> Void,
@@ -104,6 +152,8 @@ final class AIMessageHandler: BridgeMessageHandler {
     init?(container: ServiceContainer) {
         self.assetService = container.assetService
         self.persistence = container.persistence
+        self.retrievalService = container.retrievalService
+        self.aiOperations = container.aiOperations
         self.sendToWeb = { [bridgeService = container.bridgeService] message in
             bridgeService.send(message)
         }
@@ -113,7 +163,7 @@ final class AIMessageHandler: BridgeMessageHandler {
         self.isProxyUsable = { [deviceKeyService = container.deviceKeyService] in
             await deviceKeyService.currentState.isUsable
         }
-        self.routeDocumentAI = { [orchestrator = container.orchestrator] query, retrievalQuery, queryImages, streamId, sourceScope, systemPromptOverride, onChunk, onComplete, onError, onModelSelected in
+        self.routeDocumentAI = { [orchestrator = container.orchestrator] query, retrievalQuery, queryImages, streamId, sourceScope, sourceContext, systemPromptOverride, onChunk, onComplete, onError, onModelSelected in
             await orchestrator.route(
                 query: query,
                 queryImages: queryImages,
@@ -121,6 +171,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                 retrievalQuery: retrievalQuery,
                 sourceScope: sourceScope,
                 priorCells: [],
+                sourceContext: sourceContext,
                 systemPromptOverride: systemPromptOverride,
                 includeHeading: false,
                 onChunk: onChunk,
@@ -134,6 +185,8 @@ final class AIMessageHandler: BridgeMessageHandler {
     init(
         assetService: AssetService = AssetService(),
         persistence: PersistenceService? = nil,
+        retrievalService: RetrievalService? = nil,
+        aiOperations: AIOperationRegistry = AIOperationRegistry(),
         sendToWeb: @escaping (BridgeMessage) -> Void,
         sendBridgeErrorMessage: @escaping (String, String) async -> Void = { _, _ in },
         isProxyUsable: @escaping () async -> Bool = { true },
@@ -143,6 +196,7 @@ final class AIMessageHandler: BridgeMessageHandler {
             _ queryImages: [String],
             _ streamId: UUID?,
             _ sourceScope: SourceScope,
+            _ sourceContext: SourceContext?,
             _ systemPromptOverride: String,
             _ onChunk: @escaping (String) -> Void,
             _ onComplete: @escaping (SourceContext?) -> Void,
@@ -152,6 +206,8 @@ final class AIMessageHandler: BridgeMessageHandler {
     ) {
         self.assetService = assetService
         self.persistence = persistence
+        self.retrievalService = retrievalService
+        self.aiOperations = aiOperations
         self.sendToWeb = sendToWeb
         self.sendBridgeErrorMessage = sendBridgeErrorMessage
         self.isProxyUsable = isProxyUsable
@@ -170,7 +226,10 @@ final class AIMessageHandler: BridgeMessageHandler {
             }
 
             let imageURLs = payload["imageURLs"]?.value as? [String] ?? []
-            let imageDataURLs = assetService.assetsToDataURLs(imageURLs)
+            let assetService = assetService
+            let imageDataURLs = await Task.detached(priority: .utility) {
+                assetService.assetsToDataURLs(imageURLs)
+            }.value
             if !imageDataURLs.isEmpty {
                 DebugLog.log("ThinkDocument: Converting \(imageURLs.count) images to data URLs")
             }
@@ -305,6 +364,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                     imageDataURLs,
                     streamIdForRAG,
                     sourceScope,
+                    nil,
                     verb.systemPrompt,
                     onChunk,
                     onComplete,
@@ -320,6 +380,9 @@ final class AIMessageHandler: BridgeMessageHandler {
                 )
             }
             inFlightRequests[requestId] = task
+
+        case "runPdfSectionAI":
+            await handlePDFSectionAI(message)
 
         case "cancelDocumentAI":
             guard let payload = message.payload,
@@ -337,6 +400,15 @@ final class AIMessageHandler: BridgeMessageHandler {
                     "errorCode": AnyCodable("cancelled")
                 ]
             ))
+
+        case "cancelAIOperation":
+            guard let payload = message.payload,
+                  let requestId = payload["requestId"]?.value as? String else {
+                DebugLog.log("[AIMessageHandler] Invalid cancelAIOperation payload")
+                await sendBridgeErrorMessage(message.type, "Invalid cancelAIOperation payload")
+                return
+            }
+            aiOperations.cancel(requestId)
 
         default:
             DebugLog.log("[AIMessageHandler] Unknown message type: \(message.type)")
@@ -356,14 +428,208 @@ final class AIMessageHandler: BridgeMessageHandler {
         }
     }
 
-    private static func cleanedDocumentContext(_ context: String) -> String? {
+    private func handlePDFSectionAI(_ message: BridgeMessage) async {
+        guard let payload = message.payload,
+              let actionValue = payload["action"]?.value as? String,
+              let action = PDFSectionAIAction(rawValue: actionValue),
+              let streamIdValue = payload["streamId"]?.value as? String,
+              let streamId = UUID(uuidString: streamIdValue),
+              let sourceIdValue = payload["sourceId"]?.value as? String,
+              let sourceId = UUID(uuidString: sourceIdValue),
+              let page = payload["page"]?.intValue,
+              page > 0 else {
+            await sendBridgeErrorMessage(message.type, "Invalid runPdfSectionAI payload")
+            return
+        }
+
+        let prompt = (payload["prompt"]?.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard action != .ask || prompt?.isEmpty == false else {
+            await sendBridgeErrorMessage(message.type, "Ask this section requires a prompt")
+            return
+        }
+
+        let requestId = aiOperations.begin(
+            streamId: streamId,
+            verb: action.rawValue,
+            origin: "pdfSection"
+        )
+        aiOperations.transition(requestId, to: .preparing)
+
+        if action == .ask,
+           let prompt,
+           LLMRequest.estimateTokens(prompt) > PDFSectionAIAction.maxPromptTokens {
+            aiOperations.transition(
+                requestId,
+                to: .failed,
+                message: "That section question is too long. Shorten it and try again."
+            )
+            return
+        }
+
+        guard let persistence, let retrievalService else {
+            aiOperations.transition(
+                requestId,
+                to: .failed,
+                message: PDFSectionContextError.serviceUnavailable.localizedDescription
+            )
+            return
+        }
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let proxyUsable = await self.isProxyUsable()
+            guard proxyUsable else {
+                self.aiOperations.transition(
+                    requestId,
+                    to: .failed,
+                    message: OrchestratorError.noProviderAvailable.localizedDescription
+                )
+                return
+            }
+
+            let section: PDFSectionSourceContext
+            do {
+                section = try await Task.detached(priority: .userInitiated) {
+                    try retrievalService.assemblePDFSectionContext(
+                        sourceId: sourceId,
+                        streamId: streamId,
+                        page: page
+                    )
+                }.value
+            } catch {
+                guard self.aiOperations.isActive(requestId) else { return }
+                self.aiOperations.transition(
+                    requestId,
+                    to: .failed,
+                    message: Self.compactOperationError(error.localizedDescription)
+                )
+                return
+            }
+
+            guard self.aiOperations.isActive(requestId) else { return }
+            let query = action == .ask
+                ? (prompt ?? "")
+                : "Summarize the PDF section \"\(section.descriptor.sectionTitle)\"."
+            var responseRaw = ""
+            var selectedModel: String?
+
+            await self.routeDocumentAI(
+                query,
+                nil,
+                [],
+                nil,
+                .none,
+                section.sourceContext,
+                action.systemPrompt,
+                { [weak self] chunk in
+                    guard let self, self.aiOperations.isActive(requestId) else { return }
+                    responseRaw += chunk
+                    self.aiOperations.transition(requestId, to: .generating)
+                },
+                { [weak self] sourceContext in
+                    guard let self, self.aiOperations.isActive(requestId) else { return }
+                    let response = responseRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !response.isEmpty else {
+                        self.aiOperations.transition(
+                            requestId,
+                            to: .failed,
+                            message: "AI returned an empty section response."
+                        )
+                        return
+                    }
+
+                    let completedContext = sourceContext ?? section.sourceContext
+                    let manifest = DocumentAICitationManifest.entries(from: completedContext) ?? []
+                    let swappedResponse = CitationMarkerSwap.swap(
+                        response,
+                        manifest: manifest,
+                        mode: .markdownLink
+                    )
+                    let fragment = PDFSectionAIMarkdown.fragment(
+                        action: action,
+                        descriptor: section.descriptor,
+                        prompt: prompt,
+                        response: swappedResponse
+                    )
+                    self.aiOperations.transition(requestId, to: .saving)
+
+                    do {
+                        let span = ProvenanceSpan(
+                            streamId: streamId,
+                            start: 0,
+                            end: UTF16Offsets.utf16Length(fragment),
+                            origin: "ai",
+                            requestId: requestId,
+                            meta: QuickPanelMarkdownFormatter.metadataJSON([
+                                "model": selectedModel ?? "unknown",
+                                "verb": action.rawValue,
+                                "sourceId": sourceId.uuidString,
+                                "sectionPath": section.descriptor.sectionPath
+                            ]),
+                            textHash: FNV1a.hash(fragment)
+                        )
+                        let exchange = AIExchange(
+                            requestId: requestId,
+                            streamId: streamId,
+                            verb: action.rawValue,
+                            userInput: "Section:\n\(section.descriptor.sectionPath)\n\nPrompt:\n\(query)",
+                            sourceManifest: DocumentAICitationManifest.jsonString(from: completedContext),
+                            responseRaw: responseRaw,
+                            model: selectedModel
+                        )
+                        let result = try persistence.appendToStreamDocument(
+                            streamId: streamId,
+                            fragment: fragment,
+                            spans: [span],
+                            exchange: exchange
+                        )
+                        self.sendToWeb(BridgeMessage(type: "streamDocumentAppended", payload: [
+                            "streamId": AnyCodable(streamId.uuidString),
+                            "fragment": AnyCodable(result.fragment),
+                            "revision": AnyCodable(result.revision),
+                            "isNewStream": AnyCodable(false),
+                            "source": AnyCodable("pdfSectionAI"),
+                            "spans": AnyCodable(StreamCodec.encodeSpans(result.spans))
+                        ]))
+                        self.aiOperations.transition(requestId, to: .succeeded)
+                    } catch {
+                        DebugLog.log("[AIMessageHandler] Failed to append PDF section response (\(DebugLog.errorSummary(error)))")
+                        self.aiOperations.transition(
+                            requestId,
+                            to: .failed,
+                            message: "The section response could not be saved."
+                        )
+                    }
+                },
+                { [weak self] error in
+                    guard let self, self.aiOperations.isActive(requestId) else { return }
+                    self.aiOperations.transition(
+                        requestId,
+                        to: .failed,
+                        message: Self.compactOperationError(error.localizedDescription)
+                    )
+                },
+                { modelId in
+                    selectedModel = modelId
+                }
+            )
+        }
+        aiOperations.attach(task, to: requestId)
+    }
+
+    private static func compactOperationError(_ message: String) -> String {
+        let compact = message
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard compact.count > 180 else { return compact.isEmpty ? "AI request failed." : compact }
+        return "\(compact.prefix(177))..."
+    }
+
+    nonisolated static func cleanedDocumentContext(_ context: String) -> String? {
         let cleaned = context
-            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "<u>", with: "")
+            .replacingOccurrences(of: "</u>", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? nil : cleaned
     }

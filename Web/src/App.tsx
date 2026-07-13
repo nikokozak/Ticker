@@ -1,15 +1,81 @@
 import { useEffect, useRef, useState } from 'react';
-import { bridge, Stream, StreamSummary } from './types';
+import { bridge, Stream, StreamSummary, type AIOperationState } from './types';
 import { StreamEditor } from './components/StreamEditor';
 import { SearchModal } from './components/SearchModal';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
-import { DocumentIcon, KeyIcon, Spinner } from './components/icons';
+import { DocumentIcon, KeyIcon, Spinner, XIcon } from './components/icons';
 import { useToastStore } from './store/toastStore';
 import { debugError, debugLog } from './utils/debug';
 import { deserializeProvenanceSpans } from './utils/provenanceSpans';
+import {
+  editorFontStack,
+  normalizeEditorTypography,
+  type EditorTypographySettings,
+} from './utils/editorTypography';
 
 type View = 'list' | 'stream' | 'settings';
+type StorageState = 'checking' | 'ready' | 'unavailable';
+
+const AI_OPERATION_STATES: AIOperationState[] = [
+  'queued',
+  'preparing',
+  'generating',
+  'saving',
+  'succeeded',
+  'failed',
+  'canceled',
+];
+
+export interface AIOperationActivity {
+  requestId: string;
+  streamId: string;
+  verb: string;
+  origin: string;
+  state: AIOperationState;
+  message?: string;
+  updatedAt: number;
+}
+
+export function parseAIOperationActivity(
+  payload: Record<string, unknown> | undefined,
+  updatedAt = Date.now()
+): AIOperationActivity | null {
+  const requestId = payload?.requestId;
+  const streamId = payload?.streamId;
+  const verb = payload?.verb;
+  const origin = payload?.origin;
+  const state = payload?.state;
+  if (typeof requestId !== 'string'
+      || typeof streamId !== 'string'
+      || typeof verb !== 'string'
+      || typeof origin !== 'string'
+      || !AI_OPERATION_STATES.includes(state as AIOperationState)) {
+    return null;
+  }
+
+  return {
+    requestId,
+    streamId,
+    verb,
+    origin,
+    state: state as AIOperationState,
+    ...(typeof payload?.message === 'string' ? { message: payload.message } : {}),
+    updatedAt,
+  };
+}
+
+export function aiOperationActionLabel(
+  operation: Pick<AIOperationActivity, 'origin' | 'verb'>
+): string {
+  if (operation.origin === 'pdfSection') {
+    return operation.verb === 'summarize'
+      ? 'Summarizing a PDF section'
+      : 'Answering a PDF section question';
+  }
+  if (operation.origin === 'quickPanel' && operation.verb === 'develop') return 'Developing';
+  return 'AI work';
+}
 
 // Proxy auth state (matches Swift ProxyAuthState enum)
 type ProxyAuthState =
@@ -21,53 +87,9 @@ type ProxyAuthState =
   | 'blockedBoundElsewhere'
   | 'degradedOffline';
 
-type EditorFont = 'systemSans' | 'humanistSans' | 'monoSans';
-
-interface EditorTypographySettings {
-  editorFont: EditorFont;
-  editorFontSize: number;
-  editorLineSpacing: number;
-}
-
-const DEFAULT_EDITOR_TYPOGRAPHY: EditorTypographySettings = {
-  editorFont: 'systemSans',
-  editorFontSize: 16,
-  editorLineSpacing: 1.55,
-};
-
 export function shouldAcceptStreamLoaded(requestId: unknown, pendingRequestId: number | null): boolean {
   if (requestId === undefined) return pendingRequestId === null;
   return typeof requestId === 'number' && Number.isInteger(requestId) && requestId === pendingRequestId;
-}
-
-function editorFontStack(font: EditorFont): string {
-  switch (font) {
-    case 'humanistSans':
-      return '"Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
-    case 'monoSans':
-      return '"SF Mono", "JetBrains Mono", "IBM Plex Sans", Menlo, "SF Pro Text", sans-serif';
-    case 'systemSans':
-    default:
-      return '"SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", sans-serif';
-  }
-}
-
-function normalizeEditorTypography(raw: Partial<EditorTypographySettings> | null | undefined): EditorTypographySettings {
-  const merged = { ...DEFAULT_EDITOR_TYPOGRAPHY, ...(raw ?? {}) };
-  const validFonts: EditorFont[] = ['systemSans', 'humanistSans', 'monoSans'];
-  const editorFont = validFonts.includes(merged.editorFont) ? merged.editorFont : DEFAULT_EDITOR_TYPOGRAPHY.editorFont;
-  const editorFontSize = Number.isFinite(Number(merged.editorFontSize))
-    ? Math.min(24, Math.max(13, Number(merged.editorFontSize)))
-    : DEFAULT_EDITOR_TYPOGRAPHY.editorFontSize;
-  const editorLineSpacing = Number.isFinite(Number(merged.editorLineSpacing))
-    ? Math.min(2.0, Math.max(1.3, Number(merged.editorLineSpacing)))
-    : DEFAULT_EDITOR_TYPOGRAPHY.editorLineSpacing;
-
-  return {
-    editorFont,
-    editorFontSize: Number(editorFontSize.toFixed(1)),
-    editorLineSpacing: Number(editorLineSpacing.toFixed(2)),
-  };
 }
 
 function applyEditorTypography(settings: EditorTypographySettings) {
@@ -83,12 +105,15 @@ export function App() {
   const [currentStream, setCurrentStream] = useState<Stream | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingStream, setIsLoadingStream] = useState(false);
+  const [streamListError, setStreamListError] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
+  const [aiOperations, setAIOperations] = useState<Map<string, AIOperationActivity>>(new Map());
   const addToast = useToastStore((state) => state.addToast);
   const viewRef = useRef(view);
   const currentStreamIdRef = useRef<string | null>(currentStream?.id ?? null);
   const streamLoadSequenceRef = useRef(0);
   const pendingStreamLoadRequestIdRef = useRef<number | null>(null);
+  const aiOperationDismissTimersRef = useRef<Map<string, number>>(new Map());
 
   const requestStreamLoad = (id: string) => {
     const requestId = ++streamLoadSequenceRef.current;
@@ -98,6 +123,7 @@ export function App() {
 
   // Proxy auth state - gates main UI until key is validated
   const [proxyAuthState, setProxyAuthState] = useState<ProxyAuthState>('validating');
+  const [storageState, setStorageState] = useState<StorageState>('checking');
   const isAuthGated = proxyAuthState !== 'active' && proxyAuthState !== 'degradedOffline';
 
   // Load initial proxy auth state
@@ -115,7 +141,14 @@ export function App() {
   // Load global editor typography settings on app startup.
   useEffect(() => {
     bridge.send({ type: 'loadSettings' });
+    bridge.send({ type: 'loadStorageState' });
   }, []);
+
+  useEffect(() => {
+    if (storageState !== 'ready') return undefined;
+    const timeout = window.setTimeout(() => bridge.send({ type: 'loadStreams' }), 100);
+    return () => window.clearTimeout(timeout);
+  }, [storageState]);
 
   useEffect(() => {
     viewRef.current = view;
@@ -166,6 +199,13 @@ export function App() {
     // Subscribe to bridge messages
     const unsubscribe = bridge.onMessage((message) => {
       switch (message.type) {
+        case 'flushEditor': {
+          const requestId = message.payload?.requestId;
+          if (typeof requestId === 'string' && viewRef.current !== 'stream') {
+            bridge.send({ type: 'editorFlushed', payload: { requestId } });
+          }
+          break;
+        }
         case 'bridgeError':
           if (import.meta.env.DEV) {
             const originalType = String(message.payload?.originalType ?? 'unknown');
@@ -175,13 +215,55 @@ export function App() {
             addToast('Ticker could not complete that action. Try again.', 'error');
           }
           break;
+        case 'aiOperationChanged': {
+          const operation = parseAIOperationActivity(message.payload);
+          if (!operation) break;
+
+          const previousTimer = aiOperationDismissTimersRef.current.get(operation.requestId);
+          if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+          aiOperationDismissTimersRef.current.delete(operation.requestId);
+
+          setAIOperations((current) => {
+            const next = new Map(current);
+            next.set(operation.requestId, operation);
+            return next;
+          });
+
+          if (operation.state === 'succeeded' || operation.state === 'failed' || operation.state === 'canceled') {
+            const timeout = window.setTimeout(() => {
+              aiOperationDismissTimersRef.current.delete(operation.requestId);
+              setAIOperations((current) => {
+                const next = new Map(current);
+                next.delete(operation.requestId);
+                return next;
+              });
+            }, operation.state === 'failed' ? 10_000 : 4_000);
+            aiOperationDismissTimersRef.current.set(operation.requestId, timeout);
+          }
+          break;
+        }
         case 'proxyAuthState':
           // State change pushed from Swift
           setProxyAuthState(message.payload?.state as ProxyAuthState);
           break;
+        case 'storageStateChanged': {
+          const state = message.payload?.state;
+          if (state !== 'ready' && state !== 'unavailable') break;
+          setStorageState(state);
+          if (state === 'unavailable') {
+            setIsLoading(false);
+            setIsLoadingStream(false);
+          }
+          break;
+        }
         case 'streamsLoaded':
           setStreams((message.payload?.streams as StreamSummary[]) || []);
+          setStreamListError(null);
           setIsLoading(false);
+          break;
+        case 'streamsLoadFailed':
+          setIsLoading(false);
+          setStreamListError('Ticker could not load your streams.');
           break;
         case 'streamLoaded': {
           const requestId = message.payload?.requestId;
@@ -211,6 +293,19 @@ export function App() {
           setCurrentStream(loadedStream);
           setIsLoadingStream(false);
           setView('stream');
+          break;
+        }
+        case 'streamLoadFailed': {
+          const requestId = message.payload?.requestId;
+          if (!shouldAcceptStreamLoaded(requestId, pendingStreamLoadRequestIdRef.current)) break;
+          pendingStreamLoadRequestIdRef.current = null;
+          setIsLoadingStream(false);
+          addToast(
+            message.payload?.reason === 'notFound'
+              ? 'That stream no longer exists.'
+              : 'Ticker could not open that stream. Try again.',
+            'error'
+          );
           break;
         }
         case 'marginNotesChanged': {
@@ -248,12 +343,13 @@ export function App() {
       }
     });
 
-    // Request initial data after a short delay to ensure bridge is ready
-    setTimeout(() => {
-      bridge.send({ type: 'loadStreams' });
-    }, 100);
-
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      for (const timeout of aiOperationDismissTimersRef.current.values()) {
+        window.clearTimeout(timeout);
+      }
+      aiOperationDismissTimersRef.current.clear();
+    };
   }, [addToast]);
 
   const handleCreateStream = () => {
@@ -322,11 +418,42 @@ export function App() {
     setView('list');
   };
 
+  const handleCopyDiagnostics = async () => {
+    try {
+      const result = await bridge.sendAsync<{ bundle: Record<string, unknown> }>('getSupportBundle');
+      await navigator.clipboard.writeText(JSON.stringify(result.bundle, null, 2));
+      addToast('Diagnostics copied to clipboard.', 'success');
+    } catch {
+      addToast('Diagnostics could not be copied.', 'error');
+    }
+  };
+
+  const handleRetryStreamList = () => {
+    setStreamListError(null);
+    setIsLoading(true);
+    bridge.send({ type: 'loadStreams' });
+  };
+
   let viewContent: JSX.Element;
 
   // Always allow settings view (for key entry)
   if (view === 'settings') {
     viewContent = <Settings onClose={handleCloseSettings} />;
+  } else if (storageState === 'unavailable') {
+    viewContent = (
+      <StorageGate
+        onOpenSettings={handleOpenSettings}
+        onCopyDiagnostics={handleCopyDiagnostics}
+        onQuit={() => bridge.send({ type: 'quitApp' })}
+      />
+    );
+  } else if (storageState === 'checking') {
+    viewContent = (
+      <div className="loading-state">
+        <Spinner className="loading-spinner" />
+        <p>Opening notes...</p>
+      </div>
+    );
   } else if (isAuthGated) {
     // Gate main UI until authenticated
     viewContent = (
@@ -356,9 +483,11 @@ export function App() {
         streams={streams}
         isLoading={isLoading}
         isLoadingStream={isLoadingStream}
+        error={streamListError}
         onSelect={handleSelectStream}
         onCreate={handleCreateStream}
         onSettings={handleOpenSettings}
+        onRetry={handleRetryStreamList}
       />
     );
   }
@@ -376,7 +505,76 @@ export function App() {
         onNavigateToSource={handleNavigateToSource}
       />
       <ToastStack />
+      <AIActivityCapsule
+        operations={[...aiOperations.values()].sort((a, b) => b.updatedAt - a.updatedAt)}
+        streams={streams}
+        currentStream={currentStream}
+        onCancel={(requestId) => bridge.send({ type: 'cancelAIOperation', payload: { requestId } })}
+      />
     </>
+  );
+}
+
+interface AIActivityCapsuleProps {
+  operations: AIOperationActivity[];
+  streams: StreamSummary[];
+  currentStream: Stream | null;
+  onCancel: (requestId: string) => void;
+}
+
+function AIActivityCapsule({ operations, streams, currentStream, onCancel }: AIActivityCapsuleProps) {
+  if (operations.length === 0) return null;
+
+  const streamTitle = (streamId: string) => {
+    if (currentStream?.id === streamId) return currentStream.title;
+    return streams.find((stream) => stream.id === streamId)?.title ?? 'Stream';
+  };
+
+  const phaseLabel = (state: AIOperationState) => {
+    switch (state) {
+      case 'queued': return 'Queued';
+      case 'preparing': return 'Preparing';
+      case 'generating': return 'Writing';
+      case 'saving': return 'Saving';
+      case 'succeeded': return 'Saved';
+      case 'failed': return 'Failed';
+      case 'canceled': return 'Canceled';
+    }
+  };
+
+  return (
+    <section className="ai-activity-capsule" aria-label="AI activity" aria-live="polite">
+      {operations.slice(0, 4).map((operation) => {
+        const isActive = operation.state !== 'succeeded'
+          && operation.state !== 'failed'
+          && operation.state !== 'canceled';
+        return (
+          <div className="ai-activity-row" data-state={operation.state} key={operation.requestId}>
+            {isActive ? <Spinner className="ai-activity-spinner" /> : <span className="ai-activity-dot" aria-hidden="true" />}
+            <span className="ai-activity-copy">
+              <span className="ai-activity-label">{aiOperationActionLabel(operation)}</span>
+              <span className="ai-activity-stream">
+                {phaseLabel(operation.state)} · {streamTitle(operation.streamId)}
+              </span>
+              {operation.state === 'failed' && operation.message && (
+                <span className="ai-activity-message">{operation.message}</span>
+              )}
+            </span>
+            {isActive && (
+              <button
+                type="button"
+                className="ai-activity-cancel"
+                onClick={() => onCancel(operation.requestId)}
+                aria-label={`Stop AI in ${streamTitle(operation.streamId)}`}
+              >
+                <XIcon size={12} /> Stop
+              </button>
+            )}
+          </div>
+        );
+      })}
+      {operations.length > 4 && <div className="ai-activity-more">+{operations.length - 4} more</div>}
+    </section>
   );
 }
 
@@ -384,9 +582,11 @@ interface StreamListViewProps {
   streams: StreamSummary[];
   isLoading: boolean;
   isLoadingStream: boolean;
+  error: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onSettings: () => void;
+  onRetry: () => void;
 }
 
 function formatRelativeTime(dateString: string): string {
@@ -427,7 +627,7 @@ function formatStreamMetadata(stream: StreamSummary): string {
   return segments.join(' · ');
 }
 
-function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreate, onSettings }: StreamListViewProps) {
+function StreamListView({ streams, isLoading, isLoadingStream, error, onSelect, onCreate, onSettings, onRetry }: StreamListViewProps) {
   // Sort streams by updatedAt (most recent first)
   const sortedStreams = [...streams].sort((a, b) =>
     new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -449,6 +649,13 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
           <div className="loading-state">
             <Spinner className="loading-spinner" />
             <p>Loading...</p>
+          </div>
+        ) : error ? (
+          <div className="empty-state">
+            <div className="empty-state-icon"><DocumentIcon size={56} /></div>
+            <h2>Streams unavailable</h2>
+            <p>{error}</p>
+            <button onClick={onRetry} className="primary-button">Try again</button>
           </div>
         ) : streams.length === 0 ? (
           <div className="empty-state">
@@ -482,6 +689,32 @@ function StreamListView({ streams, isLoading, isLoadingStream, onSelect, onCreat
             </button>
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+interface StorageGateProps {
+  onOpenSettings: () => void;
+  onCopyDiagnostics: () => void;
+  onQuit: () => void;
+}
+
+function StorageGate({ onOpenSettings, onCopyDiagnostics, onQuit }: StorageGateProps) {
+  return (
+    <div className="auth-gate">
+      <div className="auth-gate-content">
+        <div className="auth-gate-icon"><DocumentIcon size={48} /></div>
+        <h1>Notes unavailable</h1>
+        <p>
+          Ticker could not open its local database. Settings and diagnostics are still available;
+          quit and reopen Ticker after checking disk access.
+        </p>
+        <div className="storage-gate-actions">
+          <button type="button" className="primary-button" onClick={onOpenSettings}>Open Settings</button>
+          <button type="button" className="settings-support-bundle-btn" onClick={onCopyDiagnostics}>Copy Diagnostics</button>
+          <button type="button" className="settings-button" onClick={onQuit}>Quit Ticker</button>
+        </div>
       </div>
     </div>
   );

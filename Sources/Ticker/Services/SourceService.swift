@@ -1,7 +1,6 @@
 import Foundation
-import PDFKit
+import ImageIO
 import Vision
-import AppKit
 
 /// Manages file sources: bookmarks, access, and legacy whole-document text extraction.
 final class SourceService {
@@ -139,14 +138,14 @@ final class SourceService {
 
     // MARK: - Text Extraction
 
-    /// Extract text from a source file
-    func extractText(from source: SourceReference) throws -> (text: String, pageCount: Int?) {
+    /// Extract text from a non-PDF source file. PDFs are extracted once by IngestService.
+    private func extractText(from source: SourceReference) throws -> (text: String, pageCount: Int?) {
         let url = try accessFile(source)
         defer { url.stopAccessingSecurityScopedResource() }
 
         switch source.fileType {
         case .pdf:
-            return try extractPDFText(from: url)
+            throw SourceError.extractionFailed("PDF extraction is handled during indexing")
         case .text, .markdown:
             let text = try String(contentsOf: url, encoding: .utf8)
             return (text, nil)
@@ -155,30 +154,12 @@ final class SourceService {
         }
     }
 
-    private func extractPDFText(from url: URL) throws -> (text: String, pageCount: Int?) {
-        guard let document = PDFDocument(url: url) else {
-            throw SourceError.extractionFailed("Could not open PDF")
-        }
-
-        let pageCount = document.pageCount
-        var text = ""
-
-        for i in 0..<pageCount {
-            if let page = document.page(at: i),
-               let pageText = page.string {
-                if !text.isEmpty {
-                    text += "\n\n--- Page \(i + 1) ---\n\n"
-                }
-                text += pageText
-            }
-        }
-
-        return (text, pageCount)
-    }
-
     private func extractImageText(from url: URL) throws -> (text: String, pageCount: Int?) {
-        guard let image = NSImage(contentsOf: url),
-              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        try ImageImportPolicy.validateFileSize(at: url)
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        _ = try ImageImportPolicy.metadata(for: data)
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw SourceError.extractionFailed("Could not load image")
         }
 
@@ -202,12 +183,11 @@ final class SourceService {
 
     // MARK: - Full Processing
 
-    /// Create and process a source: create bookmark, extract text, and save for the legacy whole-text AI path.
+    /// Create and process a source. PDF extraction belongs to the background indexer.
     func addSource(from url: URL, to streamId: UUID) throws -> SourceReference {
-        // Create the source with bookmark
         var source = try createSource(from: url, for: streamId)
+        guard source.fileType != .pdf else { return source }
 
-        // Extract text
         do {
             let (text, pageCount) = try extractText(from: source)
             source.extractedText = text.isEmpty ? nil : text
@@ -218,7 +198,6 @@ final class SourceService {
             DebugLog.log("Text extraction failed (\(DebugLog.errorSummary(error)))")
         }
 
-        // Update in database
         try persistence.saveSource(source)
 
         return source

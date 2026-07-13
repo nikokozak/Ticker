@@ -6,6 +6,10 @@
       "bridgeError": {
         "requiredPayloadKeys": ["originalType", "reason"]
       },
+      "aiOperationChanged": {
+        "requiredPayloadKeys": ["requestId", "streamId", "verb", "origin", "state"],
+        "optionalPayloadKeys": ["message"]
+      },
       "callback": {
         "requiredPayloadKeys": [],
         "requiredCallbackId": true
@@ -39,6 +43,9 @@
       "fileDropError": {
         "requiredPayloadKeys": ["error"]
       },
+      "flushEditor": {
+        "requiredPayloadKeys": ["requestId"]
+      },
       "getEditorSelection": {
         "requiredPayloadKeys": ["requestId"]
       },
@@ -54,9 +61,15 @@
       "pdfHighlightLinked": {
         "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page", "quote"]
       },
+      "revealPdfHighlightInStream": {
+        "requiredPayloadKeys": ["streamId", "sourceId", "highlightId"]
+      },
       "pdfPaneStateChanged": {
         "requiredPayloadKeys": ["visible"],
         "optionalPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle"]
+      },
+      "pdfSectionActionRequested": {
+        "requiredPayloadKeys": ["action", "streamId", "sourceId", "shortTitle", "sectionTitle", "page"]
       },
       "pdfAnchorPlaced": {
         "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page"]
@@ -67,14 +80,11 @@
       "proxyAuthState": {
         "requiredPayloadKeys": ["state"]
       },
-      "quickPanelAIFailed": {
-        "requiredPayloadKeys": ["streamId", "message"]
-      },
-      "quickPanelAIStarted": {
-        "requiredPayloadKeys": ["streamId"]
-      },
       "settingsLoaded": {
         "requiredPayloadKeys": ["settings"]
+      },
+      "storageStateChanged": {
+        "requiredPayloadKeys": ["state"]
       },
       "sourceAdded": {
         "requiredPayloadKeys": ["source"]
@@ -102,6 +112,10 @@
         "requiredPayloadKeys": ["stream", "spans", "marginNotes"],
         "optionalPayloadKeys": ["scrollOffset", "sourceScope", "requestId"]
       },
+      "streamLoadFailed": {
+        "requiredPayloadKeys": ["id", "reason"],
+        "optionalPayloadKeys": ["requestId"]
+      },
       "streamTitleUpdated": {
         "requiredPayloadKeys": ["id", "title"]
       },
@@ -110,6 +124,9 @@
       },
       "streamsLoaded": {
         "requiredPayloadKeys": ["streams"]
+      },
+      "streamsLoadFailed": {
+        "requiredPayloadKeys": ["reason"]
       }
     }
   },
@@ -124,6 +141,9 @@
       "cancelDocumentAI": {
         "requiredPayloadKeys": ["requestId"]
       },
+      "cancelAIOperation": {
+        "requiredPayloadKeys": ["requestId"]
+      },
       "clearProxyDeviceKey": {
         "requiredPayloadKeys": [],
         "requiredCallbackId": true
@@ -133,6 +153,9 @@
       },
       "deleteStream": {
         "requiredPayloadKeys": ["id"]
+      },
+      "editorFlushed": {
+        "requiredPayloadKeys": ["requestId"]
       },
       "editorSelection": {
         "requiredPayloadKeys": ["requestId", "text"]
@@ -153,6 +176,9 @@
       "loadSettings": {
         "requiredPayloadKeys": []
       },
+      "loadStorageState": {
+        "requiredPayloadKeys": []
+      },
       "loadStream": {
         "requiredPayloadKeys": ["id"],
         "optionalPayloadKeys": ["requestId"]
@@ -170,6 +196,9 @@
       "openSource": {
         "requiredPayloadKeys": ["sourceId"]
       },
+      "quitApp": {
+        "requiredPayloadKeys": []
+      },
       "openPdfDestination": {
         "requiredPayloadKeys": ["streamId"],
         "optionalPayloadKeys": ["sourceId", "highlightId", "page", "chunkId", "quote", "url"]
@@ -183,6 +212,10 @@
       },
       "retrySourceIndexing": {
         "requiredPayloadKeys": ["sourceId"]
+      },
+      "runPdfSectionAI": {
+        "requiredPayloadKeys": ["action", "streamId", "sourceId", "page"],
+        "optionalPayloadKeys": ["prompt"]
       },
       "setSourceAIExclusion": {
         "requiredPayloadKeys": ["sourceId", "excluded"]

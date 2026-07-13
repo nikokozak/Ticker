@@ -1,15 +1,99 @@
 import Foundation
-import AppKit
+import ImageIO
+import UniformTypeIdentifiers
+
+enum ImageImportPolicy {
+    static let maxByteCount = 25 * 1024 * 1024
+    static let maxPixelDimension = 12_000
+    static let maxPixelCount = 64_000_000
+    static let maxBase64CharacterCount = ((maxByteCount + 2) / 3) * 4
+
+    struct Metadata {
+        let fileExtension: String
+        let width: Int
+        let height: Int
+    }
+
+    static func data(fromBase64 encoded: String) throws -> Data {
+        guard encoded.utf8.count <= maxBase64CharacterCount else {
+            throw ImageImportError.tooManyBytes
+        }
+        guard let data = Data(base64Encoded: encoded) else {
+            throw ImageImportError.invalidImage
+        }
+        return data
+    }
+
+    static func validateFileSize(at url: URL) throws {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey])
+        guard let fileSize = values.fileSize else {
+            throw ImageImportError.unreadableSize
+        }
+        guard fileSize <= maxByteCount else {
+            throw ImageImportError.tooManyBytes
+        }
+    }
+
+    static func metadata(for data: Data) throws -> Metadata {
+        guard data.count <= maxByteCount else {
+            throw ImageImportError.tooManyBytes
+        }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              width > 0,
+              height > 0,
+              let typeIdentifier = CGImageSourceGetType(source) as String?,
+              let type = UTType(typeIdentifier),
+              type.conforms(to: .image),
+              let fileExtension = type.preferredFilenameExtension else {
+            throw ImageImportError.invalidImage
+        }
+
+        guard width <= maxPixelDimension,
+              height <= maxPixelDimension,
+              Int64(width) * Int64(height) <= Int64(maxPixelCount) else {
+            throw ImageImportError.tooManyPixels
+        }
+
+        return Metadata(fileExtension: fileExtension, width: width, height: height)
+    }
+}
+
+enum ImageImportError: LocalizedError {
+    case invalidImage
+    case tooManyBytes
+    case tooManyPixels
+    case unreadableSize
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidImage:
+            return "That file is not a supported image."
+        case .tooManyBytes:
+            return "Images must be 25 MB or smaller."
+        case .tooManyPixels:
+            return "That image's dimensions are too large."
+        case .unreadableSize:
+            return "Could not determine the image size."
+        }
+    }
+}
 
 /// Manages stream assets (images, files) stored locally
-final class AssetService {
+final class AssetService: @unchecked Sendable {
     private let fileManager = FileManager.default
+    private let assetsBaseDirectory: URL
 
-    /// Base directory for all stream assets
-    private var assetsBaseDirectory: URL {
+    init(baseDirectory: URL? = nil) {
+        if let baseDirectory {
+            self.assetsBaseDirectory = baseDirectory
+            return
+        }
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
-        return appSupport.appendingPathComponent("Ticker-Next/assets", isDirectory: true)
+        self.assetsBaseDirectory = appSupport.appendingPathComponent("Ticker-Next/assets", isDirectory: true)
     }
 
     /// Get the assets directory for a specific stream
@@ -27,23 +111,14 @@ final class AssetService {
 
     /// Save image data to the stream's assets folder
     /// Returns the relative path from assets base (for storage in cell content)
-    func saveImage(data: Data, streamId: UUID, filename: String? = nil) throws -> String {
+    func saveImage(data: Data, streamId: UUID) throws -> String {
+        let metadata = try ImageImportPolicy.metadata(for: data)
         try ensureAssetsDirectory(for: streamId)
 
         let directory = assetsDirectory(for: streamId)
-
-        // Generate unique filename if not provided
-        let finalFilename: String
-        if let filename = filename {
-            finalFilename = filename
-        } else {
-            // Detect image type and use appropriate extension
-            let ext = imageExtension(from: data) ?? "png"
-            finalFilename = "\(UUID().uuidString).\(ext)"
-        }
-
+        let finalFilename = "\(UUID().uuidString).\(metadata.fileExtension)"
         let fileURL = directory.appendingPathComponent(finalFilename)
-        try data.write(to: fileURL)
+        try data.write(to: fileURL, options: .atomic)
 
         // Return relative path: streamId/filename
         return "\(streamId.uuidString)/\(finalFilename)"
@@ -51,9 +126,9 @@ final class AssetService {
 
     /// Save an image from a file URL (copies to assets folder)
     func saveImage(from sourceURL: URL, streamId: UUID) throws -> String {
-        let data = try Data(contentsOf: sourceURL)
-        let filename = sourceURL.lastPathComponent
-        return try saveImage(data: data, streamId: streamId, filename: filename)
+        try ImageImportPolicy.validateFileSize(at: sourceURL)
+        let data = try Data(contentsOf: sourceURL, options: .mappedIfSafe)
+        return try saveImage(data: data, streamId: streamId)
     }
 
     /// Get the full file URL for an asset path
@@ -111,13 +186,25 @@ final class AssetService {
         }
 
         let safeURL = URL(fileURLWithPath: canonicalPath)
-        guard let data = try? Data(contentsOf: safeURL) else {
-            DebugLog.log("AssetService: Could not read asset file")
+        let data: Data
+        let metadata: ImageImportPolicy.Metadata
+        do {
+            try ImageImportPolicy.validateFileSize(at: safeURL)
+            data = try Data(contentsOf: safeURL, options: .mappedIfSafe)
+            metadata = try ImageImportPolicy.metadata(for: data)
+        } catch {
+            DebugLog.log("AssetService: Could not read asset file (\(DebugLog.errorSummary(error)))")
             return nil
         }
 
         // Resize image if needed and convert to JPEG for efficient encoding
-        let (finalData, mimeType) = resizeImageForAPI(data: data, maxDimension: 2048)
+        guard let (finalData, mimeType) = resizeImageForAPI(
+            data: data,
+            metadata: metadata,
+            maxDimension: 2048
+        ) else {
+            return nil
+        }
 
         // Convert to data URL
         let base64 = finalData.base64EncodedString()
@@ -133,85 +220,47 @@ final class AssetService {
 
     /// Resize image data if it exceeds maxDimension on longest edge
     /// Returns (resized data, mime type) - uses JPEG for resized images to reduce size
-    private func resizeImageForAPI(data: Data, maxDimension: CGFloat) -> (Data, String) {
-        guard let image = NSImage(data: data) else {
-            // Not an image or corrupted - return original
-            return (data, "application/octet-stream")
-        }
-
-        let size = image.size
-        let longestEdge = max(size.width, size.height)
+    private func resizeImageForAPI(
+        data: Data,
+        metadata: ImageImportPolicy.Metadata,
+        maxDimension: Int
+    ) -> (Data, String)? {
+        let longestEdge = max(metadata.width, metadata.height)
 
         // If image is already small enough, return original with detected type
         if longestEdge <= maxDimension {
-            let ext = imageExtension(from: data) ?? "png"
-            return (data, mimeType(for: ext))
+            return (data, mimeType(for: metadata.fileExtension))
         }
 
-        // Calculate new size maintaining aspect ratio
-        let scale = maxDimension / longestEdge
-        let newSize = NSSize(width: size.width * scale, height: size.height * scale)
-
-        // Create resized image
-        let resizedImage = NSImage(size: newSize)
-        resizedImage.lockFocus()
-        NSGraphicsContext.current?.imageInterpolation = .high
-        image.draw(in: NSRect(origin: .zero, size: newSize),
-                   from: NSRect(origin: .zero, size: size),
-                   operation: .copy,
-                   fraction: 1.0)
-        resizedImage.unlockFocus()
-
-        // Convert to JPEG with 0.85 quality - good balance of size and quality for text
-        guard let tiffData = resizedImage.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData),
-              let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
-            // Fallback to original if conversion fails
-            let ext = imageExtension(from: data) ?? "png"
-            return (data, mimeType(for: ext))
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+              ] as CFDictionary) else {
+            return nil
         }
 
-        return (jpegData, "image/jpeg")
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        ) else {
+            return nil
+        }
+        CGImageDestinationAddImage(
+            destination,
+            thumbnail,
+            [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary
+        )
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return (output as Data, "image/jpeg")
     }
 
     /// Get MIME type for file extension
     private func mimeType(for ext: String) -> String {
-        switch ext.lowercased() {
-        case "png": return "image/png"
-        case "jpg", "jpeg": return "image/jpeg"
-        case "gif": return "image/gif"
-        case "webp": return "image/webp"
-        case "heic", "heif": return "image/heic"
-        default: return "application/octet-stream"
-        }
-    }
-
-    /// Detect image format from data header bytes
-    private func imageExtension(from data: Data) -> String? {
-        guard data.count >= 8 else { return nil }
-
-        let bytes = [UInt8](data.prefix(8))
-
-        // PNG: 89 50 4E 47 0D 0A 1A 0A
-        if bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47 {
-            return "png"
-        }
-
-        // JPEG: FF D8 FF
-        if bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
-            return "jpg"
-        }
-
-        // GIF: 47 49 46 38
-        if bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38 {
-            return "gif"
-        }
-
-        // WebP: 52 49 46 46 ... 57 45 42 50
-        if bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46 {
-            return "webp"
-        }
-
-        return nil
+        UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
     }
 }

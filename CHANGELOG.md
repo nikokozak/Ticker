@@ -5,6 +5,11 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
+- Editor chrome now prioritizes sources, tucks destructive actions into overflow, simplifies selection tools, and gives background AI work action-specific status.
+- PDF section actions now use a labeled Section control instead of an ambiguous icon.
+- Saved PDF highlights and point anchors now reveal their linked text in the stream when clicked, while PDF text drags continue to select normally.
+- PDF outline sections now offer Ask and Summarize actions that use only the exact indexed section, show cancellable AI progress, append cited results, and link back to the source page.
+- A global AI Activity Capsule now follows Quick Panel work across streams, shows each phase and outcome, and lets you stop an active request.
 - Underline joins bold and italic: ⌘U and a U button in the selection menu (stored as `<u>` in the markdown substrate, rendered with the tags concealed).
 - AI answers now use rudimentary Markdown structure — bolded key terms, short paragraphs, lists and headings where they genuinely organize the material — instead of uniformly flat prose.
 - Source answers now use on-device semantic retrieval alongside lexical matching, improving paraphrase recall while preserving the existing fallback behavior.
@@ -46,6 +51,14 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- The quick-window now uses a roomier, higher-contrast capture surface with larger type, clearer shortcuts, and confirmation attached to the action that was pressed.
+- PDF quote and point-anchor actions now say exactly what they do, clear completed PDF selections, and persist before drawing so failed saves cannot leave phantom annotations.
+- Editor font, size, and line-spacing defaults now use the same validation in app startup and Settings.
+- The inactive ⌘; screenshot shortcut and its deprecated mode were removed; clipboard images still attach through ⌘L after a macOS screenshot.
+- Release builds no longer bundle unused programming-language parsers or stale web assets from earlier builds.
+- The main window, Quick Panel, and PDF pane now share the editor’s neutral surfaces and sienna accent, and Quick Panel names its background action “develop + save.”
+- Delete, AI prompt, Search, Sources, and Exchange now share native modal behavior with contained focus, Escape and outside-click dismissal, and focus restoration.
+- The selection toolbar now keeps common formatting and one AI entry in view, moves secondary actions behind disclosure, and fits alongside the link and provenance popovers at the 300 px window minimum.
 - Stream lists now load bounded previews and cached word counts instead of transferring every document in full.
 - Provenance spans now avoid unnecessary rehashing during edits and preserve distinct adjacent source attribution.
 - Selection dragging in large documents now avoids repeated text extraction and dormant margin-note/find rescans.
@@ -61,6 +74,30 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Editor selections now stay readable in dark mode, wrapped passages scroll without geometry jumps, smart apostrophes preserve the caret, and only exact Quick-window shortcuts can invoke AI.
+- Quick-window invocation no longer waits through repeated Accessibility reads after the source app has already reported that nothing is selected.
+- Quick-window saves now dismiss in one immediate motion without flashing the note, recoloring the destination, or resizing during the fade.
+- Quick Panel AI now keeps explicitly captured text when it also retrieves sources, instead of letting retrieval replace the user's chosen context.
+- A terminated WebKit content process now reopens the active stream from its last committed revision instead of dropping back to the stream list.
+- Quitting immediately after an edit now waits briefly for the open editor to roll back temporary AI state and flush its latest text, with one bounded save retry.
+- Queued editor saves now capture live text, provenance, and revision together instead of letting an older snapshot overwrite a newer external append.
+- In-editor AI no longer autosaves temporary deletions or partial output, and leaving a stream mid-request restores the original passage before saving.
+- Deleting a PDF link and autosaving no longer destroys its backing highlight, so Undo restores a working link.
+- The editor header, stream list, dialogs, and selection disclosures now remain usable at the 300 px minimum window width, including very long titles.
+- `ticker://append` now refuses ambiguous duplicate stream titles and directs reliable automation to the stream UUID instead of picking an arbitrary match.
+- Search now includes source passages from every stream, including locally searchable sources marked Private for AI.
+- Opening a PDF pane no longer overwrites the saved editor-only window frame; autosave resumes after the pane collapses.
+- Quick Panel setup is now synchronous, deleted stream targets are discarded before saving, editor selection capture has a realistic timeout, and canceled chat turns leave no hidden partial response.
+- Source-backed AI now performs local retrieval outside the main actor, keeping the window responsive during semantic query waits.
+- Image imports now keep immutable unique assets, write atomically, reject oversized inputs before decoding, and prepare AI image context off the main thread.
+- PDF attachments now extract text once in the background instead of blocking the main window and repeating the work during indexing.
+- Literal Markdown entities now stay unchanged when editor context is sent to AI.
+- Stream loading now has correlated failure states, and a database startup failure leaves Settings, diagnostics, and Quit available instead of trapping the app behind loading UI.
+- AI context cleaning now removes only Ticker’s exact underline tags, preserving comparisons, generic types, and code-like angle brackets.
+- Removing a source now cancels its queued or active indexing work first, and failed status writes stop after a bounded retry instead of recurring forever.
+- Text, Markdown, and OCR image sources now build retrieval chunks instead of reporting ready with no searchable content.
+- Quick Panel AI answers, provenance, and exchange receipts now save in one transaction instead of leaving partial history when a database write fails.
+- Overlapping Quick Panel AI requests now keep independent activity state, failures no longer write operational text into notes, and external captures no longer occupy local editor Undo history.
 - Source retrieval no longer treats one strong word shared with a multi-word question as sufficient lexical evidence.
 - The PDF pane now follows the app's light/dark theme: page margins and pane backgrounds previously stayed light in dark mode, and opening/closing no longer warps the window across the screen — the pane and window frame animate together.
 - The provenance-overlay popover now follows the hovered text and positions like the selection menu; it previously rendered cramped at the top-right of the stream regardless of the pointer.

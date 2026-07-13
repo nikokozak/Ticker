@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, forwardRef, type ReactNode } 
 import type { SourceIndexStatus, SourceReference } from '../types';
 import { bridge } from '../types';
 import { DocumentIcon, ImageIcon, PaperclipIcon, XIcon } from './icons';
+import { Modal } from './Modal';
 
 interface SourceIndexStatusLineInput {
   status: SourceIndexStatus;
@@ -166,19 +167,6 @@ export function SourcesModal({
   useEffect(() => {
     if (!isOpen) return undefined;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        handleClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleClose, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return undefined;
-
     const unsubscribe = bridge.onMessage((message) => {
       if (message.type === 'sourceError' && message.payload?.error) {
         showError(message.payload.error as string);
@@ -248,17 +236,14 @@ export function SourcesModal({
   if (!isOpen) return null;
 
   return (
-    <div className="sources-modal-overlay" onClick={handleClose}>
-      <div
-        className={`sources-modal ${isDragOver ? 'sources-modal--drag-over' : ''}`}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="sources-modal-title"
-        onClick={(event) => event.stopPropagation()}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
+    <Modal
+      className={`sources-modal ${isDragOver ? 'sources-modal--drag-over' : ''}`}
+      aria-labelledby="sources-modal-title"
+      onRequestClose={handleClose}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
         <div className="sources-modal-header">
           <div>
             <h2 id="sources-modal-title">Sources</h2>
@@ -309,8 +294,7 @@ export function SourcesModal({
             ))
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

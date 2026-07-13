@@ -110,4 +110,15 @@ describe('MarkdownConceal static concealment', () => {
     const tickerStart = doc.indexOf('[Book');
     expect(ranges.filter(([from]) => from >= tickerStart).length).toBeGreaterThan(0);
   });
+
+  it('conceals escape slashes without hiding bracketed ticker-pdf labels', () => {
+    const doc = '[Guide \\[draft\\] p.7](ticker-pdf://source?page=7)';
+    const state = stateWithSelection(doc, doc.length);
+    const ranges = concealRanges(buildMarkdownConcealDecorations(viewFor(state), true), doc.length);
+    const openingEscape = doc.indexOf('\\[');
+    const closingEscape = doc.indexOf('\\]');
+
+    expect(ranges).toContainEqual([openingEscape, openingEscape + 1]);
+    expect(ranges).toContainEqual([closingEscape, closingEscape + 1]);
+  });
 });

@@ -13,6 +13,12 @@ export interface TickerPDFDestination {
   rawURL: string;
 }
 
+export interface TickerPDFHighlightLinkMatch {
+  from: number;
+  to: number;
+  rawURL: string;
+}
+
 export function parseTickerPDFURL(rawURL: string): TickerPDFDestination | null {
   if (!rawURL.startsWith('ticker-pdf://')) return null;
 
@@ -49,6 +55,65 @@ export function parseTickerPDFURL(rawURL: string): TickerPDFDestination | null {
   } catch {
     return null;
   }
+}
+
+function isEscaped(markdown: string, index: number): boolean {
+  let slashCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && markdown[cursor] === '\\'; cursor -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
+
+function openingLabelBracket(markdown: string, labelEnd: number): number | null {
+  for (let cursor = labelEnd - 1; cursor >= 0; cursor -= 1) {
+    const character = markdown[cursor];
+    if (character === '\n' || character === '\r') return null;
+    if (character === '[' && !isEscaped(markdown, cursor)) return cursor;
+  }
+  return null;
+}
+
+export function findTickerPDFHighlightLink(
+  markdown: string,
+  highlightId: string,
+  sourceId?: string
+): TickerPDFHighlightLinkMatch | null {
+  const linkStart = '](ticker-pdf://';
+  const expectedHighlightId = highlightId.trim().toLowerCase();
+  const expectedSourceId = sourceId?.trim().toLowerCase();
+  if (!expectedHighlightId) return null;
+
+  let searchFrom = 0;
+  while (searchFrom < markdown.length) {
+    const labelEnd = markdown.indexOf(linkStart, searchFrom);
+    if (labelEnd < 0) return null;
+
+    const urlStart = labelEnd + 2;
+    const urlEnd = markdown.indexOf(')', urlStart);
+    const labelStart = openingLabelBracket(markdown, labelEnd);
+    searchFrom = labelEnd + 1;
+    if (urlEnd < 0 || labelStart == null) continue;
+
+    const rawURL = markdown.slice(urlStart, urlEnd);
+    const destination = parseTickerPDFURL(rawURL);
+    if (destination?.highlightId?.toLowerCase() !== expectedHighlightId) continue;
+    if (
+      expectedSourceId &&
+      destination.sourceId &&
+      destination.sourceId.toLowerCase() !== expectedSourceId
+    ) {
+      continue;
+    }
+
+    return {
+      from: labelStart + 1,
+      to: labelEnd,
+      rawURL,
+    };
+  }
+
+  return null;
 }
 
 function urlForLinkNode(view: EditorView, linkNode: SyntaxNode): string | null {

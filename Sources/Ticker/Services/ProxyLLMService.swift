@@ -81,7 +81,7 @@ final class ProxyLLMService {
 
         // Build request body in proxy format
         let messages = buildProxyMessages(from: request)
-        let provider = determineProvider(for: request)
+        let provider = SettingsService.shared.defaultModel.provider
         let requestBody: [String: Any] = [
             "model": SettingsService.shared.defaultModel.proxyModel,
             "messages": messages,
@@ -328,7 +328,7 @@ final class ProxyLLMService {
         }
 
         // Build request body (non-streaming)
-        let provider = determineProvider(for: LLMRequest(systemPrompt: "", messages: []))
+        let provider = SettingsService.shared.defaultModel.provider
         let messages: [[String: Any]] = [
             ["role": "system", "content": Prompts.restatement],
             ["role": "user", "content": input]
@@ -477,13 +477,6 @@ final class ProxyLLMService {
         }
 
         return (mediaType, dataPart)
-    }
-
-    // MARK: - Provider Selection
-
-    /// Determine which provider to use based on user settings (preference hint for proxy)
-    private func determineProvider(for request: LLMRequest) -> String {
-        SettingsService.shared.defaultModel.provider
     }
 
     // MARK: - SSE Event Handling

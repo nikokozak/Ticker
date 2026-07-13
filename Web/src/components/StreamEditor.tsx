@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownKeymap, markdownLanguage } from '@codemirror/lang-markdown';
-import { languages } from '@codemirror/language-data';
 import { Decoration, EditorView, keymap } from '@codemirror/view';
 import { Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON } from '../types';
+import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON, type AIOperationState } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
+import { Modal } from './Modal';
 import { EyeIcon, XIcon } from './icons';
 import { useBridgeMessages, EditorAPI } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
@@ -18,7 +18,7 @@ import { editorFindExtension } from '../extensions/EditorFindPanel';
 import { markdownConcealExtension, setShowRawFormattingEffect } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
-import { tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
+import { findTickerPDFHighlightLink, tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
 import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
 import { canRedevelopSpan, originLine, provenanceXrayExtension, setProvenanceXrayVisible, type ProvenanceXrayOptions } from '../extensions/ProvenanceXray';
 import { pendingAppendField, setPendingAppend } from '../extensions/PendingAppend';
@@ -36,6 +36,7 @@ import { deserializeProvenanceSpans, serializeProvenanceSpans } from '../utils/p
 import {
   beginPDFAnchorPick,
   buildPDFAnchorLinkEdit,
+  buildPDFQuoteSnippet,
   buildTickerPDFLinkURL,
   mapPendingPDFAnchorSelection,
   type PendingPDFAnchorSelection,
@@ -71,7 +72,47 @@ type PromptIntent = {
   verb: DocumentAIVerb;
   parentRequestId?: string;
   preview: string;
+} | {
+  kind: 'pdfSection';
+  request: PDFSectionActionRequest;
 };
+
+export interface PDFSectionActionRequest {
+  action: 'ask' | 'summarize';
+  streamId: string;
+  sourceId: string;
+  shortTitle: string;
+  sectionTitle: string;
+  page: number;
+}
+
+export function parsePDFSectionActionRequest(
+  payload: Record<string, unknown> | undefined,
+  currentStreamId: string
+): PDFSectionActionRequest | null {
+  const action = payload?.action;
+  const streamId = payload?.streamId;
+  const sourceId = payload?.sourceId;
+  const shortTitle = payload?.shortTitle;
+  const sectionTitle = payload?.sectionTitle;
+  const page = Number(payload?.page);
+  if (
+    (action !== 'ask' && action !== 'summarize')
+    || streamId !== currentStreamId
+    || typeof sourceId !== 'string'
+    || typeof shortTitle !== 'string'
+    || typeof sectionTitle !== 'string'
+    || !sourceId
+    || !shortTitle.trim()
+    || !sectionTitle.trim()
+    || !Number.isInteger(page)
+    || page < 1
+  ) {
+    return null;
+  }
+
+  return { action, streamId, sourceId, shortTitle, sectionTitle, page };
+}
 
 interface ExchangeOverlayState {
   exchange: AIExchangeJSON;
@@ -184,6 +225,31 @@ export function documentAIErrorRecovery(originalText: string, errorCode: string 
 
 export function isStreamDocumentDirty(content: string, lastSavedContent: string): boolean {
   return content !== lastSavedContent;
+}
+
+export function shouldScheduleEditorAutosave(docChanged: boolean, hasActiveDocumentAI: boolean): boolean {
+  return docChanged && !hasActiveDocumentAI;
+}
+
+export function documentAIRollbackChange(
+  range: { from: number; to: number },
+  originalText: string
+) {
+  return { from: range.from, to: range.to, insert: originalText };
+}
+
+export function activeAIOperationsAfter(
+  current: ReadonlySet<string>,
+  requestId: string,
+  state: AIOperationState
+): Set<string> {
+  const next = new Set(current);
+  if (state === 'succeeded' || state === 'failed' || state === 'canceled') {
+    next.delete(requestId);
+  } else {
+    next.add(requestId);
+  }
+  return next;
 }
 
 export function buildDocumentAIProvenanceSpan(options: {
@@ -543,7 +609,7 @@ export function StreamEditor({
   const [exchangeOverlay, setExchangeOverlay] = useState<ExchangeOverlayState | null>(null);
   const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
   const [aiStatus, setAiStatus] = useState<'idle' | 'thinking'>('idle');
-  const [showRewriteMenu, setShowRewriteMenu] = useState(false);
+  const [selectionMenuPanel, setSelectionMenuPanel] = useState<'ai' | 'more' | null>(null);
   const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState>({
     visible: false,
     left: 0,
@@ -582,6 +648,7 @@ export function StreamEditor({
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  const streamOverflowMenuRef = useRef<HTMLDetailsElement>(null);
   const selectionActionMenuRef = useRef<HTMLDivElement>(null);
   const linkPopoverRef = useRef<HTMLDivElement>(null);
   const provenancePopoverRef = useRef<HTMLDivElement>(null);
@@ -607,8 +674,8 @@ export function StreamEditor({
   const sourceIndexStatusesRef = useRef<Map<string, SourceReference['indexStatus']>>(new Map());
   const showPromptRef = useRef(showPrompt);
   const isAiThinkingRef = useRef(false);
-  const quickPanelPendingRef = useRef(false);
-  const quickPanelPendingTimerRef = useRef<number | null>(null);
+  const appendAIPendingRef = useRef(false);
+  const appendAIOperationsRef = useRef<Set<string>>(new Set());
   const aiRequestRef = useRef<{
     id: string;
     buffer: string;
@@ -756,13 +823,9 @@ export function StreamEditor({
     setAiFeedback((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearAiFeedbackTimer]);
 
-  const clearQuickPanelPending = useCallback(() => {
-    if (quickPanelPendingTimerRef.current !== null) {
-      window.clearTimeout(quickPanelPendingTimerRef.current);
-      quickPanelPendingTimerRef.current = null;
-    }
-    if (!quickPanelPendingRef.current) return;
-    quickPanelPendingRef.current = false;
+  const clearAppendAIPending = useCallback(() => {
+    if (!appendAIPendingRef.current) return;
+    appendAIPendingRef.current = false;
     editorViewRef.current?.dispatch({
       effects: setPendingAppend.of(false),
       annotations: Transaction.addToHistory.of(false),
@@ -775,13 +838,37 @@ export function StreamEditor({
   // writing range survives it: mapping the range through a doc-wide replace
   // collapses it to {0, docLength}, so the completion handler would then
   // overwrite the ENTIRE stream with the AI passage. Abort before reloading.
-  const abortInFlightDocumentAI = useCallback(() => {
+  const discardInFlightDocumentAI = useCallback(() => {
     const active = aiRequestRef.current;
     if (!active) return;
     bridge.send({ type: 'cancelDocumentAI', payload: { requestId: active.id } });
     aiRequestRef.current = null;
     const view = editorViewRef.current;
     if (view) dispatchAiRangeClear(view);
+    setAiStatus('idle');
+    hideAiFeedback();
+  }, [hideAiFeedback]);
+
+  const rollbackInFlightDocumentAI = useCallback(() => {
+    const active = aiRequestRef.current;
+    if (!active) return;
+
+    bridge.send({ type: 'cancelDocumentAI', payload: { requestId: active.id } });
+    const view = editorViewRef.current;
+    const range = view ? getAiWritingRange(view.state) : null;
+    aiRequestRef.current = null;
+
+    if (view && range) {
+      view.dispatch({
+        changes: documentAIRollbackChange(range, active.originalText),
+        selection: { anchor: range.from + active.originalText.length },
+        effects: setAiWritingRangeEffect.of(null),
+        annotations: Transaction.addToHistory.of(false),
+      });
+    } else if (view) {
+      dispatchAiRangeClear(view);
+    }
+
     setAiStatus('idle');
     hideAiFeedback();
   }, [hideAiFeedback]);
@@ -893,7 +980,8 @@ export function StreamEditor({
     setSaveState('saved');
     setAiStatus('idle');
     hideAiFeedback();
-    clearQuickPanelPending();
+    appendAIOperationsRef.current = new Set();
+    clearAppendAIPending();
     clearSourceIndexNoticeTimer();
     setSourceIndexNotice(null);
     setFloatingMenu({
@@ -911,7 +999,7 @@ export function StreamEditor({
     setExchangeOverlay(null);
     setSourceScope(stream.sourceScope ?? 'auto');
     setIsProvenanceXrayVisible(false);
-    setShowRewriteMenu(false);
+    setSelectionMenuPanel(null);
     const rawFormatting = rawFormattingByStream.get(stream.id) ?? false;
     setShowRawFormatting(rawFormatting);
     promptContextRef.current = null;
@@ -938,7 +1026,7 @@ export function StreamEditor({
       persistNewUnanchoredMarginNotes(stream.marginNotes, notes);
       dispatchAiRangeClear(view);
     }
-  }, [clearQuickPanelPending, clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
+  }, [clearAppendAIPending, clearSourceIndexNoticeTimer, hideAiFeedback, stream.id, stream.document?.markdown, stream.document?.revision, stream.sourceScope, stream.spans, stream.title]);
 
   useEffect(() => {
     applyMarginNotesToEditor(stream.marginNotes);
@@ -953,29 +1041,40 @@ export function StreamEditor({
     }
     if (queuedSaveContentRef.current === contentToSave) return saveQueueRef.current;
 
-    const view = editorViewRef.current;
-    const spans = view ? serializeFieldSpans(currentSpans(view.state), contentToSave) : [];
     queuedSaveContentRef.current = contentToSave;
     setSaveState('saving');
 
     const save = async () => {
+      // A prior save may still be in flight. Capture content, spans, and the
+      // revision together only when this queued save actually executes so an
+      // old snapshot can never adopt a revision advanced by an external append.
+      const view = editorViewRef.current;
+      const latestContent = view?.state.doc.toString() ?? markdownContentRef.current;
+      markdownContentRef.current = latestContent;
+      if (!isStreamDocumentDirty(latestContent, lastSavedContentRef.current)) {
+        if (queuedSaveContentRef.current === contentToSave) queuedSaveContentRef.current = null;
+        setSaveState('saved');
+        return;
+      }
+
+      const spans = view ? serializeFieldSpans(currentSpans(view.state), latestContent) : [];
       const baseRevision = revisionRef.current;
       try {
         const response = await bridge.sendAsync<{ revision: number }>('saveStreamDocument', {
           streamId: stream.id,
-          markdown: contentToSave,
+          markdown: latestContent,
           baseRevision,
           spans,
         });
         if (Number.isFinite(response.revision)) {
           revisionRef.current = response.revision;
         }
-        lastSavedContentRef.current = contentToSave;
-        if (markdownContentRef.current === contentToSave) {
+        lastSavedContentRef.current = latestContent;
+        if (markdownContentRef.current === latestContent) {
           setSaveState('saved');
         }
       } catch (error) {
-        if (markdownContentRef.current === contentToSave) {
+        if (markdownContentRef.current === latestContent) {
           setSaveState('error');
         }
         addToast('Changes could not be saved. Your edits are still in the editor.', 'error');
@@ -1052,31 +1151,58 @@ export function StreamEditor({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
-      if (message.type === 'quickPanelAIStarted') {
-        if (message.payload?.streamId !== stream.id) return;
-        const view = editorViewRef.current;
-        if (!view) return;
-        quickPanelPendingRef.current = true;
-        view.dispatch({
-          effects: [
-            setPendingAppend.of(true),
-            EditorView.scrollIntoView(view.state.doc.length, { y: 'nearest' }),
-          ],
-          annotations: Transaction.addToHistory.of(false),
-        });
-        showAiWritingFeedback();
-        if (quickPanelPendingTimerRef.current !== null) {
-          window.clearTimeout(quickPanelPendingTimerRef.current);
+      if (message.type === 'flushEditor') {
+        const requestId = message.payload?.requestId;
+        if (typeof requestId !== 'string') return;
+
+        rollbackInFlightDocumentAI();
+        if (autosaveTimerRef.current !== null) {
+          window.clearTimeout(autosaveTimerRef.current);
+          autosaveTimerRef.current = null;
         }
-        // Fallback: proxy idle timeout is 120s; never leave the indicator stranded.
-        quickPanelPendingTimerRef.current = window.setTimeout(clearQuickPanelPending, 130_000);
+
+        void (async () => {
+          await saveNow();
+          const content = editorViewRef.current?.state.doc.toString() ?? markdownContentRef.current;
+          if (isStreamDocumentDirty(content, lastSavedContentRef.current)) {
+            await saveNow();
+          }
+          bridge.send({ type: 'editorFlushed', payload: { requestId } });
+        })();
         return;
       }
 
-      if (message.type === 'quickPanelAIFailed') {
-        if (message.payload?.streamId !== stream.id) return;
-        clearQuickPanelPending();
-        addToast('Quick Panel AI answer could not be saved. Try again.', 'error');
+      if (message.type === 'aiOperationChanged') {
+        const origin = message.payload?.origin;
+        if (message.payload?.streamId !== stream.id || (origin !== 'quickPanel' && origin !== 'pdfSection')) return;
+        const requestId = message.payload?.requestId;
+        const operationState = message.payload?.state;
+        const validStates: AIOperationState[] = ['queued', 'preparing', 'generating', 'saving', 'succeeded', 'failed', 'canceled'];
+        if (typeof requestId !== 'string' || !validStates.includes(operationState as AIOperationState)) return;
+
+        appendAIOperationsRef.current = activeAIOperationsAfter(
+          appendAIOperationsRef.current,
+          requestId,
+          operationState as AIOperationState
+        );
+
+        if (appendAIOperationsRef.current.size === 0) {
+          clearAppendAIPending();
+          return;
+        }
+
+        const view = editorViewRef.current;
+        if (!view) return;
+        if (!appendAIPendingRef.current) {
+          appendAIPendingRef.current = true;
+          view.dispatch({
+            effects: [
+              setPendingAppend.of(true),
+              EditorView.scrollIntoView(view.state.doc.length, { y: 'nearest' }),
+            ],
+            annotations: Transaction.addToHistory.of(false),
+          });
+        }
         return;
       }
 
@@ -1089,7 +1215,7 @@ export function StreamEditor({
           return;
         }
 
-        abortInFlightDocumentAI();
+        discardInFlightDocumentAI();
 
         const view = editorViewRef.current;
         const spans = payloadSpansForDoc(message.payload?.spans, markdown);
@@ -1121,10 +1247,6 @@ export function StreamEditor({
           return;
         }
 
-        // An append landing (answer or error fragment) ends any pending
-        // quick-panel AI presence.
-        clearQuickPanelPending();
-
         // Revision gap = this editor missed an earlier append (it wasn't
         // listening when it broadcast). Patching the fragment in and adopting
         // the payload revision would make the next autosave pass the revision
@@ -1135,7 +1257,7 @@ export function StreamEditor({
             localRevision: revisionRef.current,
             appendRevision: revision,
           });
-          abortInFlightDocumentAI();
+          discardInFlightDocumentAI();
           bridge.send({ type: 'loadStream', payload: { id: stream.id } });
           return;
         }
@@ -1158,6 +1280,7 @@ export function StreamEditor({
               addSpans.of(spans),
               addArrivalEffect.of({ id: arrivalId, from: insertion.from, to: insertion.insertedEnd }),
             ],
+            annotations: Transaction.addToHistory.of(false),
           });
           window.setTimeout(() => {
             if (editorViewRef.current === view) {
@@ -1213,6 +1336,7 @@ export function StreamEditor({
         const requestId = message.payload?.requestId as string | undefined;
         const error = message.payload?.error as string | undefined;
         if (!requestId || requestId !== active.id) return;
+        aiRequestRef.current = null;
 
         const errorCode = message.payload?.errorCode as string | undefined;
         const recovery = documentAIErrorRecovery(active.originalText, errorCode);
@@ -1260,12 +1384,10 @@ export function StreamEditor({
         }
 
         setAiStatus('idle');
-        aiRequestRef.current = null;
         if (recovery.silent) {
           hideAiFeedback();
         } else {
           showAiErrorFeedback(displayError);
-          addToast(displayError, 'error');
         }
         return;
       }
@@ -1273,11 +1395,11 @@ export function StreamEditor({
       if (message.type === 'documentAIComplete') {
         const requestId = message.payload?.requestId as string | undefined;
         if (!requestId || requestId !== active.id) return;
+        aiRequestRef.current = null;
 
         const view = editorViewRef.current;
         if (!view) {
           setAiStatus('idle');
-          aiRequestRef.current = null;
           hideAiFeedback();
           return;
         }
@@ -1297,16 +1419,13 @@ export function StreamEditor({
           }
           view.focus();
           setAiStatus('idle');
-          aiRequestRef.current = null;
           showAiErrorFeedback('AI returned empty output.');
-          addToast('AI returned empty output.', 'warning');
           return;
         }
 
         const range = getAiWritingRange(view.state);
         if (!range) {
           setAiStatus('idle');
-          aiRequestRef.current = null;
           hideAiFeedback();
           return;
         }
@@ -1339,7 +1458,6 @@ export function StreamEditor({
           });
           view.focus();
           setAiStatus('idle');
-          aiRequestRef.current = null;
           hideAiFeedback();
           return;
         }
@@ -1378,14 +1496,13 @@ export function StreamEditor({
         view.focus();
 
         setAiStatus('idle');
-        aiRequestRef.current = null;
         hideAiFeedback();
         return;
       }
     });
 
     return () => unsubscribe();
-  }, [abortInFlightDocumentAI, addToast, clearQuickPanelPending, hideAiFeedback, showAiErrorFeedback, showAiWritingFeedback, stream.id]);
+  }, [addToast, clearAppendAIPending, discardInFlightDocumentAI, hideAiFeedback, rollbackInFlightDocumentAI, saveNow, showAiErrorFeedback, stream.id]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message) => {
@@ -1405,18 +1522,44 @@ export function StreamEditor({
       if (!sourceId || !highlightId) return;
 
       const pageNumber = Number.isFinite(page) ? Math.max(1, Math.round(page as number)) : 1;
-      const linkUrl = `ticker-pdf://${sourceId}?highlight=${encodeURIComponent(highlightId)}&page=${pageNumber}`;
-      const compactQuote = (quote || '').trim().replace(/\s+/g, ' ');
-      const quoteLine = compactQuote ? `> ${compactQuote}\n` : '';
+      const linkUrl = buildTickerPDFLinkURL({ sourceId, highlightId, page: pageNumber });
       const linkLabel = `${shortTitle || sourceName || 'PDF'} p.${pageNumber}`;
-      const snippet = `\n${quoteLine}[${linkLabel}](${linkUrl})\n`;
+      const snippet = buildPDFQuoteSnippet({ quote: quote || '', linkLabel, linkURL: linkUrl });
 
       insertTextAtCursor(snippet);
-      addToast('Linked PDF selection inserted into stream.', 'success');
+      addToast('Added PDF quote to stream.', 'success');
     });
 
     return () => unsubscribe();
   }, [addToast, insertTextAtCursor, stream.id]);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type !== 'revealPdfHighlightInStream') return;
+
+      const payloadStreamId = message.payload?.streamId as string | undefined;
+      const sourceId = message.payload?.sourceId as string | undefined;
+      const highlightId = message.payload?.highlightId as string | undefined;
+      if (payloadStreamId !== stream.id || !sourceId || !highlightId) return;
+
+      const view = editorViewRef.current;
+      if (!view) return;
+      const match = findTickerPDFHighlightLink(view.state.doc.toString(), highlightId, sourceId);
+      if (!match) {
+        addToast('This highlight is no longer linked in the stream.', 'warning');
+        return;
+      }
+
+      view.dispatch({
+        selection: { anchor: match.from },
+        effects: EditorView.scrollIntoView(match.from, { y: 'center' }),
+        annotations: Transaction.addToHistory.of(false),
+      });
+      addToast('Showing linked highlight in stream.', 'success');
+    });
+
+    return () => unsubscribe();
+  }, [addToast, stream.id]);
 
   useEffect(() => {
     pendingPDFAnchorSelectionRef.current = null;
@@ -1487,7 +1630,7 @@ export function StreamEditor({
         ],
       });
       view.focus();
-      addToast('Linked selection to PDF.', 'success');
+      addToast('Anchored selection in PDF.', 'success');
     });
 
     return () => unsubscribe();
@@ -1663,9 +1806,34 @@ export function StreamEditor({
 
   const hideSelectionMenu = useCallback(() => {
     clearSelectionMenuTimer();
-    setShowRewriteMenu(false);
+    setSelectionMenuPanel(null);
     setFloatingMenu((previous) => (previous.visible ? { ...previous, visible: false } : previous));
   }, [clearSelectionMenuTimer]);
+
+  useEffect(() => bridge.onMessage((message) => {
+    if (message.type !== 'pdfSectionActionRequested') return;
+    const request = parsePDFSectionActionRequest(message.payload, stream.id);
+    if (!request) return;
+
+    if (request.action === 'summarize') {
+      bridge.send({
+        type: 'runPdfSectionAI',
+        payload: {
+          action: request.action,
+          streamId: request.streamId,
+          sourceId: request.sourceId,
+          page: request.page,
+        },
+      });
+      return;
+    }
+
+    hideSelectionMenu();
+    promptContextRef.current = null;
+    setPromptValue('');
+    setPromptIntent({ kind: 'pdfSection', request });
+    setShowPrompt(true);
+  }), [hideSelectionMenu, stream.id]);
 
   const hideLinkPopover = useCallback(() => {
     setLinkPopover((previous) => (previous.visible ? { ...previous, visible: false } : previous));
@@ -1880,17 +2048,16 @@ export function StreamEditor({
       };
     });
   }, [
-    floatingMenu.left,
-    floatingMenu.menuHeight,
-    floatingMenu.menuWidth,
+    // Position and measured size are outputs of this effect. Depending on
+    // them can oscillate forever when a narrow menu wraps at a threshold.
     floatingMenu.selectionFrom,
     floatingMenu.selectionHead,
     floatingMenu.selectionTo,
-    floatingMenu.top,
     floatingMenu.visible,
     getSelectionMenuPlacement,
     pdfPaneState.streamId,
     pdfPaneState.visible,
+    selectionMenuPanel,
     stream.id,
   ]);
 
@@ -1932,7 +2099,11 @@ export function StreamEditor({
     });
   }, [
     getLinkPopoverPlacement,
-    linkPopover,
+    linkPopover.from,
+    linkPopover.label,
+    linkPopover.labelFrom,
+    linkPopover.url,
+    linkPopover.visible,
     pdfPaneState.streamId,
     pdfPaneState.visible,
     stream.id,
@@ -1974,7 +2145,13 @@ export function StreamEditor({
         menuHeight: measuredMenuSize.height,
       };
     });
-  }, [getProvenancePopoverPlacement, provenancePopover]);
+  }, [
+    getProvenancePopoverPlacement,
+    provenancePopover.anchorPos,
+    provenancePopover.exchangeStatus,
+    provenancePopover.span,
+    provenancePopover.visible,
+  ]);
 
   const scheduleSelectionMenu = useCallback((view: EditorView) => {
     clearSelectionMenuTimer();
@@ -2152,7 +2329,12 @@ export function StreamEditor({
 
   const selectionMenuExtension = useMemo<Extension>(() => [
     EditorView.updateListener.of((update) => {
-      if (update.docChanged) scheduleAutosave(update.view);
+      if (update.docChanged) {
+        markdownContentRef.current = update.state.doc.toString();
+      }
+      if (shouldScheduleEditorAutosave(update.docChanged, aiRequestRef.current !== null)) {
+        scheduleAutosave(update.view);
+      }
 
       if (update.docChanged && pendingPDFAnchorSelectionRef.current) {
         pendingPDFAnchorSelectionRef.current = mapPendingPDFAnchorSelection(
@@ -2226,6 +2408,18 @@ export function StreamEditor({
         ? { from: to, insert: prefix }
         : null;
 
+    const requestId = crypto.randomUUID();
+    aiRequestRef.current = {
+      id: requestId,
+      buffer: '',
+      mode: options.mode,
+      verb: options.verb ?? 'develop',
+      originalText,
+      prefix,
+      anchorTo: to,
+      parentRequestId: options.parentRequestId,
+    };
+
     view.dispatch({
       changes: initialChange ?? undefined,
       selection: { anchor: rangeTo },
@@ -2240,17 +2434,6 @@ export function StreamEditor({
     });
     view.focus();
 
-    const requestId = crypto.randomUUID();
-    aiRequestRef.current = {
-      id: requestId,
-      buffer: '',
-      mode: options.mode,
-      verb: options.verb ?? 'develop',
-      originalText,
-      prefix,
-      anchorTo: to,
-      parentRequestId: options.parentRequestId,
-    };
     setAiStatus('thinking');
     showAiWritingFeedback();
 
@@ -2441,8 +2624,26 @@ export function StreamEditor({
 
   const handlePromptSend = useCallback(() => {
     const prompt = promptValue.trim();
+    if (!prompt && promptIntent.kind !== 'redevelop') return;
+
+    if (promptIntent.kind === 'pdfSection') {
+      const request = promptIntent.request;
+      closePrompt();
+      bridge.send({
+        type: 'runPdfSectionAI',
+        payload: {
+          action: 'ask',
+          streamId: request.streamId,
+          sourceId: request.sourceId,
+          page: request.page,
+          prompt,
+        },
+      });
+      return;
+    }
+
     const context = promptContextRef.current;
-    if ((!prompt && promptIntent.kind !== 'redevelop') || !context) return;
+    if (!context) return;
 
     closePrompt();
 
@@ -2539,14 +2740,14 @@ export function StreamEditor({
 
   useEffect(() => {
     return () => {
+      rollbackInFlightDocumentAI();
       if (autosaveTimerRef.current !== null) {
         window.clearTimeout(autosaveTimerRef.current);
         autosaveTimerRef.current = null;
       }
       void saveNow();
-      abortInFlightDocumentAI();
     };
-  }, [abortInFlightDocumentAI, saveNow]);
+  }, [rollbackInFlightDocumentAI, saveNow]);
 
   useEffect(() => {
     return () => {
@@ -2707,7 +2908,7 @@ export function StreamEditor({
     clickToDocumentEndExtension,
     aiWritingExtension,
     editorFindExtension,
-    markdown({ base: markdownLanguage, codeLanguages: languages }),
+    markdown({ base: markdownLanguage }),
     // basicSetup's default Enter shadows the markdown bindings.
     // Bullet lines get our always-tight continuation; everything
     // else falls through to markdownKeymap (quote continuation,
@@ -2748,7 +2949,18 @@ export function StreamEditor({
   })();
 
   return (
-    <div className="stream-editor">
+    <div
+      className="stream-editor"
+      onPointerDownCapture={(event) => {
+        const menu = streamOverflowMenuRef.current;
+        if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+      }}
+      onKeyDownCapture={(event) => {
+        if (event.key === 'Escape' && streamOverflowMenuRef.current?.open) {
+          streamOverflowMenuRef.current.open = false;
+        }
+      }}
+    >
       <header className="stream-header">
         <button onClick={onBack} className="back-button">
           ← Back
@@ -2770,8 +2982,17 @@ export function StreamEditor({
           </h1>
         )}
         <div className="stream-header-actions">
-          <span className={`stream-save-status stream-save-status--${saveState}`}>
-            {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}
+          <span
+            className={`stream-save-status stream-save-status--${saveState}`}
+            role="status"
+            aria-live="polite"
+            aria-label={saveState === 'saving' ? 'Saving' : saveState === 'error' ? 'Save failed' : 'Saved'}
+            title={saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}
+          >
+            <span className="stream-save-status-dot" aria-hidden="true" />
+            <span className="stream-save-status-label">
+              {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}
+            </span>
           </span>
           <button
             onClick={() => setIsProvenanceXrayVisible((value) => !value)}
@@ -2792,55 +3013,88 @@ export function StreamEditor({
           >
             Sources · {sources.length}
           </button>
-          <button
-            onClick={() => setShowDeleteConfirm(true)}
-            className="delete-stream-button"
-            title="Delete stream"
-            type="button"
+          <details
+            ref={streamOverflowMenuRef}
+            className="stream-overflow-menu"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector('summary')?.focus();
+            }}
           >
-            Delete
-          </button>
+            <summary title="More stream actions" aria-label="More stream actions">
+              <span aria-hidden="true">•••</span>
+            </summary>
+            <div className="stream-overflow-panel">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.currentTarget.closest('details')!.open = false;
+                  setShowDeleteConfirm(true);
+                }}
+              >
+                Delete stream…
+              </button>
+            </div>
+          </details>
         </div>
       </header>
 
       {showDeleteConfirm && (
-        <div className="delete-confirm-overlay" onClick={() => setShowDeleteConfirm(false)}>
-          <div className="delete-confirm-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>Delete this stream?</h2>
-            <p>This will permanently delete "{title}" and all its contents. This cannot be undone.</p>
-            <div className="delete-confirm-actions">
-              <button
-                className="delete-confirm-cancel"
-                onClick={() => setShowDeleteConfirm(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="delete-confirm-delete"
-                onClick={() => {
-                  setShowDeleteConfirm(false);
-                  onDelete();
-                }}
-              >
-                Delete
-              </button>
-            </div>
+        <Modal
+          className="delete-confirm-dialog"
+          aria-labelledby="delete-confirm-title"
+          onRequestClose={() => setShowDeleteConfirm(false)}
+        >
+          <h2 id="delete-confirm-title">Delete this stream?</h2>
+          <p>This will permanently delete "{title}" and all its contents. This cannot be undone.</p>
+          <div className="delete-confirm-actions">
+            <button
+              className="delete-confirm-cancel"
+              onClick={() => setShowDeleteConfirm(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="delete-confirm-delete"
+              onClick={() => {
+                setShowDeleteConfirm(false);
+                onDelete();
+              }}
+            >
+              Delete
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {showPrompt && (
-        <div className="ai-prompt-overlay" onClick={closePrompt}>
-          <div className="ai-prompt-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>
-              {promptIntent.kind === 'redevelop' ? 'Re-develop' : promptIntent.kind === 'rewrite' ? 'Rewrite' : 'Ask'}
-            </h2>
-            <p>
-              {promptIntent.kind === 'ask'
-                ? 'Selection will be attached as context.'
+        <Modal
+          className="ai-prompt-dialog"
+          aria-labelledby="ai-prompt-title"
+          onRequestClose={closePrompt}
+        >
+          <h2 id="ai-prompt-title">
+            {promptIntent.kind === 'redevelop'
+              ? 'Re-develop'
+              : promptIntent.kind === 'rewrite'
+                ? 'Rewrite'
+                : promptIntent.kind === 'pdfSection'
+                  ? 'Ask this section'
+                  : 'Ask'}
+          </h2>
+          <p>
+            {promptIntent.kind === 'ask'
+              ? 'Selection will be attached as context.'
+              : promptIntent.kind === 'pdfSection'
+                ? `“${promptIntent.request.sectionTitle}” from ${promptIntent.request.shortTitle} will be attached as context.`
                 : `will replace: ${promptIntent.preview}`}
-            </p>
-            <textarea
+          </p>
+          <textarea
               className="ai-prompt-input"
               value={promptValue}
               onChange={(event) => setPromptValue(event.target.value)}
@@ -2858,20 +3112,25 @@ export function StreamEditor({
                   ? 'Edit the prompt…'
                   : promptIntent.kind === 'rewrite'
                     ? 'How should this be rewritten? (e.g. "condense to one sentence")'
-                    : 'Ask a question or continue the line of thought…'
+                    : promptIntent.kind === 'pdfSection'
+                      ? 'Ask about this section…'
+                      : 'Ask a question or continue the line of thought…'
               }
               autoFocus
+              maxLength={promptIntent.kind === 'pdfSection' ? 32_000 : undefined}
               rows={5}
-            />
-            <div className="ai-prompt-actions">
-              <button
-                className="ai-prompt-source-scope"
-                type="button"
-                onClick={cycleSourceScope}
-                title="Cycle source scope"
-              >
-                Sources: {formatSourceScope(sourceScope)}
-              </button>
+          />
+          <div className="ai-prompt-actions">
+              {promptIntent.kind !== 'pdfSection' && (
+                <button
+                  className="ai-prompt-source-scope"
+                  type="button"
+                  onClick={cycleSourceScope}
+                  title="Cycle source scope"
+                >
+                  Sources: {formatSourceScope(sourceScope)}
+                </button>
+              )}
               <button
                 className="ai-prompt-cancel"
                 type="button"
@@ -2885,11 +3144,16 @@ export function StreamEditor({
                 onClick={handlePromptSend}
                 disabled={promptIntent.kind !== 'redevelop' && !promptValue.trim()}
               >
-                {promptIntent.kind === 'redevelop' ? 'Re-develop' : promptIntent.kind === 'rewrite' ? 'Rewrite' : 'Ask'}
+                {promptIntent.kind === 'redevelop'
+                  ? 'Re-develop'
+                  : promptIntent.kind === 'rewrite'
+                    ? 'Rewrite'
+                    : promptIntent.kind === 'pdfSection'
+                      ? 'Ask section'
+                      : 'Ask'}
               </button>
-            </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {exchangeOverlay && (
@@ -2908,223 +3172,165 @@ export function StreamEditor({
           style={{ left: `${floatingMenu.left}px`, top: `${floatingMenu.top}px` }}
         >
           <div className="selection-action-row">
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--bold"
-            title="Bold"
-            aria-label="Bold"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat('**')}
-          >
-            B
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--italic"
-            title="Italic"
-            aria-label="Italic"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat('*')}
-          >
-            I
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--underline"
-            title="Underline"
-            aria-label="Underline"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat(UNDERLINE_MARK)}
-          >
-            U
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--code"
-            title="Code"
-            aria-label="Code"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionFormat('`')}
-          >
-            &lt;/&gt;
-          </button>
-          <span className="selection-action-divider" aria-hidden="true" />
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--text"
-            title="Heading 1"
-            aria-label="Heading 1"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('h1')}
-          >
-            H1
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--text"
-            title="Heading 2"
-            aria-label="Heading 2"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('h2')}
-          >
-            H2
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format selection-action-button--text"
-            title="Heading 3"
-            aria-label="Heading 3"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('h3')}
-          >
-            H3
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format"
-            title="Quote"
-            aria-label="Quote"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('quote')}
-          >
-            ❝
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--format"
-            title="Bullet list"
-            aria-label="Bullet list"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionLineFormat('bullet')}
-          >
-            •
-          </button>
-          <button
-            type="button"
-            className="selection-action-button"
-            title="Add link"
-            aria-label="Add link"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={handleSelectionCreateLink}
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-              <path d="M10.6 13.4a1 1 0 010-1.4l2.8-2.8a1 1 0 011.4 1.4l-2.8 2.8a1 1 0 01-1.4 0zm-3.5 3.5a3.5 3.5 0 010-5l1.8-1.8 1.4 1.4-1.8 1.8a1.5 1.5 0 002.2 2.2l1.8-1.8 1.4 1.4-1.8 1.8a3.5 3.5 0 01-5 0zm9.8-4.8l-1.4-1.4 1.8-1.8a1.5 1.5 0 00-2.2-2.2l-1.8 1.8-1.4-1.4 1.8-1.8a3.5 3.5 0 015 5z" />
-            </svg>
-          </button>
-          {canLinkSelectionToPDF && (
             <button
               type="button"
-              className="selection-action-button"
-              title="Link to PDF"
-              aria-label="Link to PDF"
+              className="selection-action-button selection-action-button--format selection-action-button--bold"
+              title="Bold"
+              aria-label="Bold"
               onMouseDown={(event) => event.preventDefault()}
-              onClick={handleSelectionLinkToPDF}
+              onClick={() => handleSelectionFormat('**')}
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                <path d="M8.8 12.9a1 1 0 010-1.4l3.7-3.7a3.4 3.4 0 114.8 4.8l-1.5 1.5-.7-.7 1.5-1.5a2.4 2.4 0 10-3.4-3.4l-3.7 3.7a1 1 0 001.4 1.4l2.5-2.5.7.7-2.5 2.5a2 2 0 01-2.8 0zm-2.1 7a3.4 3.4 0 010-4.8l1.5-1.5.7.7-1.5 1.5a2.4 2.4 0 103.4 3.4l3.7-3.7a1 1 0 00-1.4-1.4l-2.5 2.5-.7-.7 2.5-2.5a2 2 0 112.8 2.8l-3.7 3.7a3.4 3.4 0 01-4.8 0z" />
-              </svg>
+              B
             </button>
-          )}
-          </div>
-          <div className="selection-action-row">
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            title="Ask"
-            aria-label="Ask"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionVerb('ask')}
-            disabled={isAiThinking}
-          >
-            Ask
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            title="Challenge"
-            aria-label="Challenge"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionVerb('challenge')}
-            disabled={isAiThinking}
-          >
-            Challenge
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            title="Define"
-            aria-label="Define"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => handleSelectionVerb('define')}
-            disabled={isAiThinking}
-          >
-            Define
-          </button>
-          <div className="selection-action-submenu">
             <button
               type="button"
-              className="selection-action-button selection-action-button--text selection-action-button--ai"
-              title="Rewrite"
-              aria-label="Rewrite"
+              className="selection-action-button selection-action-button--format selection-action-button--italic"
+              title="Italic"
+              aria-label="Italic"
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => setShowRewriteMenu((value) => !value)}
-              disabled={isAiThinking}
+              onClick={() => handleSelectionFormat('*')}
             >
-              Rewrite ▾
+              I
             </button>
-            {showRewriteMenu && (
-              <div className="selection-action-submenu-panel">
-                <button
-                  type="button"
-                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
-                  title="Develop (replaces)"
-                  aria-label="Develop (replaces)"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => handleSelectionVerb('develop')}
-                >
-                  Develop (replaces)
-                </button>
-                <button
-                  type="button"
-                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
-                  title="Rewrite with instructions (replaces)"
-                  aria-label="Rewrite with instructions (replaces)"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={openRewritePrompt}
-                >
-                  With instructions…
-                </button>
-              </div>
-            )}
-          </div>
-          <span className="selection-action-divider" aria-hidden="true" />
-          {isProvenanceXrayVisible && (
-            <>
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--format selection-action-button--underline"
+              title="Underline"
+              aria-label="Underline"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => handleSelectionFormat(UNDERLINE_MARK)}
+            >
+              U
+            </button>
+            <div className="selection-action-submenu">
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-button--ai"
+                title="AI actions"
+                aria-label="AI actions"
+                aria-expanded={selectionMenuPanel === 'ai'}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setSelectionMenuPanel((panel) => panel === 'ai' ? null : 'ai')}
+                disabled={isAiThinking}
+              >
+                AI ▾
+              </button>
+            </div>
+            <div className="selection-action-submenu">
               <button
                 type="button"
                 className="selection-action-button selection-action-button--text"
-                title="Dissolve provenance in selection"
-                aria-label="Dissolve provenance in selection"
+                title="More formatting and context actions"
+                aria-label="More actions"
+                aria-expanded={selectionMenuPanel === 'more'}
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={handleSelectionDissolve}
-                disabled={selectionDissolveSpanIds.length === 0}
+                onClick={() => setSelectionMenuPanel((panel) => panel === 'more' ? null : 'more')}
               >
-                Dissolve
+                More ▾
               </button>
-              <span className="selection-action-divider" aria-hidden="true" />
-            </>
-          )}
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-source-scope"
-            title="Cycle source scope"
-            aria-label="Cycle source scope"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={cycleSourceScope}
-          >
-            Sources: {formatSourceScope(sourceScope)}
-          </button>
+            </div>
           </div>
+          {selectionMenuPanel === 'ai' && (
+            <div className="selection-action-submenu-panel">
+              {(['ask', 'develop', 'challenge', 'define'] as const).map((verb) => (
+                <button
+                  key={verb}
+                  type="button"
+                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => handleSelectionVerb(verb)}
+                >
+                  {verb[0].toUpperCase() + verb.slice(1)}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={openRewritePrompt}
+              >
+                Rewrite…
+              </button>
+            </div>
+          )}
+          {selectionMenuPanel === 'more' && (
+            <div className="selection-action-submenu-panel" aria-label="More formatting and context actions">
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-button--code"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => handleSelectionFormat('`')}
+              >
+                Code
+              </button>
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={handleSelectionCreateLink}
+              >
+                Link
+              </button>
+              {(['h1', 'h2', 'h3'] as const).map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  className="selection-action-button selection-action-button--format selection-action-button--text"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => handleSelectionLineFormat(format)}
+                >
+                  {format.toUpperCase()}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => handleSelectionLineFormat('quote')}
+              >
+                Quote
+              </button>
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => handleSelectionLineFormat('bullet')}
+              >
+                List
+              </button>
+              {canLinkSelectionToPDF && (
+                <button
+                  type="button"
+                  className="selection-action-button selection-action-button--text"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={handleSelectionLinkToPDF}
+                >
+                  Anchor in PDF
+                </button>
+              )}
+              {isProvenanceXrayVisible && (
+                <button
+                  type="button"
+                  className="selection-action-button selection-action-button--text"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={handleSelectionDissolve}
+                  disabled={selectionDissolveSpanIds.length === 0}
+                >
+                  Dissolve
+                </button>
+              )}
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-source-scope"
+                title="Cycle source scope"
+                aria-label="Cycle source scope"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={cycleSourceScope}
+              >
+                Sources: {formatSourceScope(sourceScope)}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

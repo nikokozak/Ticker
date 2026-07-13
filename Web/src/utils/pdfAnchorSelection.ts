@@ -27,6 +27,15 @@ export function buildTickerPDFLinkURL(args: { sourceId: string; highlightId: str
   return `ticker-pdf://${args.sourceId}?highlight=${encodeURIComponent(args.highlightId)}&page=${args.page}`;
 }
 
+export function buildPDFQuoteSnippet(args: { quote: string; linkLabel: string; linkURL: string }): string {
+  const quote = args.quote.trim().replace(/\s+/g, ' ');
+  const linkLabel = args.linkLabel
+    .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]');
+  return `\n${quote ? `> ${quote}\n` : ''}[${linkLabel}](${args.linkURL})\n`;
+}
+
 export function beginPDFAnchorPick(streamId: string): void {
   bridge.send({
     type: 'beginPdfAnchorPick',
@@ -46,6 +55,7 @@ export function buildPDFAnchorLinkEdit(
 
   const linkText = selectedText
     .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
     .replace(/\]/g, '\\]');
   const insert = `[${linkText}](${linkURL})`;
 

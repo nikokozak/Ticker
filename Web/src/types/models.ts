@@ -66,7 +66,6 @@ export interface StreamSummary {
   title: string;
   sourceCount: number;
   sourceShortTitle?: string;
-  cellCount: number;
   charCount: number;
   wordCount: number;
   imageCount: number;

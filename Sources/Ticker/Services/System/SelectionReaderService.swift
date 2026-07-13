@@ -209,11 +209,13 @@ final class SelectionReaderService {
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let frontmostBundleId = frontmostApp?.bundleIdentifier
         var useHintSettleBudget = false
+        var initialRead: AXSelectionRead = .unavailable
 
         let result = Self.captureExternalSelectedText(
             hasAccessibilityPermission: cursorService.hasAccessibilityPermission,
             axSelection: { [self] in
-                readSelection()
+                initialRead = readSelection()
+                return initialRead
             },
             hintAccessibilityTree: { [self] in
                 useHintSettleBudget = hintAccessibilityTree(for: frontmostApp)
@@ -223,7 +225,9 @@ final class SelectionReaderService {
                     attempts: useHintSettleBudget ? hintedSelectionReadAttempts : 1,
                     retryDelay: useHintSettleBudget ? hintedSelectionReadRetryDelay : 0,
                     retryMissingFocusedElement: useHintSettleBudget,
-                    retryEmptySelection: useHintSettleBudget
+                    // An initial .empty is authoritative; only unavailable AX trees
+                    // need the full settle budget after enabling accessibility hints.
+                    retryEmptySelection: useHintSettleBudget && initialRead == .unavailable
                 )
             },
             clipboardSelection: { [self] in
@@ -627,7 +631,6 @@ final class SelectionReaderService {
             panelPosition: position,
             clipboardImage: clipboardImageData,
             clipboardText: clipboardText,
-            isScreenshot: false,
             selectionCaptureOutcome: selectionCaptureOutcome
         )
         DebugLog.log(
@@ -688,9 +691,6 @@ struct QuickPanelContext {
     let clipboardImage: Data?
     /// Recent user-copied clipboard text used as context when no real selection exists.
     let clipboardText: String?
-    /// True only for explicit app-initiated screenshot mode (currently deprecated).
-    /// Clipboard-derived images should keep this false.
-    let isScreenshot: Bool
     /// Outcome of the external-app selection ladder when Quick Panel was invoked.
     let selectionCaptureOutcome: SelectionCaptureOutcome
 
@@ -701,7 +701,6 @@ struct QuickPanelContext {
         panelPosition: CGPoint,
         clipboardImage: Data?,
         clipboardText: String? = nil,
-        isScreenshot: Bool,
         selectionCaptureOutcome: SelectionCaptureOutcome = .notAttempted
     ) {
         self.selectedText = selectedText
@@ -710,7 +709,6 @@ struct QuickPanelContext {
         self.panelPosition = panelPosition
         self.clipboardImage = clipboardImage
         self.clipboardText = clipboardText
-        self.isScreenshot = isScreenshot
         self.selectionCaptureOutcome = selectionCaptureOutcome
     }
 

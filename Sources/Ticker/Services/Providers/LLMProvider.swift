@@ -18,6 +18,8 @@ struct LLMMessage {
 
 /// A standardized request to an LLM provider
 struct LLMRequest {
+    static let defaultTokenBudget = 100_000
+
     /// System prompt for the model
     var systemPrompt: String
 
@@ -94,7 +96,7 @@ struct LLMRequest {
     /// Keeps system prompt, first context message (if any), and most recent messages
     /// - Parameter budget: Maximum token count (default 100,000 for GPT-4o-mini safety margin)
     /// - Returns: A new request with truncated messages if needed
-    func truncated(toTokenBudget budget: Int = 100_000) -> LLMRequest {
+    func truncated(toTokenBudget budget: Int = LLMRequest.defaultTokenBudget) -> LLMRequest {
         let systemTokens = LLMRequest.estimateTokens(systemPrompt)
         var availableBudget = budget - systemTokens - (maxTokens ?? 2048)
 

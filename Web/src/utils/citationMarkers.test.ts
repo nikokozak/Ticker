@@ -88,6 +88,13 @@ describe('swapCitationMarkers', () => {
     );
   });
 
+  it('escapes both brackets in source-prefixed labels', () => {
+    const bracketed = { ...citations[1], shortTitle: 'Guide [draft]' };
+    expect(swapCitationMarkers('Disambiguate this.【2】', [citations[0], bracketed])).toBe(
+      'Disambiguate this. [Guide \\[draft\\] p.8](ticker-pdf://source-2?page=8&chunk=chunk-2)'
+    );
+  });
+
   it('inserts exactly one space before a swapped link', () => {
     expect(swapCitationMarkers('Crowded  【1】', citations)).toBe(
       'Crowded [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1)'
@@ -112,6 +119,26 @@ describe('swapCitationMarkers', () => {
   it('accepts typographic quote delimiters', () => {
     expect(swapCitationMarkers('Curly quote marker.【1|“curly quoted span”】', citations)).toBe(
       'Curly quote marker. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=curly%20quoted%20span)'
+    );
+  });
+
+  it('accepts the observed provider closing-brace typo', () => {
+    expect(swapCitationMarkers('Provider typo.【1|"exact supporting words"}', citations)).toBe(
+      'Provider typo. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=exact%20supporting%20words)'
+    );
+  });
+
+  it('keeps braces inside a valid quoted marker', () => {
+    expect(swapCitationMarkers('Code quote.【1|"pushes {x} onto the stack"】', citations)).toBe(
+      'Code quote. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=pushes%20%7Bx%7D%20onto%20the%20stack)'
+    );
+  });
+
+  it('does not merge a typo marker with a later citation', () => {
+    expect(
+      swapCitationMarkers('First.【1|"alpha"} prose Second.【2|"beta"】', citations)
+    ).toBe(
+      'First. [Manual p.12](ticker-pdf://source-1?page=12&chunk=chunk-1&q=alpha) prose Second. [Guide p.8](ticker-pdf://source-2?page=8&chunk=chunk-2&q=beta)'
     );
   });
 

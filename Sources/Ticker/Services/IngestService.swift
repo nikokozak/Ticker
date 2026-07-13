@@ -84,7 +84,7 @@ final class IngestService: @unchecked Sendable {
     }
 
     func cancel(sourceId: UUID? = nil) {
-        stateQueue.async {
+        stateQueue.sync {
             if let sourceId {
                 self.queuedSources.removeAll { source in
                     if source.id == sourceId {
@@ -144,40 +144,45 @@ final class IngestService: @unchecked Sendable {
         do {
             try Task.checkCancellation()
 
-            guard var source = try persistence.loadSource(id: queuedSource.id) else { return }
+            guard let source = try persistence.loadSource(id: queuedSource.id) else { return }
             guard source.indexStatus == .pending || source.indexStatus == .failed else { return }
 
-            source.indexStatus = .indexing
             try writeIndexStatus(source.id, .indexing)
             emit(.indexing, progress: 0, force: true)
 
-            guard source.fileType == .pdf else {
-                try persistence.saveSourceChunks([], for: source.id)
-                emit(persistCompletionStatus(source.id, desired: .ready))
-                return
+            let chunks: [SourceChunk]
+            if source.fileType == .pdf {
+                let url = try sourceService.accessFile(source)
+                defer { url.stopAccessingSecurityScopedResource() }
+
+                try Task.checkCancellation()
+
+                guard let document = PDFDocument(url: url) else {
+                    throw IngestError.openFailed
+                }
+
+                if document.isLocked {
+                    throw IngestError.noReadableText
+                }
+
+                let result = try chunkingService.extractAndChunkPDF(
+                    document: document,
+                    sourceId: source.id,
+                    progress: { progress in
+                        emit(.indexing, progress: min(0.95, max(0, progress * 0.95)))
+                    },
+                    shouldCancel: { Task.isCancelled }
+                )
+                try persistence.updateSourceExtraction(
+                    source.id,
+                    text: result.extractedText.isEmpty ? nil : result.extractedText,
+                    pageCount: result.pageCount,
+                    status: result.extractedText.isEmpty ? .error : .ready
+                )
+                chunks = result.chunks
+            } else {
+                chunks = chunkingService.chunkText(source.extractedText ?? "", sourceId: source.id)
             }
-
-            let url = try sourceService.accessFile(source)
-            defer { url.stopAccessingSecurityScopedResource() }
-
-            try Task.checkCancellation()
-
-            guard let document = PDFDocument(url: url) else {
-                throw IngestError.openFailed
-            }
-
-            if document.isLocked {
-                throw IngestError.noReadableText
-            }
-
-            let chunks = try chunkingService.chunkPDF(
-                document: document,
-                sourceId: source.id,
-                progress: { progress in
-                    emit(.indexing, progress: min(0.95, max(0, progress * 0.95)))
-                },
-                shouldCancel: { Task.isCancelled }
-            )
 
             try Task.checkCancellation()
 
@@ -228,31 +233,17 @@ final class IngestService: @unchecked Sendable {
     }
 
     private func persistCompletionStatus(_ sourceId: UUID, desired: SourceIndexStatus) -> SourceIndexStatus {
-        for _ in 0..<2 {
-            do {
-                try writeIndexStatus(sourceId, desired)
-                return desired
-            } catch {
-                DebugLog.log("IngestService: Failed to persist terminal status (\(DebugLog.errorSummary(error)))")
+        let statuses: [SourceIndexStatus] = desired == .failed ? [.failed] : [desired, .failed]
+        for status in statuses {
+            for _ in 0..<2 {
+                do {
+                    try writeIndexStatus(sourceId, status)
+                    return status
+                } catch {
+                    DebugLog.log("IngestService: Failed to persist terminal status (\(DebugLog.errorSummary(error)))")
+                }
             }
-        }
-
-        do {
-            try writeIndexStatus(sourceId, .failed)
-        } catch {
-            queueFailedStatus(sourceId)
         }
         return .failed
-    }
-
-    private func queueFailedStatus(_ sourceId: UUID) {
-        stateQueue.asyncAfter(deadline: .now() + 1) { [weak self] in
-            guard let self else { return }
-            do {
-                try self.writeIndexStatus(sourceId, .failed)
-            } catch {
-                self.queueFailedStatus(sourceId)
-            }
-        }
     }
 }

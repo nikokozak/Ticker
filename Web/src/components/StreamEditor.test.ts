@@ -3,12 +3,40 @@ import { history, undo } from '@codemirror/commands';
 import { describe, expect, it } from 'vitest';
 import { addSpans, currentSpans, provenanceField } from '../extensions/ProvenanceField';
 import { fnv1a } from '../utils/fnv1a';
-import { buildDocumentAIProvenanceSpan, documentAIErrorRecovery, isStreamDocumentDirty, nextSourceScope } from './StreamEditor';
+import {
+  activeAIOperationsAfter,
+  buildDocumentAIProvenanceSpan,
+  documentAIErrorRecovery,
+  documentAIRollbackChange,
+  isStreamDocumentDirty,
+  nextSourceScope,
+  parsePDFSectionActionRequest,
+  shouldScheduleEditorAutosave,
+} from './StreamEditor';
 
 describe('isStreamDocumentDirty', () => {
   it('only reports content that differs from the last successful save', () => {
     expect(isStreamDocumentDirty('edited', 'saved')).toBe(true);
     expect(isStreamDocumentDirty('saved', 'saved')).toBe(false);
+  });
+});
+
+describe('document AI save ownership', () => {
+  it('suppresses autosave for temporary AI document changes', () => {
+    expect(shouldScheduleEditorAutosave(true, true)).toBe(false);
+    expect(shouldScheduleEditorAutosave(true, false)).toBe(true);
+    expect(shouldScheduleEditorAutosave(false, false)).toBe(false);
+  });
+
+  it('restores the exact original range before teardown saves', () => {
+    let state = EditorState.create({ doc: 'Keep this tail' });
+    state = state.update({ changes: { from: 0, to: 9, insert: 'AI partial' } }).state;
+
+    state = state.update({
+      changes: documentAIRollbackChange({ from: 0, to: 10 }, 'Keep this'),
+    }).state;
+
+    expect(state.doc.toString()).toBe('Keep this tail');
   });
 });
 
@@ -33,6 +61,57 @@ describe('documentAIErrorRecovery', () => {
       restoreText: 'original text',
       silent: false,
     });
+  });
+});
+
+describe('activeAIOperationsAfter', () => {
+  it('keeps independent requests active until each reaches a terminal state', () => {
+    let active = activeAIOperationsAfter(new Set(), 'request-1', 'queued');
+    active = activeAIOperationsAfter(active, 'request-2', 'generating');
+    active = activeAIOperationsAfter(active, 'request-1', 'succeeded');
+    expect([...active]).toEqual(['request-2']);
+
+    active = activeAIOperationsAfter(active, 'request-2', 'failed');
+    expect(active.size).toBe(0);
+  });
+});
+
+describe('parsePDFSectionActionRequest', () => {
+  it('accepts a current-stream section action and rejects stale or malformed payloads', () => {
+    const payload = {
+      action: 'ask',
+      streamId: 'stream-1',
+      sourceId: 'source-1',
+      shortTitle: 'Manual',
+      sectionTitle: 'Storage',
+      page: 4,
+    };
+
+    expect(parsePDFSectionActionRequest(payload, 'stream-1')).toEqual(payload);
+    expect(parsePDFSectionActionRequest(payload, 'stream-2')).toBeNull();
+    expect(parsePDFSectionActionRequest({ ...payload, page: 0 }, 'stream-1')).toBeNull();
+    expect(parsePDFSectionActionRequest({ ...payload, action: 'rewrite' }, 'stream-1')).toBeNull();
+  });
+});
+
+describe('external append history', () => {
+  it('keeps an external append while undoing the preceding local edit', () => {
+    let state = EditorState.create({ doc: 'Saved', extensions: [history()] });
+    const dispatch = (transaction: Transaction) => {
+      state = transaction.state;
+    };
+
+    state = state.update({
+      changes: { from: state.doc.length, insert: ' local' },
+      annotations: Transaction.addToHistory.of(true),
+    }).state;
+    state = state.update({
+      changes: { from: state.doc.length, insert: '\n\nCaptured' },
+      annotations: Transaction.addToHistory.of(false),
+    }).state;
+
+    expect(undo({ state, dispatch })).toBe(true);
+    expect(state.doc.toString()).toBe('Saved\n\nCaptured');
   });
 });
 

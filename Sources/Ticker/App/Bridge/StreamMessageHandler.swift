@@ -6,40 +6,6 @@ protocol StreamMessageHandlerDelegate: AnyObject {
     func consumeLastOpenStreamIdForLaunchRestore() -> UUID?
     func clearCurrentStreamIdForFileDrops(ifMatches streamId: UUID)
     func closePDFPaneIfShowingDifferentStream(_ streamId: UUID) async
-    func removePDFHighlightAnnotations(ids: [String], sourceIds: [UUID]) async
-}
-
-enum PDFHighlightLinkReferenceExtractor {
-    private static let tickerPDFURLPattern = #"ticker-pdf://[^\s<>"'\)\]]+"#
-
-    static func highlightIds(in markdown: String) -> Set<String> {
-        guard let regex = try? NSRegularExpression(pattern: tickerPDFURLPattern, options: [.caseInsensitive]) else {
-            return []
-        }
-
-        let range = NSRange(markdown.startIndex..<markdown.endIndex, in: markdown)
-        var ids = Set<String>()
-
-        regex.enumerateMatches(in: markdown, range: range) { match, _, _ in
-            guard let match,
-                  let urlRange = Range(match.range, in: markdown) else {
-                return
-            }
-
-            let rawURL = String(markdown[urlRange])
-            guard let components = URLComponents(string: rawURL),
-                  let highlightValue = components.queryItems?.first(where: {
-                      $0.name.caseInsensitiveCompare("highlight") == .orderedSame
-                  })?.value,
-                  let id = UUID(uuidString: highlightValue) else {
-                return
-            }
-
-            ids.insert(id.uuidString)
-        }
-
-        return ids
-    }
 }
 
 final class StreamMessageHandler: BridgeMessageHandler {
@@ -83,11 +49,22 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 await bridgeService.send(BridgeMessage(type: "streamsLoaded", payload: [
                     "streams": payload["streams"]!
                 ]))
-                if let restoreId = delegate?.consumeLastOpenStreamIdForLaunchRestore() {
-                    try await sendStreamLoaded(id: restoreId)
-                }
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load streams (\(DebugLog.errorSummary(error)))")
+                await bridgeService.send(BridgeMessage(
+                    type: "streamsLoadFailed",
+                    payload: ["reason": AnyCodable("unavailable")]
+                ))
+                return
+            }
+
+            if let restoreId = delegate?.consumeLastOpenStreamIdForLaunchRestore() {
+                do {
+                    try await sendStreamLoaded(id: restoreId)
+                } catch {
+                    DebugLog.log("[StreamMessageHandler] Failed to restore last stream (\(DebugLog.errorSummary(error)))")
+                    await sendStreamLoadFailed(id: restoreId, requestId: nil, reason: "unavailable")
+                }
             }
 
         case "loadStream":
@@ -102,6 +79,11 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 try await sendStreamLoaded(id: id, requestId: payload["requestId"]?.intValue)
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load stream (\(DebugLog.errorSummary(error)))")
+                await sendStreamLoadFailed(
+                    id: id,
+                    requestId: payload["requestId"]?.intValue,
+                    reason: "unavailable"
+                )
             }
 
         case "createStream":
@@ -189,7 +171,6 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     baseRevision: baseRevision,
                     spans: spans
                 )
-                await pruneUnreferencedPDFHighlights(streamId: streamId, markdown: markdown)
                 await bridgeService.respond(to: callbackId, with: [
                     "revision": AnyCodable(revision)
                 ])
@@ -306,7 +287,10 @@ final class StreamMessageHandler: BridgeMessageHandler {
     }
 
     func sendStreamLoaded(id: UUID, requestId: Int? = nil) async throws {
-        guard let stream = try persistence.loadStream(id: id) else { return }
+        guard let stream = try persistence.loadStream(id: id) else {
+            await sendStreamLoadFailed(id: id, requestId: requestId, reason: "notFound")
+            return
+        }
         delegate?.setCurrentStreamIdForFileDrops(id)
         await delegate?.closePDFPaneIfShowingDifferentStream(id)
         let document = try persistence.loadOrCreateStreamDocument(streamId: id)
@@ -325,6 +309,17 @@ final class StreamMessageHandler: BridgeMessageHandler {
         }
         await bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
         ingestService?.enqueuePendingSources(for: id)
+    }
+
+    private func sendStreamLoadFailed(id: UUID, requestId: Int?, reason: String) async {
+        var payload: [String: AnyCodable] = [
+            "id": AnyCodable(id.uuidString),
+            "reason": AnyCodable(reason)
+        ]
+        if let requestId {
+            payload["requestId"] = AnyCodable(requestId)
+        }
+        await bridgeService.send(BridgeMessage(type: "streamLoadFailed", payload: payload))
     }
 
     private func decodeSpans(_ value: Any?, streamId: UUID) -> [ProvenanceSpan]? {
@@ -402,18 +397,4 @@ final class StreamMessageHandler: BridgeMessageHandler {
         return nil
     }
 
-    private func pruneUnreferencedPDFHighlights(streamId: UUID, markdown: String) async {
-        do {
-            let referencedHighlightIds = PDFHighlightLinkReferenceExtractor.highlightIds(in: markdown)
-            let sourceIds = try persistence.loadStream(id: streamId)?.sources.map(\.id) ?? []
-            let deletedHighlightIds = try persistence.deletePDFHighlights(
-                sourceIds: sourceIds,
-                excludingIds: Array(referencedHighlightIds)
-            )
-            // ponytail: undoing a deleted link after GC restores the markdown only; revive-on-undo would need soft-delete metadata.
-            await delegate?.removePDFHighlightAnnotations(ids: deletedHighlightIds, sourceIds: sourceIds)
-        } catch {
-            DebugLog.log("[StreamMessageHandler] Failed to prune PDF highlights (\(DebugLog.errorSummary(error)))")
-        }
-    }
 }

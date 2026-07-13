@@ -165,7 +165,7 @@ enum SourceFileType: String, Codable {
             self = .text
         case "md", "markdown":
             self = .markdown
-        case "png", "jpg", "jpeg", "gif", "webp":
+        case "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tiff", "tif", "bmp":
             self = .image
         default:
             return nil

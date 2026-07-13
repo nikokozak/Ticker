@@ -1,5 +1,62 @@
 import Foundation
 
+struct PDFSectionDescriptor: Equatable {
+    let streamId: UUID
+    let sourceId: UUID
+    let sourceName: String
+    let shortTitle: String
+    let sectionPath: String
+    let sectionTitle: String
+    let pageStart: Int
+    let pageEnd: Int
+}
+
+struct PDFSectionSourceContext {
+    let descriptor: PDFSectionDescriptor
+    let sourceContext: SourceContext
+}
+
+enum PDFSectionContextError: LocalizedError, Equatable {
+    case serviceUnavailable
+    case invalidPage
+    case missingSource
+    case wrongStream
+    case notPDF
+    case sourceExcluded
+    case indexing
+    case noReadableText
+    case indexingFailed
+    case noSection
+    case sectionTooLong
+
+    var errorDescription: String? {
+        switch self {
+        case .serviceUnavailable:
+            return "PDF section actions are unavailable right now."
+        case .invalidPage:
+            return "The current PDF page is unavailable."
+        case .missingSource:
+            return "This PDF source is no longer available."
+        case .wrongStream:
+            return "This PDF belongs to another stream."
+        case .notPDF:
+            return "Section actions require a PDF source."
+        case .sourceExcluded:
+            return "This source is Private for AI. Allow AI access before using section actions."
+        case .indexing:
+            return "This PDF is still indexing. Try the section action again shortly."
+        case .noReadableText:
+            return "No readable text is available for this PDF."
+        case .indexingFailed:
+            return "This PDF could not be indexed. Retry it from Sources."
+        case .noSection:
+            return "No indexed outline section is available on this page."
+        case .sectionTooLong:
+            return "This section is too long for one AI request."
+        }
+    }
+}
+
 /// Local source retrieval over the v16 FTS chunk index.
 final class RetrievalService {
     private let persistence: PersistenceService
@@ -9,6 +66,7 @@ final class RetrievalService {
 
     private static let topK = 8
     private static let passthroughTokenBudget = 8_000
+    static let maxPDFSectionReferenceTokens = LLMRequest.defaultTokenBudget - 12_000
     // ponytail: Short-query BM25 scales from a 274-page book where relevant queries scored
     // about -1.9/token and unrelated queries about -0.52/token; cap long paragraph queries
     // so strong matches around -13 remain retrievable while unrelated 8-token best -4.15 stays gated.
@@ -149,6 +207,36 @@ final class RetrievalService {
         )
     }
 
+    func resolvePDFSection(sourceId: UUID, streamId: UUID, page: Int) throws -> PDFSectionDescriptor {
+        try pdfSection(sourceId: sourceId, streamId: streamId, page: page).descriptor
+    }
+
+    func assemblePDFSectionContext(sourceId: UUID, streamId: UUID, page: Int) throws -> PDFSectionSourceContext {
+        let section = try pdfSection(sourceId: sourceId, streamId: streamId, page: page)
+        let chunks = section.chunks.map { chunk in
+            RetrievedChunk(
+                id: chunk.id,
+                sourceId: chunk.sourceId,
+                sourceName: section.descriptor.sourceName,
+                seq: chunk.seq,
+                text: chunk.text,
+                pageStart: chunk.pageStart,
+                pageEnd: chunk.pageEnd,
+                sectionPath: chunk.sectionPath,
+                score: 0
+            )
+        }
+        let manifest = Self.buildManifest(from: chunks)
+        guard LLMRequest.estimateTokens(manifest) <= Self.maxPDFSectionReferenceTokens else {
+            throw PDFSectionContextError.sectionTooLong
+        }
+
+        return PDFSectionSourceContext(
+            descriptor: section.descriptor,
+            sourceContext: SourceContext(text: manifest, chunks: chunks, mode: .retrieved)
+        )
+    }
+
     static func reciprocalRankFuse<ID: Hashable & Comparable>(
         bm25: [ID], semantic: [ID], rrfK: Int, limit: Int
     ) -> [ID] {
@@ -195,6 +283,64 @@ final class RetrievalService {
             DebugLog.log("RetrievalService: Semantic retrieval failed (\(DebugLog.errorSummary(error)))")
             return nil
         }
+    }
+
+    private func pdfSection(
+        sourceId: UUID,
+        streamId: UUID,
+        page: Int
+    ) throws -> (descriptor: PDFSectionDescriptor, chunks: [SourceChunk]) {
+        guard page > 0 else { throw PDFSectionContextError.invalidPage }
+        guard let source = try persistence.loadSource(id: sourceId) else {
+            throw PDFSectionContextError.missingSource
+        }
+        guard source.streamId == streamId else { throw PDFSectionContextError.wrongStream }
+        guard source.fileType == .pdf else { throw PDFSectionContextError.notPDF }
+        guard !source.aiExcluded else { throw PDFSectionContextError.sourceExcluded }
+
+        let chunks = try persistence.loadSourceChunks(sourceId: sourceId)
+        guard !chunks.isEmpty else {
+            switch source.indexStatus {
+            case .pending, .indexing:
+                throw PDFSectionContextError.indexing
+            case .failedNoText:
+                throw PDFSectionContextError.noReadableText
+            case .failed:
+                throw PDFSectionContextError.indexingFailed
+            case .ready:
+                throw PDFSectionContextError.noSection
+            }
+        }
+
+        guard let sectionPath = chunks.first(where: { chunk in
+            chunk.pageStart <= page && page <= chunk.pageEnd && chunk.sectionPath?.isEmpty == false
+        })?.sectionPath else {
+            throw PDFSectionContextError.noSection
+        }
+        let sectionChunks = chunks.filter { $0.sectionPath == sectionPath }.sorted { $0.seq < $1.seq }
+        guard let pageStart = sectionChunks.map(\.pageStart).min(),
+              let pageEnd = sectionChunks.map(\.pageEnd).max() else {
+            throw PDFSectionContextError.noSection
+        }
+        let titleCandidate = sectionPath
+            .components(separatedBy: " > ")
+            .last?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let sectionTitle = titleCandidate.flatMap { $0.isEmpty ? nil : $0 } ?? sectionPath
+
+        return (
+            PDFSectionDescriptor(
+                streamId: streamId,
+                sourceId: sourceId,
+                sourceName: source.displayName,
+                shortTitle: source.shortTitle,
+                sectionPath: sectionPath,
+                sectionTitle: sectionTitle,
+                pageStart: pageStart,
+                pageEnd: pageEnd
+            ),
+            sectionChunks
+        )
     }
 
     private func embedQuery(_ query: String, using provider: EmbeddingProvider) -> [Float]? {

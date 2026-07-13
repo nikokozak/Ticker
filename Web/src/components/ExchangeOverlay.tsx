@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
 import type { AIExchangeJSON } from '../types';
 import { XIcon } from './icons';
+import { Modal } from './Modal';
 
 export interface ExchangeManifestEntry {
   sourceId: string;
@@ -43,27 +43,16 @@ export function ExchangeOverlay({
 }: ExchangeOverlayProps) {
   const entries = manifestEntries(exchange.sourceManifest);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
-
   const copyRaw = () => {
     void navigator.clipboard?.writeText(exchange.responseRaw);
   };
 
   return (
-    <div className="exchange-overlay" onClick={onClose}>
-      <div
-        className="exchange-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="exchange-modal-title"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <Modal
+      className="exchange-modal"
+      aria-labelledby="exchange-modal-title"
+      onRequestClose={onClose}
+    >
         <div className="exchange-modal-header">
           <h2 id="exchange-modal-title">Exchange</h2>
           <button
@@ -110,7 +99,6 @@ export function ExchangeOverlay({
           <button type="button" onClick={onRedevelop}>re-develop</button>
           <button type="button" onClick={copyRaw}>copy raw</button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

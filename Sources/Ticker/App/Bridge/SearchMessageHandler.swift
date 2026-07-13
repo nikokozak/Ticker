@@ -54,8 +54,8 @@ final class SearchMessageHandler: BridgeMessageHandler {
 
                     await MainActor.run {
                         bridgeService.respond(to: callbackId, with: [
-                            "currentStreamResults": AnyCodable(json["currentStreamResults"]),
-                            "otherStreamResults": AnyCodable(json["otherStreamResults"])
+                            "currentStreamResults": AnyCodable(json["currentStreamResults"] ?? []),
+                            "otherStreamResults": AnyCodable(json["otherStreamResults"] ?? [])
                         ])
                     }
                 } catch {

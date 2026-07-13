@@ -73,6 +73,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var onboardingWindow: NSWindow?
     private var didCompleteStartup = false
     private var skipLastStreamRestore = false
+    private var isWaitingForEditorFlush = false
 
     // Menu bar (status item)
     private var statusItem: NSStatusItem?
@@ -229,6 +230,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard didCompleteStartup, let webViewManager else { return .terminateNow }
+        guard !isWaitingForEditorFlush else { return .terminateLater }
+
+        isWaitingForEditorFlush = true
+        Task { @MainActor [weak self] in
+            await webViewManager.requestEditorFlush()
+            guard let self, self.isWaitingForEditorFlush else { return }
+            self.isWaitingForEditorFlush = false
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
         skipLastStreamRestore = true
         webViewManager?.skipLaunchStreamRestore()
@@ -266,7 +281,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             case .append(let selector, let text):
                 guard let streamId = try resolveTickerStream(selector, persistence: persistence) else {
-                    DebugLog.log("[TickerURL] Append ignored; stream not found")
                     return
                 }
                 let span = ProvenanceSpan(
@@ -298,9 +312,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if try persistence.loadStream(id: id) != nil {
                 return id
             }
+            DebugLog.log("[TickerURL] Append ignored; stream ID not found: \(id.uuidString)")
             return nil
         case .title(let title):
-            return try persistence.loadStreamSummaries().first { $0.title == title }?.id
+            switch try persistence.resolveUniqueStreamTitle(title) {
+            case .unique(let id):
+                return id
+            case .notFound:
+                DebugLog.log("[TickerURL] Append ignored; stream title not found: \(title)")
+                return nil
+            case .ambiguous:
+                DebugLog.log("[TickerURL] Append ignored; duplicate title requires a stream UUID: \(title)")
+                return nil
+            }
         }
     }
 
@@ -490,14 +514,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainWindow?.styleMask.insert(.fullSizeContentView)
         mainWindow?.titlebarAppearsTransparent = true
         mainWindow?.titleVisibility = .hidden
-        mainWindow?.backgroundColor = NSColor(name: nil) { appearance in
-            switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
-            case .darkAqua:
-                return NSColor(red: 28 / 255, green: 28 / 255, blue: 27 / 255, alpha: 1)
-            default:
-                return NSColor(red: 251 / 255, green: 251 / 255, blue: 250 / 255, alpha: 1)
-            }
-        }
+        mainWindow?.backgroundColor = NativePalette.background
         mainWindow?.minSize = NSSize(width: 300, height: 400)
         mainWindow?.delegate = self  // Handle close to hide instead of quit
         _ = mainWindow?.setFrameAutosaveName(autosaveName)
@@ -517,24 +534,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Quick Panel Setup
 
+    @MainActor
     private func setupQuickPanel(container: ServiceContainer) {
-        // Initialize Quick Panel manager on main actor
-        Task { @MainActor in
-            let manager = QuickPanelManager()
-            self.quickPanelManager = manager
-            manager.configure(container: container)
-            manager.configureLocalSelectionProvider(QuickPanelLocalSelectionProvider(
-                pdfSelection: { [weak self] in
-                    self?.webViewManager?.currentPDFSelectionText()
-                },
-                editorSelection: { [weak self] in
-                    guard let webViewManager = self?.webViewManager else {
-                        return nil
-                    }
-                    return await webViewManager.requestEditorSelection()
+        let manager = QuickPanelManager(aiOperations: container.aiOperations)
+        quickPanelManager = manager
+        manager.configure(container: container)
+        manager.configureLocalSelectionProvider(QuickPanelLocalSelectionProvider(
+            pdfSelection: { [weak self] in
+                self?.webViewManager?.currentPDFSelectionText()
+            },
+            editorSelection: { [weak self] in
+                guard let webViewManager = self?.webViewManager else {
+                    return nil
                 }
-            ))
-        }
+                return await webViewManager.requestEditorSelection()
+            }
+        ))
 
         // Initialize hotkey service
         hotkeyService = HotkeyService()
@@ -542,14 +557,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Register Quick Panel hotkey (Cmd+L)
         hotkeyService?.register(config: .quickPanel) { [weak self] in
             self?.triggerQuickPanelToggle()
-        }
-
-        // Register deprecated screenshot hotkey (Cmd+;).
-        // We keep the binding for discoverability while app-initiated capture is disabled.
-        hotkeyService?.register(config: .screenshot) { [weak self] in
-            Task { @MainActor in
-                self?.handleDeprecatedScreenshotHotkey()
-            }
         }
 
         // Register Main Window toggle hotkey (Ctrl+Space)
@@ -560,14 +567,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    /// Deprecated until we migrate to a Sequoia-style picker flow.
-    /// Users can still attach screenshots by capturing to clipboard with macOS, then pressing Cmd+L.
-    @MainActor
-    private func handleDeprecatedScreenshotHotkey() {
-        quickPanelManager?.showWithStatusMessage(
-            "Screenshot mode is deprecated. Use macOS screenshot shortcuts, then press Cmd+L."
-        )
-    }
 }
 
 extension AppDelegate: SPUUpdaterDelegate {

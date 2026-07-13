@@ -1,21 +1,9 @@
 import SwiftUI
 import AppKit
 
-private extension Color {
-    init(light: Color, dark: Color) {
-        self.init(NSColor(name: nil, dynamicProvider: { appearance in
-            switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
-            case .darkAqua:
-                return NSColor(dark)
-            default:
-                return NSColor(light)
-            }
-        }))
-    }
-}
-
 private enum QuickPanelStyle {
-    static let radius: CGFloat = 8
+    static let radius: CGFloat = 9
+    static let panelRadius: CGFloat = 14
     static let badgeVerticalPadding: CGFloat = 2
     static let optionVerticalPadding: CGFloat = 5
     static let pickerMaxHeight: CGFloat = 180
@@ -25,52 +13,25 @@ private enum QuickPanelStyle {
     static let markdownLineSpacing: CGFloat = 3
     static let inputInsetY: CGFloat = 2
     static let inputHeightPadding: CGFloat = 4
-    static let minInputHeight: CGFloat = 22
-    static let maxInputHeight: CGFloat = 120
+    static let minInputHeight: CGFloat = 24
+    static let maxInputHeight: CGFloat = 144
 
-    static let microTextSize: CGFloat = 9
-    static let iconSize: CGFloat = 10
-    static let captionSize: CGFloat = 11
-    static let bodySize: CGFloat = 12
-    static let inputSize: CGFloat = 15
-    static let actionIconSize: CGFloat = 18
+    static let microTextSize: CGFloat = 10
+    static let iconSize: CGFloat = 11
+    static let captionSize: CGFloat = 12
+    static let bodySize: CGFloat = 13
+    static let inputSize: CGFloat = 16
+    static let actionIconSize: CGFloat = 19
 
-    static let surface = Color(
-        light: Color(red: 251 / 255, green: 251 / 255, blue: 250 / 255),
-        dark: Color(red: 28 / 255, green: 28 / 255, blue: 27 / 255)
-    )
-    static let surfaceRaised = Color(
-        light: Color.white,
-        dark: Color(red: 43 / 255, green: 43 / 255, blue: 41 / 255)
-    )
-    static let surfaceMuted = Color(
-        light: Color(red: 244 / 255, green: 244 / 255, blue: 242 / 255),
-        dark: Color(red: 48 / 255, green: 48 / 255, blue: 46 / 255)
-    )
-    static let text = Color(
-        light: Color(red: 31 / 255, green: 31 / 255, blue: 29 / 255),
-        dark: Color(red: 243 / 255, green: 242 / 255, blue: 237 / 255)
-    )
-    static let textMuted = Color(
-        light: Color(red: 111 / 255, green: 111 / 255, blue: 104 / 255),
-        dark: Color(red: 170 / 255, green: 167 / 255, blue: 157 / 255)
-    )
-    static let textSubtle = Color(
-        light: Color(red: 155 / 255, green: 154 / 255, blue: 145 / 255),
-        dark: Color(red: 119 / 255, green: 116 / 255, blue: 108 / 255)
-    )
-    static let accent = Color(
-        light: Color(red: 37 / 255, green: 99 / 255, blue: 235 / 255),
-        dark: Color(red: 138 / 255, green: 168 / 255, blue: 255 / 255)
-    )
-    static let success = Color(
-        light: Color(red: 22 / 255, green: 129 / 255, blue: 61 / 255),
-        dark: Color(red: 104 / 255, green: 185 / 255, blue: 130 / 255)
-    )
-    static let danger = Color(
-        light: Color(red: 199 / 255, green: 58 / 255, blue: 50 / 255),
-        dark: Color(red: 238 / 255, green: 127 / 255, blue: 118 / 255)
-    )
+    static let surfaceRaised = Color(NativePalette.surfaceRaised)
+    static let surfaceMuted = Color(NativePalette.surface)
+    static let text = Color(NativePalette.text)
+    static let textMuted = Color(NativePalette.textMuted)
+    static let textSubtle = Color(NativePalette.textSubtle)
+    static let accent = Color(NativePalette.accent)
+    static let success = Color(NativePalette.success)
+    static let danger = Color(NativePalette.danger)
+    static let separator = Color(NativePalette.separator)
 
     static func font(
         size: CGFloat,
@@ -95,11 +56,12 @@ private struct ContentHeightKey: PreferenceKey {
 /// Simplified for ticker-v2: capture mode only (no search, ask, command modes)
 struct QuickPanelView: View {
     @ObservedObject var manager: QuickPanelManager
-    @FocusState private var isInputFocused: Bool
     @State private var isPickerExpanded = false
+    @State private var inputFocusRequest = 0
+    @State private var savedConversationTurns = Set<Int>()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
+        VStack(alignment: .leading, spacing: Spacing.md) {
             // Ephemeral conversation response area (above everything else)
             if manager.ephemeralConversation.isActive {
                 responseArea
@@ -132,7 +94,7 @@ struct QuickPanelView: View {
         .padding(Spacing.lg)
         .frame(width: QuickPanelWindow.defaultWidth, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
-        .background(QuickPanelStyle.surfaceRaised)
+        .background(QuickPanelStyle.surfaceRaised.opacity(0.96))
         .background(
             GeometryReader { geometry in
                 Color.clear
@@ -144,14 +106,21 @@ struct QuickPanelView: View {
                 manager.contentHeightChanged(height)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: QuickPanelStyle.radius))
+        .clipShape(RoundedRectangle(cornerRadius: QuickPanelStyle.panelRadius))
         .overlay(
-            RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
-                .stroke(Color.clear, lineWidth: 1)
+            RoundedRectangle(cornerRadius: QuickPanelStyle.panelRadius)
+                .stroke(QuickPanelStyle.separator, lineWidth: 1)
         )
-        .onReceive(NotificationCenter.default.publisher(for: .quickPanelDidShow)) { _ in
-            isInputFocused = true
+        .onReceive(NotificationCenter.default.publisher(for: .quickPanelWillShow)) { _ in
             isPickerExpanded = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quickPanelDidShow)) { _ in
+            inputFocusRequest &+= 1
+        }
+        .onChange(of: manager.ephemeralConversation.turns.isEmpty) { _, isEmpty in
+            if isEmpty {
+                savedConversationTurns.removeAll()
+            }
         }
     }
 
@@ -204,18 +173,14 @@ struct QuickPanelView: View {
     }
 
     private func attachmentContextBadge(context: QuickPanelContext) -> some View {
-        let isScreenshot = context.isScreenshot
-        let accentColor = isScreenshot ? QuickPanelStyle.success : QuickPanelStyle.textMuted
-        let backgroundColor = isScreenshot ? QuickPanelStyle.success.opacity(0.15) : QuickPanelStyle.accent.opacity(0.1)
-
-        return HStack(spacing: Spacing.xs) {
+        HStack(spacing: Spacing.xs) {
             Image(systemName: context.hasImage ? "photo" : "text.quote")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize))
-                .foregroundColor(accentColor)
+                .foregroundColor(QuickPanelStyle.textMuted)
 
             Text(contextPreview(context))
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
-                .foregroundColor(accentColor)
+                .foregroundColor(QuickPanelStyle.textMuted)
                 .lineLimit(1)
 
             Spacer()
@@ -234,11 +199,7 @@ struct QuickPanelView: View {
         }
         .padding(.horizontal, Spacing.sm)
         .padding(.vertical, Spacing.xs)
-        .background(backgroundColor)
-        .overlay(
-            RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
-                .stroke(isScreenshot ? QuickPanelStyle.success.opacity(0.35) : Color.clear, lineWidth: 1)
-        )
+        .background(QuickPanelStyle.accent.opacity(0.1))
         .cornerRadius(QuickPanelStyle.radius)
     }
 
@@ -249,14 +210,11 @@ struct QuickPanelView: View {
                 .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
         }
         .buttonStyle(.plain)
-        .disabled(manager.isInputSaveFeedbackActive)
         .help("Clear context")
+        .accessibilityLabel("Clear attached context")
     }
 
     private func contextPreview(_ context: QuickPanelContext) -> String {
-        if context.isScreenshot {
-            return "Screenshot attached"
-        }
         if let text = context.contextText {
             if text.count > 40 {
                 return String(text.prefix(37)) + "..."
@@ -331,7 +289,10 @@ struct QuickPanelView: View {
     }
 
     private var clearConversationButton: some View {
-        Button(action: { manager.clearEphemeralConversation() }) {
+        Button(action: {
+            savedConversationTurns.removeAll()
+            manager.clearEphemeralConversation()
+        }) {
             Image(systemName: "xmark.circle")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, weight: .semibold))
                 .foregroundColor(QuickPanelStyle.textMuted.opacity(0.72))
@@ -344,15 +305,7 @@ struct QuickPanelView: View {
     }
 
     private var streamDestinationPicker: some View {
-        let isSaveFeedbackActive = manager.isStreamPickerSaveFeedbackActive
-        let pickerBackground = isSaveFeedbackActive
-            ? QuickPanelStyle.success.opacity(0.16)
-            : QuickPanelStyle.surfaceMuted
-        let pickerStroke = isSaveFeedbackActive
-            ? QuickPanelStyle.success.opacity(0.34)
-            : Color.clear
-
-        return VStack(alignment: .leading, spacing: Spacing.xs) {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
             Button(action: {
                 withAnimation(.easeOut(duration: 0.12)) {
                     isPickerExpanded.toggle()
@@ -372,14 +325,12 @@ struct QuickPanelView: View {
                 }
                 .padding(.horizontal, Spacing.sm)
                 .padding(.vertical, Spacing.xs)
-                .background(pickerBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
-                        .stroke(pickerStroke, lineWidth: 1)
-                )
+                .background(QuickPanelStyle.surfaceMuted)
                 .cornerRadius(QuickPanelStyle.radius)
             }
             .buttonStyle(.plain)
+            .help("Choose destination stream")
+            .accessibilityLabel("Destination: \(selectedStreamTitle)")
 
             if isPickerExpanded {
                 streamDestinationOptions
@@ -387,7 +338,6 @@ struct QuickPanelView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .animation(.easeOut(duration: 0.6), value: manager.isStreamPickerSaveFeedbackActive)
     }
 
     private var streamDestinationOptions: some View {
@@ -514,25 +464,31 @@ struct QuickPanelView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            saveConversationMessageButton(turn: turn)
+            saveConversationMessageButton(turn: turn, id: id)
         }
         .padding(.vertical, Spacing.xs)
         .id(id)
     }
 
-    private func saveConversationMessageButton(turn: ConversationTurn) -> some View {
+    private func saveConversationMessageButton(turn: ConversationTurn, id: Int) -> some View {
         let content = turn.saveContent ?? turn.content
-        return Button(action: { manager.saveConversationMessage(turn) }) {
-            Image(systemName: "tray.and.arrow.down")
+        let isSaved = savedConversationTurns.contains(id)
+        return Button(action: {
+            if manager.saveConversationMessage(turn) {
+                savedConversationTurns.insert(id)
+            }
+        }) {
+            Image(systemName: isSaved ? "checkmark" : "tray.and.arrow.down")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize, weight: .semibold))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.64))
+                .foregroundColor(isSaved ? QuickPanelStyle.success : QuickPanelStyle.textMuted.opacity(0.64))
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Save message to stream")
-        .accessibilityLabel("Save message to stream")
-        .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .animation(.easeOut(duration: 0.12), value: isSaved)
+        .help(isSaved ? "Saved to stream" : "Save message to stream")
+        .accessibilityLabel(isSaved ? "Saved to stream" : "Save message to stream")
+        .disabled(isSaved || content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     private var streamingResponseView: some View {
@@ -564,15 +520,14 @@ struct QuickPanelView: View {
 
     private var inputField: some View {
         let isInputDisabled = manager.isLoading ||
-            manager.ephemeralConversation.isStreaming ||
-            manager.isInputSaveFeedbackActive
+            manager.ephemeralConversation.isStreaming
 
         return HStack(spacing: Spacing.sm) {
             QuickPanelInputField(
                 text: $manager.inputText,
                 placeholder: placeholderText,
                 isLoading: isInputDisabled,
-                isShimmering: manager.isInputSaveFeedbackActive,
+                focusRequest: inputFocusRequest,
                 onSubmit: handleSubmit,
                 onCancel: { manager.handleEscape() },
                 onCmdEnter: handleCmdSubmit,
@@ -590,7 +545,11 @@ struct QuickPanelView: View {
                         .foregroundColor(canSubmit ? QuickPanelStyle.accent : QuickPanelStyle.textSubtle.opacity(0.5))
                 }
                 .buttonStyle(.plain)
-                .disabled(!canSubmit || manager.isInputSaveFeedbackActive)
+                .disabled(!canSubmit)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+                .help("Save note")
+                .accessibilityLabel("Save note")
             }
         }
         .padding(.horizontal, Spacing.md)
@@ -601,9 +560,9 @@ struct QuickPanelView: View {
 
     private var placeholderText: String {
         if manager.context?.hasContent == true {
-            return "Add a note..."
+            return "Add a note…"
         }
-        return "Capture a thought..."
+        return "Capture a thought…"
     }
 
     private var canSubmit: Bool {
@@ -616,17 +575,17 @@ struct QuickPanelView: View {
 
     private var modeHintsBar: some View {
         HStack(spacing: Spacing.md) {
-            Text("↵ save")
+            Text("↵  Save")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
 
-            Text("⌘↵ AI+save")
+            Text("⌘↵  Save & develop")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
 
-            Text("⌥↵ ask")
+            Text("⌥↵  Ask")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
 
             Spacer()
         }
@@ -666,10 +625,6 @@ struct QuickPanelView: View {
         case .info:
             icon = "info.circle"
             color = QuickPanelStyle.textMuted
-            textColor = QuickPanelStyle.text
-        case .success:
-            icon = "checkmark.circle"
-            color = QuickPanelStyle.success
             textColor = QuickPanelStyle.text
         }
 
@@ -712,14 +667,14 @@ struct QuickPanelView: View {
     // MARK: - Actions
 
     private func handleSubmit() {
-        guard canSubmit, !manager.isLoading, !manager.isInputSaveFeedbackActive else { return }
+        guard canSubmit, !manager.isLoading else { return }
         Task {
             await manager.handleEnter()
         }
     }
 
     private func handleCmdSubmit() {
-        guard canSubmit, !manager.isLoading, !manager.isInputSaveFeedbackActive else { return }
+        guard canSubmit, !manager.isLoading else { return }
         Task {
             await manager.handleCmdEnter()
         }
@@ -729,8 +684,7 @@ struct QuickPanelView: View {
         let hasInput = !manager.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard hasInput,
               !manager.isLoading,
-              !manager.ephemeralConversation.isStreaming,
-              !manager.isInputSaveFeedbackActive else { return }
+              !manager.ephemeralConversation.isStreaming else { return }
         Task {
             await manager.handleOptionEnter()
         }
@@ -743,7 +697,7 @@ struct QuickPanelInputField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String
     var isLoading: Bool
-    var isShimmering: Bool
+    var focusRequest: Int
     var onSubmit: () -> Void
     var onCancel: () -> Void
     var onCmdEnter: (() -> Void)?
@@ -802,7 +756,6 @@ struct QuickPanelInputField: NSViewRepresentable {
         DispatchQueue.main.async {
             textView.setSelectedRange(NSRange(location: 0, length: 0))
             context.coordinator.updateScrollViewHeight()
-            textView.window?.makeFirstResponder(textView)
         }
 
         return scrollView
@@ -811,9 +764,16 @@ struct QuickPanelInputField: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? QuickPanelTextView else { return }
 
+        context.coordinator.parent = self
         context.coordinator.isLoading = isLoading
         textView.placeholder = placeholder
-        textView.setShimmering(isShimmering)
+
+        if context.coordinator.lastFocusRequest != focusRequest {
+            context.coordinator.lastFocusRequest = focusRequest
+            DispatchQueue.main.async {
+                textView.window?.makeFirstResponder(textView)
+            }
+        }
 
         // Update text if changed externally
         if textView.string != text {
@@ -835,9 +795,11 @@ struct QuickPanelInputField: NSViewRepresentable {
         weak var textView: QuickPanelTextView?
         weak var scrollView: NSScrollView?
         var isLoading: Bool = false
+        var lastFocusRequest: Int
 
         init(_ parent: QuickPanelInputField) {
             self.parent = parent
+            self.lastFocusRequest = parent.focusRequest
         }
 
         func updateScrollViewHeight() {
@@ -896,25 +858,32 @@ struct QuickPanelInputField: NSViewRepresentable {
 
 // MARK: - Custom NSTextView for Quick Panel
 
+enum QuickPanelReturnAction: Equatable {
+    case save
+    case saveAndDevelop
+    case ask
+    case insertNewline
+
+    init(modifierFlags: NSEvent.ModifierFlags) {
+        let shortcutFlags = modifierFlags.intersection([.shift, .control, .option, .command])
+
+        if shortcutFlags.isEmpty {
+            self = .save
+        } else if shortcutFlags == .command {
+            self = .saveAndDevelop
+        } else if shortcutFlags == .option {
+            self = .ask
+        } else {
+            self = .insertNewline
+        }
+    }
+}
+
 class QuickPanelTextView: NSTextView {
     weak var coordinator: QuickPanelInputField.Coordinator?
     var placeholder: String = "" {
         didSet { needsDisplay = true }
     }
-    private var shimmerTimer: Timer?
-    private var shimmerStartedAt: Date?
-
-    deinit {
-        stopShimmer()
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil {
-            stopShimmer()
-        }
-        super.viewWillMove(toWindow: newWindow)
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
@@ -931,59 +900,6 @@ class QuickPanelTextView: NSTextView {
         placeholder.draw(at: origin, withAttributes: placeholderAttributes)
     }
 
-    func setShimmering(_ enabled: Bool) {
-        if enabled {
-            startShimmer()
-        } else {
-            stopShimmer()
-        }
-    }
-
-    private func startShimmer() {
-        guard shimmerTimer == nil else { return }
-        shimmerStartedAt = Date()
-
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] timer in
-            guard let self, let startedAt = self.shimmerStartedAt else {
-                timer.invalidate()
-                return
-            }
-
-            let progress = min(Date().timeIntervalSince(startedAt) / 0.7, 1)
-            let pulse = CGFloat(sin(progress * .pi))
-            self.applyTextColor(self.shimmerColor(pulse: pulse))
-
-            if progress >= 1 {
-                self.stopShimmer()
-            }
-        }
-
-        shimmerTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    private func stopShimmer() {
-        shimmerTimer?.invalidate()
-        shimmerTimer = nil
-        shimmerStartedAt = nil
-        applyTextColor(NSColor(QuickPanelStyle.text))
-    }
-
-    private func shimmerColor(pulse: CGFloat) -> NSColor {
-        let base = NSColor(QuickPanelStyle.text)
-        let highlight = NSColor(QuickPanelStyle.textMuted)
-        return base.blended(withFraction: 0.35 * pulse, of: highlight) ?? base
-    }
-
-    private func applyTextColor(_ color: NSColor) {
-        textColor = color
-        typingAttributes[.foregroundColor] = color
-
-        let length = (string as NSString).length
-        guard length > 0 else { return }
-        textStorage?.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: length))
-    }
-
     override func keyDown(with event: NSEvent) {
         // Escape - cancel
         if event.keyCode == 53 {
@@ -993,16 +909,16 @@ class QuickPanelTextView: NSTextView {
 
         // Enter/Return
         if event.keyCode == 36 {
-            if event.modifierFlags.contains(.command) {
+            switch QuickPanelReturnAction(modifierFlags: event.modifierFlags) {
+            case .save:
+                coordinator?.parent.onSubmit()
+            case .saveAndDevelop:
                 coordinator?.parent.onCmdEnter?()
-                return
-            }
-            if event.modifierFlags.contains(.option) {
+            case .ask:
                 coordinator?.parent.onOptionEnter?()
-                return
+            case .insertNewline:
+                insertNewline(nil)
             }
-            // Plain Enter submits
-            coordinator?.parent.onSubmit()
             return
         }
 
@@ -1032,122 +948,5 @@ private struct TypingDotsView: View {
             }
         }
         .onAppear { pulsing = true }
-    }
-}
-
-// MARK: - Markdown Rendering
-
-/// Renders markdown content with code block support
-private struct MarkdownContentView: View {
-    let content: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            ForEach(parseBlocks(content)) { block in
-                switch block {
-                case .text(let text):
-                    MarkdownTextView(text: text)
-                case .code(let lang, let code):
-                    CodeBlockView(language: lang, code: code)
-                }
-            }
-        }
-    }
-
-    private func parseBlocks(_ input: String) -> [ContentBlock] {
-        var blocks: [ContentBlock] = []
-        if input.isEmpty { return [] }
-
-        let components = input.components(separatedBy: "```")
-
-        for (index, component) in components.enumerated() {
-            if index % 2 == 0 {
-                // Text block
-                let trimmed = component.trimmingCharacters(in: .newlines)
-                if !trimmed.isEmpty {
-                    blocks.append(.text(trimmed))
-                }
-            } else {
-                // Code block - first line is language
-                let lines = component.components(separatedBy: .newlines)
-                let lang = lines.first?.trimmingCharacters(in: .whitespaces) ?? ""
-                let code = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .newlines)
-                blocks.append(.code(lang.isEmpty ? nil : lang, code))
-            }
-        }
-        return blocks
-    }
-}
-
-/// Renders inline markdown text using AttributedString
-private struct MarkdownTextView: View {
-    let text: String
-
-    var body: some View {
-        if let attributed = try? AttributedString(
-            markdown: text,
-            options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .inlineOnlyPreservingWhitespace
-            )
-        ) {
-            Text(attributed)
-                .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
-                .foregroundColor(QuickPanelStyle.text)
-                .lineSpacing(QuickPanelStyle.markdownLineSpacing)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-        } else {
-            Text(text)
-                .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
-                .foregroundColor(QuickPanelStyle.text)
-                .lineSpacing(QuickPanelStyle.markdownLineSpacing)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-        }
-    }
-}
-
-/// Renders a fenced code block with optional language label
-private struct CodeBlockView: View {
-    let language: String?
-    let code: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let lang = language, !lang.isEmpty {
-                HStack {
-                    Text(lang.uppercased())
-                        .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .bold, design: .monospaced))
-                        .foregroundColor(QuickPanelStyle.textMuted)
-                    Spacer()
-                }
-                .padding(.horizontal, Spacing.sm)
-                .padding(.vertical, Spacing.xs)
-                .background(QuickPanelStyle.surfaceMuted)
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, design: .monospaced))
-                    .foregroundColor(QuickPanelStyle.text)
-                    .padding(Spacing.sm)
-                    .textSelection(.enabled)
-            }
-        }
-        .background(QuickPanelStyle.surfaceMuted.opacity(0.5))
-        .cornerRadius(QuickPanelStyle.radius)
-    }
-}
-
-/// Content block type for markdown parsing
-private enum ContentBlock: Identifiable {
-    case text(String)
-    case code(String?, String)
-
-    var id: String {
-        switch self {
-        case .text(let s): return "text-\(s.hashValue)"
-        case .code(_, let c): return "code-\(c.hashValue)"
-        }
     }
 }

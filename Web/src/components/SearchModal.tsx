@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { SearchResult, HybridSearchResults, bridge } from '../types';
 import { DocumentIcon, SearchIcon, Spinner } from './icons';
 import { markdownPreviewLine } from '../utils/markdownPreview';
+import { Modal } from './Modal';
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -32,12 +33,11 @@ export function SearchModal({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [expandedResult, setExpandedResult] = useState<SearchResult | null>(null);
 
-  const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<number>();
   // Sequence counter to discard stale responses from out-of-order requests
   const requestSequenceRef = useRef(0);
 
-  // Focus input when modal opens, invalidate in-flight requests when closing
+  // Reset state when opening and invalidate in-flight requests when closing.
   useEffect(() => {
     if (isOpen) {
       setQuery('');
@@ -47,12 +47,8 @@ export function SearchModal({
       setError(null);
       setLoading(false);
       requestSequenceRef.current = 0;
-      const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 50);
-      return () => window.clearTimeout(focusTimer);
     } else {
-      // Modal closing - increment sequence to invalidate any in-flight requests
       requestSequenceRef.current++;
-      return undefined;
     }
   }, [isOpen]);
 
@@ -147,6 +143,7 @@ export function SearchModal({
   // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
+      e.preventDefault();
       if (expandedResult) {
         setExpandedResult(null);
       } else {
@@ -177,12 +174,15 @@ export function SearchModal({
   if (!isOpen) return null;
 
   return (
-    <div className="search-modal-overlay" onClick={onClose}>
-      <div className="search-modal" onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
+    <Modal
+      className="search-modal"
+      aria-label="Search streams and sources"
+      onRequestClose={() => expandedResult ? setExpandedResult(null) : onClose()}
+      onKeyDown={handleKeyDown}
+    >
         <div className="search-modal-input-wrapper">
           <span className="search-modal-icon"><SearchIcon size={16} /></span>
           <input
-            ref={inputRef}
             type="text"
             className="search-modal-input"
             placeholder="Search…"
@@ -259,8 +259,7 @@ export function SearchModal({
             Type to search streams and sources
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }
 

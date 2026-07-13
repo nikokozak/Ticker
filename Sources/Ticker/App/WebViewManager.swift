@@ -11,6 +11,7 @@ final class WebViewManager: NSObject {
     let persistence: PersistenceService?
     private let sourceService: SourceService?
     private let ingestService: IngestService?
+    private let retrievalService: RetrievalService?
     let orchestrator: AIOrchestrator
     private let assetService: AssetService
     private var currentStreamIdForFileDrops: UUID?
@@ -24,7 +25,9 @@ final class WebViewManager: NSObject {
     private var didConsumeLaunchStreamRestore = false
     private var pendingLaunchOpenStreamId: UUID?
     private var pendingEditorSelectionRequests: [String: (String?) -> Void] = [:]
-    private let editorSelectionTimeoutNanoseconds: UInt64 = 50_000_000
+    private let editorSelectionTimeoutNanoseconds: UInt64 = 300_000_000
+    private var pendingEditorFlushRequests: [String: () -> Void] = [:]
+    private let editorFlushTimeoutNanoseconds: UInt64 = 1_500_000_000
 
     @MainActor
     init(container: ServiceContainer) {
@@ -48,6 +51,7 @@ final class WebViewManager: NSObject {
         self.persistence = container.persistence
         self.sourceService = container.sourceService
         self.ingestService = container.ingestService
+        self.retrievalService = container.retrievalService
         self.assetService = container.assetService
         super.init()
         if let streamHandler = StreamMessageHandler(container: container, delegate: self) {
@@ -126,6 +130,7 @@ final class WebViewManager: NSObject {
         ])
     }
 
+    @MainActor
     private func configurePDFPaneCallbacks() {
         pdfPaneController.highlightsProvider = { [weak self] sourceId in
             guard let self, let persistence = self.persistence else { return [] }
@@ -136,40 +141,60 @@ final class WebViewManager: NSObject {
                 return []
             }
         }
+        pdfPaneController.sectionProvider = { [weak self] streamId, sourceId, page in
+            guard let retrievalService = self?.retrievalService else {
+                throw PDFSectionContextError.serviceUnavailable
+            }
+            // ponytail: Reuse the proven chunk read on a user click; add a metadata-only
+            // query only if profiling shows large-book menu latency.
+            return try retrievalService.resolvePDFSection(
+                sourceId: sourceId,
+                streamId: streamId,
+                page: page
+            )
+        }
         pdfPaneController.onLinkSelection = { [weak self] payload in
-            Task { @MainActor in
-                guard let self, let persistence = self.persistence else { return }
-                do {
-                    try persistence.savePDFHighlight(payload.highlight)
-                    self.sendPDFHighlightLinked(payload)
-                } catch {
-                    DebugLog.log("[WebViewManager] Failed to save PDF highlight (\(DebugLog.errorSummary(error)))")
-                    self.sendSourceError("Could not save PDF highlight.")
-                }
+            guard let self else { return false }
+            guard let persistence = self.persistence else {
+                self.sendSourceError("Could not save PDF highlight.")
+                return false
+            }
+            do {
+                try persistence.savePDFHighlight(payload.highlight)
+                self.sendPDFHighlightLinked(payload)
+                return true
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save PDF highlight (\(DebugLog.errorSummary(error)))")
+                self.sendSourceError("Could not save PDF highlight.")
+                return false
             }
         }
         pdfPaneController.onAnchorPlaced = { [weak self] payload in
-            Task { @MainActor in
-                guard let self else { return }
-                guard let persistence = self.persistence else {
-                    self.sendSourceError("Could not save PDF anchor.")
-                    self.sendPDFAnchorPickCancelled(streamId: payload.streamId)
-                    return
-                }
-                do {
-                    try persistence.savePDFHighlight(payload.highlight)
-                    self.sendPDFAnchorPlaced(payload)
-                } catch {
-                    DebugLog.log("[WebViewManager] Failed to save PDF anchor (\(DebugLog.errorSummary(error)))")
-                    self.sendSourceError("Could not save PDF anchor.")
-                    self.sendPDFAnchorPickCancelled(streamId: payload.streamId)
-                }
+            guard let self else { return false }
+            guard let persistence = self.persistence else {
+                self.sendSourceError("Could not save PDF anchor.")
+                return false
+            }
+            do {
+                try persistence.savePDFHighlight(payload.highlight)
+                self.sendPDFAnchorPlaced(payload)
+                return true
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save PDF anchor (\(DebugLog.errorSummary(error)))")
+                self.sendSourceError("Could not save PDF anchor.")
+                return false
             }
         }
         pdfPaneController.onAnchorPickCancelled = { [weak self] streamId in
             Task { @MainActor in
                 self?.sendPDFAnchorPickCancelled(streamId: streamId)
             }
+        }
+        pdfPaneController.onSectionAction = { [weak self] payload in
+            self?.sendPDFSectionActionRequested(payload)
+        }
+        pdfPaneController.onRevealHighlightInStream = { [weak self] payload in
+            self?.sendRevealPDFHighlightInStream(payload)
         }
         pdfPaneController.onPageChanged = { [weak self] sourceId, pageIndex in
             guard let self, let persistence = self.persistence else { return }
@@ -273,38 +298,30 @@ final class WebViewManager: NSObject {
         return imageExtensions.contains(url.pathExtension.lowercased())
     }
 
-    private func withSecurityScopedAccess<T>(_ url: URL, _ work: () throws -> T) rethrows -> T {
-        let didStart = url.startAccessingSecurityScopedResource()
-        defer {
-            if didStart {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-        return try work()
-    }
-
     @MainActor
     private func processDroppedImage(_ url: URL, streamId: UUID) {
-        do {
-            let imageData = try withSecurityScopedAccess(url) { try Data(contentsOf: url) }
-            let relativePath = try assetService.saveImage(
-                data: imageData,
-                streamId: streamId,
-                filename: url.lastPathComponent
-            )
+        let assetService = assetService
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let relativePath = try await Task.detached(priority: .utility) {
+                    let didStart = url.startAccessingSecurityScopedResource()
+                    defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+                    return try assetService.saveImage(from: url, streamId: streamId)
+                }.value
+                let assetUrl = "ticker-asset:///\(relativePath)"
 
-            let assetUrl = "ticker-asset:///\(relativePath)"
-
-            bridgeService.send(BridgeMessage(type: "imageDropped", payload: [
-                "relativePath": AnyCodable(relativePath),
-                "assetUrl": AnyCodable(assetUrl),
-                "streamId": AnyCodable(streamId.uuidString)
-            ]))
-        } catch {
-            DebugLog.log("[WebViewManager] Failed to import dropped image (\(DebugLog.errorSummary(error)))")
-            bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
-                "error": AnyCodable("Could not import that image.")
-            ]))
+                bridgeService.send(BridgeMessage(type: "imageDropped", payload: [
+                    "relativePath": AnyCodable(relativePath),
+                    "assetUrl": AnyCodable(assetUrl),
+                    "streamId": AnyCodable(streamId.uuidString)
+                ]))
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to import dropped image (\(DebugLog.errorSummary(error)))")
+                bridgeService.send(BridgeMessage(type: "fileDropError", payload: [
+                    "error": AnyCodable("Could not import that image.")
+                ]))
+            }
         }
     }
 
@@ -317,17 +334,25 @@ final class WebViewManager: NSObject {
             return
         }
 
-        do {
-            let source = try withSecurityScopedAccess(url) { try sourceService.addSource(from: url, to: streamId) }
-            let sourcePayload = StreamCodec.encodeSource(source)
-            bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
-            ingestService?.enqueue(source: source)
-            if source.fileType == .pdf {
-                openSourceReference(source, sourceService: sourceService)
+        let ingestService = ingestService
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let source = try await Task.detached(priority: .utility) {
+                    let didStart = url.startAccessingSecurityScopedResource()
+                    defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+                    return try sourceService.addSource(from: url, to: streamId)
+                }.value
+                let sourcePayload = StreamCodec.encodeSource(source)
+                bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+                ingestService?.enqueue(source: source)
+                if source.fileType == .pdf {
+                    openSourceReference(source, sourceService: sourceService)
+                }
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to import dropped document (\(DebugLog.errorSummary(error)))")
+                bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
             }
-        } catch {
-            DebugLog.log("[WebViewManager] Failed to import dropped document (\(DebugLog.errorSummary(error)))")
-            bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
         }
     }
 
@@ -395,6 +420,33 @@ final class WebViewManager: NSObject {
         bridgeService.send(BridgeMessage(
             type: "pdfAnchorPickCancelled",
             payload: ["streamId": AnyCodable(streamId.uuidString)]
+        ))
+    }
+
+    @MainActor
+    private func sendPDFSectionActionRequested(_ payload: PDFSectionActionPayload) {
+        bridgeService.send(BridgeMessage(
+            type: "pdfSectionActionRequested",
+            payload: [
+                "action": AnyCodable(payload.action.rawValue),
+                "streamId": AnyCodable(payload.descriptor.streamId.uuidString),
+                "sourceId": AnyCodable(payload.descriptor.sourceId.uuidString),
+                "shortTitle": AnyCodable(payload.descriptor.shortTitle),
+                "sectionTitle": AnyCodable(payload.descriptor.sectionTitle),
+                "page": AnyCodable(payload.page)
+            ]
+        ))
+    }
+
+    @MainActor
+    private func sendRevealPDFHighlightInStream(_ payload: PDFHighlightRevealPayload) {
+        bridgeService.send(BridgeMessage(
+            type: "revealPdfHighlightInStream",
+            payload: [
+                "streamId": AnyCodable(payload.streamId.uuidString),
+                "sourceId": AnyCodable(payload.sourceId.uuidString),
+                "highlightId": AnyCodable(payload.highlightId.uuidString)
+            ]
         ))
     }
 
@@ -590,11 +642,31 @@ final class WebViewManager: NSObject {
             ))
 
             Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: self?.editorSelectionTimeoutNanoseconds ?? 50_000_000)
+                try? await Task.sleep(nanoseconds: self?.editorSelectionTimeoutNanoseconds ?? 300_000_000)
                 guard let resolver = self?.pendingEditorSelectionRequests.removeValue(forKey: requestId) else {
                     return
                 }
                 resolver(nil)
+            }
+        }
+    }
+
+    @MainActor
+    func requestEditorFlush() async {
+        await withCheckedContinuation { continuation in
+            let requestId = UUID().uuidString
+            pendingEditorFlushRequests[requestId] = {
+                continuation.resume()
+            }
+
+            bridgeService.send(BridgeMessage(
+                type: "flushEditor",
+                payload: ["requestId": AnyCodable(requestId)]
+            ))
+
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: self?.editorFlushTimeoutNanoseconds ?? 1_500_000_000)
+                self?.resolveEditorFlush(requestId: requestId)
             }
         }
     }
@@ -611,8 +683,19 @@ final class WebViewManager: NSObject {
         resolver(text)
     }
 
+    @MainActor
+    private func resolveEditorFlush(requestId: String) {
+        pendingEditorFlushRequests.removeValue(forKey: requestId)?()
+    }
+
     private func handleMessage(_ message: BridgeMessage) {
         switch message.type {
+        case "editorFlushed":
+            guard let requestId = message.payload?["requestId"]?.value as? String else { return }
+            Task { @MainActor [weak self] in
+                self?.resolveEditorFlush(requestId: requestId)
+            }
+            return
         case "editorSelection":
             Task { @MainActor [weak self] in
                 self?.resolveEditorSelectionResponse(message)
@@ -624,14 +707,6 @@ final class WebViewManager: NSObject {
 
         Task { [weak self] in
             guard let self else { return }
-            guard persistence != nil else {
-                DebugLog.log("[WebViewManager] Persistence not available")
-                await bridgeService.reject(
-                    message,
-                    reason: "Ticker storage is unavailable. Restart the app and try again."
-                )
-                return
-            }
             await bridgeRouter.route(message)
         }
     }
@@ -681,13 +756,6 @@ extension WebViewManager: StreamMessageHandlerDelegate {
         }
     }
 
-    func removePDFHighlightAnnotations(ids: [String], sourceIds: [UUID]) async {
-        guard !ids.isEmpty else { return }
-        await MainActor.run {
-            guard sourceIds.contains(where: { pdfPaneController.isPresenting(sourceId: $0) }) else { return }
-            pdfPaneController.removeHighlightAnnotations(ids: ids)
-        }
-    }
 }
 
 extension WebViewManager: SourceMessageHandlerDelegate {
@@ -721,6 +789,10 @@ extension WebViewManager: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // Without this, a dead web content process leaves a permanent white window.
         DebugLog.log("[WebViewManager] Web content process terminated; reloading")
+        if let activeStreamId = currentStreamIdForFileDrops {
+            pendingLaunchOpenStreamId = activeStreamId
+            didConsumeLaunchStreamRestore = false
+        }
         webView.reload()
     }
 }

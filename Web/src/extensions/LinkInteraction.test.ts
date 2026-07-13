@@ -31,11 +31,13 @@ describe('link interaction helpers', () => {
   });
 
   it('escapes edited link labels and trims URL fields', () => {
-    expect(buildLinkEditChange({ from: 0, to: 10 }, 'A ] B', ' https://example.com/path ')).toEqual({
+    const change = buildLinkEditChange({ from: 0, to: 10 }, 'A [ B ]', ' https://example.com/path ');
+    expect(change).toEqual({
       from: 0,
       to: 10,
-      insert: '[A \\] B](https://example.com/path)',
+      insert: '[A \\[ B \\]](https://example.com/path)',
     });
+    expect(linkInfoAt(viewFor(change!.insert), 1)?.label).toBe('A [ B ]');
   });
 
   it('rejects empty edited links', () => {

@@ -607,15 +607,11 @@ final class PersistenceService {
                     s.id, s.title, s.updated_at,
                     (SELECT COUNT(*) FROM sources WHERE stream_id = s.id) as source_count,
                     (SELECT display_name FROM sources WHERE stream_id = s.id ORDER BY added_at LIMIT 1) as source_display_name,
-                    (SELECT COUNT(*) FROM cells WHERE stream_id = s.id) as cell_count,
                     (SELECT COUNT(*) FROM margin_notes WHERE stream_id = s.id AND status = 'open' AND kind = 'question') as open_question_count,
                     LENGTH(d.markdown) as char_count,
                     d.word_count,
                     (LENGTH(d.markdown) - LENGTH(REPLACE(d.markdown, '![', ''))) / 2 as image_count,
-                    COALESCE(
-                        SUBSTR(d.markdown, 1, 2000),
-                        SUBSTR((SELECT content FROM cells WHERE stream_id = s.id ORDER BY position LIMIT 1), 1, 2000)
-                    ) as preview_prefix
+                    SUBSTR(d.markdown, 1, 2000) as preview_prefix
                 FROM streams s
                 LEFT JOIN stream_documents d ON d.stream_id = s.id
                 ORDER BY s.updated_at DESC
@@ -628,7 +624,6 @@ final class PersistenceService {
                     title: row["title"],
                     sourceCount: sourceCount,
                     sourceShortTitle: sourceCount == 1 ? sourceDisplayName.map { SourceShortTitle.derive(displayName: $0) } : nil,
-                    cellCount: row["cell_count"],
                     charCount: row["char_count"] ?? 0,
                     wordCount: row["word_count"] ?? 0,
                     imageCount: row["image_count"] ?? 0,
@@ -643,6 +638,22 @@ final class PersistenceService {
     func getStreamTitle(id: UUID) throws -> String? {
         try dbQueue.read { db in
             try Row.fetchOne(db, sql: "SELECT title FROM streams WHERE id = ?", arguments: [id.uuidString])?["title"]
+        }
+    }
+
+    func resolveUniqueStreamTitle(_ title: String) throws -> StreamTitleResolution {
+        try dbQueue.read { db in
+            let ids = try String.fetchAll(
+                db,
+                sql: "SELECT id FROM streams WHERE title = ? ORDER BY updated_at DESC LIMIT 2",
+                arguments: [title]
+            ).compactMap(UUID.init(uuidString:))
+
+            switch ids.count {
+            case 0: return .notFound
+            case 1: return .unique(ids[0])
+            default: return .ambiguous
+            }
         }
     }
 
@@ -808,6 +819,7 @@ final class PersistenceService {
 
     func deleteStream(id: UUID) throws {
         try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM margin_suppressions WHERE stream_id = ?", arguments: [id.uuidString])
             try db.execute(sql: "DELETE FROM streams WHERE id = ?", arguments: [id.uuidString])
         }
     }
@@ -1025,7 +1037,12 @@ final class PersistenceService {
         }
     }
 
-    func appendToStreamDocument(streamId: UUID, fragment: String, spans: [ProvenanceSpan] = []) throws -> AppendResult {
+    func appendToStreamDocument(
+        streamId: UUID,
+        fragment: String,
+        spans: [ProvenanceSpan] = [],
+        exchange: AIExchange? = nil
+    ) throws -> AppendResult {
         try dbQueue.write { db in
             let now = Date().timeIntervalSince1970
             let existingMarkdown: String
@@ -1088,6 +1105,9 @@ final class PersistenceService {
             )
 
             try insertSpans(streamId: streamId, spans: validSpans, db: db)
+            if let exchange {
+                try saveExchange(exchange, db: db)
+            }
 
             return AppendResult(fragment: fragment, isNewDocument: isNewDocument, revision: newRevision, spans: validSpans)
         }
@@ -1134,32 +1154,36 @@ final class PersistenceService {
 
     func saveExchange(_ exchange: AIExchange) throws {
         try dbQueue.write { db in
-            try db.execute(
-                sql: """
-                    INSERT INTO ai_exchanges
-                        (request_id, stream_id, verb, user_input, source_manifest, response_raw, model, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(request_id) DO UPDATE SET
-                        stream_id = excluded.stream_id,
-                        verb = excluded.verb,
-                        user_input = excluded.user_input,
-                        source_manifest = excluded.source_manifest,
-                        response_raw = excluded.response_raw,
-                        model = excluded.model,
-                        created_at = excluded.created_at
-                """,
-                arguments: [
-                    exchange.requestId,
-                    exchange.streamId.uuidString,
-                    exchange.verb,
-                    exchange.userInput,
-                    exchange.sourceManifest,
-                    exchange.responseRaw,
-                    exchange.model,
-                    exchange.createdAt.timeIntervalSince1970
-                ]
-            )
+            try saveExchange(exchange, db: db)
         }
+    }
+
+    private func saveExchange(_ exchange: AIExchange, db: Database) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO ai_exchanges
+                    (request_id, stream_id, verb, user_input, source_manifest, response_raw, model, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(request_id) DO UPDATE SET
+                    stream_id = excluded.stream_id,
+                    verb = excluded.verb,
+                    user_input = excluded.user_input,
+                    source_manifest = excluded.source_manifest,
+                    response_raw = excluded.response_raw,
+                    model = excluded.model,
+                    created_at = excluded.created_at
+            """,
+            arguments: [
+                exchange.requestId,
+                exchange.streamId.uuidString,
+                exchange.verb,
+                exchange.userInput,
+                exchange.sourceManifest,
+                exchange.responseRaw,
+                exchange.model,
+                exchange.createdAt.timeIntervalSince1970
+            ]
+        )
     }
 
     func deleteOrphanExchanges(streamId: UUID) throws {
@@ -1522,6 +1546,20 @@ final class PersistenceService {
         }
     }
 
+    func updateSourceExtraction(
+        _ sourceId: UUID,
+        text: String?,
+        pageCount: Int?,
+        status: SourceStatus
+    ) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE sources SET extracted_text = ?, page_count = ?, status = ? WHERE id = ?",
+                arguments: [text, pageCount, status.rawValue, sourceId.uuidString]
+            )
+        }
+    }
+
     func saveSourceLastPageIndex(sourceId: UUID, pageIndex: Int) throws {
         try dbQueue.write { db in
             try db.execute(
@@ -1587,46 +1625,6 @@ final class PersistenceService {
             return try rows.map { row in
                 try decodePDFHighlight(row)
             }
-        }
-    }
-
-    @discardableResult
-    func deletePDFHighlights(sourceIds: [UUID], excludingIds: [String]) throws -> [String] {
-        var seenSourceIds = Set<UUID>()
-        let scopedSourceIds = sourceIds.filter { seenSourceIds.insert($0).inserted }
-        guard !scopedSourceIds.isEmpty else { return [] }
-
-        let normalizedExcludingIds = Set(excludingIds.compactMap { UUID(uuidString: $0)?.uuidString })
-
-        return try dbQueue.write { db in
-            var deletedIds: [String] = []
-
-            for sourceId in scopedSourceIds {
-                let rows = try Row.fetchAll(
-                    db,
-                    sql: """
-                        SELECT id
-                        FROM pdf_highlights
-                        WHERE source_id = ?
-                        ORDER BY created_at ASC
-                    """,
-                    arguments: [sourceId.uuidString]
-                )
-
-                for row in rows {
-                    let id: String = row["id"]
-                    let normalizedId = UUID(uuidString: id)?.uuidString ?? id
-                    guard !normalizedExcludingIds.contains(normalizedId) else { continue }
-
-                    try db.execute(
-                        sql: "DELETE FROM pdf_highlights WHERE source_id = ? AND id = ?",
-                        arguments: [sourceId.uuidString, id]
-                    )
-                    deletedIds.append(normalizedId)
-                }
-            }
-
-            return deletedIds
         }
     }
 
@@ -1919,6 +1917,65 @@ final class PersistenceService {
                     pageEnd: row["page_end"],
                     sectionPath: row["section_path"],
                     score: row["score"]
+                )
+            }
+        }
+    }
+
+    func searchSourceChunksGlobally(
+        matching ftsQuery: String,
+        excludingStreamId: UUID? = nil,
+        limit: Int,
+        excludeAIPrivateSources: Bool = true
+    ) throws -> [GlobalSourceChunkMatch] {
+        let streamPredicate = excludingStreamId == nil ? "" : "AND s.stream_id <> ?"
+        let aiExclusionPredicate = excludeAIPrivateSources ? "AND s.ai_excluded = 0" : ""
+        var arguments: StatementArguments = [ftsQuery]
+        if let excludingStreamId { arguments += [excludingStreamId.uuidString] }
+        arguments += [limit]
+
+        return try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT
+                        c.id,
+                        c.source_id,
+                        s.display_name AS source_name,
+                        s.stream_id,
+                        streams.title AS stream_title,
+                        c.seq,
+                        c.text,
+                        c.page_start,
+                        c.page_end,
+                        c.section_path,
+                        bm25(source_chunks_fts) AS score
+                    FROM source_chunks_fts
+                    JOIN source_chunks c ON c.id = source_chunks_fts.chunk_id
+                    JOIN sources s ON s.id = c.source_id
+                    JOIN streams ON streams.id = s.stream_id
+                    WHERE source_chunks_fts MATCH ?
+                      \(streamPredicate)
+                      \(aiExclusionPredicate)
+                    ORDER BY score ASC
+                    LIMIT ?
+                """,
+                arguments: arguments
+            ).map { row in
+                GlobalSourceChunkMatch(
+                    streamId: UUID(uuidString: row["stream_id"])!,
+                    streamTitle: row["stream_title"],
+                    chunk: RetrievedChunk(
+                        id: UUID(uuidString: row["id"])!,
+                        sourceId: UUID(uuidString: row["source_id"])!,
+                        sourceName: row["source_name"],
+                        seq: row["seq"],
+                        text: row["text"],
+                        pageStart: row["page_start"],
+                        pageEnd: row["page_end"],
+                        sectionPath: row["section_path"],
+                        score: row["score"]
+                    )
                 )
             }
         }

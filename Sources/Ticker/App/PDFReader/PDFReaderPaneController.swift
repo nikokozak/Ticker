@@ -7,6 +7,23 @@ struct PDFHighlightLinkPayload {
     let highlight: PDFHighlightRecord
 }
 
+struct PDFHighlightRevealPayload {
+    let streamId: UUID
+    let sourceId: UUID
+    let highlightId: UUID
+}
+
+enum PDFSectionAction: String {
+    case ask
+    case summarize
+}
+
+struct PDFSectionActionPayload {
+    let action: PDFSectionAction
+    let descriptor: PDFSectionDescriptor
+    let page: Int
+}
+
 private enum PDFReaderPanePresentationError: LocalizedError {
     case couldNotOpenPDFSource
     case notEnoughHorizontalSpace
@@ -23,52 +40,43 @@ private enum PDFReaderPanePresentationError: LocalizedError {
 
 private enum PDFPaneStyle {
     static let trafficLightSafeLeading: CGFloat = 84
-
-    static let background = dynamicColor(
-        light: NSColor(red: 251 / 255, green: 251 / 255, blue: 250 / 255, alpha: 1),
-        dark: NSColor(red: 28 / 255, green: 28 / 255, blue: 27 / 255, alpha: 1)
-    )
-    static let surface = dynamicColor(
-        light: NSColor(red: 244 / 255, green: 244 / 255, blue: 242 / 255, alpha: 1),
-        dark: NSColor(red: 36 / 255, green: 36 / 255, blue: 35 / 255, alpha: 1)
-    )
-    static let text = dynamicColor(
-        light: NSColor(red: 31 / 255, green: 31 / 255, blue: 29 / 255, alpha: 1),
-        dark: NSColor(red: 243 / 255, green: 242 / 255, blue: 237 / 255, alpha: 1)
-    )
-    static let textMuted = dynamicColor(
-        light: NSColor(red: 111 / 255, green: 111 / 255, blue: 104 / 255, alpha: 1),
-        dark: NSColor(red: 170 / 255, green: 167 / 255, blue: 157 / 255, alpha: 1)
-    )
-    static let accent = dynamicColor(
-        light: NSColor(red: 37 / 255, green: 99 / 255, blue: 235 / 255, alpha: 1),
-        dark: NSColor(red: 138 / 255, green: 168 / 255, blue: 255 / 255, alpha: 1)
-    )
-    static let separator = dynamicColor(
-        light: NSColor(red: 31 / 255, green: 31 / 255, blue: 29 / 255, alpha: 0.08),
-        dark: NSColor(red: 243 / 255, green: 242 / 255, blue: 237 / 255, alpha: 0.08)
-    )
-
-    private static func dynamicColor(light: NSColor, dark: NSColor) -> NSColor {
-        NSColor(name: nil) { appearance in
-            switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
-            case .darkAqua:
-                return dark
-            default:
-                return light
-            }
-        }
-    }
 }
 
 private enum PDFHighlightAnnotationStyle {
-    static let contentsPrefix = "ticker-pdf-highlight:"
     static let color = NSColor.systemYellow.withAlphaComponent(0.32)
     static let pulseColor = NSColor.systemYellow.withAlphaComponent(0.62)
-    static let markerColor = PDFPaneStyle.accent.withAlphaComponent(0.38)
-    static let markerPulseColor = PDFPaneStyle.accent.withAlphaComponent(0.74)
+    static let markerColor = NativePalette.accent.withAlphaComponent(0.38)
+    static let markerPulseColor = NativePalette.accent.withAlphaComponent(0.74)
     static let markerSize: CGFloat = 14
     static let escapeKeyCode: UInt16 = 53
+}
+
+enum PDFHighlightAnnotationTag {
+    static let prefix = "ticker-pdf-highlight:"
+
+    static func contents(for highlightId: UUID) -> String {
+        "\(prefix)\(highlightId.uuidString)"
+    }
+
+    static func highlightId(from contents: String?) -> UUID? {
+        guard let contents, contents.hasPrefix(prefix) else { return nil }
+        return UUID(uuidString: String(contents.dropFirst(prefix.count)))
+    }
+}
+
+struct PDFHighlightClickTracker {
+    static let slop: CGFloat = 4
+
+    let mouseDownLocation: CGPoint
+    private(set) var exceededSlop = false
+
+    mutating func observe(_ location: CGPoint) {
+        let dx = location.x - mouseDownLocation.x
+        let dy = location.y - mouseDownLocation.y
+        if (dx * dx) + (dy * dy) > Self.slop * Self.slop {
+            exceededSlop = true
+        }
+    }
 }
 
 struct PDFCitationMatch {
@@ -323,11 +331,14 @@ private struct PDFOutlineSidebarEntry {
 }
 
 final class PDFReaderPaneController: NSViewController {
-    var onLinkSelection: ((PDFHighlightLinkPayload) -> Void)?
-    var onAnchorPlaced: ((PDFHighlightLinkPayload) -> Void)?
+    var onLinkSelection: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
+    var onAnchorPlaced: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
     var onAnchorPickCancelled: ((UUID) -> Void)?
+    var onSectionAction: (@MainActor (PDFSectionActionPayload) -> Void)?
+    var onRevealHighlightInStream: (@MainActor (PDFHighlightRevealPayload) -> Void)?
     var onPageChanged: ((UUID, Int) -> Void)?
     var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
+    var sectionProvider: ((UUID, UUID, Int) throws -> PDFSectionDescriptor)?
     var onClose: (() -> Void)?
 
     private let pdfPaneView = PDFPaneAppearanceObservingView(frame: .zero)
@@ -339,6 +350,7 @@ final class PDFReaderPaneController: NSViewController {
     private let pdfPaneStatusField = NSTextField(labelWithString: "")
     private let pdfPaneHintIconView = NSImageView(frame: .zero)
     private let pdfPaneOutlineButton = NSButton(title: "", target: nil, action: nil)
+    private let pdfPaneSectionActionsButton = NSButton(title: "", target: nil, action: nil)
     private let pdfPaneLinkButton = NSButton(title: "", target: nil, action: nil)
     private let pdfPaneCloseButton = NSButton(title: "", target: nil, action: nil)
     private let pdfFindBarView = NSView(frame: .zero)
@@ -353,6 +365,7 @@ final class PDFReaderPaneController: NSViewController {
     /// True while the pane's open expanded the window, so close knows to
     /// give that width back (computed from the current frame, never saved).
     private var didExpandWindowForPDFPane = false
+    private var suspendedFrameAutosaveName: String?
     private var pdfFindBarHeightConstraint: NSLayoutConstraint?
     private var pdfOutlineWidthConstraint: NSLayoutConstraint?
     private var pdfPaneOutlineButtonWidthConstraint: NSLayoutConstraint?
@@ -368,6 +381,8 @@ final class PDFReaderPaneController: NSViewController {
     private var anchorPickMouseMonitor: Any?
     private var anchorPickKeyMonitor: Any?
     private var anchorPickCursorMonitor: Any?
+    private var pdfHighlightActivationMonitor: Any?
+    private var pdfHighlightClickTracker: PDFHighlightClickTracker?
     private var anchorPickPreviousAcceptsMouseMovedEvents: Bool?
     private var pdfFindDebounceWorkItem: DispatchWorkItem?
     private var pdfFindGeneration = 0
@@ -379,12 +394,16 @@ final class PDFReaderPaneController: NSViewController {
     private var pdfPaneTransientMessage: String?
     private var pdfOutlineEntries: [PDFOutlineSidebarEntry] = []
     private var isPDFOutlineVisible = false
+    private var pendingPDFSectionAction: (descriptor: PDFSectionDescriptor, page: Int)?
 
     deinit {
         pdfFindDebounceWorkItem?.cancel()
         pdfPageSaveWorkItem?.cancel()
         pdfPaneMessageWorkItem?.cancel()
         NotificationCenter.default.removeObserver(self)
+        if let pdfHighlightActivationMonitor {
+            NSEvent.removeMonitor(pdfHighlightActivationMonitor)
+        }
         exitAnchorPickMode(notifyCancelled: false)
         releaseActivePDFContext()
     }
@@ -531,32 +550,6 @@ final class PDFReaderPaneController: NSViewController {
         navigateToHighlight(id: highlightId, page: pageNumber)
     }
 
-    func removeHighlightAnnotations(ids: [String]) {
-        guard !ids.isEmpty,
-              let document = pdfPanePDFView.document else {
-            return
-        }
-
-        let tags = Set(ids.map { id in
-            let normalizedId = UUID(uuidString: id)?.uuidString ?? id
-            return "\(PDFHighlightAnnotationStyle.contentsPrefix)\(normalizedId)"
-        })
-        var didRemove = false
-
-        for index in 0..<document.pageCount {
-            guard let page = document.page(at: index) else { continue }
-            let annotations = page.annotations
-            for annotation in annotations where annotation.contents.map(tags.contains) == true {
-                page.removeAnnotation(annotation)
-                didRemove = true
-            }
-        }
-
-        if didRemove {
-            pdfPanePDFView.needsDisplay = true
-        }
-    }
-
     @discardableResult
     /// No animation, by design. NSWindow frame animation runs on its own
     /// clock and cannot be synchronized with Auto Layout, so every animated
@@ -600,6 +593,7 @@ final class PDFReaderPaneController: NSViewController {
             if shouldResizeWindow,
                let window = view.window,
                let targetWindowFrame {
+                suspendFrameAutosave(for: window)
                 window.setFrame(targetWindowFrame, display: false)
                 didExpandWindowForPDFPane = true
             }
@@ -608,6 +602,9 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         guard isPDFPaneVisible else {
+            if let window = view.window {
+                resumeFrameAutosave(for: window)
+            }
             exitAnchorPickMode(notifyCancelled: true)
             releaseActivePDFContext()
             return true
@@ -633,10 +630,28 @@ final class PDFReaderPaneController: NSViewController {
             frame.size.width -= paneWidth
             window.setFrame(frame, display: false)
         }
+        if let window = view.window {
+            resumeFrameAutosave(for: window)
+        }
         didExpandWindowForPDFPane = false
         view.superview?.layoutSubtreeIfNeeded()
         releaseActivePDFContext()
         return true
+    }
+
+    private func suspendFrameAutosave(for window: NSWindow) {
+        guard suspendedFrameAutosaveName == nil, !window.frameAutosaveName.isEmpty else { return }
+        suspendedFrameAutosaveName = window.frameAutosaveName
+        _ = window.setFrameAutosaveName("")
+    }
+
+    private func resumeFrameAutosave(for window: NSWindow) {
+        guard let name = suspendedFrameAutosaveName else { return }
+        _ = window.setFrameAutosaveName(name)
+        if !window.styleMask.contains(.fullScreen) {
+            window.saveFrame(usingName: name)
+        }
+        suspendedFrameAutosaveName = nil
     }
 
     /// Layer backgrounds and PDFKit's margin color snapshot the appearance at
@@ -645,12 +660,12 @@ final class PDFReaderPaneController: NSViewController {
     private func applyPDFPaneAppearanceColors() {
         pdfPaneView.effectiveAppearance.performAsCurrentDrawingAppearance {
             for view in paneBackgroundLayerViews {
-                view.layer?.backgroundColor = PDFPaneStyle.background.cgColor
+                view.layer?.backgroundColor = NativePalette.background.cgColor
             }
             for view in paneSeparatorLayerViews {
-                view.layer?.backgroundColor = PDFPaneStyle.separator.cgColor
+                view.layer?.backgroundColor = NativePalette.separator.cgColor
             }
-            let resolvedSurface = NSColor(cgColor: PDFPaneStyle.surface.cgColor) ?? PDFPaneStyle.surface
+            let resolvedSurface = NSColor(cgColor: NativePalette.surface.cgColor) ?? NativePalette.surface
             pdfPanePDFView.backgroundColor = resolvedSurface
             pdfOutlineScrollView.backgroundColor = resolvedSurface
             pdfFindSearchField.backgroundColor = resolvedSurface
@@ -682,6 +697,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneStatusField.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneHintIconView.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneOutlineButton.translatesAutoresizingMaskIntoConstraints = false
+        pdfPaneSectionActionsButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneLinkButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneCloseButton.translatesAutoresizingMaskIntoConstraints = false
         pdfFindBarView.translatesAutoresizingMaskIntoConstraints = false
@@ -701,7 +717,7 @@ final class PDFReaderPaneController: NSViewController {
         ))
 
         pdfPaneTitleField.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        pdfPaneTitleField.textColor = PDFPaneStyle.text
+        pdfPaneTitleField.textColor = NativePalette.text
         pdfPaneTitleField.lineBreakMode = .byTruncatingMiddle
         pdfPaneTitleField.maximumNumberOfLines = 1
         pdfPaneTitleField.usesSingleLineMode = true
@@ -710,7 +726,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneTitleField.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         pdfPaneStatusField.font = NSFont.systemFont(ofSize: 11, weight: .regular)
-        pdfPaneStatusField.textColor = PDFPaneStyle.textMuted
+        pdfPaneStatusField.textColor = NativePalette.textMuted
         pdfPaneStatusField.lineBreakMode = .byTruncatingTail
         pdfPaneStatusField.maximumNumberOfLines = 1
         pdfPaneStatusField.usesSingleLineMode = true
@@ -720,7 +736,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneHintIconView.image = NSImage(systemSymbolName: "cursorarrow.click", accessibilityDescription: nil)
             ?? NSImage(systemSymbolName: "link", accessibilityDescription: nil)
         pdfPaneHintIconView.imageScaling = .scaleProportionallyDown
-        pdfPaneHintIconView.contentTintColor = PDFPaneStyle.accent
+        pdfPaneHintIconView.contentTintColor = NativePalette.accent
         pdfPaneHintIconView.isHidden = true
 
         pdfPaneOutlineButton.target = self
@@ -732,7 +748,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneOutlineButton.imageScaling = .scaleProportionallyDown
         pdfPaneOutlineButton.isBordered = true
         pdfPaneOutlineButton.showsBorderOnlyWhileMouseInside = true
-        pdfPaneOutlineButton.contentTintColor = PDFPaneStyle.textMuted
+        pdfPaneOutlineButton.contentTintColor = NativePalette.textMuted
         pdfPaneOutlineButton.toolTip = "Show outline"
         pdfPaneOutlineButton.setAccessibilityLabel("Toggle PDF outline")
         pdfPaneOutlineButton.setButtonType(.toggle)
@@ -740,18 +756,32 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneOutlineButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         pdfPaneOutlineButton.setContentHuggingPriority(.required, for: .horizontal)
 
+        pdfPaneSectionActionsButton.target = self
+        pdfPaneSectionActionsButton.action = #selector(handlePDFSectionActions)
+        pdfPaneSectionActionsButton.bezelStyle = .texturedRounded
+        pdfPaneSectionActionsButton.controlSize = .small
+        pdfPaneSectionActionsButton.title = "Section ▾"
+        pdfPaneSectionActionsButton.isBordered = true
+        pdfPaneSectionActionsButton.showsBorderOnlyWhileMouseInside = true
+        pdfPaneSectionActionsButton.contentTintColor = NativePalette.accent
+        pdfPaneSectionActionsButton.toolTip = "Actions for the current section"
+        pdfPaneSectionActionsButton.setAccessibilityLabel("Section actions")
+        pdfPaneSectionActionsButton.isEnabled = false
+        pdfPaneSectionActionsButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        pdfPaneSectionActionsButton.setContentHuggingPriority(.required, for: .horizontal)
+
         pdfPaneLinkButton.target = self
         pdfPaneLinkButton.action = #selector(handlePDFPaneLinkSelection)
         pdfPaneLinkButton.bezelStyle = .texturedRounded
         pdfPaneLinkButton.controlSize = .small
-        pdfPaneLinkButton.image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)
+        pdfPaneLinkButton.image = NSImage(systemSymbolName: "text.quote", accessibilityDescription: nil)
             ?? NSImage(systemSymbolName: "link", accessibilityDescription: nil)
         pdfPaneLinkButton.imagePosition = .imageOnly
         pdfPaneLinkButton.imageScaling = .scaleProportionallyDown
         pdfPaneLinkButton.isBordered = true
         pdfPaneLinkButton.showsBorderOnlyWhileMouseInside = true
-        pdfPaneLinkButton.toolTip = "Link selection to stream"
-        pdfPaneLinkButton.setAccessibilityLabel("Link selection to stream")
+        pdfPaneLinkButton.toolTip = "Add selected quote to stream"
+        pdfPaneLinkButton.setAccessibilityLabel("Add selected quote to stream")
         pdfPaneLinkButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         pdfPaneLinkButton.setContentHuggingPriority(.required, for: .horizontal)
         setPDFPaneLinkButtonEnabled(false)
@@ -765,7 +795,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneCloseButton.imageScaling = .scaleProportionallyDown
         pdfPaneCloseButton.isBordered = true
         pdfPaneCloseButton.showsBorderOnlyWhileMouseInside = true
-        pdfPaneCloseButton.contentTintColor = PDFPaneStyle.textMuted
+        pdfPaneCloseButton.contentTintColor = NativePalette.textMuted
         pdfPaneCloseButton.toolTip = "Close PDF"
         pdfPaneCloseButton.setAccessibilityLabel("Close PDF")
         pdfPaneCloseButton.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -778,7 +808,7 @@ final class PDFReaderPaneController: NSViewController {
 
         pdfFindSearchField.placeholderString = "Find in document"
         pdfFindSearchField.font = NSFont.systemFont(ofSize: 13)
-        pdfFindSearchField.textColor = PDFPaneStyle.text
+        pdfFindSearchField.textColor = NativePalette.text
         pdfFindSearchField.controlSize = .small
         pdfFindSearchField.isBordered = false
         pdfFindSearchField.drawsBackground = true
@@ -791,7 +821,7 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         pdfFindCounterField.font = NSFont.systemFont(ofSize: 12)
-        pdfFindCounterField.textColor = PDFPaneStyle.textMuted
+        pdfFindCounterField.textColor = NativePalette.textMuted
         pdfFindCounterField.alignment = .right
         pdfFindCounterField.stringValue = ""
         pdfFindCounterField.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -824,6 +854,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.displayMode = .singlePageContinuous
         pdfPanePDFView.displayDirection = .vertical
         pdfPanePDFView.displaysAsBook = false
+        installPDFHighlightActivationMonitor()
         let pageControllerSelector = NSSelectorFromString("usePageViewController:withViewOptions:")
         if pdfPanePDFView.responds(to: pageControllerSelector) {
             pdfPanePDFView.perform(pageControllerSelector, with: NSNumber(value: true), with: nil)
@@ -851,6 +882,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneHeaderView.addSubview(pdfPaneHintIconView)
         pdfPaneHeaderView.addSubview(pdfPaneStatusField)
         pdfPaneHeaderView.addSubview(pdfPaneOutlineButton)
+        pdfPaneHeaderView.addSubview(pdfPaneSectionActionsButton)
         pdfPaneHeaderView.addSubview(pdfPaneLinkButton)
         pdfPaneHeaderView.addSubview(pdfPaneCloseButton)
         pdfPaneHeaderView.addSubview(headerSeparator)
@@ -911,7 +943,11 @@ final class PDFReaderPaneController: NSViewController {
             pdfPaneLinkButton.widthAnchor.constraint(equalToConstant: 28),
             pdfPaneLinkButton.heightAnchor.constraint(equalToConstant: 28),
 
-            pdfPaneOutlineButton.trailingAnchor.constraint(equalTo: pdfPaneLinkButton.leadingAnchor, constant: -8),
+            pdfPaneSectionActionsButton.trailingAnchor.constraint(equalTo: pdfPaneLinkButton.leadingAnchor, constant: -8),
+            pdfPaneSectionActionsButton.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
+            pdfPaneSectionActionsButton.heightAnchor.constraint(equalToConstant: 28),
+
+            pdfPaneOutlineButton.trailingAnchor.constraint(equalTo: pdfPaneSectionActionsButton.leadingAnchor, constant: -8),
             pdfPaneOutlineButton.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
             pdfPaneOutlineButton.heightAnchor.constraint(equalToConstant: 28),
 
@@ -997,7 +1033,7 @@ final class PDFReaderPaneController: NSViewController {
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
         button.isBordered = false
-        button.contentTintColor = PDFPaneStyle.textMuted
+        button.contentTintColor = NativePalette.textMuted
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         button.setContentHuggingPriority(.required, for: .horizontal)
     }
@@ -1007,6 +1043,10 @@ final class PDFReaderPaneController: NSViewController {
         rebuildPDFOutlineSidebar()
         pdfPaneOutlineButton.isHidden = pdfOutlineEntries.isEmpty
         pdfPaneOutlineButtonWidthConstraint?.constant = pdfOutlineEntries.isEmpty ? 0 : 28
+        pdfPaneSectionActionsButton.isEnabled = !pdfOutlineEntries.isEmpty
+        pdfPaneSectionActionsButton.toolTip = pdfOutlineEntries.isEmpty
+            ? "Section actions require a PDF outline"
+            : "Section actions"
         if pdfOutlineEntries.isEmpty {
             setPDFOutlineVisible(false)
         }
@@ -1045,7 +1085,7 @@ final class PDFReaderPaneController: NSViewController {
             button.isBordered = false
             button.alignment = .left
             button.font = NSFont.systemFont(ofSize: 12)
-            button.contentTintColor = entry.destination == nil ? PDFPaneStyle.textMuted : PDFPaneStyle.text
+            button.contentTintColor = entry.destination == nil ? NativePalette.textMuted : NativePalette.text
             button.isEnabled = entry.destination != nil
             button.lineBreakMode = .byTruncatingTail
             button.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -1074,6 +1114,63 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         pdfPanePDFView.go(to: destination)
+    }
+
+    @objc private func handlePDFSectionActions() {
+        guard let context = activePDFContext,
+              let document = pdfPanePDFView.document,
+              let currentPage = pdfPanePDFView.currentPage,
+              let sectionProvider else {
+            showPDFPaneMessage("No section is available on this page.")
+            return
+        }
+
+        let page = document.index(for: currentPage) + 1
+        do {
+            let descriptor = try sectionProvider(context.streamId, context.sourceId, page)
+            pendingPDFSectionAction = (descriptor, page)
+
+            let menu = NSMenu()
+            let ask = NSMenuItem(
+                title: "Ask about “\(descriptor.sectionTitle)”…",
+                action: #selector(handlePDFSectionAsk),
+                keyEquivalent: ""
+            )
+            ask.target = self
+            menu.addItem(ask)
+
+            let summarize = NSMenuItem(
+                title: "Summarize “\(descriptor.sectionTitle)”",
+                action: #selector(handlePDFSectionSummarize),
+                keyEquivalent: ""
+            )
+            summarize.target = self
+            menu.addItem(summarize)
+            menu.popUp(
+                positioning: nil,
+                at: NSPoint(x: 0, y: pdfPaneSectionActionsButton.bounds.minY - 4),
+                in: pdfPaneSectionActionsButton
+            )
+        } catch {
+            showPDFPaneMessage(error.localizedDescription)
+        }
+    }
+
+    @objc private func handlePDFSectionAsk() {
+        sendPDFSectionAction(.ask)
+    }
+
+    @objc private func handlePDFSectionSummarize() {
+        sendPDFSectionAction(.summarize)
+    }
+
+    private func sendPDFSectionAction(_ action: PDFSectionAction) {
+        guard let pendingPDFSectionAction else { return }
+        onSectionAction?(PDFSectionActionPayload(
+            action: action,
+            descriptor: pendingPDFSectionAction.descriptor,
+            page: pendingPDFSectionAction.page
+        ))
     }
 
     private func setPDFOutlineVisible(_ visible: Bool) {
@@ -1317,8 +1414,8 @@ final class PDFReaderPaneController: NSViewController {
         let hasMatches = !pdfFindMatches.isEmpty
         pdfFindPreviousButton.isEnabled = hasMatches
         pdfFindNextButton.isEnabled = hasMatches
-        pdfFindPreviousButton.contentTintColor = hasMatches ? PDFPaneStyle.textMuted : PDFPaneStyle.textMuted.withAlphaComponent(0.45)
-        pdfFindNextButton.contentTintColor = hasMatches ? PDFPaneStyle.textMuted : PDFPaneStyle.textMuted.withAlphaComponent(0.45)
+        pdfFindPreviousButton.contentTintColor = hasMatches ? NativePalette.textMuted : NativePalette.textMuted.withAlphaComponent(0.45)
+        pdfFindNextButton.contentTintColor = hasMatches ? NativePalette.textMuted : NativePalette.textMuted.withAlphaComponent(0.45)
     }
 
     private func firstResponderIsInPDFPane() -> Bool {
@@ -1389,6 +1486,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPageSaveWorkItem?.cancel()
         pdfPaneMessageWorkItem?.cancel()
         pdfPaneTransientMessage = nil
+        pendingPDFSectionAction = nil
         resetPDFFindState()
         if let current = activePDFContext {
             current.fileURL.stopAccessingSecurityScopedResource()
@@ -1418,6 +1516,67 @@ final class PDFReaderPaneController: NSViewController {
     @objc private func handlePDFPanePageChanged() {
         updatePDFPaneStatus()
         schedulePDFPageSave()
+    }
+
+    private func installPDFHighlightActivationMonitor() {
+        guard pdfHighlightActivationMonitor == nil else { return }
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        pdfHighlightActivationMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            self?.handlePDFHighlightActivationEvent(event)
+            return event
+        }
+    }
+
+    private func handlePDFHighlightActivationEvent(_ event: NSEvent) {
+        let pointInPDFView = pdfPanePDFView.convert(event.locationInWindow, from: nil)
+
+        switch event.type {
+        case .leftMouseDown:
+            pdfHighlightClickTracker = nil
+            guard !isAnchorPickMode,
+                  event.clickCount == 1,
+                  event.window === view.window,
+                  pdfPanePDFView.bounds.contains(pointInPDFView) else {
+                return
+            }
+            pdfHighlightClickTracker = PDFHighlightClickTracker(mouseDownLocation: event.locationInWindow)
+
+        case .leftMouseDragged:
+            pdfHighlightClickTracker?.observe(event.locationInWindow)
+
+        case .leftMouseUp:
+            guard var tracker = pdfHighlightClickTracker else { return }
+            pdfHighlightClickTracker = nil
+            tracker.observe(event.locationInWindow)
+            guard !tracker.exceededSlop,
+                  !isAnchorPickMode,
+                  event.window === view.window,
+                  pdfPanePDFView.bounds.contains(pointInPDFView) else {
+                return
+            }
+            revealSavedHighlight(at: pointInPDFView)
+
+        default:
+            break
+        }
+    }
+
+    private func revealSavedHighlight(at pointInPDFView: CGPoint) {
+        guard let context = activePDFContext,
+              let page = pdfPanePDFView.page(for: pointInPDFView, nearest: false) else {
+            return
+        }
+        let pointOnPage = pdfPanePDFView.convert(pointInPDFView, to: page)
+        guard let annotation = page.annotation(at: pointOnPage),
+              let highlightId = PDFHighlightAnnotationTag.highlightId(from: annotation.contents) else {
+            return
+        }
+
+        onRevealHighlightInStream?(PDFHighlightRevealPayload(
+            streamId: context.streamId,
+            sourceId: context.sourceId,
+            highlightId: highlightId
+        ))
     }
 
     @objc private func handlePDFPaneResizePan(_ recognizer: NSPanGestureRecognizer) {
@@ -1471,13 +1630,15 @@ final class PDFReaderPaneController: NSViewController {
             quote: quote,
             createdAt: Date()
         )
-        applyHighlight(highlight)
-
-        onLinkSelection?(PDFHighlightLinkPayload(
+        let payload = PDFHighlightLinkPayload(
             streamId: context.streamId,
             sourceName: context.sourceName,
             highlight: highlight
-        ))
+        )
+        guard onLinkSelection?(payload) == true else { return }
+
+        applyHighlight(highlight)
+        pdfPanePDFView.clearSelection()
     }
 
     private func highlightRects(for selection: PDFSelection) -> [PDFHighlightRect] {
@@ -1540,14 +1701,14 @@ final class PDFReaderPaneController: NSViewController {
                 annotation.interiorColor = PDFHighlightAnnotationStyle.markerColor
             }
             annotation.userName = "Ticker-Next"
-            annotation.contents = "\(PDFHighlightAnnotationStyle.contentsPrefix)\(highlight.id.uuidString)"
+            annotation.contents = PDFHighlightAnnotationTag.contents(for: highlight.id)
             page.addAnnotation(annotation)
         }
     }
 
     private func taggedAnnotations(highlightId: String) -> [PDFAnnotation] {
         guard let document = pdfPanePDFView.document else { return [] }
-        let tag = "\(PDFHighlightAnnotationStyle.contentsPrefix)\(highlightId)"
+        let tag = "\(PDFHighlightAnnotationTag.prefix)\(highlightId)"
         var annotations: [PDFAnnotation] = []
 
         for index in 0..<document.pageCount {
@@ -1779,13 +1940,16 @@ final class PDFReaderPaneController: NSViewController {
             createdAt: Date()
         )
 
-        applyHighlight(highlight)
-        exitAnchorPickMode(notifyCancelled: false)
-        onAnchorPlaced?(PDFHighlightLinkPayload(
+        let payload = PDFHighlightLinkPayload(
             streamId: context.streamId,
             sourceName: context.sourceName,
             highlight: highlight
-        ))
+        )
+        let didSave = onAnchorPlaced?(payload) == true
+        exitAnchorPickMode(notifyCancelled: !didSave)
+        if didSave {
+            applyHighlight(highlight)
+        }
     }
 
     private func enforceAnchorPickCursor(for event: NSEvent) {
@@ -1839,7 +2003,7 @@ final class PDFReaderPaneController: NSViewController {
         } else {
             setPDFPaneHeader(displayName: nil)
         }
-        pdfPaneTitleField.textColor = PDFPaneStyle.text
+        pdfPaneTitleField.textColor = NativePalette.text
         updatePDFPaneStatus()
         handlePDFPaneSelectionChanged()
 
@@ -1850,7 +2014,7 @@ final class PDFReaderPaneController: NSViewController {
 
     private func setPDFPaneLinkButtonEnabled(_ enabled: Bool) {
         pdfPaneLinkButton.isEnabled = enabled
-        pdfPaneLinkButton.contentTintColor = enabled ? PDFPaneStyle.accent : PDFPaneStyle.textMuted
+        pdfPaneLinkButton.contentTintColor = enabled ? NativePalette.accent : NativePalette.textMuted
     }
 
     private func updatePDFPaneStatus() {
@@ -1864,7 +2028,7 @@ final class PDFReaderPaneController: NSViewController {
         }
 
         let showHint = isAnchorPickMode
-        let hintText = "Click a spot to link · Esc to cancel"
+        let hintText = "Click a spot to anchor · Esc to cancel"
 
         pdfPaneHintIconView.isHidden = !showHint
         pdfPaneStatusLeadingConstraint?.isActive = !showHint

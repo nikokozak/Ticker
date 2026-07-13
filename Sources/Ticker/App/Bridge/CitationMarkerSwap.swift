@@ -6,7 +6,9 @@ enum CitationMarkerRenderMode {
 }
 
 enum CitationMarkerSwap {
-    private static let markerPattern = #"【(\d+)(?:\|([^】]*))?】"#
+    // Some providers occasionally close an otherwise valid marker with `}`.
+    // Accept that observed typo so raw citation syntax never leaks into notes.
+    private static let markerPattern = #"【(\d+)(?:\|(["“”][^】【]*?["“”]|[^】}]*))?[】}]"#
     private static let quoteDelimiters: Set<Character> = ["\"", "“", "”"]
     private static let maxQuoteQueryLength = 200
 
@@ -109,9 +111,10 @@ enum CitationMarkerSwap {
         return output + " " + citation
     }
 
-    private static func escapeMarkdownLabel(_ label: String) -> String {
+    static func escapeMarkdownLabel(_ label: String) -> String {
         label
             .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "[", with: "\\[")
             .replacingOccurrences(of: "]", with: "\\]")
     }
 }

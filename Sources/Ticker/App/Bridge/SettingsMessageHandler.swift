@@ -1,19 +1,24 @@
+import AppKit
 import Foundation
 
 final class SettingsMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
         "loadSettings",
-        "saveSettings"
+        "saveSettings",
+        "loadStorageState",
+        "quitApp"
     ]
 
     private let settingsService: SettingsService
     private let bridgeService: BridgeService
     private let settingsProvider: () -> [String: Any]
+    private let storageAvailable: Bool
 
     init(container: ServiceContainer, settingsProvider: @escaping () -> [String: Any]) {
         self.settingsService = container.settingsService
         self.bridgeService = container.bridgeService
         self.settingsProvider = settingsProvider
+        self.storageAvailable = container.persistence != nil
     }
 
     func handle(_ message: BridgeMessage) async {
@@ -73,6 +78,17 @@ final class SettingsMessageHandler: BridgeMessageHandler {
                 type: "settingsLoaded",
                 payload: ["settings": AnyCodable(settings)]
             ))
+
+        case "loadStorageState":
+            await bridgeService.send(BridgeMessage(
+                type: "storageStateChanged",
+                payload: ["state": AnyCodable(storageAvailable ? "ready" : "unavailable")]
+            ))
+
+        case "quitApp":
+            await MainActor.run {
+                NSApp.terminate(nil)
+            }
 
         default:
             DebugLog.log("[SettingsMessageHandler] Unknown message type: \(message.type)")

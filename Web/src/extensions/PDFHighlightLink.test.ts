@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseTickerPDFURL } from './PDFHighlightLink';
+import { findTickerPDFHighlightLink, parseTickerPDFURL } from './PDFHighlightLink';
 
 describe('parseTickerPDFURL', () => {
   it('extracts source, highlight, and page from ticker pdf links', () => {
@@ -49,5 +49,43 @@ describe('parseTickerPDFURL', () => {
   it('rejects other URL schemes and invalid source ids', () => {
     expect(parseTickerPDFURL('https://example.com/file.pdf')).toBeNull();
     expect(parseTickerPDFURL('ticker-pdf://')).toBeNull();
+  });
+});
+
+describe('findTickerPDFHighlightLink', () => {
+  const sourceId = '11111111-1111-1111-1111-111111111111';
+  const highlightId = '22222222-2222-2222-2222-222222222222';
+
+  it('finds a current highlight link anywhere in the full markdown string', () => {
+    const markdown = `${'Earlier text. '.repeat(2_000)}[Manual \\[draft\\] p.7](ticker-pdf://${sourceId}?highlight=${highlightId}&page=7)`;
+    const match = findTickerPDFHighlightLink(markdown, highlightId, sourceId);
+    const labelStart = markdown.indexOf('Manual');
+
+    expect(match).toEqual({
+      from: labelStart,
+      to: labelStart + 'Manual \\[draft\\] p.7'.length,
+      rawURL: `ticker-pdf://${sourceId}?highlight=${highlightId}&page=7`,
+    });
+  });
+
+  it('finds the legacy bare-highlight URL form', () => {
+    const markdown = `Before [Legacy anchor](ticker-pdf://${highlightId}) after`;
+    const match = findTickerPDFHighlightLink(markdown, highlightId, sourceId);
+
+    expect(match).toEqual({
+      from: markdown.indexOf('Legacy anchor'),
+      to: markdown.indexOf('Legacy anchor') + 'Legacy anchor'.length,
+      rawURL: `ticker-pdf://${highlightId}`,
+    });
+  });
+
+  it('ignores citation, page-only, and other-source links', () => {
+    const markdown = [
+      `[Citation](ticker-pdf://${sourceId}?page=7&chunk=chunk-1)`,
+      `[Page](ticker-pdf://${sourceId}?page=7)`,
+      `[Other](ticker-pdf://33333333-3333-3333-3333-333333333333?highlight=${highlightId}&page=7)`,
+    ].join('\n');
+
+    expect(findTickerPDFHighlightLink(markdown, highlightId, sourceId)).toBeNull();
   });
 });

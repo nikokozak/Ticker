@@ -3,12 +3,17 @@ import { bridge } from '../types';
 import { Spinner } from './icons';
 import { useToastStore } from '../store/toastStore';
 import { debugError } from '../utils/debug';
+import {
+  DEFAULT_EDITOR_TYPOGRAPHY,
+  editorFontStack,
+  normalizeEditorTypography,
+  type EditorFont,
+  type EditorTypographySettings,
+} from '../utils/editorTypography';
 
 type Appearance = 'light' | 'dark' | 'system';
 type DefaultModel = 'openai' | 'openaiFast' | 'anthropic';
-type EditorFont = 'systemSans' | 'humanistSans' | 'monoSans';
-
-interface SettingsData {
+interface SettingsData extends EditorTypographySettings {
   proxyOnlyMode?: boolean;
   defaultModel: DefaultModel;
   appearance: Appearance;
@@ -19,13 +24,11 @@ interface SettingsData {
 }
 
 const DEFAULT_SETTINGS: SettingsData = {
+  ...DEFAULT_EDITOR_TYPOGRAPHY,
   proxyOnlyMode: true,
   defaultModel: 'openai',
   appearance: 'light',
   diagnosticsEnabled: true,
-  editorFont: 'systemSans',
-  editorFontSize: 16,
-  editorLineSpacing: 1.55,
 };
 
 const EDITOR_FONT_OPTIONS: Array<{ value: EditorFont; label: string; detail: string }> = [
@@ -34,31 +37,13 @@ const EDITOR_FONT_OPTIONS: Array<{ value: EditorFont; label: string; detail: str
   { value: 'monoSans', label: 'Mono Sans', detail: 'Duospace feel' },
 ];
 
-function editorFontStack(font: EditorFont): string {
-  switch (font) {
-    case 'humanistSans':
-      return '"Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
-    case 'monoSans':
-      return '"SF Mono", "JetBrains Mono", "IBM Plex Sans", Menlo, "SF Pro Text", sans-serif';
-    case 'systemSans':
-    default:
-      return '"SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", sans-serif';
-  }
-}
-
 function normalizeSettings(raw: Partial<SettingsData> | null | undefined): SettingsData {
   const merged = { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
-  const font: EditorFont = EDITOR_FONT_OPTIONS.some((option) => option.value === merged.editorFont)
-    ? merged.editorFont
-    : DEFAULT_SETTINGS.editorFont;
-  const fontSize = Math.min(24, Math.max(13, Number(merged.editorFontSize) || DEFAULT_SETTINGS.editorFontSize));
-  const lineSpacing = Math.min(2.0, Math.max(1.3, Number(merged.editorLineSpacing) || DEFAULT_SETTINGS.editorLineSpacing));
+  const typography = normalizeEditorTypography(merged);
 
   return {
     ...merged,
-    editorFont: font,
-    editorFontSize: Number(fontSize.toFixed(1)),
-    editorLineSpacing: Number(lineSpacing.toFixed(2)),
+    ...typography,
   };
 }
 

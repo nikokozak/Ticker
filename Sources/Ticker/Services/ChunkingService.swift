@@ -3,6 +3,12 @@ import PDFKit
 
 /// Builds local source chunks for Reading with Receipts indexing.
 final class ChunkingService {
+    struct PDFResult {
+        let chunks: [SourceChunk]
+        let extractedText: String
+        let pageCount: Int
+    }
+
     struct Config {
         var targetTokens: Int = 800
         var overlapTokens: Int = 100
@@ -37,13 +43,26 @@ final class ChunkingService {
         self.config = config
     }
 
-    func chunkPDF(
+    func chunkText(_ text: String, sourceId: UUID) -> [SourceChunk] {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        return chunkPages(
+            [PageText(page: 1, text: text)],
+            sourceId: sourceId,
+            sectionPath: nil,
+            startingSeq: 0
+        )
+    }
+
+    func extractAndChunkPDF(
         document: PDFDocument,
         sourceId: UUID,
         progress: ((Double) -> Void)? = nil,
         shouldCancel: () -> Bool = { false }
-    ) throws -> [SourceChunk] {
-        guard document.pageCount > 0 else { return [] }
+    ) throws -> PDFResult {
+        guard document.pageCount > 0 else {
+            return PDFResult(chunks: [], extractedText: "", pageCount: 0)
+        }
 
         var pagesByNumber: [Int: PageText] = [:]
         for index in 0..<document.pageCount {
@@ -60,7 +79,14 @@ final class ChunkingService {
             progress?(Double(index + 1) / Double(document.pageCount))
         }
 
-        guard !pagesByNumber.isEmpty else { return [] }
+        let pages = pagesByNumber.keys.sorted().compactMap { pagesByNumber[$0] }
+        let extractedText = pages.enumerated().map { offset, page in
+            offset == 0 ? page.text : "--- Page \(page.page) ---\n\n\(page.text)"
+        }.joined(separator: "\n\n")
+
+        guard !pagesByNumber.isEmpty else {
+            return PDFResult(chunks: [], extractedText: "", pageCount: document.pageCount)
+        }
 
         let sections = sectionRanges(for: document)
         let ranges = sections.isEmpty
@@ -85,7 +111,11 @@ final class ChunkingService {
             ))
         }
 
-        return chunks
+        return PDFResult(
+            chunks: chunks,
+            extractedText: extractedText,
+            pageCount: document.pageCount
+        )
     }
 
     private func sectionRanges(for document: PDFDocument) -> [SectionRange] {

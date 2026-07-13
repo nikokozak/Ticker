@@ -55,6 +55,15 @@ struct EphemeralConversation: Equatable {
         currentResponse = ""
         turns = []
     }
+
+    mutating func discardStreamingTurn() {
+        guard isStreaming else { return }
+        isStreaming = false
+        currentResponse = ""
+        if turns.last?.role == .user {
+            turns.removeLast()
+        }
+    }
 }
 
 struct QuickPanelLocalSelectionProvider {
@@ -86,7 +95,6 @@ enum QuickPanelStatusAction: Equatable {
 struct QuickPanelStatus: Equatable {
     enum Tone: Equatable {
         case info
-        case success
         case warning
     }
 
@@ -160,8 +168,6 @@ final class QuickPanelManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var status: QuickPanelStatus?  // Temporary feedback and capture status.
-    @Published private(set) var isInputSaveFeedbackActive: Bool = false
-    @Published private(set) var isStreamPickerSaveFeedbackActive: Bool = false
     @Published var ephemeralConversation = EphemeralConversation()
 
     // Stream selection
@@ -177,13 +183,11 @@ final class QuickPanelManager: ObservableObject {
     private weak var bridgeService: BridgeService?
     private var assetService: AssetService?
     private weak var orchestrator: AIOrchestrator?
+    private let aiOperations: AIOperationRegistry
 
     // MARK: - Streaming Task
 
     private var streamingTask: Task<Void, Never>?
-    private var documentAITasks: [UUID: Task<Void, Never>] = [:]
-    private var statusClearTask: Task<Void, Never>?
-    private var saveFeedbackTask: Task<Void, Never>?
     private var streamingGeneration = StreamingGeneration()
 
     // MARK: - Height Management
@@ -205,20 +209,21 @@ final class QuickPanelManager: ObservableObject {
 
     init(
         persistence: PersistenceService? = nil,
-        bridgeService: BridgeService? = nil
+        bridgeService: BridgeService? = nil,
+        aiOperations: AIOperationRegistry = AIOperationRegistry()
     ) {
         let cursor = CursorPositionService()
         self.cursorService = cursor
         self.selectionService = SelectionReaderService(cursorService: cursor)
         self.persistence = persistence
         self.bridgeService = bridgeService
+        self.aiOperations = aiOperations
+        connectAIOperationsToBridge()
     }
 
     deinit {
         streamingTask?.cancel()
-        documentAITasks.values.forEach { $0.cancel() }
-        statusClearTask?.cancel()
-        saveFeedbackTask?.cancel()
+        aiOperations.cancelAll()
     }
 
     /// Configure services after initialization (for dependency injection)
@@ -232,6 +237,26 @@ final class QuickPanelManager: ObservableObject {
         self.bridgeService = bridgeService
         self.assetService = assetService ?? AssetService()
         self.orchestrator = orchestrator
+        connectAIOperationsToBridge()
+    }
+
+    private func connectAIOperationsToBridge() {
+        aiOperations.onChange = { [weak bridgeService] operation in
+            var payload: [String: AnyCodable] = [
+                "requestId": AnyCodable(operation.requestId),
+                "streamId": AnyCodable(operation.streamId.uuidString),
+                "verb": AnyCodable(operation.verb),
+                "origin": AnyCodable(operation.origin),
+                "state": AnyCodable(operation.state.rawValue)
+            ]
+            if let message = operation.message {
+                payload["message"] = AnyCodable(message)
+            }
+            bridgeService?.send(BridgeMessage(
+                type: "aiOperationChanged",
+                payload: payload
+            ))
+        }
     }
 
     func configure(container: ServiceContainer) {
@@ -308,61 +333,9 @@ final class QuickPanelManager: ObservableObject {
         )
     }
 
-    /// Show after screenshot capture with status feedback
-    func showAfterScreenshot() {
-        if isVisible {
-            hide()
-        }
-        var capturedContext = selectionService.buildContext()
-
-        // Verify clipboard has image and update context
-        if let imageData = ClipboardService.getImageData() {
-            capturedContext = QuickPanelContext(
-                selectedText: capturedContext.selectedText,
-                activeApp: capturedContext.activeApp,
-                windowTitle: capturedContext.windowTitle,
-                panelPosition: capturedContext.panelPosition,
-                clipboardImage: imageData,
-                clipboardText: capturedContext.clipboardText,
-                isScreenshot: true,
-                selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
-            )
-            // New explicit screenshot capture should always attach, even if a prior clipboard image
-            // was manually dismissed from context.
-            suppressedClipboardImageChangeCount = nil
-        }
-
-        show(with: capturedContext, showAccessibilityWarning: false)
-    }
-
-    /// Show the Quick Panel with an informational status message (no clipboard image attachment).
-    /// Useful for explaining why a screenshot capture couldn't proceed (e.g., missing permissions).
-    func showWithStatusMessage(_ message: String) {
-        if isVisible {
-            hide()
-        }
-
-        let capturedContext = selectionService.buildContext()
-        // Avoid implicitly attaching any pre-existing clipboard image — this mode is informational.
-        let contextWithoutClipboard = QuickPanelContext(
-            selectedText: capturedContext.selectedText,
-            activeApp: capturedContext.activeApp,
-            windowTitle: capturedContext.windowTitle,
-            panelPosition: capturedContext.panelPosition,
-            clipboardImage: nil,
-            clipboardText: nil,
-            isScreenshot: false,
-            selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
-        )
-
-        show(with: contextWithoutClipboard, showAccessibilityWarning: false)
-        showTimedStatusMessage(message, durationNanoseconds: 4_000_000_000)
-    }
-
     /// Show the quick panel with specific context
     private func show(with capturedContext: QuickPanelContext, showAccessibilityWarning: Bool) {
         presentationGeneration += 1
-        cancelFeedbackTasks()
         self.context = capturedContext
         resetState()
 
@@ -384,33 +357,28 @@ final class QuickPanelManager: ObservableObject {
         guard let panel = panel else { return }
 
         heightDebounceTimer?.invalidate()
-        targetHeight = QuickPanelWindow.minHeight
-        panel.resetToMinHeight()
+        heightDebounceTimer = nil
+
+        // Reset transient SwiftUI state and size the hidden panel before it is ordered onscreen.
+        NotificationCenter.default.post(name: .quickPanelWillShow, object: nil)
 
         // Position at captured location
         panel.position(at: capturedContext.panelPosition)
+        preparePanelHeightForPresentation()
 
         // Show panel without bringing main window forward
+        isVisible = true
         panel.fadeIn()
         panel.makeKey()
-
-        isVisible = true
-
-        // Post notification for input focus
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NotificationCenter.default.post(name: .quickPanelDidShow, object: nil)
-        }
-
-        DispatchQueue.main.async { [weak self] in
-            self?.syncHeightToContent(animated: false)
-        }
+        NotificationCenter.default.post(name: .quickPanelDidShow, object: nil)
     }
 
     /// Hide the quick panel
     func hide() {
         presentationGeneration += 1
         let generation = presentationGeneration
-        cancelFeedbackTasks()
+        heightDebounceTimer?.invalidate()
+        heightDebounceTimer = nil
         // Cancel any in-flight streaming to avoid orphan AI calls
         cancelStreaming()
 
@@ -437,7 +405,7 @@ final class QuickPanelManager: ObservableObject {
         streamingGeneration.invalidate()
         streamingTask?.cancel()
         streamingTask = nil
-        ephemeralConversation.isStreaming = false
+        ephemeralConversation.discardStreamingTurn()
     }
 
     /// Reset state for new session
@@ -446,69 +414,6 @@ final class QuickPanelManager: ObservableObject {
         isLoading = false
         error = nil
         status = nil
-        isInputSaveFeedbackActive = false
-        isStreamPickerSaveFeedbackActive = false
-    }
-
-    private func cancelFeedbackTasks() {
-        statusClearTask?.cancel()
-        statusClearTask = nil
-        saveFeedbackTask?.cancel()
-        saveFeedbackTask = nil
-    }
-
-    private func showTimedStatusMessage(_ message: String, durationNanoseconds: UInt64) {
-        statusClearTask?.cancel()
-        isInputSaveFeedbackActive = false
-        isStreamPickerSaveFeedbackActive = false
-        let timedStatus = QuickPanelStatus(message: message, tone: .info, action: nil)
-        status = timedStatus
-
-        statusClearTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: durationNanoseconds)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, self.status == timedStatus else { return }
-                self.status = nil
-                self.statusClearTask = nil
-            }
-        }
-    }
-
-    private func showStreamPickerSaveFeedbackThenHide() {
-        statusClearTask?.cancel()
-        statusClearTask = nil
-        saveFeedbackTask?.cancel()
-        isInputSaveFeedbackActive = true
-        isStreamPickerSaveFeedbackActive = true
-        status = nil
-
-        saveFeedbackTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self else { return }
-                self.hide()
-            }
-        }
-    }
-
-    private func flashStreamPickerSaveFeedback(durationNanoseconds: UInt64 = 600_000_000) {
-        statusClearTask?.cancel()
-        statusClearTask = nil
-        isInputSaveFeedbackActive = false
-        isStreamPickerSaveFeedbackActive = true
-        status = nil
-
-        statusClearTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: durationNanoseconds)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, !self.isInputSaveFeedbackActive else { return }
-                self.isStreamPickerSaveFeedbackActive = false
-                self.statusClearTask = nil
-            }
-        }
     }
 
     private func logCapturedContext(_ capturedContext: QuickPanelContext) {
@@ -552,8 +457,8 @@ final class QuickPanelManager: ObservableObject {
             return
         }
 
-        // Cancel any existing streaming task
-        streamingTask?.cancel()
+        // Cancel any existing incomplete turn before starting another one.
+        cancelStreaming()
         let generation = streamingGeneration.begin()
 
         // Build context for first turn only
@@ -596,7 +501,9 @@ final class QuickPanelManager: ObservableObject {
                 streamId: streamIdForAI,
                 sourceScope: sourceScopeForAI,
                 priorCells: priorCells,
-                sourceContext: contextForAI,
+                sourceContext: contextForAI.map {
+                    SourceContext(text: $0, chunks: [], mode: .passthrough)
+                },
                 systemPromptOverride: Prompts.quickPanelChat,
                 onChunk: { [weak self] chunk in
                     responseRaw += chunk
@@ -639,7 +546,7 @@ final class QuickPanelManager: ObservableObject {
                     Task { @MainActor in
                         guard let self, self.streamingGeneration.owns(generation) else { return }
                         self.error = err.localizedDescription
-                        self.ephemeralConversation.isStreaming = false
+                        self.ephemeralConversation.discardStreamingTurn()
                         self.streamingTask = nil
                         self.streamingGeneration.invalidate()
                     }
@@ -657,11 +564,6 @@ final class QuickPanelManager: ObservableObject {
         if ephemeralConversation.isActive {
             cancelStreaming()
             ephemeralConversation.clear()
-            return
-        }
-
-        if isInputSaveFeedbackActive {
-            hide()
             return
         }
 
@@ -735,7 +637,6 @@ final class QuickPanelManager: ObservableObject {
             panelPosition: capturedContext.panelPosition,
             clipboardImage: nil,
             clipboardText: capturedContext.clipboardText,
-            isScreenshot: false,
             selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
         )
     }
@@ -772,7 +673,6 @@ final class QuickPanelManager: ObservableObject {
             panelPosition: capturedContext.panelPosition,
             clipboardImage: capturedContext.clipboardImage,
             clipboardText: nil,
-            isScreenshot: capturedContext.isScreenshot,
             selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
         )
     }
@@ -819,10 +719,14 @@ final class QuickPanelManager: ObservableObject {
 
             let aiPrompt = triggerDocumentAI ? prompt : nil
             let orchestratorForAI = orchestrator
+            let aiRequestId = aiPrompt.map { _ in
+                aiOperations.begin(streamId: streamId, verb: "develop", origin: "quickPanel")
+            }
             var documentMarkdownForAI: String?
             var aiStartupError: String?
 
-            if aiPrompt != nil {
+            if let aiRequestId {
+                aiOperations.transition(aiRequestId, to: .preparing)
                 if orchestratorForAI == nil {
                     aiStartupError = "AI is not configured"
                 } else {
@@ -836,11 +740,13 @@ final class QuickPanelManager: ObservableObject {
             }
 
             isLoading = false
-            showStreamPickerSaveFeedbackThenHide()
+            announceSave(to: streamId)
+            hide()
 
-            if let aiPrompt {
+            if let aiPrompt, let aiRequestId {
                 if let orchestratorForAI, let documentMarkdownForAI {
                     startDocumentAI(
+                        requestId: aiRequestId,
                         streamId: streamId,
                         prompt: aiPrompt,
                         documentMarkdown: documentMarkdownForAI,
@@ -848,10 +754,10 @@ final class QuickPanelManager: ObservableObject {
                         orchestrator: orchestratorForAI
                     )
                 } else {
-                    appendQuickPanelAIError(
-                        streamId: streamId,
-                        summary: aiStartupError ?? "AI request could not start",
-                        persistence: persistence
+                    aiOperations.transition(
+                        aiRequestId,
+                        to: .failed,
+                        message: quickPanelAIErrorMessage(summary: aiStartupError ?? "AI request could not start")
                     )
                 }
             }
@@ -865,18 +771,18 @@ final class QuickPanelManager: ObservableObject {
         isLoading = false
     }
 
-    func saveConversationMessage(_ turn: ConversationTurn) {
+    func saveConversationMessage(_ turn: ConversationTurn) -> Bool {
         guard let persistence = persistence else {
             error = "Persistence not configured"
-            return
+            return false
         }
 
         let message = turn.saveContent ?? turn.content
-        guard let fragment = nonEmptyTrimmed(message) else { return }
+        guard let fragment = nonEmptyTrimmed(message) else { return false }
 
         do {
             if let receipt = turn.aiReceipt {
-                appendQuickPanelAIFragment(
+                let didSave = appendQuickPanelAIFragment(
                     streamId: receipt.streamId,
                     fragment: fragment,
                     persistence: persistence,
@@ -886,8 +792,12 @@ final class QuickPanelManager: ObservableObject {
                     sourceManifest: receipt.sourceManifest,
                     responseRaw: receipt.responseRaw
                 )
-                flashStreamPickerSaveFeedback()
-                return
+                if didSave {
+                    announceSave(to: receipt.streamId)
+                } else {
+                    error = "The answer could not be saved"
+                }
+                return didSave
             }
 
             let (streamId, isNewStream) = try getTargetStreamId()
@@ -899,10 +809,12 @@ final class QuickPanelManager: ObservableObject {
                 spans: result.spans,
                 isNewStream: isNewStream
             )
-            flashStreamPickerSaveFeedback()
+            announceSave(to: streamId)
+            return true
         } catch {
             self.error = error.localizedDescription
             DebugLog.log("[QuickPanel] Error saving conversation message (\(DebugLog.errorSummary(error)))")
+            return false
         }
     }
 
@@ -927,7 +839,10 @@ final class QuickPanelManager: ObservableObject {
         guard let persistence = persistence else { return }
         do {
             availableStreams = try persistence.loadStreamSummaries()
-            // Pre-select most recent if none selected
+            if let selectedStreamId,
+               !availableStreams.contains(where: { $0.id == selectedStreamId }) {
+                self.selectedStreamId = nil
+            }
             if selectedStreamId == nil, let first = availableStreams.first {
                 selectedStreamId = first.id
             }
@@ -963,10 +878,11 @@ final class QuickPanelManager: ObservableObject {
             throw QuickPanelError.persistenceNotConfigured
         }
 
-        // Use selected stream if set
-        if let selectedId = selectedStreamId {
+        if let selectedId = selectedStreamId,
+           try persistence.loadStream(id: selectedId) != nil {
             return (selectedId, false)
         }
+        selectedStreamId = nil
 
         // Fall back to most recently modified stream
         if let recentStreamId = try persistence.getRecentlyModifiedStreamId() {
@@ -998,48 +914,58 @@ final class QuickPanelManager: ObservableObject {
         QuickPanelMarkdownFormatter.nonEmptyTrimmed(text)
     }
 
+    private func announceSave(to streamId: UUID) {
+        let title = availableStreams.first(where: { $0.id == streamId })?.title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = title.flatMap { $0.isEmpty ? nil : "Saved to \($0)" } ?? "Saved"
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+            ]
+        )
+    }
+
     private func startDocumentAI(
+        requestId: String,
         streamId: UUID,
         prompt: String,
         documentMarkdown: String,
         persistence: PersistenceService,
         orchestrator: AIOrchestrator
     ) {
-        let taskId = UUID()
-        let requestId = taskId.uuidString
         var responseMarkdown = ""
         var selectedModel: String?
 
-        // Tell the editor work is in flight so it can show presence at the
-        // append point. Every terminal path below appends (answer or error
-        // fragment), so streamDocumentAppended doubles as the "done" signal.
-        bridgeService?.send(BridgeMessage(type: "quickPanelAIStarted", payload: [
-            "streamId": AnyCodable(streamId.uuidString)
-        ]))
-
-        documentAITasks[taskId] = Task { [weak self] in
+        let task = Task { [weak self] in
             await orchestrator.route(
                 query: prompt,
                 streamId: nil,
                 priorCells: [],
-                sourceContext: documentMarkdown,
+                sourceContext: SourceContext(text: documentMarkdown, chunks: [], mode: .passthrough),
                 includeHeading: false,
-                onChunk: { chunk in
+                onChunk: { [weak self] chunk in
                     responseMarkdown += chunk
+                    Task { @MainActor in
+                        self?.aiOperations.transition(requestId, to: .generating)
+                    }
                 },
                 onComplete: { [weak self] _ in
                     Task { @MainActor in
-                        guard let self else { return }
+                        guard let self, self.aiOperations.isActive(requestId) else { return }
 
                         let fragment = responseMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
                         if fragment.isEmpty {
-                            self.appendQuickPanelAIError(
-                                streamId: streamId,
-                                summary: "AI returned an empty response",
-                                persistence: persistence
+                            self.aiOperations.transition(
+                                requestId,
+                                to: .failed,
+                                message: self.quickPanelAIErrorMessage(summary: "AI returned an empty response")
                             )
                         } else {
-                            self.appendQuickPanelAIFragment(
+                            self.aiOperations.transition(requestId, to: .saving)
+                            let didSave = self.appendQuickPanelAIFragment(
                                 streamId: streamId,
                                 fragment: fragment,
                                 persistence: persistence,
@@ -1048,21 +974,23 @@ final class QuickPanelManager: ObservableObject {
                                 prompt: prompt,
                                 documentMarkdown: documentMarkdown
                             )
+                            self.aiOperations.transition(
+                                requestId,
+                                to: didSave ? .succeeded : .failed,
+                                message: didSave ? nil : "Quick Panel AI answer could not be saved. Try again."
+                            )
                         }
-
-                        self.documentAITasks[taskId] = nil
                     }
                 },
                 onError: { [weak self] error in
                     Task { @MainActor in
-                        guard let self else { return }
+                        guard let self, self.aiOperations.isActive(requestId) else { return }
 
-                        self.appendQuickPanelAIError(
-                            streamId: streamId,
-                            summary: error.localizedDescription,
-                            persistence: persistence
+                        self.aiOperations.transition(
+                            requestId,
+                            to: .failed,
+                            message: self.quickPanelAIErrorMessage(summary: error.localizedDescription)
                         )
-                        self.documentAITasks[taskId] = nil
                     }
                 },
                 onModelSelected: { model in
@@ -1070,8 +998,10 @@ final class QuickPanelManager: ObservableObject {
                 }
             )
         }
+        aiOperations.attach(task, to: requestId)
     }
 
+    @discardableResult
     func appendQuickPanelAIFragment(
         streamId: UUID,
         fragment: String,
@@ -1083,7 +1013,7 @@ final class QuickPanelManager: ObservableObject {
         userInput: String? = nil,
         sourceManifest: String = "[]",
         responseRaw: String? = nil
-    ) {
+    ) -> Bool {
         do {
             let spans = requestId.map { id in
                 [
@@ -1101,22 +1031,23 @@ final class QuickPanelManager: ObservableObject {
                     )
                 ]
             } ?? []
-            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment, spans: spans)
-            if let requestId {
-                do {
-                    try persistence.saveExchange(AIExchange(
-                        requestId: requestId,
-                        streamId: streamId,
-                        verb: "develop",
-                        userInput: userInput ?? "Selection:\n\(documentMarkdown ?? "")\n\nPrompt:\n\(prompt ?? "")",
-                        sourceManifest: sourceManifest,
-                        responseRaw: responseRaw ?? fragment,
-                        model: model
-                    ))
-                } catch {
-                    DebugLog.log("[QuickPanel] Failed to save AI exchange (\(DebugLog.errorSummary(error)))")
-                }
+            let exchange = requestId.map {
+                AIExchange(
+                    requestId: $0,
+                    streamId: streamId,
+                    verb: "develop",
+                    userInput: userInput ?? "Selection:\n\(documentMarkdown ?? "")\n\nPrompt:\n\(prompt ?? "")",
+                    sourceManifest: sourceManifest,
+                    responseRaw: responseRaw ?? fragment,
+                    model: model
+                )
             }
+            let result = try persistence.appendToStreamDocument(
+                streamId: streamId,
+                fragment: fragment,
+                spans: spans,
+                exchange: exchange
+            )
             notifyFrontend(
                 streamId: streamId,
                 fragment: result.fragment,
@@ -1124,30 +1055,20 @@ final class QuickPanelManager: ObservableObject {
                 spans: result.spans,
                 source: "quickPanelAI"
             )
+            return true
         } catch {
             DebugLog.log("[QuickPanel] Failed to append AI response (\(DebugLog.errorSummary(error)))")
-            bridgeService?.send(BridgeMessage(type: "quickPanelAIFailed", payload: [
-                "streamId": AnyCodable(streamId.uuidString),
-                "message": AnyCodable("Quick Panel AI answer could not be saved. Try again.")
-            ]))
+            return false
         }
     }
 
-    private func appendQuickPanelAIError(streamId: UUID, summary: String, persistence: PersistenceService) {
-        appendQuickPanelAIFragment(
-            streamId: streamId,
-            fragment: quickPanelAIErrorFragment(summary: summary),
-            persistence: persistence
-        )
-    }
-
-    private func quickPanelAIErrorFragment(summary: String) -> String {
+    private func quickPanelAIErrorMessage(summary: String) -> String {
         let compact = summary
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = compact.isEmpty ? "Unknown error" : compact
         let shortened = fallback.count > 180 ? "\(fallback.prefix(177))..." : fallback
-        return "*AI request failed: \(QuickPanelMarkdownFormatter.escapeMarkdownEmphasis(shortened))*"
+        return "AI request failed: \(shortened)"
     }
 
     /// Notify the React frontend about document appends.
@@ -1216,12 +1137,14 @@ final class QuickPanelManager: ObservableObject {
         )
     }
 
-    private func syncHeightToContent(animated: Bool) {
-        guard let hostingView else { return }
+    private func preparePanelHeightForPresentation() {
+        guard let hostingView, let panel else { return }
         hostingView.layoutSubtreeIfNeeded()
         let fittingHeight = hostingView.fittingSize.height
         guard fittingHeight.isFinite, fittingHeight > 0 else { return }
-        contentHeightChanged(fittingHeight, animatedGrowth: animated)
+
+        targetHeight = max(QuickPanelWindow.minHeight, min(fittingHeight, maxAllowedPanelHeight()))
+        panel.resize(toHeight: targetHeight, animated: false)
     }
 
     private func maxAllowedPanelHeight() -> CGFloat {
@@ -1231,6 +1154,7 @@ final class QuickPanelManager: ObservableObject {
 
     /// Called by SwiftUI when content height changes
     func contentHeightChanged(_ height: CGFloat) {
+        guard isVisible else { return }
         contentHeightChanged(height, animatedGrowth: false)
     }
 
@@ -1258,7 +1182,7 @@ final class QuickPanelManager: ObservableObject {
     }
 
     private func applyHeightUpdate(animated: Bool) {
-        guard let panel = panel else { return }
+        guard isVisible, let panel = panel else { return }
 
         // Skip if already animating - the completion handler will check if another update is needed
         guard !isAnimatingHeight else { return }
@@ -1274,7 +1198,7 @@ final class QuickPanelManager: ObservableObject {
 
             // Check if height changed during animation - if so, schedule another update
             let finalHeight = self.panel?.frame.height ?? 0
-            if abs(finalHeight - self.targetHeight) > 4 {
+            if self.isVisible, abs(finalHeight - self.targetHeight) > 4 {
                 self.applyHeightUpdate(animated: true)
             }
         }
@@ -1391,7 +1315,6 @@ enum QuickPanelMarkdownFormatter {
 enum QuickPanelError: Error, LocalizedError {
     case persistenceNotConfigured
     case assetServiceNotConfigured
-    case noActiveStream
 
     var errorDescription: String? {
         switch self {
@@ -1399,8 +1322,6 @@ enum QuickPanelError: Error, LocalizedError {
             return "Database not configured"
         case .assetServiceNotConfigured:
             return "Asset storage not configured"
-        case .noActiveStream:
-            return "No active stream"
         }
     }
 }
@@ -1408,6 +1329,6 @@ enum QuickPanelError: Error, LocalizedError {
 // MARK: - Notification Names
 
 extension Notification.Name {
+    static let quickPanelWillShow = Notification.Name("QuickPanelWillShow")
     static let quickPanelDidShow = Notification.Name("QuickPanelDidShow")
-    static let quickPanelDidHide = Notification.Name("QuickPanelDidHide")
 }

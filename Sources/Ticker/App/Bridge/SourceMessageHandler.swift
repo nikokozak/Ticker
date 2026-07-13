@@ -94,8 +94,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 return
             }
 
-            // Must run on main thread for NSOpenPanel
-            await MainActor.run {
+            let selectedURL = await MainActor.run { () -> URL? in
                 let panel = NSOpenPanel()
                 panel.canChooseFiles = true
                 panel.canChooseDirectories = false
@@ -104,18 +103,18 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 let markdownType = UTType(filenameExtension: "md") ?? UTType.plainText
                 panel.allowedContentTypes = [.pdf, .plainText, .text, .sourceCode, markdownType, .png, .jpeg, .heic, .image]
                 panel.message = "Select a file to attach"
+                return panel.runModal() == .OK ? panel.url : nil
+            }
+            guard let selectedURL else { return }
 
-                if panel.runModal() == .OK, let url = panel.url {
-                    do {
-                        let source = try sourceService.addSource(from: url, to: streamId)
-                        let sourcePayload = StreamCodec.encodeSource(source)
-                        bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
-                        ingestService?.enqueue(source: source)
-                    } catch {
-                        DebugLog.log("[WebViewManager] Failed to add source (\(DebugLog.errorSummary(error)))")
-                        bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
-                    }
-                }
+            do {
+                let source = try sourceService.addSource(from: selectedURL, to: streamId)
+                let sourcePayload = StreamCodec.encodeSource(source)
+                await bridgeService.send(BridgeMessage(type: "sourceAdded", payload: ["source": AnyCodable(sourcePayload)]))
+                ingestService?.enqueue(source: source)
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to add source (\(DebugLog.errorSummary(error)))")
+                await bridgeService.send(BridgeMessage(type: "sourceError", payload: ["error": AnyCodable(error.localizedDescription)]))
             }
 
         case "removeSource":
@@ -128,6 +127,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
                 return
             }
             do {
+                ingestService?.cancel(sourceId: id)
                 try sourceService.removeSource(id: id)
                 await bridgeService.send(BridgeMessage(type: "sourceRemoved", payload: ["id": AnyCodable(id.uuidString)]))
             } catch {
@@ -307,8 +307,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
             guard let payload = message.payload,
                   let streamIdValue = payload["streamId"]?.value as? String,
                   let streamId = UUID(uuidString: streamIdValue),
-                  let base64Data = payload["data"]?.value as? String,
-                  let imageData = Data(base64Encoded: base64Data) else {
+                  let base64Data = payload["data"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid saveImage payload")
                 let requestId = message.payload?["requestId"]?.value as? String
                 await bridgeService.sendBridgeError(type: message.type, reason: "Invalid saveImage payload")
@@ -320,9 +319,13 @@ final class SourceMessageHandler: BridgeMessageHandler {
             }
 
             let requestId = payload["requestId"]?.value as? String
+            let assetService = assetService
 
             do {
-                let relativePath = try assetService.saveImage(data: imageData, streamId: streamId)
+                let relativePath = try await Task.detached(priority: .utility) {
+                    let imageData = try ImageImportPolicy.data(fromBase64: base64Data)
+                    return try assetService.saveImage(data: imageData, streamId: streamId)
+                }.value
                 let assetUrl = "ticker-asset:///\(relativePath)"
 
                 await bridgeService.send(BridgeMessage(type: "imageSaved", payload: [
