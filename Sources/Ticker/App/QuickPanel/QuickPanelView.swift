@@ -858,6 +858,27 @@ struct QuickPanelInputField: NSViewRepresentable {
 
 // MARK: - Custom NSTextView for Quick Panel
 
+enum QuickPanelReturnAction: Equatable {
+    case save
+    case saveAndDevelop
+    case ask
+    case insertNewline
+
+    init(modifierFlags: NSEvent.ModifierFlags) {
+        let shortcutFlags = modifierFlags.intersection([.shift, .control, .option, .command])
+
+        if shortcutFlags.isEmpty {
+            self = .save
+        } else if shortcutFlags == .command {
+            self = .saveAndDevelop
+        } else if shortcutFlags == .option {
+            self = .ask
+        } else {
+            self = .insertNewline
+        }
+    }
+}
+
 class QuickPanelTextView: NSTextView {
     weak var coordinator: QuickPanelInputField.Coordinator?
     var placeholder: String = "" {
@@ -888,16 +909,16 @@ class QuickPanelTextView: NSTextView {
 
         // Enter/Return
         if event.keyCode == 36 {
-            if event.modifierFlags.contains(.command) {
+            switch QuickPanelReturnAction(modifierFlags: event.modifierFlags) {
+            case .save:
+                coordinator?.parent.onSubmit()
+            case .saveAndDevelop:
                 coordinator?.parent.onCmdEnter?()
-                return
-            }
-            if event.modifierFlags.contains(.option) {
+            case .ask:
                 coordinator?.parent.onOptionEnter?()
-                return
+            case .insertNewline:
+                insertNewline(nil)
             }
-            // Plain Enter submits
-            coordinator?.parent.onSubmit()
             return
         }
 

@@ -511,6 +511,20 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
     }
 }
 
+final class QuickPanelReturnActionTests: XCTestCase {
+    func test_onlyExactAIShortcutsInvokeAI() {
+        XCTAssertEqual(QuickPanelReturnAction(modifierFlags: []), .save)
+        XCTAssertEqual(QuickPanelReturnAction(modifierFlags: [.capsLock]), .save)
+        XCTAssertEqual(QuickPanelReturnAction(modifierFlags: [.command]), .saveAndDevelop)
+        XCTAssertEqual(QuickPanelReturnAction(modifierFlags: [.option]), .ask)
+
+        XCTAssertEqual(QuickPanelReturnAction(modifierFlags: [.command, .shift]), .insertNewline)
+        XCTAssertEqual(QuickPanelReturnAction(modifierFlags: [.option, .shift]), .insertNewline)
+        XCTAssertEqual(QuickPanelReturnAction(modifierFlags: [.command, .option]), .insertNewline)
+        XCTAssertEqual(QuickPanelReturnAction(modifierFlags: [.control]), .insertNewline)
+    }
+}
+
 private actor MockRestatementProvider: RestatementProviding {
     private var responses: [String?]
     private var inputs: [String] = []
