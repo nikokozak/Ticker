@@ -2,7 +2,8 @@ import SwiftUI
 import AppKit
 
 private enum QuickPanelStyle {
-    static let radius: CGFloat = 8
+    static let radius: CGFloat = 9
+    static let panelRadius: CGFloat = 14
     static let badgeVerticalPadding: CGFloat = 2
     static let optionVerticalPadding: CGFloat = 5
     static let pickerMaxHeight: CGFloat = 180
@@ -12,15 +13,15 @@ private enum QuickPanelStyle {
     static let markdownLineSpacing: CGFloat = 3
     static let inputInsetY: CGFloat = 2
     static let inputHeightPadding: CGFloat = 4
-    static let minInputHeight: CGFloat = 22
-    static let maxInputHeight: CGFloat = 120
+    static let minInputHeight: CGFloat = 24
+    static let maxInputHeight: CGFloat = 144
 
-    static let microTextSize: CGFloat = 9
-    static let iconSize: CGFloat = 10
-    static let captionSize: CGFloat = 11
-    static let bodySize: CGFloat = 12
-    static let inputSize: CGFloat = 15
-    static let actionIconSize: CGFloat = 18
+    static let microTextSize: CGFloat = 10
+    static let iconSize: CGFloat = 11
+    static let captionSize: CGFloat = 12
+    static let bodySize: CGFloat = 13
+    static let inputSize: CGFloat = 16
+    static let actionIconSize: CGFloat = 19
 
     static let surfaceRaised = Color(NativePalette.surfaceRaised)
     static let surfaceMuted = Color(NativePalette.surface)
@@ -30,6 +31,7 @@ private enum QuickPanelStyle {
     static let accent = Color(NativePalette.accent)
     static let success = Color(NativePalette.success)
     static let danger = Color(NativePalette.danger)
+    static let separator = Color(NativePalette.separator)
 
     static func font(
         size: CGFloat,
@@ -56,9 +58,10 @@ struct QuickPanelView: View {
     @ObservedObject var manager: QuickPanelManager
     @State private var isPickerExpanded = false
     @State private var inputFocusRequest = 0
+    @State private var savedConversationTurns = Set<Int>()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
+        VStack(alignment: .leading, spacing: Spacing.md) {
             // Ephemeral conversation response area (above everything else)
             if manager.ephemeralConversation.isActive {
                 responseArea
@@ -91,7 +94,7 @@ struct QuickPanelView: View {
         .padding(Spacing.lg)
         .frame(width: QuickPanelWindow.defaultWidth, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
-        .background(QuickPanelStyle.surfaceRaised)
+        .background(QuickPanelStyle.surfaceRaised.opacity(0.96))
         .background(
             GeometryReader { geometry in
                 Color.clear
@@ -103,16 +106,21 @@ struct QuickPanelView: View {
                 manager.contentHeightChanged(height)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: QuickPanelStyle.radius))
+        .clipShape(RoundedRectangle(cornerRadius: QuickPanelStyle.panelRadius))
         .overlay(
-            RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
-                .stroke(Color.clear, lineWidth: 1)
+            RoundedRectangle(cornerRadius: QuickPanelStyle.panelRadius)
+                .stroke(QuickPanelStyle.separator, lineWidth: 1)
         )
         .onReceive(NotificationCenter.default.publisher(for: .quickPanelWillShow)) { _ in
             isPickerExpanded = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickPanelDidShow)) { _ in
             inputFocusRequest &+= 1
+        }
+        .onChange(of: manager.ephemeralConversation.turns.isEmpty) { _, isEmpty in
+            if isEmpty {
+                savedConversationTurns.removeAll()
+            }
         }
     }
 
@@ -203,6 +211,7 @@ struct QuickPanelView: View {
         }
         .buttonStyle(.plain)
         .help("Clear context")
+        .accessibilityLabel("Clear attached context")
     }
 
     private func contextPreview(_ context: QuickPanelContext) -> String {
@@ -280,7 +289,10 @@ struct QuickPanelView: View {
     }
 
     private var clearConversationButton: some View {
-        Button(action: { manager.clearEphemeralConversation() }) {
+        Button(action: {
+            savedConversationTurns.removeAll()
+            manager.clearEphemeralConversation()
+        }) {
             Image(systemName: "xmark.circle")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, weight: .semibold))
                 .foregroundColor(QuickPanelStyle.textMuted.opacity(0.72))
@@ -293,15 +305,7 @@ struct QuickPanelView: View {
     }
 
     private var streamDestinationPicker: some View {
-        let isSaveFeedbackActive = manager.isStreamPickerSaveFeedbackActive
-        let pickerBackground = isSaveFeedbackActive
-            ? QuickPanelStyle.success.opacity(0.16)
-            : QuickPanelStyle.surfaceMuted
-        let pickerStroke = isSaveFeedbackActive
-            ? QuickPanelStyle.success.opacity(0.34)
-            : Color.clear
-
-        return VStack(alignment: .leading, spacing: Spacing.xs) {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
             Button(action: {
                 withAnimation(.easeOut(duration: 0.12)) {
                     isPickerExpanded.toggle()
@@ -321,14 +325,12 @@ struct QuickPanelView: View {
                 }
                 .padding(.horizontal, Spacing.sm)
                 .padding(.vertical, Spacing.xs)
-                .background(pickerBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: QuickPanelStyle.radius)
-                        .stroke(pickerStroke, lineWidth: 1)
-                )
+                .background(QuickPanelStyle.surfaceMuted)
                 .cornerRadius(QuickPanelStyle.radius)
             }
             .buttonStyle(.plain)
+            .help("Choose destination stream")
+            .accessibilityLabel("Destination: \(selectedStreamTitle)")
 
             if isPickerExpanded {
                 streamDestinationOptions
@@ -336,7 +338,6 @@ struct QuickPanelView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .animation(.easeOut(duration: 0.6), value: manager.isStreamPickerSaveFeedbackActive)
     }
 
     private var streamDestinationOptions: some View {
@@ -463,25 +464,31 @@ struct QuickPanelView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            saveConversationMessageButton(turn: turn)
+            saveConversationMessageButton(turn: turn, id: id)
         }
         .padding(.vertical, Spacing.xs)
         .id(id)
     }
 
-    private func saveConversationMessageButton(turn: ConversationTurn) -> some View {
+    private func saveConversationMessageButton(turn: ConversationTurn, id: Int) -> some View {
         let content = turn.saveContent ?? turn.content
-        return Button(action: { manager.saveConversationMessage(turn) }) {
-            Image(systemName: "tray.and.arrow.down")
+        let isSaved = savedConversationTurns.contains(id)
+        return Button(action: {
+            if manager.saveConversationMessage(turn) {
+                savedConversationTurns.insert(id)
+            }
+        }) {
+            Image(systemName: isSaved ? "checkmark" : "tray.and.arrow.down")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize, weight: .semibold))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.64))
+                .foregroundColor(isSaved ? QuickPanelStyle.success : QuickPanelStyle.textMuted.opacity(0.64))
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Save message to stream")
-        .accessibilityLabel("Save message to stream")
-        .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .animation(.easeOut(duration: 0.12), value: isSaved)
+        .help(isSaved ? "Saved to stream" : "Save message to stream")
+        .accessibilityLabel(isSaved ? "Saved to stream" : "Save message to stream")
+        .disabled(isSaved || content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     private var streamingResponseView: some View {
@@ -539,6 +546,10 @@ struct QuickPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSubmit)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+                .help("Save note")
+                .accessibilityLabel("Save note")
             }
         }
         .padding(.horizontal, Spacing.md)
@@ -549,9 +560,9 @@ struct QuickPanelView: View {
 
     private var placeholderText: String {
         if manager.context?.hasContent == true {
-            return "Add a note..."
+            return "Add a note…"
         }
-        return "Capture a thought..."
+        return "Capture a thought…"
     }
 
     private var canSubmit: Bool {
@@ -564,17 +575,17 @@ struct QuickPanelView: View {
 
     private var modeHintsBar: some View {
         HStack(spacing: Spacing.md) {
-            Text("↵ save")
+            Text("↵  Save")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
 
-            Text("⌘↵ develop + save")
+            Text("⌘↵  Save & develop")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
 
-            Text("⌥↵ ask")
+            Text("⌥↵  Ask")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
+                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
 
             Spacer()
         }

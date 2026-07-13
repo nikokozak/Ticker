@@ -3976,7 +3976,7 @@ final class StreamDocumentTests: XCTestCase {
                 )
             )
 
-            manager.saveConversationMessage(turn)
+            XCTAssertTrue(manager.saveConversationMessage(turn))
 
             let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
             XCTAssertEqual(document.markdown, savedMarkdown)

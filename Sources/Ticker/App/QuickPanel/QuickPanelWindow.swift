@@ -7,7 +7,7 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
 
     // MARK: - Configuration
 
-    static let defaultWidth: CGFloat = 350
+    static let defaultWidth: CGFloat = 400
     static let minHeight: CGFloat = 80
     static let maxHeight: CGFloat = 720
 
@@ -61,7 +61,7 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
 
         // Set up content view with layer for clipping
         contentView?.wantsLayer = true
-        contentView?.layer?.cornerRadius = 10
+        contentView?.layer?.cornerRadius = 14
         contentView?.layer?.masksToBounds = true
     }
 

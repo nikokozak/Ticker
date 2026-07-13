@@ -51,6 +51,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- The quick-window now uses a roomier, higher-contrast capture surface with larger type, clearer shortcuts, and confirmation attached to the action that was pressed.
 - PDF quote and point-anchor actions now say exactly what they do, clear completed PDF selections, and persist before drawing so failed saves cannot leave phantom annotations.
 - Editor font, size, and line-spacing defaults now use the same validation in app startup and Settings.
 - The inactive ⌘; screenshot shortcut and its deprecated mode were removed; clipboard images still attach through ⌘L after a macOS screenshot.

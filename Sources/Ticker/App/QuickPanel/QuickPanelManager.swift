@@ -168,7 +168,6 @@ final class QuickPanelManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var status: QuickPanelStatus?  // Temporary feedback and capture status.
-    @Published private(set) var isStreamPickerSaveFeedbackActive: Bool = false
     @Published var ephemeralConversation = EphemeralConversation()
 
     // Stream selection
@@ -189,7 +188,6 @@ final class QuickPanelManager: ObservableObject {
     // MARK: - Streaming Task
 
     private var streamingTask: Task<Void, Never>?
-    private var statusClearTask: Task<Void, Never>?
     private var streamingGeneration = StreamingGeneration()
 
     // MARK: - Height Management
@@ -226,7 +224,6 @@ final class QuickPanelManager: ObservableObject {
     deinit {
         streamingTask?.cancel()
         aiOperations.cancelAll()
-        statusClearTask?.cancel()
     }
 
     /// Configure services after initialization (for dependency injection)
@@ -339,7 +336,6 @@ final class QuickPanelManager: ObservableObject {
     /// Show the quick panel with specific context
     private func show(with capturedContext: QuickPanelContext, showAccessibilityWarning: Bool) {
         presentationGeneration += 1
-        cancelFeedbackTasks()
         self.context = capturedContext
         resetState()
 
@@ -381,7 +377,6 @@ final class QuickPanelManager: ObservableObject {
     func hide() {
         presentationGeneration += 1
         let generation = presentationGeneration
-        cancelFeedbackTasks()
         heightDebounceTimer?.invalidate()
         heightDebounceTimer = nil
         // Cancel any in-flight streaming to avoid orphan AI calls
@@ -419,29 +414,6 @@ final class QuickPanelManager: ObservableObject {
         isLoading = false
         error = nil
         status = nil
-        isStreamPickerSaveFeedbackActive = false
-    }
-
-    private func cancelFeedbackTasks() {
-        statusClearTask?.cancel()
-        statusClearTask = nil
-    }
-
-    private func flashStreamPickerSaveFeedback(durationNanoseconds: UInt64 = 600_000_000) {
-        statusClearTask?.cancel()
-        statusClearTask = nil
-        isStreamPickerSaveFeedbackActive = true
-        status = nil
-
-        statusClearTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: durationNanoseconds)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self else { return }
-                self.isStreamPickerSaveFeedbackActive = false
-                self.statusClearTask = nil
-            }
-        }
     }
 
     private func logCapturedContext(_ capturedContext: QuickPanelContext) {
@@ -799,18 +771,18 @@ final class QuickPanelManager: ObservableObject {
         isLoading = false
     }
 
-    func saveConversationMessage(_ turn: ConversationTurn) {
+    func saveConversationMessage(_ turn: ConversationTurn) -> Bool {
         guard let persistence = persistence else {
             error = "Persistence not configured"
-            return
+            return false
         }
 
         let message = turn.saveContent ?? turn.content
-        guard let fragment = nonEmptyTrimmed(message) else { return }
+        guard let fragment = nonEmptyTrimmed(message) else { return false }
 
         do {
             if let receipt = turn.aiReceipt {
-                appendQuickPanelAIFragment(
+                let didSave = appendQuickPanelAIFragment(
                     streamId: receipt.streamId,
                     fragment: fragment,
                     persistence: persistence,
@@ -820,8 +792,12 @@ final class QuickPanelManager: ObservableObject {
                     sourceManifest: receipt.sourceManifest,
                     responseRaw: receipt.responseRaw
                 )
-                flashStreamPickerSaveFeedback()
-                return
+                if didSave {
+                    announceSave(to: receipt.streamId)
+                } else {
+                    error = "The answer could not be saved"
+                }
+                return didSave
             }
 
             let (streamId, isNewStream) = try getTargetStreamId()
@@ -833,10 +809,12 @@ final class QuickPanelManager: ObservableObject {
                 spans: result.spans,
                 isNewStream: isNewStream
             )
-            flashStreamPickerSaveFeedback()
+            announceSave(to: streamId)
+            return true
         } catch {
             self.error = error.localizedDescription
             DebugLog.log("[QuickPanel] Error saving conversation message (\(DebugLog.errorSummary(error)))")
+            return false
         }
     }
 
