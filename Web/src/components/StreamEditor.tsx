@@ -3017,7 +3017,7 @@ export function StreamEditor({
             ref={streamOverflowMenuRef}
             className="stream-overflow-menu"
             onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+              if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
             }}
             onKeyDown={(event) => {
               if (event.key !== 'Escape') return;
