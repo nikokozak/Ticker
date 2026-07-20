@@ -960,42 +960,42 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime, timezone
 
-path = Path(r\"\"\"$appcast_path\"\"\")
-xml = path.read_text(encoding=\"utf-8\")
+path = Path(r"""$appcast_path""")
+xml = path.read_text(encoding="utf-8")
 
-SPARKLE_NS = \"http://www.andymatuschak.org/xml-namespaces/sparkle\"
-ET.register_namespace(\"sparkle\", SPARKLE_NS)
+SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+ET.register_namespace("sparkle", SPARKLE_NS)
 
 tree = ET.ElementTree(ET.fromstring(xml))
 root = tree.getroot()
-channel = root.find(\"channel\")
+channel = root.find("channel")
 if channel is None:
-    raise SystemExit(\"appcast missing <channel>\")
+    raise SystemExit("appcast missing <channel>")
 
 def sparkle(tag: str) -> str:
-    return f\"{{{SPARKLE_NS}}}{tag}\"
+    return f"{{{SPARKLE_NS}}}{tag}"
 
-item = ET.Element(\"item\")
-ET.SubElement(item, \"title\").text = f\"Version {r'''$version'''}\"
-ET.SubElement(item, \"pubDate\").text = datetime.now(timezone.utc).strftime(\"%a, %d %b %Y %H:%M:%S +0000\")
-ET.SubElement(item, sparkle(\"version\")).text = r'''$bundle_build_num'''
-ET.SubElement(item, sparkle(\"shortVersionString\")).text = r'''$version'''
-ET.SubElement(item, sparkle(\"minimumSystemVersion\")).text = r'''$MIN_MACOS'''
+item = ET.Element("item")
+ET.SubElement(item, "title").text = f"Version {r'''$version'''}"
+ET.SubElement(item, "pubDate").text = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+ET.SubElement(item, sparkle("version")).text = r'''$bundle_build_num'''
+ET.SubElement(item, sparkle("shortVersionString")).text = r'''$version'''
+ET.SubElement(item, sparkle("minimumSystemVersion")).text = r'''$MIN_MACOS'''
 
-enclosure = ET.SubElement(item, \"enclosure\")
-enclosure.set(\"url\", f\"https://github.com/{r'''$UPDATES_REPO_SLUG'''}/releases/download/v{r'''$version'''}/{r'''$zip_name'''}\")
-enclosure.set(\"type\", \"application/octet-stream\")
-enclosure.set(sparkle(\"edSignature\"), r'''$signature''')
-enclosure.set(\"length\", r'''$length''')
+enclosure = ET.SubElement(item, "enclosure")
+enclosure.set("url", f"https://github.com/{r'''$UPDATES_REPO_SLUG'''}/releases/download/v{r'''$version'''}/{r'''$zip_name'''}")
+enclosure.set("type", "application/octet-stream")
+enclosure.set(sparkle("edSignature"), r'''$signature''')
+enclosure.set("length", r'''$length''')
 
-channel.insert(1 if len(channel) > 0 and channel[0].tag == \"title\" else 0, item)
+channel.insert(1 if len(channel) > 0 and channel[0].tag == "title" else 0, item)
 
 max_items = int(r'''$APPCAST_MAX_ITEMS''')
-items = [child for child in list(channel) if child.tag == \"item\"]
+items = [child for child in list(channel) if child.tag == "item"]
 for extra in items[max_items:]:
     channel.remove(extra)
 
-path.write_text(ET.tostring(root, encoding=\"unicode\", xml_declaration=True), encoding=\"utf-8\")
+path.write_text(ET.tostring(root, encoding="unicode", xml_declaration=True), encoding="utf-8")
 PY
 
       echo "Appcast updated."
