@@ -1,5 +1,6 @@
 import CoreGraphics
 import AppKit
+import Darwin
 import Foundation
 import GRDB
 import PDFKit
@@ -418,7 +419,7 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
 
     func test_selectionCaptureStatusMapping() {
         XCTAssertEqual(
-            QuickPanelStatus.selectionCaptureStatus(for: .noPermission, activeApp: "Chrome"),
+            QuickPanelStatus.selectionCaptureStatus(for: .noPermission),
             QuickPanelStatus(
                 message: "Grant Accessibility permission to capture text selections",
                 tone: .warning,
@@ -426,31 +427,16 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
             )
         )
         XCTAssertEqual(
-            QuickPanelStatus.selectionCaptureStatus(for: .stalePermission, activeApp: "Chrome"),
+            QuickPanelStatus.selectionCaptureStatus(for: .stalePermission),
             QuickPanelStatus(
                 message: "Accessibility permission is stale — remove Ticker from the list and re-add it",
                 tone: .warning,
                 action: .openAccessibilitySettings
             )
         )
-        XCTAssertEqual(
-            QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal, activeApp: "Chrome"),
-            QuickPanelStatus(
-                message: "No text selected in Chrome — copy it (⌘C) and press ⌘L to attach.",
-                tone: .info,
-                action: nil
-            )
-        )
-        XCTAssertEqual(
-            QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal, activeApp: " "),
-            QuickPanelStatus(
-                message: "No text selected — copy it (⌘C) and press ⌘L to attach.",
-                tone: .info,
-                action: nil
-            )
-        )
-        XCTAssertNil(QuickPanelStatus.selectionCaptureStatus(for: .internalApp, activeApp: "Ticker"))
-        XCTAssertNil(QuickPanelStatus.selectionCaptureStatus(for: .axHinted, activeApp: "Chrome"))
+        XCTAssertNil(QuickPanelStatus.selectionCaptureStatus(for: .emptyExternal))
+        XCTAssertNil(QuickPanelStatus.selectionCaptureStatus(for: .internalApp))
+        XCTAssertNil(QuickPanelStatus.selectionCaptureStatus(for: .axHinted))
     }
 
     func test_pasteboardSnapshotRestoresItemsAndTypes() throws {
@@ -1907,6 +1893,57 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertNotEqual(firstPath, secondPath)
         XCTAssertEqual(try Data(contentsOf: assetService.assetURL(for: firstPath)), firstData)
         XCTAssertEqual(try Data(contentsOf: assetService.assetURL(for: secondPath)), secondData)
+    }
+
+    func test_recentSavedScreenshotIsCapturedWhenTaggedAndFresh() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+
+        let imageData = try makePNG(red: 255, green: 0, blue: 0)
+        let screenshotURL = directory.appendingPathComponent("capture.png")
+        try imageData.write(to: screenshotURL)
+
+        let marker = Data([1])
+        let result = screenshotURL.withUnsafeFileSystemRepresentation { path in
+            marker.withUnsafeBytes { bytes in
+                setxattr(
+                    path,
+                    "com.apple.metadata:kMDItemIsScreenCapture",
+                    bytes.baseAddress,
+                    marker.count,
+                    0,
+                    0
+                )
+            }
+        }
+        XCTAssertEqual(result, 0)
+
+        let now = Date()
+        try fileManager.setAttributes([.modificationDate: now], ofItemAtPath: screenshotURL.path)
+        XCTAssertEqual(
+            ClipboardService.getRecentScreenshotData(in: directory, maxAge: 10, now: now),
+            imageData
+        )
+
+        try fileManager.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-11)],
+            ofItemAtPath: screenshotURL.path
+        )
+        XCTAssertNil(ClipboardService.getRecentScreenshotData(in: directory, maxAge: 10, now: now))
+    }
+
+    func test_clipboardImageKeepsItsNativePNGData() throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("TickerImagePasteboardTests.\(UUID().uuidString)"))
+        defer { pasteboard.clearContents() }
+        let imageData = try makePNG(red: 0, green: 0, blue: 255)
+        let item = NSPasteboardItem()
+        XCTAssertTrue(item.setData(imageData, forType: .png))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+
+        XCTAssertEqual(ClipboardService.getImageData(pasteboard: pasteboard), imageData)
     }
 
     @MainActor

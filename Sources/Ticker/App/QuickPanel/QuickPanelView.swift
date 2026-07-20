@@ -586,7 +586,7 @@ struct QuickPanelView: View {
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
                 .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
 
-            Text("⌥↵  Ask")
+            Text("⌥↵  Ask AI here")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
                 .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
 

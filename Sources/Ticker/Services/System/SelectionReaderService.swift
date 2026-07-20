@@ -643,18 +643,13 @@ final class SelectionReaderService {
         return context
     }
 
-    /// Get clipboard image if it was copied recently (within threshold)
-    /// Returns PNG data for the image
-    /// Note: PNG conversion runs synchronously. ClipboardService limits to 5MB to avoid
-    /// significant frame drops. For 4K screenshots this is typically <100ms which is
-    /// acceptable since the user just triggered the panel.
+    /// Get a recently copied image or a screenshot saved by macOS.
     private func getRecentClipboardImage() -> Data? {
-        // Only grab image if clipboard was modified recently (60 seconds)
-        guard ClipboardService.wasRecentlyModified(threshold: 60) else {
-            return nil
+        if ClipboardService.wasRecentlyModified(threshold: 60),
+           let image = ClipboardService.getImageData() {
+            return image
         }
-
-        return ClipboardService.getImageData()
+        return ClipboardService.getRecentScreenshotData()
     }
 
     static func recentClipboardTextCandidate(

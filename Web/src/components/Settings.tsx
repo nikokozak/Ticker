@@ -680,20 +680,30 @@ export function Settings({ onClose }: SettingsProps) {
           <h2>Keyboard Shortcuts</h2>
           <div className="settings-shortcuts">
             <div className="shortcut-row">
-              <span className="shortcut-keys">Cmd+Enter</span>
-              <span className="shortcut-desc">Send selection or current paragraph</span>
-            </div>
-            <div className="shortcut-row">
-              <span className="shortcut-keys">Cmd+Shift+Enter</span>
-              <span className="shortcut-desc">Send &amp; Prompt with selected context</span>
-            </div>
-            <div className="shortcut-row">
               <span className="shortcut-keys">Cmd+K</span>
-              <span className="shortcut-desc">Open search</span>
+              <span className="shortcut-desc">Search all streams</span>
             </div>
             <div className="shortcut-row">
-              <span className="shortcut-keys">Esc</span>
-              <span className="shortcut-desc">Close overlays and dialogs</span>
+              <span className="shortcut-keys">Cmd+F</span>
+              <span className="shortcut-desc">Find in the current stream</span>
+            </div>
+            <div className="shortcut-row">
+              <span className="shortcut-keys">Cmd+L</span>
+              <span className="shortcut-desc">Open Quick Window</span>
+            </div>
+          </div>
+          <div className="settings-shortcuts">
+            <div className="shortcut-row">
+              <span className="shortcut-keys">Enter</span>
+              <span className="shortcut-desc">Save to the selected stream (Quick Window)</span>
+            </div>
+            <div className="shortcut-row">
+              <span className="shortcut-keys">Cmd+Enter</span>
+              <span className="shortcut-desc">Save and develop with AI (Quick Window)</span>
+            </div>
+            <div className="shortcut-row">
+              <span className="shortcut-keys">Option+Enter</span>
+              <span className="shortcut-desc">Ask AI here (Quick Window)</span>
             </div>
           </div>
         </section>

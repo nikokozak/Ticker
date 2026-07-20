@@ -183,9 +183,6 @@ struct OnboardingView: View {
                     Text("Open Quick Panel anywhere")
                         .foregroundColor(.secondary)
                 }
-
-                Text("Use macOS screenshot shortcuts to copy an image, then open Quick Panel to attach it.")
-                    .foregroundColor(.secondary)
             }
             .font(.system(size: 13))
             .padding()

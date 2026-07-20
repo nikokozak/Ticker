@@ -103,8 +103,7 @@ struct QuickPanelStatus: Equatable {
     let action: QuickPanelStatusAction?
 
     static func selectionCaptureStatus(
-        for outcome: SelectionCaptureOutcome,
-        activeApp: String?
+        for outcome: SelectionCaptureOutcome
     ) -> QuickPanelStatus? {
         switch outcome {
         case .noPermission:
@@ -119,20 +118,7 @@ struct QuickPanelStatus: Equatable {
                 tone: .warning,
                 action: .openAccessibilitySettings
             )
-        case .emptyExternal:
-            let appName = activeApp?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let message: String
-            if let appName, !appName.isEmpty {
-                message = "No text selected in \(appName) — copy it (⌘C) and press ⌘L to attach."
-            } else {
-                message = "No text selected — copy it (⌘C) and press ⌘L to attach."
-            }
-            return QuickPanelStatus(
-                message: message,
-                tone: .info,
-                action: nil
-            )
-        case .notAttempted, .internalApp, .ax, .axHinted, .clipboard:
+        case .notAttempted, .internalApp, .ax, .axHinted, .clipboard, .emptyExternal:
             return nil
         }
     }
@@ -201,7 +187,7 @@ final class QuickPanelManager: ObservableObject {
     private var panel: QuickPanelWindow?
     private var hostingView: NSHostingView<QuickPanelView>?
     private var currentAppearance: NSAppearance?  // Stored to apply when panel is created
-    private var suppressedClipboardImageChangeCount: Int?
+    private var suppressedImageHash: Int?
     private var suppressedClipboardTextChangeCount: Int?
     private var presentationGeneration: Int = 0
 
@@ -285,7 +271,7 @@ final class QuickPanelManager: ObservableObject {
     private func toggleAfterCapturingContext() async {
         // Capture context BEFORE we steal focus
         let capturedContext = contextRespectingDismissedClipboardText(
-            contextRespectingDismissedClipboardImage(await buildContextForQuickPanelToggle())
+            contextRespectingDismissedImage(await buildContextForQuickPanelToggle())
         )
         logCapturedContext(capturedContext)
 
@@ -344,8 +330,7 @@ final class QuickPanelManager: ObservableObject {
 
         if showAccessibilityWarning && !capturedContext.hasSelection && !capturedContext.isClipboardTextContext {
             status = QuickPanelStatus.selectionCaptureStatus(
-                for: capturedContext.selectionCaptureOutcome,
-                activeApp: capturedContext.activeApp
+                for: capturedContext.selectionCaptureOutcome
             )
         }
 
@@ -612,14 +597,14 @@ final class QuickPanelManager: ObservableObject {
     }
 
     private func suppressDismissedClipboardContextIfNeeded() {
-        suppressDismissedClipboardImageIfNeeded()
+        suppressDismissedImageIfNeeded()
         suppressDismissedClipboardTextIfNeeded()
     }
 
-    /// Suppress reattaching the current clipboard image on Cmd+L until clipboard changes.
-    private func suppressDismissedClipboardImageIfNeeded() {
-        guard context?.hasImage == true else { return }
-        suppressedClipboardImageChangeCount = ClipboardService.changeCount()
+    /// Suppress reattaching the same captured image on Cmd+L.
+    private func suppressDismissedImageIfNeeded() {
+        guard let image = context?.clipboardImage else { return }
+        suppressedImageHash = image.hashValue
     }
 
     /// Suppress reattaching the current clipboard text on Cmd+L until clipboard changes.
@@ -628,17 +613,16 @@ final class QuickPanelManager: ObservableObject {
         suppressedClipboardTextChangeCount = ClipboardService.changeCount()
     }
 
-    /// Applies explicit image-dismissal state to freshly captured context.
-    private func contextRespectingDismissedClipboardImage(_ capturedContext: QuickPanelContext) -> QuickPanelContext {
-        let currentClipboardChangeCount = ClipboardService.changeCount()
-
-        if let suppressedCount = suppressedClipboardImageChangeCount,
-           suppressedCount != currentClipboardChangeCount {
-            suppressedClipboardImageChangeCount = nil
+    /// Applies explicit image-dismissal state to freshly captured clipboard or screenshot context.
+    private func contextRespectingDismissedImage(_ capturedContext: QuickPanelContext) -> QuickPanelContext {
+        guard let image = capturedContext.clipboardImage else { return capturedContext }
+        let imageHash = image.hashValue
+        if let suppressedImageHash, suppressedImageHash != imageHash {
+            self.suppressedImageHash = nil
         }
 
-        guard capturedContext.hasImage,
-              suppressedClipboardImageChangeCount == currentClipboardChangeCount else {
+        // ponytail: bytes identify a dismissed image; add source tokens only if identical recaptures must reattach.
+        guard suppressedImageHash == imageHash else {
             return capturedContext
         }
 
