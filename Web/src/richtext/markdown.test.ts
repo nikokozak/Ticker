@@ -254,7 +254,7 @@ describe('7. serializer output always re-parses to the same document', () => {
   // `foo\n---`, which reloads as a setext heading and eats the second line.
   const shape = (doc: ProseNode) => {
     const out: string[] = [];
-    doc.descendants((n) => out.push(`${n.type.name}${n.isText ? `:${JSON.stringify(n.text)}` : ''}`));
+    doc.descendants((n) => { out.push(`${n.type.name}${n.isText ? `:${JSON.stringify(n.text)}` : ''}`); });
     return out.join(' ');
   };
 

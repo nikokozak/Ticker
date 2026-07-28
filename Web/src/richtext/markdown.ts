@@ -276,9 +276,16 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
       // Only characters nothing else escapes. '*' and '>' are already handled by
       // the inline escape and escapeExtraCharacters; prefixing them again yields a
       // literal backslash in the user's text.
-      // ponytail: leading whitespace after a soft break is still dropped, because
-      // CommonMark strips it from continuation lines and there is no escape for a
-      // space. Cosmetic, not structural. Fix with an entity if anyone complains.
+      // CommonMark strips leading whitespace from a continuation line, so a space
+      // typed straight after Shift+Enter vanishes on reload. There is no escape for
+      // a space, but an entity survives — markdown-it decodes them even with html
+      // off, and the entity is re-emitted here on the way back out.
+      const indent = /^[ \t]+/.exec(text);
+      if (indent) {
+        state.write(indent[0].replace(/ /g, '&#32;').replace(/\t/g, '&#9;'));
+        state.text(text.slice(indent[0].length));
+        return;
+      }
       if (/^[:#\-+]/.test(text)) {
         state.write('\\');
         state.text(text);
