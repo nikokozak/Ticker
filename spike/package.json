@@ -1,0 +1,1 @@
+{"name":"ticker-richtext-spike","private":true,"type":"module","dependencies":{"prosemirror-markdown":"^1.13.5","prosemirror-model":"^1.25.11"}}
