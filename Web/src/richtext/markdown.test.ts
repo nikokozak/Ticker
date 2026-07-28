@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseMarkdown, serializeMarkdown } from './markdown';
 import type { Node as ProseNode } from 'prosemirror-model';
+import { tickerSchema } from './schema';
 
 /**
  * The proof obligations for the codec, per the settled schema spec. Assertions are
@@ -244,4 +245,31 @@ describe('6. unsupported syntax is preserved, never mangled', () => {
     expect(text).toBe(hostile);
     expect(canon(once)).toBe(once);
   });
+});
+
+describe('7. serializer output always re-parses to the same document', () => {
+  // The closure property, tested on EDITOR-CONSTRUCTED documents rather than parsed
+  // ones — that is where it breaks. A soft break starts a new line, so text after
+  // it sits where block syntax is live. `foo` + break + `---` once serialized to
+  // `foo\n---`, which reloads as a setext heading and eats the second line.
+  const shape = (doc: ProseNode) => {
+    const out: string[] = [];
+    doc.descendants((n) => out.push(`${n.type.name}${n.isText ? `:${JSON.stringify(n.text)}` : ''}`));
+    return out.join(' ');
+  };
+
+  for (const second of ['# bar', '> quote', '- item', '1. item', '```', '---', '+ plus', '* star', ': def', '| a |', '~~s~~', '[x]', '{width=300}', '<u>']) {
+    it(`survives a soft break followed by ${JSON.stringify(second)}`, () => {
+      const doc = tickerSchema.node('doc', null, [
+        tickerSchema.node('paragraph', null, [
+          tickerSchema.text('foo'),
+          tickerSchema.node('soft_break'),
+          tickerSchema.text(second),
+        ]),
+      ]);
+      const out = serializeMarkdown(doc);
+      expect(shape(parseMarkdown(out))).toBe(shape(doc));
+      expect(serializeMarkdown(parseMarkdown(out))).toBe(out); // and it is stable
+    });
+  }
 });

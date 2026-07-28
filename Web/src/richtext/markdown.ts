@@ -260,7 +260,33 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
   },
   // An authored newline goes back as a newline, not a space.
   soft_break: (state) => state.write('\n'),
-  text: (state, node) => state.text(node.text ?? ''),
+  text: (state, node, parent, index) => {
+    const text = node.text ?? '';
+    // A soft break starts a new LINE, and prosemirror-markdown only applies
+    // start-of-line escaping at the start of a BLOCK. Without this, typing
+    // Shift+Enter then '# x' reloads as a heading, '- x' as a list, and worst of
+    // all '---' turns the whole paragraph into a setext heading and eats the line.
+    if (index > 0 && parent.child(index - 1).type.name === 'soft_break') {
+      const ordered = /^(\s*)(\d+)\./.exec(text);
+      if (ordered) {
+        state.write(`${ordered[1]}${ordered[2]}\\.`);
+        state.text(text.slice(ordered[0].length));
+        return;
+      }
+      // Only characters nothing else escapes. '*' and '>' are already handled by
+      // the inline escape and escapeExtraCharacters; prefixing them again yields a
+      // literal backslash in the user's text.
+      // ponytail: leading whitespace after a soft break is still dropped, because
+      // CommonMark strips it from continuation lines and there is no escape for a
+      // space. Cosmetic, not structural. Fix with an entity if anyone complains.
+      if (/^[:#\-+]/.test(text)) {
+        state.write('\\');
+        state.text(text);
+        return;
+      }
+    }
+    state.text(text);
+  },
 }, {
   em: { open: '*', close: '*', mixable: true, expelEnclosingWhitespace: true },
   strong: { open: '**', close: '**', mixable: true, expelEnclosingWhitespace: true },
