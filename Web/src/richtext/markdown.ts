@@ -50,7 +50,10 @@ const WIDTH_SUFFIX = /^\{width=(\d{2,4})\}/;
  * to being literal text. Nothing the user types is ever refused — the same
  * principle that lets tables survive as text.
  */
-function underlineRule(state: { src: string; pos: number; posMax: number; push: (t: string, g: string, n: number) => Token }): boolean {
+function underlineRule(
+  state: { src: string; pos: number; posMax: number; push: (t: string, g: string, n: number) => Token },
+  silent: boolean,
+): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x3c /* < */) return false;
   const rest = state.src.slice(state.pos, state.posMax);
 
@@ -59,6 +62,7 @@ function underlineRule(state: { src: string; pos: number; posMax: number; push: 
   // delimiter balancer, so nesting is assigned later, once pairing is known.
   const open = OPEN_UNDERLINE.exec(rest);
   if (open) {
+    if (silent) { state.pos += open[0].length; return true; }
     const token = state.push('ticker_u_open', '', 0);
     token.markup = open[0];
     state.pos += open[0].length;
@@ -67,6 +71,7 @@ function underlineRule(state: { src: string; pos: number; posMax: number; push: 
 
   const close = CLOSE_UNDERLINE.exec(rest);
   if (close) {
+    if (silent) { state.pos += close[0].length; return true; }
     const token = state.push('ticker_u_close', '', 0);
     token.markup = close[0];
     state.pos += close[0].length;
@@ -160,7 +165,7 @@ export const tickerMarkdownParser = new MarkdownParser(tickerSchema, markdownIt,
   ordered_list: {
     block: 'ordered_list',
     getAttrs: (token, tokens, i) => ({
-      order: Number(token.attrGet('start')) || 1,
+      order: token.attrGet('start') === null ? 1 : Number(token.attrGet('start')),
       tight: listIsTight(tokens, i),
     }),
   },
@@ -217,8 +222,11 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
   blockquote: (state, node) => state.wrapBlock('> ', null, node, () => state.renderContent(node)),
   code_block: (state, node) => {
     const params = node.attrs.params || '';
-    const backticks = node.textContent.match(/`{3,}/gm);
-    const fence = backticks ? `${'`'.repeat((backticks.sort().slice(-1)[0] || '``').length + 1)}` : '```';
+    const useTilde = params.includes('`');
+    const marker = useTilde ? '~' : '`';
+    const runs = node.textContent.match(useTilde ? /~{3,}/gm : /`{3,}/gm);
+    const longest = runs ? Math.max(...runs.map((run) => run.length)) : 2;
+    const fence = marker.repeat(Math.max(3, longest + 1));
     state.write(`${fence}${params}\n`);
     state.text(node.textContent, false);
     state.write('\n');
@@ -236,7 +244,7 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
   },
   bullet_list: (state, node) => state.renderList(node, '  ', () => '* '),
   ordered_list: (state, node) => {
-    const start = node.attrs.order || 1;
+    const start = node.attrs.order == null ? 1 : Number(node.attrs.order);
     const maxWidth = String(start + node.childCount - 1).length;
     const space = state.repeat(' ', maxWidth + 2);
     state.renderList(node, space, (i) => {
@@ -266,7 +274,8 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
     // start-of-line escaping at the start of a BLOCK. Without this, typing
     // Shift+Enter then '# x' reloads as a heading, '- x' as a list, and worst of
     // all '---' turns the whole paragraph into a setext heading and eats the line.
-    if (index > 0 && parent.child(index - 1).type.name === 'soft_break') {
+    const previous = index > 0 ? parent.child(index - 1).type.name : '';
+    if (previous === 'soft_break' || previous === 'hard_break') {
       const ordered = /^(\s*)(\d+)\./.exec(text);
       if (ordered) {
         state.write(`${ordered[1]}${ordered[2]}\\.`);
@@ -297,7 +306,7 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
 }, {
   em: { open: '*', close: '*', mixable: true, expelEnclosingWhitespace: true },
   strong: { open: '**', close: '**', mixable: true, expelEnclosingWhitespace: true },
-  underline: { open: '<u>', close: '</u>', mixable: true, expelEnclosingWhitespace: true },
+  underline: { open: '<u>', close: '</u>', mixable: true },
   // Always the bracket form. The stock autolink shortcut (`<https://x>`) indexes
   // the sibling node and blew up on a link whose content spans a soft break; with
   // linkify off nothing needs it, and `[url](url)` round-trips identically.
@@ -314,7 +323,7 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
 }, {
   // Its own output must never be something its own parser would reinterpret:
   // literal `<u>`, a `{width=300}` a user typed, or table-shaped pipes.
-  escapeExtraCharacters: /[<>{}|]/g,
+  escapeExtraCharacters: /[<>{}]/g,
 });
 
 function backticksFor(node: ProseNode, side: number): string {

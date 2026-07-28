@@ -41,7 +41,6 @@ const nodes: Record<string, NodeSpec> = {
   blockquote: {
     content: 'block+',
     group: 'block',
-    defining: true,
     parseDOM: [{ tag: 'blockquote' }],
     toDOM: () => ['blockquote', 0],
   },
