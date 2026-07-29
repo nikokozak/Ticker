@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
+import { TextSelection } from 'prosemirror-state';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import { DocumentSession, type SaveState, type SessionTransport } from './session';
 import { addProvenanceSpans, hashProvenanceText, provenanceSpans, spanFromJSON, type ProvenanceSpan, type ProvenanceSpanJSON } from './provenance';
 import { fnv1a } from '../utils/fnv1a';
+import type { PendingAppend } from './pendingAppends';
 
 /**
  * These are the rules that corrupt a user's notes when they are wrong, so they are
@@ -28,7 +30,12 @@ interface Harness {
   failNextSave(reason?: string): void;
 }
 
-function open(markdown: string, revision = 1, spans: ProvenanceSpan[] = []): Harness {
+function open(
+  markdown: string,
+  revision = 1,
+  spans: ProvenanceSpan[] = [],
+  pendingAppends: PendingAppend[] = [],
+): Harness {
   const parent = document.createElement('div');
   document.body.appendChild(parent);
 
@@ -70,7 +77,7 @@ function open(markdown: string, revision = 1, spans: ProvenanceSpan[] = []): Har
     onChange: () => session?.documentChanged(),
   });
   session = new DocumentSession({
-    streamId: 'stream-1', editor, transport, revision, spans, autosaveDelay: 5,
+    streamId: 'stream-1', editor, transport, revision, spans, pendingAppends, autosaveDelay: 5,
   });
   return {
     ed: editor,
@@ -92,6 +99,30 @@ afterEach(() => {
 });
 
 const type = (ed: RichTextEditor, text: string) => ed.view.dispatch(ed.view.state.tr.insertText(text, 1));
+
+/**
+ * What the host ACTUALLY sends. Every producer records offsets into the
+ * fragment's own markdown, from 0 to its length, hashed over that raw markdown.
+ * It cannot send ProseMirror positions without parsing the document.
+ */
+const wireSpan = (fragment: string, overrides: Partial<ProvenanceSpanJSON> = {}): ProvenanceSpanJSON => ({
+  spanId: 'appended-1',
+  start: 0,
+  end: fragment.length,
+  origin: 'ai',
+  requestId: 'req-1',
+  meta: '{}',
+  textHash: fnv1a(fragment),
+  createdAt: new Date(0).toISOString(),
+  ...overrides,
+});
+
+const pendingAppend = (
+  revision: number,
+  fragment: string,
+  rawSpans: ProvenanceSpanJSON[] = [],
+  separator = '\n\n',
+): PendingAppend => ({ revision, separator, fragment, rawSpans });
 
 describe('autosave', () => {
   it('writes once after a burst of typing, not once per keystroke', async () => {
@@ -217,28 +248,6 @@ describe('an append landing on unsaved edits', () => {
 });
 
 describe('provenance that arrives with an append', () => {
-  /**
-   * What the host ACTUALLY sends. Every producer — the quick panel, document AI, the
-   * URL scheme — builds the same shape: offsets into the fragment's own markdown,
-   * from 0 to its length, hashed over that raw markdown. It cannot send anything
-   * else without parsing the document, which is the editor's job.
-   *
-   * An earlier version of this test invented ProseMirror positions instead (a span
-   * starting at 1, "inside the parsed fragment"), so it proved the live path worked
-   * on coordinates nothing produces.
-   */
-  const wireSpan = (fragment: string, overrides: Record<string, unknown> = {}): ProvenanceSpanJSON => ({
-    spanId: 'appended-1',
-    start: 0,
-    end: fragment.length,
-    origin: 'ai',
-    requestId: 'req-1',
-    meta: '{}',
-    textHash: fnv1a(fragment),
-    createdAt: new Date(0).toISOString(),
-    ...overrides,
-  });
-
   it('is installed at the right place and survives the next save', async () => {
     // Dropping it, which is what happened before, meant the next save replaced the
     // whole stored span set and erased the append's provenance, orphaning its AI
@@ -402,13 +411,18 @@ describe('a save that finishes after the document moved on', () => {
     const inFlight = h.session.saveNow();
     await h.started;
 
-    // Prefix-provable, so the conflict merges and adopts revision 11.
-    h.session.documentConflict({ streamId: 'stream-1', markdown: 'start\n\nfrom the host', revision: 11 });
+    // The pending rows prove both appends, so the conflict adopts revision 5.
+    h.session.documentConflict({
+      streamId: 'stream-1',
+      markdown: 'start\n\nfrom four\n\nfrom five',
+      revision: 5,
+      pendingAppends: [pendingAppend(4, 'from four'), pendingAppend(5, 'from five')],
+    });
     h.release(4);
     await inFlight;
 
-    expect(h.session.currentRevision).toBe(11);
-    expect(h.ed.getMarkdown()).toBe('xstart\n\nfrom the host');
+    expect(h.session.currentRevision).toBe(5);
+    expect(h.ed.getMarkdown()).toBe('xstart\n\nfrom four\n\nfrom five');
   });
 
   it('does not mark the superseded document as the saved one', async () => {
@@ -549,19 +563,97 @@ describe('flushing before the window closes', () => {
 });
 
 describe('a conflict arriving on top of unsaved work', () => {
-  it('keeps the local edit and merges what the host added', async () => {
+  it('merges a proven append and keeps the local edit unsaved', async () => {
     // Type a sentence, lose the revision race to a quick-panel capture. Taking the
     // host copy wholesale — which is what "host wins" did — deletes the sentence.
     const h = open('base', 3);
     type(h.ed, 'LOCAL ');
     h.session.documentConflict({
       streamId: 'stream-1', markdown: 'base\n\nfrom the quick panel', revision: 4,
+      pendingAppends: [pendingAppend(4, 'from the quick panel')],
     });
 
     expect(h.ed.getMarkdown()).toBe('LOCAL base\n\nfrom the quick panel');
     await h.session.saveNow();
     expect(h.saves[0].markdown).toBe('LOCAL base\n\nfrom the quick panel');
     expect(h.saves[0].baseRevision).toBe(4);
+    expect(h.saves[0].resolvedPendingThrough).toBe(4);
+  });
+
+  it('places the proven append provenance over text, not markup', () => {
+    const h = open('base', 3);
+    const fragment = 'The **AI** appended this.';
+    type(h.ed, 'LOCAL ');
+    h.session.documentConflict({
+      streamId: 'stream-1',
+      markdown: `base\n\n${fragment}`,
+      revision: 4,
+      pendingAppends: [pendingAppend(4, fragment, [wireSpan(fragment)])],
+    });
+
+    const [installed] = provenanceSpans(h.ed.view.state);
+    expect(installed, 'conflict provenance was dropped').toBeDefined();
+    expect(h.ed.view.state.doc.textBetween(installed.from, installed.to)).toBe('The AI appended this.');
+    expect(installed.textHash).toBe(fnv1a('The AI appended this.'));
+  });
+
+  it('refuses rows that do not start at the next revision', async () => {
+    const h = open('base', 3);
+    type(h.ed, 'LOCAL ');
+    h.session.documentConflict({
+      streamId: 'stream-1',
+      markdown: 'base\n\nunexplained gap',
+      revision: 5,
+      pendingAppends: [pendingAppend(5, 'unexplained gap')],
+    });
+
+    expect(h.ed.getMarkdown()).toBe('LOCAL base');
+    expect(h.session.currentRevision).toBe(3);
+    expect(h.session.saveState).toBe('error');
+    expect(h.errors[0]).toMatch(/still here/);
+
+    // A refused row is still the store's to keep. Claiming revision 5 here would
+    // delete every pending row at or below it, including the one just refused.
+    h.failNextSave();
+    await h.session.saveNow();
+    expect(h.saves[0].resolvedPendingThrough).toBe(3);
+  });
+
+  it('refuses a host document that the rows cannot peel back to lastSaved', () => {
+    const h = open('base', 3);
+    type(h.ed, 'LOCAL ');
+    h.session.documentConflict({
+      streamId: 'stream-1',
+      markdown: 'base drifted outside an append\n\nclaimed append',
+      revision: 4,
+      pendingAppends: [pendingAppend(4, 'claimed append')],
+    });
+
+    expect(h.ed.getMarkdown()).toBe('LOCAL base');
+    expect(h.session.currentRevision).toBe(3);
+    expect(h.session.saveState).toBe('error');
+  });
+
+  it('refuses an unplaceable span without touching the document or cursor', () => {
+    const h = open('base', 3);
+    const fragment = 'The **AI** appended this.';
+    type(h.ed, 'LOCAL ');
+    h.ed.view.dispatch(h.ed.view.state.tr.setSelection(TextSelection.create(h.ed.view.state.doc, 3)));
+    const before = h.ed.getMarkdown();
+    const cursor = h.ed.view.state.selection.from;
+
+    h.session.documentConflict({
+      streamId: 'stream-1',
+      markdown: `base\n\n${fragment}`,
+      revision: 4,
+      pendingAppends: [pendingAppend(4, fragment, [wireSpan(fragment, { textHash: 'drifted' })])],
+    });
+
+    expect(h.ed.getMarkdown()).toBe(before);
+    expect(h.ed.view.state.selection.from).toBe(cursor);
+    expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
+    expect(h.session.currentRevision).toBe(3);
+    expect(h.session.saveState).toBe('error');
   });
 
   it('keeps the local text when the two genuinely diverged', async () => {
@@ -576,11 +668,43 @@ describe('a conflict arriving on top of unsaved work', () => {
     expect(h.errors[0]).toMatch(/still here/);
   });
 
-  it('still takes the host copy when nothing local is pending', () => {
+  it('does not let a proven merge clear rows an abandoned replay left behind', async () => {
+    // Open on rows that cannot be replayed, so this session has proven nothing and
+    // the store must keep them. A later conflict whose OWN rows do prove out must
+    // not sweep those away with them: the store deletes every row at or below what
+    // it is told, so one number covers both.
+    const h = open('base\n\nunreplayable', 4, [], [pendingAppend(4, 'a different fragment')]);
+    expect(h.errors[0]).toMatch(/history restored/);
+    type(h.ed, 'LOCAL ');
+
+    h.session.documentConflict({
+      streamId: 'stream-1',
+      markdown: 'base\n\nunreplayable\n\nproven append',
+      revision: 5,
+      pendingAppends: [pendingAppend(5, 'proven append')],
+    });
+
+    // The merge itself is fine — the text arrives and the local edit survives.
+    expect(h.ed.getMarkdown()).toBe('LOCAL base\n\nunreplayable\n\nproven append');
+    await h.session.saveNow();
+    // But nothing may be forgotten, because revision 4's row never was converted.
+    expect(h.saves[0].resolvedPendingThrough).toBeUndefined();
+  });
+
+  it('still takes the host copy and adopts its pending rows when nothing local is pending', async () => {
     const h = open('base', 3);
-    h.session.documentConflict({ streamId: 'stream-1', markdown: 'the host copy', revision: 9 });
-    expect(h.ed.getMarkdown()).toBe('the host copy');
-    expect(h.session.currentRevision).toBe(9);
+    const fragment = 'The **host** appended this.';
+    h.session.documentConflict({
+      streamId: 'stream-1',
+      markdown: `base\n\n${fragment}`,
+      revision: 4,
+      pendingAppends: [pendingAppend(4, fragment, [wireSpan(fragment)])],
+    });
+    expect(h.ed.getMarkdown()).toBe(`base\n\n${fragment}`);
+    expect(h.session.currentRevision).toBe(4);
+    expect(provenanceSpans(h.ed.view.state)).toHaveLength(1);
+    await h.session.saveNow();
+    expect(h.saves[0].resolvedPendingThrough).toBe(4);
   });
 });
 

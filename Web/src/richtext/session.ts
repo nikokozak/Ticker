@@ -1,4 +1,5 @@
 import type { RichTextEditor } from './editor';
+import { parseMarkdown } from './markdown';
 import { placeFragmentSpan, planReplay, type PendingAppend } from './pendingAppends';
 import {
   addProvenanceSpans,
@@ -437,51 +438,93 @@ export class DocumentSession {
     else this.setState('saved');
   }
 
-  /**
-   * The save was rejected because the document had moved on. The host's copy wins —
-   * it contains work this editor never saw.
-   */
-  documentConflict(payload: { streamId: string; markdown: string; revision: number; spans?: ProvenanceSpan[] }): void {
+  /** The save was rejected because the stored document moved on. */
+  documentConflict(payload: {
+    streamId: string;
+    markdown: string;
+    revision: number;
+    spans?: ProvenanceSpan[];
+    pendingAppends?: PendingAppend[];
+  }): void {
     if (payload.streamId !== this.options.streamId || typeof payload.markdown !== 'string') return;
     if (!Number.isFinite(payload.revision)) return;
 
     // Nothing local is pending, so the host copy is simply newer.
     if (!this.isDirty()) {
       this.adoptHostDocument(payload);
+      this.adoptPendingAppends(payload.pendingAppends ?? []);
       return;
     }
 
-    /*
-     * There IS unsaved local work, and taking the host copy would delete it —
-     * type a sentence, lose the revision race to a quick-panel capture, and the
-     * sentence is gone. So the host copy is only merged when it can be PROVEN to
-     * be this editor's last saved document plus something appended to the end,
-     * which is what a conflict almost always is. Then the appended part is added
-     * here too and the document stays dirty, so the local work is written next.
-     */
-    if (payload.markdown.startsWith(this.lastSaved)) {
-      const appended = payload.markdown.slice(this.lastSaved.length);
-      this.generation += 1;
-      if (appended.trim()) this.options.editor.appendMarkdown(appended.replace(/^\n+/, '\n\n'));
-      this.revision = payload.revision;
-      this.documentChanged();
+    // Only rows newer than this editor can explain the conflict. An older pending
+    // row may still be waiting for provenance conversion, but replaying its text
+    // here would duplicate content already present in lastSaved.
+    const rows = [...(payload.pendingAppends ?? [])]
+      .filter((append) => append.revision > this.revision)
+      .sort((a, b) => a.revision - b.revision);
+    if (rows[0]?.revision !== this.revision + 1) {
+      this.refuseConflict(payload, 'revisionGap');
       return;
     }
 
-    /*
-     * The host copy is not an extension of what this editor last saved, so the two
-     * genuinely diverged and nothing here can merge them safely. The local text is
-     * kept and the revision is NOT adopted: saves keep failing, the error stays
-     * visible, and nothing is lost. Better a save the user can see failing than a
-     * paragraph that quietly disappears.
-     *
-     * ponytail: no merge UI. Add one if this fires in practice — it needs a real
-     * divergence, which the append-only write path makes rare.
-     */
+    const plan = planReplay(payload.markdown, payload.revision, rows);
+    if (!plan.ok) {
+      this.refuseConflict(payload, plan.reason);
+      return;
+    }
+    if (plan.baseMarkdown !== this.lastSaved) {
+      this.refuseConflict(payload, 'baseMismatch');
+      return;
+    }
+
+    // Prove every raw span against its fragment BEFORE touching the live document.
+    // A failed proof after the first append would need a rollback, which would
+    // itself discard the user's selection and undo history.
+    const proofs: ProvenanceSpan[][] = [];
+    for (const append of plan.appends) {
+      const fragment = parseMarkdown(append.fragment);
+      const proven = append.spans.map((span) => placeFragmentSpan(span, append.fragment, 0, fragment));
+      if (proven.some((span) => span === null)) {
+        this.refuseConflict(payload, 'spanUnplaceable');
+        return;
+      }
+      // Kept, so the live pass is arithmetic rather than a second proof. Proving it
+      // twice and asserting the second one cannot fail meant that if it ever did,
+      // it threw AFTER the first fragment had already been appended — a
+      // half-merged document, and an exception out of a bridge message.
+      proofs.push(proven as ProvenanceSpan[]);
+    }
+
+    const pendingWasContiguous = this.pendingSafeThrough === this.revision;
+    const { editor } = this.options;
+    const { view } = editor;
+    const placed: ProvenanceSpan[] = [];
+    this.generation += 1;
+
+    plan.appends.forEach((append, index) => {
+      const inserted = editor.appendMarkdown(append.fragment);
+      // appendMarkdown puts that same parsed tree in whole, at inserted.from, so a
+      // position measured inside the fragment is that base plus the position.
+      placed.push(...proofs[index].map((span) => ({
+        ...span,
+        from: span.from + inserted.from,
+        to: span.to + inserted.from,
+      })));
+    });
+    if (placed.length) view.dispatch(addProvenanceSpans(view.state.tr, placed));
+
+    this.revision = payload.revision;
+    if (pendingWasContiguous) this.pendingSafeThrough = payload.revision;
+    // lastSaved deliberately stays put: it does not include the local edit or the
+    // newly merged fragments, so the whole live document is still owed a save.
+    this.documentChanged();
+  }
+
+  private refuseConflict(payload: unknown, reason: string): void {
     this.setState('error');
     this.options.transport.onError?.(
       'This stream changed elsewhere. Your edits are still here, but they cannot be saved until the conflict is resolved.',
-      payload,
+      { reason, payload },
     );
   }
 

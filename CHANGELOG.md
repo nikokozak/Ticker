@@ -75,6 +75,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Rich-text conflict recovery now preserves unsaved edits only when pending append records prove the merge, including their provenance.
 - Quick Window now attaches recent macOS screenshots whether copied or saved, removes stale selection guidance, and labels its shortcuts consistently in onboarding and Settings.
 - Delete Stream now opens its confirmation reliably in WebKit instead of closing the action menu before the click completes.
 - Editor selections now stay readable in dark mode, wrapped passages scroll without geometry jumps, smart apostrophes preserve the caret, and only exact Quick-window shortcuts can invoke AI.

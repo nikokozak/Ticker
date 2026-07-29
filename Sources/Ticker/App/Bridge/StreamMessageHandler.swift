@@ -182,11 +182,13 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     }
                 }
             } catch let conflict as StreamDocumentRevisionConflict {
+                let pendingAppends = StreamCodec.encodePendingAppends(conflict.pendingAppends)
                 await bridgeService.send(BridgeMessage(type: "streamDocumentConflict", payload: [
                     "streamId": AnyCodable(conflict.streamId.uuidString),
                     "markdown": AnyCodable(conflict.markdown),
                     "revision": AnyCodable(conflict.revision),
-                    "spans": AnyCodable(StreamCodec.encodeSpans(conflict.spans))
+                    "spans": AnyCodable(StreamCodec.encodeSpans(conflict.spans)),
+                    "pendingAppends": AnyCodable(pendingAppends)
                 ]))
                 await bridgeService.respondWithError(to: callbackId, error: "Stream document revision conflict")
             } catch {

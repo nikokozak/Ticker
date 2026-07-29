@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Command } from 'prosemirror-state';
-import { bridge } from '../types/bridge';
+import { bridge, type StreamDocumentConflictPayload } from '../types/bridge';
 import type { Stream } from '../types/models';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import { DocumentSession, type SaveState } from '../richtext/session';
@@ -181,11 +181,15 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     }
 
     if (message.type === 'streamDocumentConflict') {
+      const conflict = payload as Partial<StreamDocumentConflictPayload> | undefined;
       session.documentConflict({
-        streamId: String(payload?.streamId ?? ''),
-        markdown: String(payload?.markdown ?? ''),
-        revision: Number(payload?.revision),
-        spans: (payload?.spans as ProvenanceSpanJSON[] | undefined)?.map(spanFromJSON),
+        streamId: String(conflict?.streamId ?? ''),
+        markdown: String(conflict?.markdown ?? ''),
+        revision: Number(conflict?.revision),
+        spans: conflict?.spans?.map(spanFromJSON),
+        pendingAppends: decodePendingAppends(
+          Array.isArray(conflict?.pendingAppends) ? conflict.pendingAppends : [],
+        ),
       });
       return;
     }

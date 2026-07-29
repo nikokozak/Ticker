@@ -106,7 +106,7 @@
         "requiredPayloadKeys": ["streamId", "fragment", "revision", "isNewStream", "source", "spans"]
       },
       "streamDocumentConflict": {
-        "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans"]
+        "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans", "pendingAppends"]
       },
       "streamLoaded": {
         "requiredPayloadKeys": ["stream", "spans", "marginNotes"],

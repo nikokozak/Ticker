@@ -4148,6 +4148,48 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    /// A conflict is another editor snapshot: its markdown, revision and pending
+    /// rows have to describe the same instant or the editor can only refuse them.
+    func test_revisionConflictIsInternallyConsistentUnderConcurrentAppends() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Conflict Snapshot")
+            try service.saveStream(stream)
+            _ = try service.saveStreamDocument(streamId: stream.id, markdown: "base", baseRevision: 0)
+
+            let done = expectation(description: "appends finished")
+            DispatchQueue.global().async {
+                for i in 0..<40 {
+                    _ = try? service.appendToStreamDocument(streamId: stream.id, fragment: "fragment \(i)")
+                }
+                done.fulfill()
+            }
+
+            for _ in 0..<40 {
+                do {
+                    _ = try service.saveStreamDocument(
+                        streamId: stream.id,
+                        markdown: "stale",
+                        baseRevision: 0
+                    )
+                    XCTFail("Expected stale revision save to throw")
+                } catch let conflict as StreamDocumentRevisionConflict {
+                    XCTAssertNil(conflict.pendingAppends.first(where: { $0.revision > conflict.revision }),
+                                 "a pending row ran ahead of the conflict document")
+                    var remaining = conflict.markdown
+                    for row in conflict.pendingAppends.sorted(by: { $0.revision > $1.revision }) {
+                        let suffix = "\(row.separator)\(row.fragment)"
+                        XCTAssertTrue(remaining.hasSuffix(suffix),
+                                      "row \(row.revision) is not on the end of its conflict document")
+                        remaining = String(remaining.dropLast(suffix.count))
+                    }
+                    XCTAssertEqual(remaining, "base")
+                }
+            }
+
+            wait(for: [done], timeout: 30)
+        }
+    }
+
     func test_staleRevisionSaveDoesNotClobberInterleavedAppend() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Conflict Guard")

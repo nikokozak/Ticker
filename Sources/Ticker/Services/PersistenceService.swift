@@ -29,13 +29,7 @@ struct StreamDocumentRevisionConflict: Error {
     let markdown: String
     let revision: Int
     let spans: [ProvenanceSpan]
-
-    init(streamId: UUID, markdown: String, revision: Int, spans: [ProvenanceSpan] = []) {
-        self.streamId = streamId
-        self.markdown = markdown
-        self.revision = revision
-        self.spans = spans
-    }
+    let pendingAppends: [PendingStreamAppend]
 }
 
 enum PersistenceError: LocalizedError {
@@ -1064,7 +1058,8 @@ final class PersistenceService {
                         streamId: streamId,
                         markdown: currentMarkdown,
                         revision: currentRevision,
-                        spans: try fetchSpans(streamId: streamId, db: db)
+                        spans: try fetchSpans(streamId: streamId, db: db),
+                        pendingAppends: try fetchPendingAppends(streamId: streamId, db: db)
                     )
                 }
 
@@ -1104,7 +1099,8 @@ final class PersistenceService {
                     streamId: streamId,
                     markdown: "",
                     revision: 0,
-                    spans: []
+                    spans: [],
+                    pendingAppends: try fetchPendingAppends(streamId: streamId, db: db)
                 )
             }
 
