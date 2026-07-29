@@ -494,7 +494,9 @@ export function App() {
         onBack={handleBackToList}
         onDelete={handleDeleteStream}
         pendingMatchText={pendingMatchText}
+        pendingSourceId={pendingSourceId}
         onClearPendingMatch={() => setPendingMatchText(null)}
+        onClearPendingSource={() => setPendingSourceId(null)}
       />
     ) : (
       <StreamEditor

@@ -2,8 +2,12 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { bridge, type WebToSwiftBridgeMessage } from '../types/bridge';
-import type { Stream } from '../types/models';
+import {
+  bridge,
+  type SwiftToWebBridgeMessage,
+  type WebToSwiftBridgeMessage,
+} from '../types/bridge';
+import type { SourceReference, Stream } from '../types/models';
 import { DocumentSession } from '../richtext/session';
 import { useToastStore } from '../store/toastStore';
 import { fnv1a } from '../utils/fnv1a';
@@ -18,6 +22,7 @@ beforeAll(() => {
     proto.getBoundingClientRect ??= empty;
   }
   document.elementFromPoint ??= () => null;
+  Element.prototype.scrollIntoView ??= () => {};
   HTMLDialogElement.prototype.showModal ??= function showModal() {
     this.setAttribute('open', '');
   };
@@ -166,7 +171,9 @@ async function finishImageSave(message: WebToSwiftBridgeMessage, assetUrl = 'tic
 
 async function renderStream(next: Stream, options: {
   pendingMatchText?: string | null;
+  pendingSourceId?: string | null;
   onClearPendingMatch?: () => void;
+  onClearPendingSource?: () => void;
 } = {}) {
   await act(async () => {
     root!.render(
@@ -179,6 +186,23 @@ async function renderStream(next: Stream, options: {
       />,
     );
     await Promise.resolve();
+  });
+}
+
+async function renderStreamLoaded(message: SwiftToWebBridgeMessage) {
+  expect(message.type).toBe('streamLoaded');
+  const payload = message.payload!;
+  const wireStream = payload.stream as unknown as Stream;
+  await renderStream({
+    ...wireStream,
+    sourceScope: payload.sourceScope as Stream['sourceScope'],
+    spans: payload.spans as unknown as Stream['spans'],
+    pendingAppends: payload.pendingAppends as unknown as Stream['pendingAppends'],
+    marginNotes: payload.marginNotes as unknown as Stream['marginNotes'],
+    document: {
+      ...wireStream.document,
+      scrollOffset: Number(payload.scrollOffset),
+    },
   });
 }
 
@@ -1063,5 +1087,442 @@ describe('RichStreamEditor search arrival', () => {
       onClearPendingMatch: clear,
     });
     expect(clear).not.toHaveBeenCalled();
+  });
+});
+
+describe('RichStreamEditor sources', () => {
+  const source: SourceReference = {
+    id: 'source-1',
+    streamId: 'source-stream',
+    displayName: 'paper.pdf',
+    shortTitle: 'Paper',
+    fileType: 'pdf',
+    status: 'ready',
+    embeddingStatus: 'complete',
+    indexStatus: 'ready',
+    aiExcluded: false,
+    extractedText: null,
+    pageCount: 12,
+    addedAt: new Date(0).toISOString(),
+  };
+  const sourceStream: Stream = {
+    ...stream,
+    id: 'source-stream',
+    sources: [source],
+    document: { ...stream.document, streamId: 'source-stream' },
+  };
+
+  it('opens the shared sources UI and opens a source through the host', async () => {
+    await renderStream(sourceStream);
+    await click('Sources, 1 source');
+
+    const sourceItem = document.querySelector('[title="Open paper.pdf"]') as HTMLElement;
+    expect(sourceItem).not.toBe(null);
+    await act(async () => { sourceItem.click(); });
+
+    expect(lastSent()).toEqual({
+      type: 'openSource',
+      payload: { sourceId: 'source-1' },
+    });
+  });
+
+  it('uses a changed source scope for the very next AI request', async () => {
+    await renderStream(sourceStream);
+    await click('Cycle source scope');
+
+    expect(lastSent()).toEqual({
+      type: 'setSourceScope',
+      payload: { streamId: 'source-stream', scope: 'all' },
+    });
+
+    await click('Send to AI');
+    expect(lastSent()).toMatchObject({
+      type: 'thinkDocument',
+      payload: { streamId: 'source-stream', sourceScope: 'all' },
+    });
+    await click('Stop document AI');
+  });
+
+  it('opens a pending source and consumes it once even while source state changes', async () => {
+    const clear = vi.fn();
+    const options = {
+      pendingSourceId: 'source-1',
+      onClearPendingSource: clear,
+    };
+    await renderStream(sourceStream, options);
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('[title="Open paper.pdf"]')
+        ?.classList.contains('sources-modal-item--highlighted')).toBe(true);
+    });
+    expect(clear).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      bridge.receive({
+        type: 'sourceIndexStatusChanged',
+        payload: { sourceId: 'source-1', status: 'indexing', progress: 0.5 },
+      });
+    });
+    await renderStream({ ...sourceStream, title: 'Still here' }, options);
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a pending source that is not in the loaded stream without opening the modal', async () => {
+    const clear = vi.fn();
+    await renderStream(sourceStream, {
+      pendingSourceId: 'missing-source',
+      onClearPendingSource: clear,
+    });
+
+    expect(document.querySelector('.sources-modal')).toBe(null);
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not consume a source when none is pending', async () => {
+    const clear = vi.fn();
+    await renderStream(sourceStream, { onClearPendingSource: clear });
+
+    expect(document.querySelector('.sources-modal')).toBe(null);
+    expect(clear).not.toHaveBeenCalled();
+  });
+});
+
+describe('RichStreamEditor PDF section AI', () => {
+  const sectionRequest = (action: 'ask' | 'summarize'): SwiftToWebBridgeMessage => ({
+    type: 'pdfSectionActionRequested',
+    payload: {
+      action,
+      streamId: 'stream-1',
+      sourceId: 'source-1',
+      shortTitle: 'Paper',
+      sectionTitle: 'Methods',
+      page: 4,
+    },
+  });
+
+  it('runs a summarize request with the native section shape', async () => {
+    await act(async () => { bridge.receive(sectionRequest('summarize')); });
+
+    expect(lastSent()).toEqual({
+      type: 'runPdfSectionAI',
+      payload: {
+        action: 'summarize',
+        streamId: 'stream-1',
+        sourceId: 'source-1',
+        page: 4,
+      },
+    });
+  });
+
+  it('asks for an instruction before running an ask request', async () => {
+    await act(async () => { bridge.receive(sectionRequest('ask')); });
+
+    expect(document.querySelector('.ai-prompt-dialog')?.textContent)
+      .toContain('“Methods” from Paper');
+    await enterPrompt('Compare the two approaches.');
+    await click('Send prompt to AI');
+
+    expect(lastSent()).toEqual({
+      type: 'runPdfSectionAI',
+      payload: {
+        action: 'ask',
+        streamId: 'stream-1',
+        sourceId: 'source-1',
+        page: 4,
+        prompt: 'Compare the two approaches.',
+      },
+    });
+  });
+
+  it('keeps a PDF ask prompt available when document AI wins the start race', async () => {
+    await act(async () => { bridge.receive(sectionRequest('ask')); });
+    await click('Send to AI');
+    await enterPrompt('Compare the two approaches.');
+    await click('Send prompt to AI');
+
+    expect(sent.filter((message) => message.type === 'runPdfSectionAI')).toHaveLength(0);
+    expect(document.querySelector('.ai-prompt-dialog')).not.toBe(null);
+    await click('Stop document AI');
+  });
+
+  it.each(['summarize', 'ask'] as const)(
+    'refuses a PDF %s request while document AI is writing and leaves Stop available',
+    async (action) => {
+      await click('Send to AI');
+      await act(async () => { bridge.receive(sectionRequest(action)); });
+
+      expect(sent.filter((message) => message.type === 'runPdfSectionAI')).toHaveLength(0);
+      expect(document.querySelector('.ai-prompt-dialog')).toBe(null);
+      expect((document.querySelector('[aria-label="Stop document AI"]') as HTMLButtonElement).disabled)
+        .toBe(false);
+      expect(useToastStore.getState().toasts.map((toast) => toast.message).join(' '))
+        .toMatch(/current AI/i);
+      await click('Stop document AI');
+    },
+  );
+
+  it('does not start document AI until the PDF append actually lands', async () => {
+    vi.mocked(bridge.sendAsync).mockImplementation(
+      (async (_type, payload) => ({
+        revision: Number(payload?.baseRevision) + 1,
+      })) as typeof bridge.sendAsync,
+    );
+    await act(async () => { bridge.receive(sectionRequest('summarize')); });
+
+    await click('Send to AI');
+    expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(0);
+
+    await act(async () => {
+      bridge.receive({
+        type: 'streamDocumentAppended',
+        payload: {
+          streamId: 'another-stream',
+          fragment: 'Someone else’s PDF answer.',
+          revision: 2,
+          isNewStream: false,
+          source: 'pdfSectionAI',
+          spans: [],
+        },
+      });
+      bridge.receive({
+        type: 'streamDocumentAppended',
+        payload: {
+          streamId: 'stream-1',
+          fragment: 'Quick note.',
+          revision: 2,
+          isNewStream: false,
+          source: 'quickPanel',
+          spans: [],
+        },
+      });
+    });
+    await click('Send to AI');
+    expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(0);
+
+    await act(async () => {
+      bridge.receive({
+        type: 'streamDocumentAppended',
+        payload: {
+          streamId: 'stream-1',
+          fragment: 'PDF answer.',
+          revision: 3,
+          isNewStream: false,
+          source: 'pdfSectionAI',
+          spans: [],
+        },
+      });
+    });
+    await click('Send to AI');
+    expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(1);
+    await click('Stop document AI');
+  });
+
+  it.each(['failed', 'canceled'] as const)(
+    'releases the PDF AI gate when the operation is %s',
+    async (state) => {
+      await act(async () => { bridge.receive(sectionRequest('summarize')); });
+      await act(async () => {
+        bridge.receive({
+          type: 'aiOperationChanged',
+          payload: {
+            requestId: 'pdf-operation',
+            streamId: 'stream-1',
+            verb: 'summarize',
+            origin: 'pdfSection',
+            state,
+          },
+        });
+      });
+
+      await click('Send to AI');
+      expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(1);
+      await click('Stop document AI');
+    },
+  );
+
+  it('does not release the PDF AI gate for another operation or a nonterminal state', async () => {
+    await act(async () => { bridge.receive(sectionRequest('summarize')); });
+    await act(async () => {
+      bridge.receive({
+        type: 'aiOperationChanged',
+        payload: {
+          requestId: 'editor-operation',
+          streamId: 'stream-1',
+          verb: 'develop',
+          origin: 'editor',
+          state: 'failed',
+        },
+      });
+      bridge.receive({
+        type: 'aiOperationChanged',
+        payload: {
+          requestId: 'other-pdf-operation',
+          streamId: 'another-stream',
+          verb: 'summarize',
+          origin: 'pdfSection',
+          state: 'failed',
+        },
+      });
+      bridge.receive({
+        type: 'aiOperationChanged',
+        payload: {
+          requestId: 'pdf-operation',
+          streamId: 'stream-1',
+          verb: 'summarize',
+          origin: 'pdfSection',
+          state: 'generating',
+        },
+      });
+    });
+
+    await click('Send to AI');
+    expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(0);
+  });
+
+  it('ignores a section request for a different stream', async () => {
+    await act(async () => {
+      bridge.receive({
+        ...sectionRequest('summarize'),
+        payload: { ...sectionRequest('summarize').payload, streamId: 'another-stream' },
+      });
+    });
+
+    expect(sent.filter((message) => message.type === 'runPdfSectionAI')).toHaveLength(0);
+  });
+
+  it('keeps PDF pane state in chrome and out of the document', async () => {
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfPaneStateChanged',
+        payload: {
+          visible: true,
+          streamId: 'stream-1',
+          sourceId: 'source-1',
+          sourceName: 'paper.pdf',
+          shortTitle: 'Paper',
+        },
+      });
+    });
+
+    expect(document.querySelector('.stream-header')?.textContent).toContain('PDF · Paper');
+    expect(editor().textContent).toBe('Original paragraph.');
+
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfPaneStateChanged',
+        payload: {
+          visible: true,
+          streamId: 'another-stream',
+          sourceId: 'source-2',
+          sourceName: 'other.pdf',
+          shortTitle: 'Other',
+        },
+      });
+    });
+    expect(document.querySelector('.stream-header')?.textContent).not.toContain('PDF · Other');
+
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfPaneStateChanged',
+        payload: {
+          visible: false,
+          streamId: 'stream-1',
+          sourceId: 'source-1',
+          sourceName: 'paper.pdf',
+          shortTitle: 'Paper',
+        },
+      });
+    });
+    expect(document.querySelector('.stream-header')?.textContent).not.toContain('PDF · Paper');
+  });
+});
+
+describe('RichStreamEditor host wire gate', () => {
+  it('opens and appends using the exact payload shapes emitted by Swift', async () => {
+    const loaded: SwiftToWebBridgeMessage = {
+      type: 'streamLoaded',
+      payload: {
+        requestId: 17,
+        stream: {
+          id: '00000000-0000-0000-0000-000000000001',
+          title: 'Host stream',
+          sourceScope: 'all',
+          sources: [{
+            id: '00000000-0000-0000-0000-000000000002',
+            streamId: '00000000-0000-0000-0000-000000000001',
+            displayName: 'paper.pdf',
+            shortTitle: 'Paper',
+            fileType: 'pdf',
+            status: 'ready',
+            embeddingStatus: 'complete',
+            indexStatus: 'ready',
+            aiExcluded: false,
+            pageCount: 12,
+            addedAt: '1970-01-01T00:00:00Z',
+          }],
+          createdAt: '1970-01-01T00:00:00Z',
+          updatedAt: '1970-01-01T00:00:00Z',
+          document: {
+            streamId: '00000000-0000-0000-0000-000000000001',
+            markdown: 'Host paragraph.',
+            revision: 1,
+            scrollOffset: 23,
+            createdAt: '1970-01-01T00:00:00Z',
+            updatedAt: '1970-01-01T00:00:00Z',
+          },
+        },
+        sourceScope: 'all',
+        scrollOffset: 23,
+        spans: [],
+        pendingAppends: [],
+        marginNotes: [],
+      },
+    };
+    const appended: SwiftToWebBridgeMessage = {
+      type: 'streamDocumentAppended',
+      payload: {
+        streamId: '00000000-0000-0000-0000-000000000001',
+        fragment: 'Appended by host.',
+        revision: 2,
+        isNewStream: false,
+        source: 'quickPanel',
+        spans: [{
+          spanId: 'host-span',
+          start: 0,
+          end: 17,
+          origin: 'capture',
+          requestId: 'host-request',
+          meta: '{}',
+          textHash: fnv1a('Appended by host.'),
+          createdAt: '1970-01-01T00:00:00Z',
+        }],
+      },
+    };
+
+    await renderStreamLoaded(loaded);
+    expect((document.querySelector('.stream-content') as HTMLElement).scrollTop).toBe(23);
+    await act(async () => { bridge.receive(appended); });
+
+    expect([...editor().querySelectorAll('p')].map((node) => node.textContent))
+      .toEqual(['Host paragraph.', 'Appended by host.']);
+
+    // The text arriving is the easy half. The span has to be PLACED from raw
+    // markdown offsets and re-hashed over document text, and a save has to carry
+    // it back with the revision the store can accept — that is the path that only
+    // real coordinates exercise.
+    await vi.waitFor(() => {
+      expect(vi.mocked(bridge.sendAsync).mock.calls
+        .some(([type]) => type === 'saveStreamDocument')).toBe(true);
+    });
+    const save = vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'saveStreamDocument')
+      .pop()?.[1] as { markdown: string; baseRevision: number; spans: Array<Record<string, unknown>>; resolvedPendingThrough?: number } | undefined;
+    expect(save, 'the append was never written back').toBeDefined();
+    expect(save!.baseRevision).toBe(2);
+    expect(save!.spans).toHaveLength(1);
+    expect(save!.spans[0]).toMatchObject({ spanId: 'host-span', origin: 'capture' });
+    expect(save!.spans[0].textHash).toBe(fnv1a('Appended by host.'));
+    // And the row the append recorded may now be forgotten.
+    expect(save!.resolvedPendingThrough).toBe(2);
   });
 });

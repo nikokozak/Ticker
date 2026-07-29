@@ -4,10 +4,17 @@ import type { Command } from 'prosemirror-state';
 import {
   bridge,
   type DocumentAIVerb,
+  type SourceTitlePayload,
   type StreamDocumentConflictPayload,
 } from '../types/bridge';
-import type { Stream } from '../types/models';
+import type { SourceReference, SourceScope, Stream } from '../types/models';
 import { Modal } from './Modal';
+import { SourcesModal } from './SourcesModal';
+import {
+  nextSourceScope,
+  parsePDFSectionActionRequest,
+  type PDFSectionActionRequest,
+} from './StreamEditor';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import {
   aiWritingRange,
@@ -24,6 +31,7 @@ import {
   type ProvenanceSpanJSON,
 } from '../richtext/provenance';
 import { parseRawSpans, type PendingAppend } from '../richtext/pendingAppends';
+import { useBridgeMessages } from '../hooks/useBridgeMessages';
 import { useToastStore } from '../store/toastStore';
 import {
   buildProvenanceLine,
@@ -57,7 +65,9 @@ interface RichStreamEditorProps {
   onBack: () => void;
   onDelete: () => void;
   pendingMatchText?: string | null;
+  pendingSourceId?: string | null;
   onClearPendingMatch?: () => void;
+  onClearPendingSource?: () => void;
 }
 
 const PDF_URL_PREFIX = 'ticker-pdf://';
@@ -82,6 +92,21 @@ interface ActiveDocumentAI {
   stream: ReturnType<typeof streamAIMarkdown>;
   verb: Exclude<DocumentAIVerb, 'challenge'>;
   model?: string;
+}
+
+type PromptIntent = {
+  kind: 'document';
+  verb: 'ask' | 'rewrite';
+} | {
+  kind: 'pdfSection';
+  request: PDFSectionActionRequest;
+};
+
+interface PDFPaneState {
+  visible: boolean;
+  streamId?: string;
+  sourceName?: string;
+  shortTitle?: string;
 }
 
 function documentAITarget(editor: RichTextEditor): { from: number; to: number; text: string } | null {
@@ -120,26 +145,46 @@ export function RichStreamEditor({
   onBack,
   onDelete,
   pendingMatchText,
+  pendingSourceId,
   onClearPendingMatch,
+  onClearPendingSource,
 }: RichStreamEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditor | null>(null);
   const sessionRef = useRef<DocumentSession | null>(null);
   const aiRequestRef = useRef<ActiveDocumentAI | null>(null);
   const aiInFlightRef = useRef(false);
+  // ponytail: one stream-wide PDF AI lock; track host operation ids if concurrent
+  // PDF jobs ever become a supported workflow.
+  const pdfAIInFlightRef = useRef(false);
+  const consumedPendingSourceRef = useRef<string | null>(null);
 
   const [editor, setEditor] = useState<RichTextEditor | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [aiRunning, setAIRunning] = useState(false);
   const [aiDetail, setAIDetail] = useState<string | null>(null);
-  const [promptVerb, setPromptVerb] = useState<'ask' | 'rewrite' | null>(null);
+  const [promptIntent, setPromptIntent] = useState<PromptIntent | null>(null);
   const [promptValue, setPromptValue] = useState('');
   const [leaving, setLeaving] = useState(false);
   const deleting = useRef(false);
   const [xray, setXray] = useState(false);
   const [title, setTitle] = useState(stream.title);
+  const [showSourcesModal, setShowSourcesModal] = useState(false);
+  const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
+  const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
+  const [pdfPaneState, setPDFPaneState] = useState<PDFPaneState>({ visible: false });
   const [, redraw] = useState(0);
   const addToast = useToastStore((state) => state.addToast);
+  const { sources, setSources } = useBridgeMessages({
+    streamId: stream.id,
+    initialSources: stream.sources,
+    editorAPI: editor ? {
+      insertImage: (src) => {
+        insertImage(editor.view, { src, alt: 'image' });
+        editor.view.focus();
+      },
+    } : null,
+  });
 
   const cancelDocumentAI = useCallback((notifyHost = true) => {
     const active = aiRequestRef.current;
@@ -159,6 +204,68 @@ export function RichStreamEditor({
     setAIRunning(false);
     setAIDetail(null);
   }, []);
+
+  const canStartAI = useCallback(() => {
+    if (!aiInFlightRef.current && !pdfAIInFlightRef.current) return true;
+    addToast('Wait for the current AI operation to finish, or stop it first.', 'info');
+    return false;
+  }, [addToast]);
+
+  const startPDFSectionAI = useCallback((
+    request: PDFSectionActionRequest,
+    prompt?: string,
+  ) => {
+    if (!canStartAI()) return false;
+    pdfAIInFlightRef.current = true;
+    if (prompt) {
+      bridge.send({
+        type: 'runPdfSectionAI',
+        payload: {
+          action: request.action,
+          streamId: request.streamId,
+          sourceId: request.sourceId,
+          page: request.page,
+          prompt,
+        },
+      });
+    } else {
+      bridge.send({
+        type: 'runPdfSectionAI',
+        payload: {
+          action: request.action,
+          streamId: request.streamId,
+          sourceId: request.sourceId,
+          page: request.page,
+        },
+      });
+    }
+    return true;
+  }, [canStartAI]);
+
+  const cycleSourceScope = useCallback(() => {
+    setSourceScope((previous) => {
+      const scope = nextSourceScope(previous);
+      bridge.send({
+        type: 'setSourceScope',
+        payload: { streamId: stream.id, scope },
+      });
+      return scope;
+    });
+  }, [stream.id]);
+
+  const openSource = useCallback((source: SourceReference) => {
+    bridge.send({ type: 'openSource', payload: { sourceId: source.id } });
+  }, []);
+
+  const removeSource = useCallback((sourceId: string) => {
+    setSources((previous) => previous.filter((source) => source.id !== sourceId));
+  }, [setSources]);
+
+  const setSourceAIExclusion = useCallback((sourceId: string, aiExcluded: boolean) => {
+    setSources((previous) => previous.map((source) => (
+      source.id === sourceId ? { ...source, aiExcluded } : source
+    )));
+  }, [setSources]);
 
   // Which formatting buttons are lit depends on the SELECTION, so the menu has to
   // redraw on every transaction and not only on edits.
@@ -366,13 +473,32 @@ export function RichStreamEditor({
     onClearPendingMatch?.();
   }, [editor, onClearPendingMatch, pendingMatchText]);
 
+  useEffect(() => {
+    setSourceScope(stream.sourceScope ?? 'auto');
+  }, [stream.sourceScope]);
+
+  useEffect(() => {
+    if (!pendingSourceId) {
+      consumedPendingSourceRef.current = null;
+      return;
+    }
+    if (consumedPendingSourceRef.current === pendingSourceId) return;
+    consumedPendingSourceRef.current = pendingSourceId;
+
+    if (sources.some((source) => source.id === pendingSourceId)) {
+      setHighlightedSourceId(pendingSourceId);
+      setShowSourcesModal(true);
+    }
+    onClearPendingSource?.();
+  }, [onClearPendingSource, pendingSourceId, sources]);
+
   const startDocumentAI = useCallback(async (
     verb: Exclude<DocumentAIVerb, 'challenge'> = 'develop',
     instruction?: string,
   ) => {
     const currentEditor = editorRef.current;
     const session = sessionRef.current;
-    if (!currentEditor || !session || aiInFlightRef.current) return;
+    if (!currentEditor || !session || !canStartAI()) return;
 
     // Clear any already-armed save before streaming begins. Merely suppressing the
     // chunks is insufficient: a timer from the edit that started the request can
@@ -422,12 +548,12 @@ export function RichStreamEditor({
         streamId: stream.id,
         query: instruction ?? target.text,
         context: instruction ? target.text : undefined,
-        sourceScope: stream.sourceScope ?? 'auto',
+        sourceScope,
         verb,
         imageURLs: [],
       },
     });
-  }, [addToast, stream.id, stream.sourceScope]);
+  }, [addToast, canStartAI, sourceScope, stream.id]);
 
   const openDocumentAIPrompt = useCallback((verb: 'ask' | 'rewrite') => {
     const currentEditor = editorRef.current;
@@ -436,21 +562,31 @@ export function RichStreamEditor({
       return;
     }
     setPromptValue('');
-    setPromptVerb(verb);
+    setPromptIntent({ kind: 'document', verb });
   }, [addToast]);
 
   const closeDocumentAIPrompt = useCallback(() => {
-    setPromptVerb(null);
+    setPromptIntent(null);
     setPromptValue('');
   }, []);
 
   const sendDocumentAIPrompt = useCallback(() => {
     const instruction = promptValue.trim();
-    if (!promptVerb || !instruction) return;
-    const verb = promptVerb;
+    if (!promptIntent || !instruction) return;
+    if (promptIntent.kind === 'pdfSection') {
+      if (startPDFSectionAI(promptIntent.request, instruction)) closeDocumentAIPrompt();
+      return;
+    }
+    const { verb } = promptIntent;
     closeDocumentAIPrompt();
     void startDocumentAI(verb, instruction);
-  }, [closeDocumentAIPrompt, promptValue, promptVerb, startDocumentAI]);
+  }, [
+    closeDocumentAIPrompt,
+    promptIntent,
+    promptValue,
+    startDocumentAI,
+    startPDFSectionAI,
+  ]);
 
   /**
    * Leaving is not a render, it is a write that can fail.
@@ -492,9 +628,42 @@ export function RichStreamEditor({
       return;
     }
 
+    if (message.type === 'pdfPaneStateChanged') {
+      setPDFPaneState({
+        visible: payload?.visible === true,
+        streamId: typeof payload?.streamId === 'string' ? payload.streamId : undefined,
+        sourceName: (payload as SourceTitlePayload | undefined)?.sourceName,
+        shortTitle: (payload as SourceTitlePayload | undefined)?.shortTitle,
+      });
+      return;
+    }
+
+    if (message.type === 'pdfSectionActionRequested') {
+      const request = parsePDFSectionActionRequest(payload, stream.id);
+      if (!request) return;
+      if (request.action === 'summarize') {
+        startPDFSectionAI(request);
+        return;
+      }
+      if (!canStartAI()) return;
+      setPromptValue('');
+      setPromptIntent({ kind: 'pdfSection', request });
+      return;
+    }
+
     const activeAI = aiRequestRef.current;
 
     if (message.type === 'aiOperationChanged') {
+      if (payload?.streamId === stream.id && payload.origin === 'pdfSection') {
+        if (
+          payload.state === 'succeeded'
+          || payload.state === 'failed'
+          || payload.state === 'canceled'
+        ) {
+          pdfAIInFlightRef.current = false;
+        }
+        return;
+      }
       if (!activeAI || payload?.requestId !== activeAI.requestId) return;
       const detail = typeof payload.message === 'string' ? payload.message : payload.state;
       if (typeof detail === 'string') setAIDetail(`AI ${detail}`);
@@ -586,6 +755,9 @@ export function RichStreamEditor({
         // wrote while the stream was open.
         spans: payload?.spans as ProvenanceSpanJSON[] | undefined,
       });
+      if (payload?.streamId === stream.id && payload.source === 'pdfSectionAI') {
+        pdfAIInFlightRef.current = false;
+      }
       return;
     }
 
@@ -617,7 +789,13 @@ export function RichStreamEditor({
         bridge.send({ type: 'editorFlushed', payload: { requestId, saved } });
       });
     }
-  }), [addToast, cancelDocumentAI, stream.id]);
+  }), [
+    addToast,
+    canStartAI,
+    cancelDocumentAI,
+    startPDFSectionAI,
+    stream.id,
+  ]);
 
   /**
    * A reload this session asked for, after an append it could not reconcile.
@@ -662,6 +840,10 @@ export function RichStreamEditor({
   };
 
   const formats = editor ? activeFormats(editor.view.state) : null;
+  const sourceScopeLabel = sourceScope === 'all' ? 'All' : sourceScope === 'none' ? 'None' : 'Auto';
+  const openPDFTitle = pdfPaneState.visible && pdfPaneState.streamId === stream.id
+    ? pdfPaneState.shortTitle ?? pdfPaneState.sourceName ?? 'Open PDF'
+    : null;
 
   const formatButton = (label: string, active: boolean, command: Command, hint: string) => (
     <button
@@ -701,6 +883,15 @@ export function RichStreamEditor({
             <span className="stream-save-status-label">{SAVE_LABEL[saveState]}</span>
           </span>
           <button
+            type="button"
+            className="stream-sources-button"
+            aria-label={`Sources, ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
+            title="Sources"
+            onClick={() => setShowSourcesModal(true)}
+          >
+            Sources · {sources.length}{openPDFTitle ? ` · PDF · ${openPDFTitle}` : ''}
+          </button>
+          <button
             onClick={() => setXray((value) => !value)}
             className={`stream-xray-button ${xray ? 'stream-xray-button--active' : ''}`}
             title="Toggle provenance x-ray"
@@ -711,16 +902,22 @@ export function RichStreamEditor({
         </div>
       </header>
 
-      {promptVerb && (
+      {promptIntent && (
         <Modal
           className="ai-prompt-dialog"
           aria-labelledby="richtext-ai-prompt-title"
           onRequestClose={closeDocumentAIPrompt}
         >
           <h2 id="richtext-ai-prompt-title">
-            {promptVerb === 'rewrite' ? 'Rewrite' : 'Send & Prompt'}
+            {promptIntent.kind === 'pdfSection'
+              ? 'Ask this section'
+              : promptIntent.verb === 'rewrite' ? 'Rewrite' : 'Send & Prompt'}
           </h2>
-          <p>The selected text will be attached as context.</p>
+          <p>
+            {promptIntent.kind === 'pdfSection'
+              ? `“${promptIntent.request.sectionTitle}” from ${promptIntent.request.shortTitle} will be attached as context.`
+              : 'The selected text will be attached as context.'}
+          </p>
           <textarea
             className="ai-prompt-input"
             value={promptValue}
@@ -734,10 +931,13 @@ export function RichStreamEditor({
                 closeDocumentAIPrompt();
               }
             }}
-            placeholder={promptVerb === 'rewrite'
-              ? 'How should this be rewritten?'
-              : 'Ask a question or give an instruction…'}
+            placeholder={promptIntent.kind === 'pdfSection'
+              ? 'Ask about this section…'
+              : promptIntent.verb === 'rewrite'
+                ? 'How should this be rewritten?'
+                : 'Ask a question or give an instruction…'}
             autoFocus
+            maxLength={promptIntent.kind === 'pdfSection' ? 32_000 : undefined}
             rows={5}
           />
           <div className="ai-prompt-actions">
@@ -755,7 +955,7 @@ export function RichStreamEditor({
               onClick={sendDocumentAIPrompt}
               disabled={!promptValue.trim()}
             >
-              Send
+              {promptIntent.kind === 'pdfSection' ? 'Ask section' : 'Send'}
             </button>
           </div>
         </Modal>
@@ -813,6 +1013,16 @@ export function RichStreamEditor({
           >
             Rewrite…
           </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text"
+            aria-label="Cycle source scope"
+            title="Cycle source scope"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={cycleSourceScope}
+          >
+            Sources: {sourceScopeLabel}
+          </button>
           {formatButton('B', formats.bold, toggleBold, 'Bold ⌘B')}
           {formatButton('I', formats.italic, toggleItalic, 'Italic ⌘I')}
           {formatButton('U', formats.underline, toggleUnderline, 'Underline ⌘U')}
@@ -832,6 +1042,18 @@ export function RichStreamEditor({
           </div>
         </div>
       </div>
+
+      <SourcesModal
+        isOpen={showSourcesModal}
+        streamId={stream.id}
+        sources={sources}
+        onClose={() => setShowSourcesModal(false)}
+        onSourceRemoved={removeSource}
+        onSourceAIExclusionChanged={setSourceAIExclusion}
+        onSourceOpen={openSource}
+        highlightedSourceId={highlightedSourceId}
+        onClearHighlight={() => setHighlightedSourceId(null)}
+      />
     </div>
   );
 }

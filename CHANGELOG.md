@@ -5,7 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Added
-- The rich-text editor now supports Send, Send & Prompt, Ask, Define, Rewrite, and one-shot search-result jumps while keeping browser-copied images local.
+- The rich-text editor now supports source controls, PDF section AI, Send, Send & Prompt, Ask, Define, Rewrite, and one-shot search-result jumps while keeping browser-copied images local.
 - The rich-text editor now pastes, drops, and resizes saved images and restores each stream's scroll position.
 - The rich-text editor now supports streamed document AI with one-step undo, provenance, citation links, read-only streaming, safe cancellation, and no half-written autosaves.
 - Quick Window AI can now see an attached clipboard image in both Ask and develop + save flows, including the first image copied after launch, and marks ephemeral turns when captured context was included.
