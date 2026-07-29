@@ -108,7 +108,10 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     return () => {
       // Write what is pending BEFORE tearing the editor down — the write reads the
       // document, and clicking Back straight after typing must not lose the edit.
-      void session.destroy().finally(() => created.destroy());
+      void session.destroy().then((saved) => {
+        if (!saved) addToast('Some changes could not be saved before leaving the stream.', 'error');
+        created.destroy();
+      });
       editorRef.current = null;
       sessionRef.current = null;
       setEditor(null);
@@ -145,8 +148,10 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       // it can see — but a failure still shows as an error and raises a toast.
       const requestId = payload?.requestId;
       if (typeof requestId !== 'string') return;
-      void session.saveNow().finally(() => {
-        bridge.send({ type: 'editorFlushed', payload: { requestId } });
+      void session.saveNow().then((saved) => {
+        // Reported truthfully: the host cancels quitting on a false, because
+        // closing over an editor that could not save discards the only copy.
+        bridge.send({ type: 'editorFlushed', payload: { requestId, saved } });
       });
     }
   }), [stream.id]);

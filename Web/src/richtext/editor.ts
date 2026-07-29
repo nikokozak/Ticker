@@ -174,7 +174,10 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
 
     const tr = view.state.tr;
     // Back to front, so an earlier edit's positions are still valid.
-    for (const edit of [...edits].reverse()) tr.replaceWith(edit.from, edit.to, edit.replacement);
+    for (const edit of [...edits].reverse()) {
+      if (edit.kind === 'attrs') tr.setNodeMarkup(edit.pos, undefined, edit.attrs);
+      else tr.replaceWith(edit.from, edit.to, edit.replacement);
+    }
     // Not an edit the user made, and not one they should have to undo.
     tr.setMeta('addToHistory', false);
     view.dispatch(tr);

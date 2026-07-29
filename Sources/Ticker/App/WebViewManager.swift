@@ -26,7 +26,7 @@ final class WebViewManager: NSObject {
     private var pendingLaunchOpenStreamId: UUID?
     private var pendingEditorSelectionRequests: [String: (String?) -> Void] = [:]
     private let editorSelectionTimeoutNanoseconds: UInt64 = 300_000_000
-    private var pendingEditorFlushRequests: [String: () -> Void] = [:]
+    private var pendingEditorFlushRequests: [String: (Bool) -> Void] = [:]
     private let editorFlushTimeoutNanoseconds: UInt64 = 1_500_000_000
 
     @MainActor
@@ -651,12 +651,16 @@ final class WebViewManager: NSObject {
         }
     }
 
+    /// Asks the editor to write whatever it is holding, and reports whether it
+    /// actually did. A caller about to close a window or quit must not treat an
+    /// unsaved editor as flushed — that is how typing disappears. A timeout counts
+    /// as failure for the same reason: silence is not success.
     @MainActor
-    func requestEditorFlush() async {
+    func requestEditorFlush() async -> Bool {
         await withCheckedContinuation { continuation in
             let requestId = UUID().uuidString
-            pendingEditorFlushRequests[requestId] = {
-                continuation.resume()
+            pendingEditorFlushRequests[requestId] = { saved in
+                continuation.resume(returning: saved)
             }
 
             bridgeService.send(BridgeMessage(
@@ -666,7 +670,7 @@ final class WebViewManager: NSObject {
 
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: self?.editorFlushTimeoutNanoseconds ?? 1_500_000_000)
-                self?.resolveEditorFlush(requestId: requestId)
+                self?.resolveEditorFlush(requestId: requestId, saved: false)
             }
         }
     }
@@ -684,16 +688,19 @@ final class WebViewManager: NSObject {
     }
 
     @MainActor
-    private func resolveEditorFlush(requestId: String) {
-        pendingEditorFlushRequests.removeValue(forKey: requestId)?()
+    private func resolveEditorFlush(requestId: String, saved: Bool) {
+        pendingEditorFlushRequests.removeValue(forKey: requestId)?(saved)
     }
 
     private func handleMessage(_ message: BridgeMessage) {
         switch message.type {
         case "editorFlushed":
             guard let requestId = message.payload?["requestId"]?.value as? String else { return }
+            // Absent means an older editor that cannot report; treat it as saved so
+            // its behaviour does not change.
+            let saved = message.payload?["saved"]?.value as? Bool ?? true
             Task { @MainActor [weak self] in
-                self?.resolveEditorFlush(requestId: requestId)
+                self?.resolveEditorFlush(requestId: requestId, saved: saved)
             }
             return
         case "editorSelection":

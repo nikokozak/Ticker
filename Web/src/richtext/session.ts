@@ -70,6 +70,7 @@ export class DocumentSession {
   /** Saves run one at a time; a second edit while one is in flight waits for it. */
   private queue: Promise<void> = Promise.resolve();
 
+
   private state: SaveState = 'saved';
 
   /**
@@ -124,13 +125,16 @@ export class DocumentSession {
    * Write now, and resolve when the write has actually happened — what the host
    * waits on before it closes a window or quits.
    */
-  saveNow(): Promise<void> {
+  saveNow(): Promise<boolean> {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
     this.queue = this.queue.then(() => this.write(), () => this.write());
-    return this.queue;
+    // Whether the document is actually stored, which a caller about to close a
+    // window or quit has to know: acknowledging a flush that did not save means
+    // the host throws away the only copy.
+    return this.queue.then(() => this.state !== 'error');
   }
 
   private async write(): Promise<void> {
@@ -333,10 +337,10 @@ export class DocumentSession {
    * The caller must let this settle before tearing the editor down, since the write
    * reads the document.
    */
-  destroy(): Promise<void> {
+  destroy(): Promise<boolean> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    return this.isDirty() ? this.saveNow() : Promise.resolve();
+    return this.isDirty() ? this.saveNow() : Promise.resolve(true);
   }
 
   private setState(next: SaveState): void {

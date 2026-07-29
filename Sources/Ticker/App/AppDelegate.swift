@@ -237,9 +237,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         isWaitingForEditorFlush = true
         Task { @MainActor [weak self] in
-            await webViewManager.requestEditorFlush()
+            let saved = await webViewManager.requestEditorFlush()
             guard let self, self.isWaitingForEditorFlush else { return }
             self.isWaitingForEditorFlush = false
+
+            // Quitting on an editor that could not save discards whatever it was
+            // holding, with no way to get it back. Staying open leaves the text on
+            // screen and the failure visible, which is the only recoverable option.
+            if !saved {
+                DebugLog.log("[Ticker] Termination cancelled: the editor could not save")
+                sender.reply(toApplicationShouldTerminate: false)
+                return
+            }
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

@@ -155,7 +155,8 @@
         "requiredPayloadKeys": ["id"]
       },
       "editorFlushed": {
-        "requiredPayloadKeys": ["requestId"]
+        "requiredPayloadKeys": ["requestId"],
+        "optionalPayloadKeys": ["saved"]
       },
       "editorSelection": {
         "requiredPayloadKeys": ["requestId", "text"]

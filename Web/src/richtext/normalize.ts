@@ -1,4 +1,4 @@
-import { Fragment, type Node as ProseNode } from 'prosemirror-model';
+import { Fragment, type Attrs, type Node as ProseNode } from 'prosemirror-model';
 import { markdownIt } from './markdown';
 import { tickerSchema } from './schema';
 
@@ -324,12 +324,15 @@ export function isNormalized(doc: ProseNode): boolean {
   return normalizeForMarkdown(doc).eq(doc);
 }
 
-/** One region to replace, in document coordinates. */
-export interface NormalizationEdit {
-  from: number;
-  to: number;
-  replacement: Fragment;
-}
+/**
+ * One change, in document coordinates. An attribute-only change is kept separate
+ * from a replacement: clamping an ordered list's start must not replace the list,
+ * because a replacement step maps every position inside it to its boundary and the
+ * provenance in its items would be gone.
+ */
+export type NormalizationEdit =
+  | { kind: 'replace'; from: number; to: number; replacement: Fragment }
+  | { kind: 'attrs'; pos: number; attrs: Attrs };
 
 /**
  * The smallest set of edits that turns `current` into `normalized`.
@@ -362,6 +365,13 @@ export function normalizationEdits(current: ProseNode, normalized: ProseNode, co
     return -1;
   };
 
+  // When the counts match, the children correspond one for one and pairing by
+  // index IS their identity. Searching for a match instead can pick the wrong one:
+  // trimming a space from the first of `" AI" / "AI"` makes the two identical, and
+  // the search then treats the first as deleted and the second as inserted —
+  // arriving at the right document while destroying every position in it.
+  const pairwise = current.childCount === normalized.childCount;
+
   while (i < current.childCount || j < normalized.childCount) {
     if (i < current.childCount && j < normalized.childCount && current.child(i).eq(normalized.child(j))) {
       pos += current.child(i).nodeSize;
@@ -374,24 +384,24 @@ export function normalizationEdits(current: ProseNode, normalized: ProseNode, co
       // Everything left over was deleted.
       let to = pos;
       for (let k = i; k < current.childCount; k += 1) to += current.child(k).nodeSize;
-      edits.push({ from: pos, to, replacement: Fragment.empty });
+      edits.push({ kind: 'replace', from: pos, to, replacement: Fragment.empty });
       break;
     }
 
     if (i >= current.childCount) {
       const added: ProseNode[] = [];
       for (let k = j; k < normalized.childCount; k += 1) added.push(normalized.child(k));
-      edits.push({ from: pos, to: pos, replacement: Fragment.fromArray(added) });
+      edits.push({ kind: 'replace', from: pos, to: pos, replacement: Fragment.fromArray(added) });
       break;
     }
 
     // This child of `normalized` survives further along, so what sits before it was
     // deleted — an empty paragraph, most often.
-    const reappearsAt = nextMatch(i, normalized.child(j));
+    const reappearsAt = pairwise ? -1 : nextMatch(i, normalized.child(j));
     if (reappearsAt > i) {
       let to = pos;
       for (let k = i; k < reappearsAt; k += 1) to += current.child(k).nodeSize;
-      edits.push({ from: pos, to, replacement: Fragment.empty });
+      edits.push({ kind: 'replace', from: pos, to, replacement: Fragment.empty });
       pos = to;
       i = reappearsAt;
       continue;
@@ -403,8 +413,11 @@ export function normalizationEdits(current: ProseNode, normalized: ProseNode, co
     const after = normalized.child(j);
     if (before.sameMarkup(after) && !before.isText && !before.isLeaf) {
       edits.push(...normalizationEdits(before, after, pos + 1));
+    } else if (before.type === after.type && before.content.eq(after.content) && !before.isText) {
+      // Only the attributes differ — clamping a heading level or a list start.
+      edits.push({ kind: 'attrs', pos, attrs: after.attrs });
     } else {
-      edits.push({ from: pos, to: pos + before.nodeSize, replacement: Fragment.from(after) });
+      edits.push({ kind: 'replace', from: pos, to: pos + before.nodeSize, replacement: Fragment.from(after) });
     }
     pos += before.nodeSize;
     i += 1;

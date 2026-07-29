@@ -319,3 +319,47 @@ describe('formatting commands do not destroy provenance they did not touch', () 
     expect(survived).toBeDefined();
   });
 });
+
+describe('settling keeps node identity', () => {
+  it('does not confuse two blocks that normalisation makes identical', () => {
+    // Trimming the space from the first of `" AI text" / "AI text"` makes the two
+    // identical. Searching for a match then treats the first as deleted and the
+    // second as inserted — the right document, every position in it destroyed.
+    const ed = open('placeholder');
+    const { schema } = ed.view.state;
+    const para = (text: string) => schema.nodes.paragraph.create(null, schema.text(text));
+    ed.view.dispatch(ed.view.state.tr.replaceWith(0, ed.view.state.doc.content.size, [
+      para(' AI text'), para('AI text'),
+    ]));
+
+    // A span on the SECOND paragraph, the one normalisation does not touch.
+    let at = -1;
+    ed.view.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === 'AI text') at = pos;
+    });
+    const range = { from: at, to: at + 'AI text'.length };
+    record(ed, {
+      spanId: 'second', ...range, origin: 'ai', meta: {},
+      textHash: hashProvenanceText(ed.view.state.doc, range), createdAt: 0,
+    });
+
+    ed.getMarkdown();
+    const [survived] = provenanceSpans(ed.view.state);
+    expect(survived, 'the span on the untouched paragraph was destroyed').toBeDefined();
+    expect(provenanceText(ed.view.state.doc, survived)).toBe('AI text');
+  });
+
+  it('clamps a list attribute without replacing the list', () => {
+    // Replacing the list to fix its start maps every position inside it to the
+    // boundary, taking the provenance in its items with it.
+    const ed = open('1. The AI wrote this.\n2. And this.');
+    record(ed, span(ed, 'The AI wrote this.'));
+    const list = ed.view.state.doc.firstChild!;
+    ed.view.dispatch(ed.view.state.tr.setNodeMarkup(0, undefined, { ...list.attrs, order: 999999999 }));
+
+    expect(ed.getMarkdown()).toBe('999999998. The AI wrote this.\n999999999. And this.');
+    const [survived] = provenanceSpans(ed.view.state);
+    expect(survived, 'the span was destroyed by an attribute clamp').toBeDefined();
+    expect(provenanceText(ed.view.state.doc, survived)).toBe('The AI wrote this.');
+  });
+});

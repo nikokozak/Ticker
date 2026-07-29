@@ -504,3 +504,34 @@ describe('a save whose reply is delayed past an append', () => {
     expect(editor.getMarkdown()).toBe('xstart\n\nappended'); // nothing lost
   });
 });
+
+describe('reporting whether the document is actually stored', () => {
+  it('says so when the write failed', async () => {
+    // Acknowledging a flush that did not save means the host closes the window or
+    // quits, throwing away the only copy of what was typed.
+    const h = open('start');
+    h.failNextSave();
+    type(h.ed, 'x');
+    expect(await h.session.saveNow()).toBe(false);
+  });
+
+  it('says so when the write succeeded', async () => {
+    const h = open('start');
+    type(h.ed, 'x');
+    expect(await h.session.saveNow()).toBe(true);
+  });
+
+  it('reports success when there was nothing to write', async () => {
+    const h = open('start');
+    expect(await h.session.saveNow()).toBe(true);
+    expect(await h.session.destroy()).toBe(true);
+  });
+
+  it('reports failure from destroy, so leaving the page can warn', async () => {
+    const h = open('start');
+    h.failNextSave();
+    type(h.ed, 'x');
+    expect(await h.session.destroy()).toBe(false);
+    expect(h.ed.getMarkdown()).toBe('xstart'); // still there to recover
+  });
+});
