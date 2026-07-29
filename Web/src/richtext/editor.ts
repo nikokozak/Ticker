@@ -14,6 +14,7 @@ import {
   toggleUnderline,
 } from './commands';
 import { parseMarkdown, serializeMarkdown } from './markdown';
+import { aiWritingHighlight } from './operations';
 import { normalizeForMarkdown } from './normalize';
 import { tickerSchema } from './schema';
 
@@ -94,7 +95,10 @@ function linkAt(state: EditorState, pos: number): string | null {
 
 function stateFor(doc: ProseNode): EditorState {
   // Order matters: our keymap gets first refusal, then the stock bindings.
-  return EditorState.create({ doc, plugins: [history(), tickerKeymap(), keymap(baseKeymap)] });
+  return EditorState.create({
+    doc,
+    plugins: [history(), tickerKeymap(), keymap(baseKeymap), aiWritingHighlight()],
+  });
 }
 
 export function createRichTextEditor(options: RichTextEditorOptions): RichTextEditor {

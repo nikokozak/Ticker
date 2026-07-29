@@ -1,0 +1,193 @@
+// @vitest-environment jsdom
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { TextSelection } from 'prosemirror-state';
+import { createRichTextEditor, type RichTextEditor } from './editor';
+import { aiWritingRange, applyAIMarkdown, focusAtEnd, insertImage, selectText, setImageWidth } from './operations';
+
+/**
+ * ProseMirror measures the DOM to scroll a selection into view, and jsdom
+ * implements no layout. Empty rectangles are enough: the tests assert document
+ * state, and the measurement only has to not throw.
+ */
+beforeAll(() => {
+  const empty = () => ({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) });
+  const none = () => Object.assign([] as unknown[], { item: () => null });
+  for (const proto of [Range.prototype, Element.prototype, Text.prototype] as Array<{ getClientRects?: unknown; getBoundingClientRect?: unknown }>) {
+    proto.getClientRects ??= none;
+    proto.getBoundingClientRect ??= empty;
+  }
+});
+
+let editor: RichTextEditor | null = null;
+
+function open(markdown: string): RichTextEditor {
+  const parent = document.createElement('div');
+  document.body.appendChild(parent);
+  editor = createRichTextEditor({ parent, markdown });
+  return editor;
+}
+
+afterEach(() => {
+  editor?.destroy();
+  editor = null;
+  document.body.innerHTML = '';
+});
+
+function find(ed: RichTextEditor, text: string): { from: number; to: number } {
+  let at = -1;
+  ed.view.state.doc.descendants((node, pos) => {
+    if (at < 0 && node.isText && node.text?.includes(text)) at = pos + node.text.indexOf(text);
+  });
+  if (at < 0) throw new Error(`no ${JSON.stringify(text)}`);
+  return { from: at, to: at + text.length };
+}
+
+function undo(ed: RichTextEditor): void {
+  const event = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true });
+  ed.view.someProp('handleKeyDown', (handler) => handler(ed.view, event));
+}
+
+describe('applying what the AI wrote', () => {
+  it('rewrites a sentence inline rather than making it its own block', () => {
+    const ed = open('One sentence. Second sentence. Third.');
+    applyAIMarkdown(ed.view, find(ed, 'Second sentence.'), 'A rewritten sentence.');
+    expect(ed.getMarkdown()).toBe('One sentence. A rewritten sentence. Third.');
+    expect(ed.view.state.doc.childCount).toBe(1);
+  });
+
+  it('keeps the formatting the AI asked for', () => {
+    const ed = open('Replace this.');
+    applyAIMarkdown(ed.view, find(ed, 'Replace this.'), 'Now **bold** and [linked](https://x.test).');
+    expect(ed.getMarkdown()).toBe('Now **bold** and [linked](https://x.test).');
+  });
+
+  it('inserts whole blocks when the AI produced them', () => {
+    const ed = open('Before.\n\nReplace me.\n\nAfter.');
+    applyAIMarkdown(ed.view, find(ed, 'Replace me.'), '## A heading\n\nAnd a paragraph.');
+    expect(ed.getMarkdown()).toBe('Before.\n\n## A heading\n\nAnd a paragraph.\n\nAfter.');
+  });
+
+  it('is exactly ONE undo step', () => {
+    // The property the old editor kept losing: an operation assembled from several
+    // dispatches takes several undos to remove, which reads as a broken undo.
+    const ed = open('One sentence. Second sentence. Third.');
+    const before = ed.getMarkdown();
+    applyAIMarkdown(ed.view, find(ed, 'Second sentence.'), 'A **much** longer rewritten sentence, with formatting.');
+    expect(ed.getMarkdown()).not.toBe(before);
+    undo(ed);
+    expect(ed.getMarkdown()).toBe(before);
+  });
+
+  it('reports the range it wrote, and highlights it', () => {
+    const ed = open('One. Two. Three.');
+    const range = applyAIMarkdown(ed.view, find(ed, 'Two.'), 'A longer replacement.');
+    expect(ed.view.state.doc.textBetween(range.from, range.to)).toBe('A longer replacement.');
+    expect(aiWritingRange(ed.view.state)).toEqual(range);
+  });
+
+  it('the highlight follows the text when the user edits before it', () => {
+    // The reported bug: "highlighting for the AI generated areas is broken in areas
+    // where I have modified it". ProseMirror maps the range; the old code did not.
+    const ed = open('One. Two. Three.');
+    const range = applyAIMarkdown(ed.view, find(ed, 'Two.'), 'AI text.');
+    ed.view.dispatch(ed.view.state.tr.insertText('XXXX', 1));
+    const moved = aiWritingRange(ed.view.state);
+    expect(moved).toEqual({ from: range.from + 4, to: range.to + 4 });
+    expect(ed.view.state.doc.textBetween(moved!.from, moved!.to)).toBe('AI text.');
+  });
+
+  it('the highlight grows with text typed inside it', () => {
+    const ed = open('One. Two. Three.');
+    const range = applyAIMarkdown(ed.view, find(ed, 'Two.'), 'AI text.');
+    ed.view.dispatch(ed.view.state.tr.insertText('!', range.from + 2));
+    const grown = aiWritingRange(ed.view.state)!;
+    expect(ed.view.state.doc.textBetween(grown.from, grown.to)).toBe('AI! text.');
+  });
+
+  it('clears when a new range replaces it', () => {
+    const ed = open('One. Two. Three.');
+    applyAIMarkdown(ed.view, find(ed, 'Two.'), 'First AI text.');
+    const second = applyAIMarkdown(ed.view, find(ed, 'Three.'), 'Second AI text.');
+    expect(aiWritingRange(ed.view.state)).toEqual(second);
+  });
+
+  it('never writes the highlight into the document', () => {
+    const ed = open('One. Two. Three.');
+    applyAIMarkdown(ed.view, find(ed, 'Two.'), 'AI text.');
+    expect(ed.getMarkdown()).toBe('One. AI text. Three.');
+    expect(ed.getMarkdown()).not.toMatch(/richtext-ai-written|<span/);
+  });
+});
+
+describe('images', () => {
+  it('inserts one at the cursor with no width token in the text', () => {
+    const ed = open('before');
+    focusAtEnd(ed.view);
+    insertImage(ed.view, { src: 'ticker-asset://s/a.png', alt: 'shot' });
+    expect(ed.getMarkdown()).toBe('before![shot](ticker-asset://s/a.png)');
+    expect(ed.view.state.doc.textContent).toBe('before');
+  });
+
+  it('resizes one already in the document, in a single step', () => {
+    const ed = open('![shot](ticker-asset://s/a.png)');
+    const pos = ed.view.state.doc.content.size - 2;
+    setImageWidth(ed.view, pos, 300);
+    expect(ed.getMarkdown()).toBe('![shot](ticker-asset://s/a.png){width=300}');
+    undo(ed);
+    expect(ed.getMarkdown()).toBe('![shot](ticker-asset://s/a.png)');
+  });
+
+  it('refuses a width on an image that is not a ticker asset', () => {
+    const ed = open('x');
+    expect(() => insertImage(ed.view, { src: 'https://example.test/a.png', width: 300 })).toThrow();
+  });
+
+  it('ignores a width outside the range the UI can produce', () => {
+    const ed = open('![shot](ticker-asset://s/a.png)');
+    const pos = ed.view.state.doc.content.size - 2;
+    setImageWidth(ed.view, pos, 5000);
+    expect(ed.getMarkdown()).toBe('![shot](ticker-asset://s/a.png)');
+  });
+});
+
+describe('finding text', () => {
+  it('selects a hit and puts the cursor on it', () => {
+    const ed = open('first paragraph\n\nsecond paragraph with a needle in it');
+    expect(selectText(ed.view, 'needle')).toBe(true);
+    const { from, to } = ed.view.state.selection;
+    expect(ed.view.state.doc.textBetween(from, to)).toBe('needle');
+  });
+
+  it('searches the document, not the markdown', () => {
+    // "bold" must be findable inside **bold**, and a search for '**' must fail,
+    // because the markers are not in the document at all.
+    const ed = open('a **bold** word');
+    expect(selectText(ed.view, 'bold')).toBe(true);
+    expect(selectText(ed.view, '**')).toBe(false);
+  });
+
+  it('is not thrown off by syntax sitting between words', () => {
+    const ed = open('the *quick* brown fox');
+    // In the markdown these words are separated by asterisks; in the document
+    // they are not, but they are still in separate text nodes.
+    expect(selectText(ed.view, 'quick')).toBe(true);
+    expect(selectText(ed.view, 'brown fox')).toBe(true);
+  });
+
+  it('reports a miss instead of moving the cursor', () => {
+    const ed = open('some text');
+    ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(ed.view.state.doc, 3)));
+    expect(selectText(ed.view, 'absent')).toBe(false);
+    expect(ed.view.state.selection.from).toBe(3);
+  });
+});
+
+describe('focusing at the end', () => {
+  it('puts the cursor after the last character', () => {
+    const ed = open('one\n\ntwo');
+    focusAtEnd(ed.view);
+    expect(ed.view.state.selection.empty).toBe(true);
+    // Inside the last paragraph, not after it.
+    expect(ed.view.state.selection.from).toBe(ed.view.state.doc.content.size - 1);
+  });
+});

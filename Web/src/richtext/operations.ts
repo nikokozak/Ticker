@@ -1,0 +1,161 @@
+import { Plugin, PluginKey, Selection, TextSelection, type EditorState, type Transaction } from 'prosemirror-state';
+import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
+import { Fragment, Slice, type Node as ProseNode } from 'prosemirror-model';
+import { parseMarkdown } from './markdown';
+import { ASSET_URL_PREFIX, isValidImageWidth, tickerSchema } from './schema';
+
+/**
+ * The operations the app performs ON the editor — AI writing, image insertion,
+ * scrolling to a search hit. They live here rather than in the component so the
+ * component is left with wiring, and so each one has a test.
+ *
+ * The rule they all obey: one user-visible action is ONE transaction, so it is one
+ * undo step. The old editor lost this repeatedly, because an operation assembled
+ * from several dispatches is several undos.
+ */
+
+/* AI writing ------------------------------------------------------------ */
+
+const aiWritingKey = new PluginKey<DecorationSet>('tickerAIWriting');
+
+/** Mark a range as AI-written; passing null clears the highlight. */
+export const setAIWritingRange = (tr: Transaction, range: { from: number; to: number } | null): Transaction =>
+  tr.setMeta(aiWritingKey, range);
+
+/**
+ * Highlights what the AI just wrote. A DECORATION rather than a mark, deliberately:
+ * it must not be part of the document, or it would serialise into the markdown and
+ * become the very thing this rewrite removes — invisible state the user can edit.
+ *
+ * ProseMirror maps the range through every later transaction, so typing inside the
+ * highlight shrinks or splits it correctly. The old editor's version reported the
+ * wrong range after edits because it tracked offsets by hand.
+ */
+export function aiWritingHighlight(): Plugin<DecorationSet> {
+  return new Plugin<DecorationSet>({
+    key: aiWritingKey,
+    state: {
+      init: () => DecorationSet.empty,
+      apply(tr, current) {
+        const meta = tr.getMeta(aiWritingKey) as { from: number; to: number } | null | undefined;
+        if (meta === null) return DecorationSet.empty;
+        if (meta) {
+          return DecorationSet.create(tr.doc, [
+            Decoration.inline(meta.from, meta.to, { class: 'richtext-ai-written' }),
+          ]);
+        }
+        return current.map(tr.mapping, tr.doc);
+      },
+    },
+    props: {
+      decorations: (state) => aiWritingKey.getState(state),
+    },
+  });
+}
+
+/** The range currently highlighted as AI-written, if any. */
+export function aiWritingRange(state: EditorState): { from: number; to: number } | null {
+  const set = aiWritingKey.getState(state);
+  const found = set?.find();
+  return found?.length ? { from: found[0].from, to: found[0].to } : null;
+}
+
+/**
+ * Replace a range with markdown the AI produced, as ONE undo step, and highlight
+ * what landed. Returns the inserted range so a caller can scroll to it.
+ *
+ * Inline when the AI produced a single paragraph and the target sits inside one —
+ * rewriting a sentence must not turn it into its own block. Otherwise the blocks go
+ * in whole.
+ */
+export function applyAIMarkdown(
+  view: EditorView,
+  range: { from: number; to: number },
+  markdown: string,
+): { from: number; to: number } {
+  const parsed = parseMarkdown(markdown);
+  const inline = parsed.childCount === 1
+    && parsed.firstChild?.type === tickerSchema.nodes.paragraph
+    && view.state.doc.resolve(range.from).parent.isTextblock;
+
+  const content = inline ? parsed.firstChild!.content : parsed.content;
+  const slice = new Slice(Fragment.from(content), 0, 0);
+
+  const tr = view.state.tr.replaceRange(range.from, range.to, slice);
+  const to = tr.mapping.map(range.to, 1);
+  setAIWritingRange(tr, { from: range.from, to });
+  view.dispatch(tr.scrollIntoView());
+  return { from: range.from, to };
+}
+
+/* Images ---------------------------------------------------------------- */
+
+/**
+ * Insert an image at the cursor as one step. The width is an attribute, so there is
+ * no `{width=N}` text beside it for a cursor to land in — that token only ever
+ * exists in the stored markdown.
+ */
+export function insertImage(
+  view: EditorView,
+  attrs: { src: string; alt?: string | null; width?: number | null },
+): void {
+  if (attrs.width != null && (!isValidImageWidth(attrs.width) || !attrs.src.startsWith(ASSET_URL_PREFIX))) {
+    throw new Error('Only ticker-asset images may carry a valid width.');
+  }
+  const image = tickerSchema.nodes.image.create({
+    src: attrs.src,
+    alt: attrs.alt ?? null,
+    title: null,
+    width: attrs.width ?? null,
+  });
+  view.dispatch(view.state.tr.replaceSelectionWith(image).scrollIntoView());
+}
+
+/** Resize an image already in the document, as one step. */
+export function setImageWidth(view: EditorView, pos: number, width: number | null): void {
+  const node = view.state.doc.nodeAt(pos);
+  if (node?.type !== tickerSchema.nodes.image) return;
+  if (width != null && !isValidImageWidth(width)) return;
+  view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, width }));
+}
+
+/* Finding text ---------------------------------------------------------- */
+
+/**
+ * Select the first occurrence of some text and scroll to it — what arriving from a
+ * search result does.
+ *
+ * It searches the DOCUMENT's text, not the markdown, which is the point: a hit for
+ * "bold" must not be found inside a `**` the user cannot see, and a match must not
+ * be thrown off by syntax sitting between two words.
+ */
+export function selectText(view: EditorView, needle: string): boolean {
+  if (!needle) return false;
+  const target = needle.toLowerCase();
+
+  let found: { from: number; to: number } | null = null;
+  view.state.doc.descendants((node: ProseNode, pos: number) => {
+    if (found || !node.isText || !node.text) return true;
+    const index = node.text.toLowerCase().indexOf(target);
+    if (index >= 0) found = { from: pos + index, to: pos + index + needle.length };
+    return !found;
+  });
+  if (!found) return false;
+
+  const { from, to } = found;
+  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to)).scrollIntoView());
+  view.focus();
+  return true;
+}
+
+/**
+ * Put the cursor at the end of the document — what clicking below the text does.
+ *
+ * Selection.atEnd, not position doc.content.size: that position is AFTER the last
+ * paragraph rather than inside it, so anything inserted there became its own block
+ * instead of continuing the last line.
+ */
+export function focusAtEnd(view: EditorView): void {
+  view.dispatch(view.state.tr.setSelection(Selection.atEnd(view.state.doc)).scrollIntoView());
+  view.focus();
+}

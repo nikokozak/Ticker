@@ -165,3 +165,16 @@
 .richtext-editor .ProseMirror-hideselection *::selection {
   background: transparent;
 }
+
+/* AI --------------------------------------------------------------------- */
+
+/*
+ * What the AI just wrote. A decoration, not a mark: it must never be part of the
+ * document, or it would serialise into the markdown and become exactly the kind of
+ * invisible state this rewrite exists to remove.
+ */
+.richtext-editor .ProseMirror .richtext-ai-written {
+  background: var(--color-accent-soft);
+  border-radius: var(--radius-small);
+  box-decoration-break: clone;
+}
