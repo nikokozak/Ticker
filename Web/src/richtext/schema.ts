@@ -1,8 +1,9 @@
-import { Schema, type MarkSpec, type NodeSpec } from 'prosemirror-model';
+import { Schema, type DOMOutputSpec, type MarkSpec, type NodeSpec } from 'prosemirror-model';
+import { schema as base } from 'prosemirror-markdown';
 
 /**
- * Ticker's document model: stock ProseMirror CommonMark plus exactly three
- * extensions, each forced by a measurement rather than a guess.
+ * Ticker's document model: prosemirror-markdown's CommonMark schema plus exactly
+ * three extensions, each forced by a measurement rather than a guess.
  *
  *   soft_break   a single newline inside a paragraph is a markdown soft break and
  *                otherwise arrives as a SPACE, silently turning an authored line
@@ -20,6 +21,13 @@ import { Schema, type MarkSpec, type NodeSpec } from 'prosemirror-model';
  * `ticker-pdf://` href — no citation node, no link subtype. Provenance spans and
  * margin notes stay external metadata and never become marks or nodes.
  *
+ * ponytail: extended rather than hand-copied. The copy had drifted from the
+ * original in five places that only bite at the view layer — code_block dropped
+ * its info string, ordered_list dropped `start`, list tightness was never emitted,
+ * image dropped its width — because ProseMirror's internal clipboard round-trips
+ * through the DOM, so a missing parseDOM attribute is silent data loss on copy.
+ * Deriving keeps those rules correct by construction.
+ *
  * ponytail: no raw_block node for unsupported syntax. Measured: with markdown-it's
  * table rule off, `| a | b |` parses to text + soft_break + text and round-trips
  * byte-exact, so nothing is lost or refused already. A raw_block would buy only a
@@ -27,163 +35,6 @@ import { Schema, type MarkSpec, type NodeSpec } from 'prosemirror-model';
  * pipe-soup inline in prose is a real annoyance — capture a paragraph whose every
  * line matches a table row.
  */
-
-const nodes: Record<string, NodeSpec> = {
-  doc: { content: 'block+' },
-
-  paragraph: {
-    content: 'inline*',
-    group: 'block',
-    parseDOM: [{ tag: 'p' }],
-    toDOM: () => ['p', 0],
-  },
-
-  blockquote: {
-    content: 'block+',
-    group: 'block',
-    parseDOM: [{ tag: 'blockquote' }],
-    toDOM: () => ['blockquote', 0],
-  },
-
-  horizontal_rule: {
-    group: 'block',
-    parseDOM: [{ tag: 'hr' }],
-    toDOM: () => ['hr'],
-  },
-
-  heading: {
-    attrs: { level: { default: 1 } },
-    content: '(text | image)*',
-    group: 'block',
-    defining: true,
-    parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({ tag: `h${level}`, attrs: { level } })),
-    toDOM: (node) => [`h${node.attrs.level}`, 0],
-  },
-
-  code_block: {
-    attrs: { params: { default: '' } },
-    content: 'text*',
-    marks: '',
-    group: 'block',
-    code: true,
-    defining: true,
-    parseDOM: [{ tag: 'pre', preserveWhitespace: 'full' }],
-    toDOM: () => ['pre', ['code', 0]],
-  },
-
-  ordered_list: {
-    attrs: { order: { default: 1 }, tight: { default: false } },
-    content: 'list_item+',
-    group: 'block',
-    parseDOM: [{ tag: 'ol' }],
-    toDOM: (node) => ['ol', { start: node.attrs.order === 1 ? null : node.attrs.order }, 0],
-  },
-
-  bullet_list: {
-    attrs: { tight: { default: false } },
-    content: 'list_item+',
-    group: 'block',
-    parseDOM: [{ tag: 'ul' }],
-    toDOM: () => ['ul', 0],
-  },
-
-  list_item: {
-    content: 'block+',
-    defining: true,
-    parseDOM: [{ tag: 'li' }],
-    toDOM: () => ['li', 0],
-  },
-
-  text: { group: 'inline' },
-
-  image: {
-    inline: true,
-    attrs: {
-      src: {},
-      alt: { default: null },
-      title: { default: null },
-      // Only ever set for ticker-asset:// images; see markdown.ts for validation.
-      width: { default: null },
-    },
-    group: 'inline',
-    draggable: true,
-    parseDOM: [{
-      tag: 'img[src]',
-      getAttrs: (dom) => ({
-        src: (dom as HTMLElement).getAttribute('src'),
-        alt: (dom as HTMLElement).getAttribute('alt'),
-        title: (dom as HTMLElement).getAttribute('title'),
-      }),
-    }],
-    toDOM: (node) => ['img', {
-      src: node.attrs.src,
-      alt: node.attrs.alt,
-      title: node.attrs.title,
-      width: node.attrs.width,
-    }],
-  },
-
-  /** An explicit markdown hard break (`\` or two trailing spaces). */
-  hard_break: {
-    inline: true,
-    group: 'inline',
-    selectable: false,
-    parseDOM: [{ tag: 'br' }],
-    toDOM: () => ['br'],
-  },
-
-  /**
-   * A newline the author typed inside a paragraph. Distinct from hard_break so the
-   * serializer can put back exactly what was there: one literal newline.
-   */
-  soft_break: {
-    inline: true,
-    group: 'inline',
-    selectable: false,
-    parseDOM: [{ tag: 'br[data-soft-break]' }],
-    toDOM: () => ['br', { 'data-soft-break': 'true' }],
-  },
-};
-
-// Order matters: it fixes canonical nesting, with underline outermost and code
-// innermost, so serialisation is deterministic.
-const marks: Record<string, MarkSpec> = {
-  underline: {
-    parseDOM: [{ tag: 'u' }],
-    toDOM: () => ['u', 0],
-  },
-
-  em: {
-    parseDOM: [{ tag: 'i' }, { tag: 'em' }, { style: 'font-style=italic' }],
-    toDOM: () => ['em', 0],
-  },
-
-  strong: {
-    parseDOM: [{ tag: 'b' }, { tag: 'strong' }],
-    toDOM: () => ['strong', 0],
-  },
-
-  link: {
-    attrs: { href: {}, title: { default: null } },
-    inclusive: false,
-    parseDOM: [{
-      tag: 'a[href]',
-      getAttrs: (dom) => ({
-        href: (dom as HTMLElement).getAttribute('href'),
-        title: (dom as HTMLElement).getAttribute('title'),
-      }),
-    }],
-    toDOM: (mark) => ['a', mark.attrs, 0],
-  },
-
-  code: {
-    code: true,
-    parseDOM: [{ tag: 'code' }],
-    toDOM: () => ['code', 0],
-  },
-};
-
-export const tickerSchema = new Schema({ nodes, marks });
 
 /** Widths are clamped by the image UI; anything outside this is a malformed document. */
 export const MIN_IMAGE_WIDTH = 120;
@@ -193,3 +44,58 @@ export const ASSET_URL_PREFIX = 'ticker-asset://';
 export function isValidImageWidth(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= MIN_IMAGE_WIDTH && (value as number) <= MAX_IMAGE_WIDTH;
 }
+
+/**
+ * Only ticker's own assets carry a width. A pasted `<img width=1200>` from a web
+ * page must not smuggle one in, so the source is checked alongside the number.
+ */
+function readWidth(dom: HTMLElement): number | null {
+  if (!(dom.getAttribute('src') ?? '').startsWith(ASSET_URL_PREFIX)) return null;
+  const width = Number(dom.getAttribute('width'));
+  return isValidImageWidth(width) ? width : null;
+}
+
+const image: NodeSpec = {
+  ...base.spec.nodes.get('image'),
+  attrs: { src: {}, alt: { default: null }, title: { default: null }, width: { default: null } },
+  parseDOM: [{
+    tag: 'img[src]',
+    getAttrs: (dom: HTMLElement) => ({
+      src: dom.getAttribute('src'),
+      title: dom.getAttribute('title'),
+      alt: dom.getAttribute('alt'),
+      width: readWidth(dom),
+    }),
+  }],
+  // Stock spreads node.attrs; `width` is a real <img> attribute, so it renders too.
+  toDOM: (node): DOMOutputSpec => ['img', node.attrs],
+};
+
+/**
+ * A newline the author typed inside a paragraph. Distinct from hard_break so the
+ * serializer can put back exactly what was there: one literal newline.
+ *
+ * The priority is load-bearing. Both break nodes serialise to `<br>`, and the
+ * stock `hard_break` rule matches ANY `br`, so at equal priority the schema order
+ * decides — and hard_break is first. Copying a soft break inside the editor would
+ * paste a hard break.
+ */
+const softBreak: NodeSpec = {
+  inline: true,
+  group: 'inline',
+  selectable: false,
+  parseDOM: [{ tag: 'br[data-soft-break]', priority: 60 }],
+  toDOM: (): DOMOutputSpec => ['br', { 'data-soft-break': 'true' }],
+};
+
+const underline: MarkSpec = {
+  parseDOM: [{ tag: 'u' }, { style: 'text-decoration=underline' }],
+  toDOM: (): DOMOutputSpec => ['u', 0],
+};
+
+export const tickerSchema = new Schema({
+  nodes: base.spec.nodes.update('image', image).addToEnd('soft_break', softBreak),
+  // Before `em` so underline is the outermost mark, which fixes one canonical
+  // nesting and keeps serialisation deterministic.
+  marks: base.spec.marks.addBefore('em', 'underline', underline),
+});
