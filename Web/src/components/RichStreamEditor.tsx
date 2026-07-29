@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Slice } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
-import { bridge, type StreamDocumentConflictPayload } from '../types/bridge';
+import {
+  bridge,
+  type DocumentAIVerb,
+  type StreamDocumentConflictPayload,
+} from '../types/bridge';
 import type { Stream } from '../types/models';
+import { Modal } from './Modal';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import {
   aiWritingRange,
   insertImage,
+  selectText,
   setAIWritingRange,
   streamAIMarkdown,
 } from '../richtext/operations';
@@ -50,6 +56,8 @@ interface RichStreamEditorProps {
   stream: Stream;
   onBack: () => void;
   onDelete: () => void;
+  pendingMatchText?: string | null;
+  onClearPendingMatch?: () => void;
 }
 
 const PDF_URL_PREFIX = 'ticker-pdf://';
@@ -72,7 +80,7 @@ interface ActiveDocumentAI {
   editor: RichTextEditor;
   original: Slice;
   stream: ReturnType<typeof streamAIMarkdown>;
-  verb: 'develop';
+  verb: Exclude<DocumentAIVerb, 'challenge'>;
   model?: string;
 }
 
@@ -107,7 +115,13 @@ const SAVE_LABEL: Record<SaveState, string> = {
   error: 'Save failed',
 };
 
-export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorProps) {
+export function RichStreamEditor({
+  stream,
+  onBack,
+  onDelete,
+  pendingMatchText,
+  onClearPendingMatch,
+}: RichStreamEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditor | null>(null);
   const sessionRef = useRef<DocumentSession | null>(null);
@@ -118,6 +132,8 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [aiRunning, setAIRunning] = useState(false);
   const [aiDetail, setAIDetail] = useState<string | null>(null);
+  const [promptVerb, setPromptVerb] = useState<'ask' | 'rewrite' | null>(null);
+  const [promptValue, setPromptValue] = useState('');
   const [leaving, setLeaving] = useState(false);
   const deleting = useRef(false);
   const [xray, setXray] = useState(false);
@@ -307,12 +323,16 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       }
     };
     const paste = (event: ClipboardEvent) => {
-      if (Array.from(event.clipboardData?.types ?? []).some((type) => type.startsWith('text/'))) return;
       const file = Array.from(event.clipboardData?.items ?? [])
         .find((item) => item.type.startsWith('image/'))?.getAsFile();
       if (!file) return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      const text = event.clipboardData?.getData('text/plain') ?? '';
+      if (text.trim()) {
+        editor.view.pasteText(text, event);
+        return;
+      }
       void insertFile(file);
     };
     const drop = (event: DragEvent) => {
@@ -340,7 +360,16 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     };
   }, [addToast, editor, saveImageToAssets]);
 
-  const startDocumentAI = useCallback(async () => {
+  useEffect(() => {
+    if (!editor || !pendingMatchText) return;
+    selectText(editor.view, pendingMatchText);
+    onClearPendingMatch?.();
+  }, [editor, onClearPendingMatch, pendingMatchText]);
+
+  const startDocumentAI = useCallback(async (
+    verb: Exclude<DocumentAIVerb, 'challenge'> = 'develop',
+    instruction?: string,
+  ) => {
     const currentEditor = editorRef.current;
     const session = sessionRef.current;
     if (!currentEditor || !session || aiInFlightRef.current) return;
@@ -367,13 +396,20 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       return;
     }
 
+    let range = { from: target.from, to: target.to };
+    if (verb === 'ask' || verb === 'define') {
+      const $to = currentEditor.view.state.doc.resolve(target.to);
+      const at = $to.depth ? $to.after() : target.to;
+      range = { from: at, to: at };
+    }
+
     const requestId = crypto.randomUUID();
     aiRequestRef.current = {
       requestId,
       editor: currentEditor,
-      original: currentEditor.view.state.doc.slice(target.from, target.to),
-      stream: streamAIMarkdown(currentEditor.view, target),
-      verb: 'develop',
+      original: currentEditor.view.state.doc.slice(range.from, range.to),
+      stream: streamAIMarkdown(currentEditor.view, range),
+      verb,
     };
     setAIRunning(true);
     setAIDetail('AI is writing');
@@ -384,14 +420,37 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       payload: {
         requestId,
         streamId: stream.id,
-        query: target.text,
-        context: undefined,
+        query: instruction ?? target.text,
+        context: instruction ? target.text : undefined,
         sourceScope: stream.sourceScope ?? 'auto',
-        verb: 'develop',
+        verb,
         imageURLs: [],
       },
     });
   }, [addToast, stream.id, stream.sourceScope]);
+
+  const openDocumentAIPrompt = useCallback((verb: 'ask' | 'rewrite') => {
+    const currentEditor = editorRef.current;
+    if (!currentEditor || !documentAITarget(currentEditor)) {
+      addToast('Select text or place the cursor in a paragraph to use as context.', 'info');
+      return;
+    }
+    setPromptValue('');
+    setPromptVerb(verb);
+  }, [addToast]);
+
+  const closeDocumentAIPrompt = useCallback(() => {
+    setPromptVerb(null);
+    setPromptValue('');
+  }, []);
+
+  const sendDocumentAIPrompt = useCallback(() => {
+    const instruction = promptValue.trim();
+    if (!promptVerb || !instruction) return;
+    const verb = promptVerb;
+    closeDocumentAIPrompt();
+    void startDocumentAI(verb, instruction);
+  }, [closeDocumentAIPrompt, promptValue, promptVerb, startDocumentAI]);
 
   /**
    * Leaving is not a render, it is a write that can fail.
@@ -652,17 +711,107 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
         </div>
       </header>
 
+      {promptVerb && (
+        <Modal
+          className="ai-prompt-dialog"
+          aria-labelledby="richtext-ai-prompt-title"
+          onRequestClose={closeDocumentAIPrompt}
+        >
+          <h2 id="richtext-ai-prompt-title">
+            {promptVerb === 'rewrite' ? 'Rewrite' : 'Send & Prompt'}
+          </h2>
+          <p>The selected text will be attached as context.</p>
+          <textarea
+            className="ai-prompt-input"
+            value={promptValue}
+            onChange={(event) => setPromptValue(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                event.preventDefault();
+                sendDocumentAIPrompt();
+              } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closeDocumentAIPrompt();
+              }
+            }}
+            placeholder={promptVerb === 'rewrite'
+              ? 'How should this be rewritten?'
+              : 'Ask a question or give an instruction…'}
+            autoFocus
+            rows={5}
+          />
+          <div className="ai-prompt-actions">
+            <button
+              className="ai-prompt-cancel"
+              type="button"
+              onClick={closeDocumentAIPrompt}
+            >
+              Cancel
+            </button>
+            <button
+              className="ai-prompt-send"
+              type="button"
+              aria-label="Send prompt to AI"
+              onClick={sendDocumentAIPrompt}
+              disabled={!promptValue.trim()}
+            >
+              Send
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {formats && (
         <div className="stream-format-bar">
           <button
             type="button"
             className="selection-action-button selection-action-button--text selection-action-button--ai"
-            aria-label={aiRunning ? 'Stop document AI' : 'Develop with AI'}
-            title={aiDetail ?? 'Develop the selection or current paragraph with AI'}
+            aria-label={aiRunning ? 'Stop document AI' : 'Send to AI'}
+            title={aiDetail ?? 'Send the selection or current paragraph to AI'}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => { if (aiRunning) cancelDocumentAI(); else void startDocumentAI(); }}
           >
-            {aiRunning ? 'Stop AI' : 'AI'}
+            {aiRunning ? 'Stop AI' : 'Send'}
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
+            aria-label="Send and prompt AI"
+            disabled={aiRunning}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => openDocumentAIPrompt('ask')}
+          >
+            Send &amp; Prompt
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
+            aria-label="Ask with AI"
+            disabled={aiRunning}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => { void startDocumentAI('ask'); }}
+          >
+            Ask
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
+            aria-label="Define with AI"
+            disabled={aiRunning}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => { void startDocumentAI('define'); }}
+          >
+            Define
+          </button>
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
+            aria-label="Rewrite with AI"
+            disabled={aiRunning}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => openDocumentAIPrompt('rewrite')}
+          >
+            Rewrite…
           </button>
           {formatButton('B', formats.bold, toggleBold, 'Bold ⌘B')}
           {formatButton('I', formats.italic, toggleItalic, 'Italic ⌘I')}

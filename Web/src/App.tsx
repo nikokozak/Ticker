@@ -493,6 +493,8 @@ export function App() {
         stream={currentStream}
         onBack={handleBackToList}
         onDelete={handleDeleteStream}
+        pendingMatchText={pendingMatchText}
+        onClearPendingMatch={() => setPendingMatchText(null)}
       />
     ) : (
       <StreamEditor

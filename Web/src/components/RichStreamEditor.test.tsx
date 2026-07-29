@@ -18,6 +18,12 @@ beforeAll(() => {
     proto.getBoundingClientRect ??= empty;
   }
   document.elementFromPoint ??= () => null;
+  HTMLDialogElement.prototype.showModal ??= function showModal() {
+    this.setAttribute('open', '');
+  };
+  HTMLDialogElement.prototype.close ??= function close() {
+    this.removeAttribute('open');
+  };
 });
 
 const stream: Stream = {
@@ -55,6 +61,34 @@ async function click(label: string) {
   });
 }
 
+async function selectEditorText(text: string) {
+  const node = [...editor().querySelectorAll('*')]
+    .flatMap((element) => [...element.childNodes])
+    .find((candidate) => candidate.nodeType === Node.TEXT_NODE && candidate.textContent?.includes(text));
+  expect(node, `Expected ${JSON.stringify(text)} in the editor`).toBeDefined();
+  const range = document.createRange();
+  const start = node!.textContent!.indexOf(text);
+  range.setStart(node!, start);
+  range.setEnd(node!, start + text.length);
+  editor().focus();
+  window.getSelection()!.removeAllRanges();
+  window.getSelection()!.addRange(range);
+  await act(async () => {
+    document.dispatchEvent(new Event('selectionchange'));
+    await Promise.resolve();
+  });
+}
+
+async function enterPrompt(value: string) {
+  const input = document.querySelector('.ai-prompt-input') as HTMLTextAreaElement;
+  expect(input, 'Expected AI prompt input').toBeDefined();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await Promise.resolve();
+  });
+}
+
 function activeRequestId(): string {
   const messages = sent.filter((candidate) => candidate.type === 'thinkDocument');
   const message = messages[messages.length - 1];
@@ -70,18 +104,27 @@ function imageFile(): File {
   return new File(['pixels'], 'shot.png', { type: 'image/png' });
 }
 
-function clipboardEvent(file: File, text?: string): ClipboardEvent {
+function clipboardEvent(file: File, text?: string, html?: string): ClipboardEvent {
   const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
   const image = { kind: 'file', type: file.type, getAsFile: () => file };
-  const items = text === undefined
-    ? [image]
-    : [{ kind: 'string', type: 'text/plain', getAsFile: () => null }, image];
+  const items = [
+    ...(text === undefined ? [] : [{ kind: 'string', type: 'text/plain', getAsFile: () => null }]),
+    ...(html === undefined ? [] : [{ kind: 'string', type: 'text/html', getAsFile: () => null }]),
+    image,
+  ];
+  const types = [
+    ...(text === undefined ? [] : ['text/plain']),
+    ...(html === undefined ? [] : ['text/html']),
+    'Files',
+  ];
   Object.defineProperty(event, 'clipboardData', {
     value: {
       files: [file],
       items,
-      types: text === undefined ? ['Files'] : ['text/plain', 'Files'],
-      getData: (type: string) => (type === 'text/plain' ? text ?? '' : ''),
+      types,
+      getData: (type: string) => (
+        type === 'text/plain' ? text ?? '' : type === 'text/html' ? html ?? '' : ''
+      ),
     },
   });
   return event;
@@ -121,10 +164,19 @@ async function finishImageSave(message: WebToSwiftBridgeMessage, assetUrl = 'tic
   });
 }
 
-async function renderStream(next: Stream) {
+async function renderStream(next: Stream, options: {
+  pendingMatchText?: string | null;
+  onClearPendingMatch?: () => void;
+} = {}) {
   await act(async () => {
     root!.render(
-      <RichStreamEditor key={next.id} stream={next} onBack={() => {}} onDelete={() => {}} />,
+      <RichStreamEditor
+        key={next.id}
+        stream={next}
+        onBack={() => {}}
+        onDelete={() => {}}
+        {...options}
+      />,
     );
     await Promise.resolve();
   });
@@ -182,8 +234,154 @@ describe('an image save that lands after the editor is gone', () => {
 });
 
 describe('RichStreamEditor document AI', () => {
+  it('sends a prompt as the query and the selected text as context', async () => {
+    await selectEditorText('Original');
+    await click('Send and prompt AI');
+    await enterPrompt('Make it concrete.');
+    await click('Send prompt to AI');
+
+    const requestId = activeRequestId();
+    expect(lastSent()).toMatchObject({
+      type: 'thinkDocument',
+      payload: {
+        requestId,
+        streamId: 'stream-1',
+        query: 'Make it concrete.',
+        context: 'Original',
+        verb: 'ask',
+        imageURLs: [],
+      },
+    });
+
+    await act(async () => {
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'A reply.' } });
+      bridge.receive({ type: 'documentAIComplete', payload: { requestId } });
+    });
+    expect([...editor().querySelectorAll('p')].map((node) => node.textContent))
+      .toEqual(['Original paragraph.', 'A reply.']);
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editor().textContent).toBe('Original paragraph.');
+  });
+
+  it('does not send a blank prompt', async () => {
+    await click('Send and prompt AI');
+    await enterPrompt(' \n ');
+    const input = document.querySelector('.ai-prompt-input') as HTMLTextAreaElement;
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+
+    expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(0);
+    expect(document.querySelector('.ai-prompt-input')).not.toBe(null);
+  });
+
+  it('does not open a prompt without text to attach', async () => {
+    await renderStream({
+      ...stream,
+      id: 'empty-stream',
+      document: { ...stream.document, streamId: 'empty-stream', markdown: '' },
+    });
+    await click('Send and prompt AI');
+
+    expect(document.querySelector('.ai-prompt-input')).toBe(null);
+    expect(useToastStore.getState().toasts.map((toast) => toast.message))
+      .toEqual(['Select text or place the cursor in a paragraph to use as context.']);
+  });
+
+  it.each([
+    ['Ask with AI', 'ask'],
+    ['Define with AI', 'define'],
+  ] as const)('supports %s without replacing the passage', async (label, verb) => {
+    await click(label);
+    const requestId = activeRequestId();
+    expect(lastSent()).toMatchObject({
+      type: 'thinkDocument',
+      payload: {
+        query: 'Original paragraph.',
+        context: undefined,
+        verb,
+      },
+    });
+
+    await act(async () => {
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'A reply.' } });
+      bridge.receive({ type: 'documentAIComplete', payload: { requestId } });
+    });
+    expect([...editor().querySelectorAll('p')].map((node) => node.textContent))
+      .toEqual(['Original paragraph.', 'A reply.']);
+  });
+
+  it('can append a reply after the whole document is selected', async () => {
+    editor().focus();
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'a', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    await click('Ask with AI');
+
+    expect(lastSent()).toMatchObject({
+      type: 'thinkDocument',
+      payload: { query: 'Original paragraph.', verb: 'ask' },
+    });
+    await click('Stop document AI');
+  });
+
+  it.each(['cancel', 'error'] as const)('restores an appended reply on %s', async (exit) => {
+    await click('Ask with AI');
+    const requestId = activeRequestId();
+    await act(async () => {
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Partial.' } });
+    });
+
+    if (exit === 'cancel') {
+      await click('Stop document AI');
+    } else {
+      await act(async () => {
+        bridge.receive({
+          type: 'documentAIError',
+          payload: { requestId, error: 'Provider broke.', errorCode: 'upstream_error' },
+        });
+      });
+    }
+
+    expect([...editor().querySelectorAll('p')].map((node) => node.textContent))
+      .toEqual(['Original paragraph.']);
+    expect(editor().getAttribute('contenteditable')).toBe('true');
+  });
+
+  it('rewrites from a prompt and does not expose challenge', async () => {
+    expect(document.querySelector('[aria-label="Challenge with AI"]')).toBe(null);
+    await click('Rewrite with AI');
+    await enterPrompt('Make it shorter.');
+    await click('Send prompt to AI');
+
+    const requestId = activeRequestId();
+    expect(lastSent()).toMatchObject({
+      type: 'thinkDocument',
+      payload: {
+        query: 'Make it shorter.',
+        context: 'Original paragraph.',
+        verb: 'rewrite',
+      },
+    });
+    await act(async () => {
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Shorter.' } });
+      bridge.receive({ type: 'documentAIComplete', payload: { requestId } });
+    });
+    expect(editor().textContent).toBe('Shorter.');
+  });
+
   it('keeps a reply streamed in several chunks to one undo step', async () => {
-    await click('Develop with AI');
+    await click('Send to AI');
     const requestId = activeRequestId();
     expect(editor().getAttribute('contenteditable')).toBe('false');
     expect((document.querySelector('[aria-label="Stop document AI"]') as HTMLButtonElement).disabled)
@@ -223,7 +421,7 @@ describe('RichStreamEditor document AI', () => {
     // The AI answering with nothing usable must not cost the user the paragraph it
     // was asked about. Every chunk replaces the target range, so by the time the
     // reply turns out to be empty the original is already gone from the document.
-    await click('Develop with AI');
+    await click('Send to AI');
     const requestId = activeRequestId();
 
     await act(async () => {
@@ -238,7 +436,7 @@ describe('RichStreamEditor document AI', () => {
 
   it('stops highlighting once the reply has landed', async () => {
     // The highlight says "the AI is writing here". Left behind, it says it forever.
-    await click('Develop with AI');
+    await click('Send to AI');
     const requestId = activeRequestId();
 
     await act(async () => {
@@ -252,7 +450,7 @@ describe('RichStreamEditor document AI', () => {
   it('saves provenance over the reply text rather than its markdown', async () => {
     vi.useFakeTimers();
     try {
-      await click('Develop with AI');
+      await click('Send to AI');
       const requestId = activeRequestId();
 
       await act(async () => {
@@ -290,7 +488,7 @@ describe('RichStreamEditor document AI', () => {
   it('swaps citation markers inside the streamed reply undo', async () => {
     vi.useFakeTimers();
     try {
-      await click('Develop with AI');
+      await click('Send to AI');
       const requestId = activeRequestId();
 
       await act(async () => {
@@ -332,7 +530,7 @@ describe('RichStreamEditor document AI', () => {
     ['none', 'From model knowledge.'],
     ['unavailable', 'Source retrieval unavailable — answered from model knowledge.'],
   ] as const)('records %s source context below the reply', async (sourceContextMode, line) => {
-    await click('Develop with AI');
+    await click('Send to AI');
     const requestId = activeRequestId();
 
     await act(async () => {
@@ -354,7 +552,7 @@ describe('RichStreamEditor document AI', () => {
     // The lock is released by the stream's own done(). A path that cancels from
     // somewhere else and forgets it leaves the user unable to type at all, in the
     // one situation where they most need to — their work is unsaved.
-    await click('Develop with AI');
+    await click('Send to AI');
     const requestId = activeRequestId();
     await act(async () => {
       bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Half a re' } });
@@ -374,7 +572,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('ignores a chunk for a stale request', async () => {
-    await click('Develop with AI');
+    await click('Send to AI');
     const requestId = activeRequestId();
 
     await act(async () => {
@@ -406,7 +604,7 @@ describe('RichStreamEditor document AI', () => {
       payload: { requestId: 'selection-1', text: 'Original' },
     });
 
-    await click('Develop with AI');
+    await click('Send to AI');
     const messages = sent.filter((candidate) => candidate.type === 'thinkDocument');
     const message = messages[messages.length - 1];
     expect(message?.payload?.query).toBe('Original');
@@ -414,7 +612,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('cancels the host request and restores the original text', async () => {
-    await click('Develop with AI');
+    await click('Send to AI');
     const requestId = activeRequestId();
     expect(editor().getAttribute('contenteditable')).toBe('false');
     await act(async () => {
@@ -439,7 +637,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('reports a real error, while cancellation stays silent', async () => {
-    await click('Develop with AI');
+    await click('Send to AI');
     let requestId = activeRequestId();
     expect(editor().getAttribute('contenteditable')).toBe('false');
     await act(async () => {
@@ -455,7 +653,7 @@ describe('RichStreamEditor document AI', () => {
     expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual(['Provider broke.']);
 
     useToastStore.getState().clearToasts();
-    await click('Develop with AI');
+    await click('Send to AI');
     requestId = activeRequestId();
     expect(editor().getAttribute('contenteditable')).toBe('false');
     await act(async () => {
@@ -474,7 +672,7 @@ describe('RichStreamEditor document AI', () => {
   it('does not save a half-written stream', async () => {
     vi.useFakeTimers();
     try {
-      await click('Develop with AI');
+      await click('Send to AI');
       const requestId = activeRequestId();
       await act(async () => {
         bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Half ' } });
@@ -501,7 +699,7 @@ describe('RichStreamEditor document AI', () => {
     vi.spyOn(DocumentSession.prototype, 'saveNow').mockReturnValue(draining);
     vi.spyOn(DocumentSession.prototype, 'destroy').mockResolvedValue(true);
 
-    await click('Develop with AI');
+    await click('Send to AI');
     await act(async () => {
       (document.querySelector('.back-button') as HTMLButtonElement).click();
       release(true);
@@ -513,7 +711,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('reflects model and operation updates for only the active request', async () => {
-    await click('Develop with AI');
+    await click('Send to AI');
     const requestId = activeRequestId();
     await act(async () => {
       bridge.receive({
@@ -548,6 +746,35 @@ describe('RichStreamEditor document AI', () => {
 });
 
 describe('RichStreamEditor images', () => {
+  it('saves a browser-copied image even when its clipboard also carries HTML', async () => {
+    const event = clipboardEvent(
+      imageFile(),
+      undefined,
+      '<img src="https://example.test/remote.png">',
+    );
+    editor().dispatchEvent(event);
+    const save = await imageSaveMessage();
+
+    expect(event.defaultPrevented).toBe(true);
+    await finishImageSave(save);
+    expect(editor().querySelector('img')?.getAttribute('src'))
+      .toBe('ticker-asset://stream-1/shot.png');
+  });
+
+  it('treats whitespace-only plain text as an image paste', async () => {
+    const event = clipboardEvent(
+      imageFile(),
+      ' \n ',
+      '<img src="https://example.test/remote.png">',
+    );
+    editor().dispatchEvent(event);
+    const save = await imageSaveMessage();
+    await finishImageSave(save);
+
+    expect(editor().querySelector('img')?.getAttribute('src'))
+      .toBe('ticker-asset://stream-1/shot.png');
+  });
+
   it('pastes a saved image as one undo step using the bridge wire shape', async () => {
     const event = clipboardEvent(imageFile());
     editor().dispatchEvent(event);
@@ -600,7 +827,11 @@ describe('RichStreamEditor images', () => {
   });
 
   it('leaves a mixed text-and-image paste to the text clipboard path', async () => {
-    const event = clipboardEvent(imageFile(), 'copied words');
+    const event = clipboardEvent(
+      imageFile(),
+      'copied words',
+      '<p>copied words<img src="https://example.test/remote.png"></p>',
+    );
     await act(async () => {
       editor().dispatchEvent(event);
       await Promise.resolve();
@@ -608,6 +839,7 @@ describe('RichStreamEditor images', () => {
 
     expect(sent.filter((message) => message.type === 'saveImage')).toHaveLength(0);
     expect(editor().textContent).toContain('copied words');
+    expect(editor().querySelector('img')).toBe(null);
   });
 
   it('reports a failed image save and inserts nothing', async () => {
@@ -691,7 +923,7 @@ describe('RichStreamEditor images', () => {
     expect(editor().querySelector('img')).not.toBe(null);
     expect(editor().querySelector('img')?.hasAttribute('width')).toBe(false);
 
-    await click('Develop with AI');
+    await click('Send to AI');
     await act(async () => {
       handle.dispatchEvent(new MouseEvent('mousedown', {
         clientX: 100, bubbles: true, cancelable: true,
@@ -786,5 +1018,50 @@ describe('RichStreamEditor scroll position', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('RichStreamEditor search arrival', () => {
+  const matchingStream: Stream = {
+    ...stream,
+    id: 'match-stream',
+    document: {
+      ...stream.document,
+      streamId: 'match-stream',
+      markdown: 'First paragraph.\n\nA needle in the second paragraph.',
+    },
+  };
+
+  it('selects and scrolls to a pending match exactly once', async () => {
+    const clear = vi.fn();
+    const options = { pendingMatchText: 'needle', onClearPendingMatch: clear };
+    await renderStream(matchingStream, options);
+
+    expect(window.getSelection()?.toString()).toBe('needle');
+    expect(clear).toHaveBeenCalledTimes(1);
+
+    await renderStream({ ...matchingStream, title: 'Same stream' }, options);
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a missed match without moving the cursor', async () => {
+    const clear = vi.fn();
+    await renderStream(matchingStream, {
+      pendingMatchText: 'absent',
+      onClearPendingMatch: clear,
+    });
+
+    expect(editor().textContent).toContain('needle');
+    expect(window.getSelection()?.toString()).toBe('');
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing when no match is pending', async () => {
+    const clear = vi.fn();
+    await renderStream(matchingStream, {
+      pendingMatchText: null,
+      onClearPendingMatch: clear,
+    });
+    expect(clear).not.toHaveBeenCalled();
   });
 });
