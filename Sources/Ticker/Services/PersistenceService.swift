@@ -1,6 +1,15 @@
 import Foundation
 import GRDB
 
+/// An append kept verbatim until an editor can convert its provenance. See
+/// migration v25.
+struct PendingStreamAppend {
+    let revision: Int
+    let separator: String
+    let fragment: String
+    let rawSpansJSON: String
+}
+
 struct AppendResult {
     let fragment: String
     let isNewDocument: Bool
@@ -533,6 +542,29 @@ final class PersistenceService {
             try db.execute(sql: "DELETE FROM provenance_spans")
         }
 
+        /// Provenance for an append made while no editor was open.
+        ///
+        /// The store cannot record it in `provenance_spans`: those coordinates are
+        /// ProseMirror document positions, and knowing one means parsing the
+        /// document, which is the editor's job. What the store CAN say exactly is
+        /// "this fragment, with these offsets inside it" — so it keeps the append
+        /// verbatim until an editor opens the stream, converts the offsets, and
+        /// saves. The row is deleted only by a successful revision-checked save.
+        migrator.registerMigration("v25_pending_stream_appends") { db in
+            try db.execute(sql: """
+                CREATE TABLE pending_stream_appends (
+                    stream_id      TEXT NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+                    revision       INTEGER NOT NULL CHECK (revision > 0),
+                    separator      TEXT NOT NULL,
+                    fragment       TEXT NOT NULL,
+                    raw_spans_json TEXT NOT NULL DEFAULT '[]',
+                    PRIMARY KEY (stream_id, revision)
+                )
+            """)
+            // Any span written between v24 and here is still coordinate-ambiguous.
+            try db.execute(sql: "DELETE FROM provenance_spans")
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -1041,6 +1073,15 @@ final class PersistenceService {
                 let validSpans = validatedSpans(spans, streamId: streamId)
                 logDroppedSpans(total: spans.count, kept: validSpans.count, context: "saveStreamDocument")
                 try replaceSpans(streamId: streamId, spans: validSpans, db: db)
+
+                // This save passed the revision check, so the editor had every
+                // append up to its base and has now converted their provenance into
+                // the spans just stored. A CONFLICTING save clears nothing, which is
+                // why this sits inside the successful path.
+                try db.execute(
+                    sql: "DELETE FROM pending_stream_appends WHERE stream_id = ? AND revision <= ?",
+                    arguments: [streamId.uuidString, baseRevision]
+                )
                 try deleteOrphanExchanges(streamId: streamId, db: db)
             }
 
@@ -1079,23 +1120,14 @@ final class PersistenceService {
                 ? fragment
                 : "\(existingMarkdown)\(separator)\(fragment)"
             let newRevision = existingRevision + 1
-            let spanOffset = UTF16Offsets.utf16Length(existingMarkdown) + UTF16Offsets.utf16Length(separator)
-            let absoluteSpans = spans.map { span in
-                ProvenanceSpan(
-                    spanId: span.spanId,
-                    streamId: streamId,
-                    start: span.start + spanOffset,
-                    end: span.end + spanOffset,
-                    origin: span.origin,
-                    requestId: span.requestId,
-                    sourceId: span.sourceId,
-                    meta: span.meta,
-                    textHash: span.textHash,
-                    createdAt: span.createdAt
-                )
-            }
-            let validSpans = validatedSpans(absoluteSpans, streamId: streamId)
-            logDroppedSpans(total: absoluteSpans.count, kept: validSpans.count, context: "appendToStreamDocument")
+            /*
+             * The spans stay exactly as they arrived: offsets into THIS fragment.
+             * Shifting them by the length of the existing Markdown, which is what
+             * used to happen here, produces an offset into the Markdown — and
+             * provenance coordinates are ProseMirror document positions now, so
+             * that number means nothing and points at the wrong text. Only an
+             * editor can convert them, because only an editor has the document.
+             */
 
             try db.execute(
                 sql: """
@@ -1115,12 +1147,26 @@ final class PersistenceService {
                 arguments: [now, streamId.uuidString]
             )
 
-            try insertSpans(streamId: streamId, spans: validSpans, db: db)
+            // Recorded for EVERY append, including one with no spans: replaying
+            // them on load means peeling the fragments off the end of the stored
+            // Markdown in order, and a missing row breaks the sequence.
+            try db.execute(
+                sql: """
+                    INSERT INTO pending_stream_appends (stream_id, revision, separator, fragment, raw_spans_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(stream_id, revision) DO UPDATE SET
+                        separator = excluded.separator,
+                        fragment = excluded.fragment,
+                        raw_spans_json = excluded.raw_spans_json
+                """,
+                arguments: [streamId.uuidString, newRevision, separator, fragment, Self.encodeRawSpans(spans)]
+            )
+
             if let exchange {
                 try saveExchange(exchange, db: db)
             }
 
-            return AppendResult(fragment: fragment, isNewDocument: isNewDocument, revision: newRevision, spans: validSpans)
+            return AppendResult(fragment: fragment, isNewDocument: isNewDocument, revision: newRevision, spans: spans)
         }
     }
 
@@ -1316,6 +1362,54 @@ final class PersistenceService {
                 textHash: span.textHash,
                 createdAt: span.createdAt
             )
+        }
+    }
+
+    /// The append's spans, verbatim, as offsets into its own fragment. Stored as
+    /// JSON rather than as columns because nothing here interprets them — they are
+    /// carried to an editor and converted there.
+    private static func encodeRawSpans(_ spans: [ProvenanceSpan]) -> String {
+        let rows: [[String: Any]] = spans.map { span in
+            var row: [String: Any] = [
+                "spanId": span.spanId,
+                "start": span.start,
+                "end": span.end,
+                "origin": span.origin,
+                "meta": span.meta,
+                "textHash": span.textHash,
+                "createdAt": ISO8601DateFormatter().string(from: span.createdAt)
+            ]
+            if let requestId = span.requestId { row["requestId"] = requestId }
+            if let sourceId = span.sourceId { row["sourceId"] = sourceId }
+            return row
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: rows),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
+    }
+
+    /// Appends this stream has recorded but no editor has converted yet.
+    func loadPendingAppends(streamId: UUID) throws -> [PendingStreamAppend] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT revision, separator, fragment, raw_spans_json
+                    FROM pending_stream_appends
+                    WHERE stream_id = ?
+                    ORDER BY revision ASC
+                """,
+                arguments: [streamId.uuidString]
+            ).map { row in
+                PendingStreamAppend(
+                    revision: row["revision"],
+                    separator: row["separator"],
+                    fragment: row["fragment"],
+                    rawSpansJSON: row["raw_spans_json"]
+                )
+            }
         }
     }
 

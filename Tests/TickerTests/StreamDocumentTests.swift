@@ -3642,14 +3642,21 @@ final class StreamDocumentTests: XCTestCase {
             let requestId = try XCTUnwrap(registry.operations.keys.first)
             let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
             let exchange = try XCTUnwrap(service.loadExchange(requestId: requestId))
-            let spans = try service.loadSpans(streamId: stream.id)
             XCTAssertTrue(document.markdown.contains("### [Storage](ticker-pdf://\(source.id.uuidString)?page=4)"))
             XCTAssertTrue(document.markdown.contains("[Manual p.4](ticker-pdf://\(source.id.uuidString)?page=4&chunk="))
             XCTAssertEqual(exchange.verb, "summarize")
             XCTAssertTrue(exchange.responseRaw.contains("【1"))
-            XCTAssertEqual(spans.count, 1)
-            XCTAssertEqual(spans[0].requestId, requestId)
-            XCTAssertEqual(spans[0].textHash, FNV1a.hash(document.markdown))
+
+            // The receipt is kept as a pending append rather than as a global span:
+            // its coordinates are offsets into the fragment, and turning those into
+            // document positions needs an editor. It stays until one converts it.
+            XCTAssertTrue(try service.loadSpans(streamId: stream.id).isEmpty)
+            let pending = try service.loadPendingAppends(streamId: stream.id)
+            XCTAssertEqual(pending.count, 1)
+            XCTAssertEqual(pending[0].revision, document.revision)
+            let receiptData = try XCTUnwrap(pending[0].rawSpansJSON.data(using: .utf8))
+            let receiptSpans = try XCTUnwrap(JSONSerialization.jsonObject(with: receiptData) as? [[String: Any]])
+            XCTAssertEqual(receiptSpans.first?["requestId"] as? String, requestId)
 
             let append = try XCTUnwrap(recorder.messages(ofType: "streamDocumentAppended").first)
             XCTAssertEqual(append.payload?["source"]?.value as? String, "pdfSectionAI")
@@ -3889,7 +3896,7 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_appendToStreamDocumentOffsetsFragmentSpansAfterEmojiTail() throws {
+    func test_appendToStreamDocumentKeepsFragmentRelativeSpansPending() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Append Span Offset")
             try service.saveStream(stream)
@@ -3908,11 +3915,24 @@ final class StreamDocumentTests: XCTestCase {
             let result = try service.appendToStreamDocument(streamId: stream.id, fragment: "Hello", spans: [span])
 
             XCTAssertEqual(try service.loadStreamDocument(streamId: stream.id)?.markdown, "a🙂\n\nHello")
+            // The offsets stay relative to the FRAGMENT. Shifting them by the
+            // length of the existing Markdown — which is what the emoji tail in
+            // this test used to exercise — produces a Markdown offset, and
+            // provenance coordinates are ProseMirror document positions now. Only
+            // an editor can convert them, so the append is kept verbatim instead.
             XCTAssertEqual(result.spans.count, 1)
-            XCTAssertEqual(result.spans[0].start, 5)
-            XCTAssertEqual(result.spans[0].end, 10)
+            XCTAssertEqual(result.spans[0].start, 0)
+            XCTAssertEqual(result.spans[0].end, 5)
             XCTAssertEqual(result.spans[0].textHash, FNV1a.hash("Hello"))
-            XCTAssertEqual(try service.loadSpans(streamId: stream.id), result.spans)
+            XCTAssertTrue(try service.loadSpans(streamId: stream.id).isEmpty)
+
+            let pending = try service.loadPendingAppends(streamId: stream.id)
+            XCTAssertEqual(pending.count, 1)
+            XCTAssertEqual(pending[0].revision, result.revision)
+            XCTAssertEqual(pending[0].fragment, "Hello")
+            let helloData = try XCTUnwrap(pending[0].rawSpansJSON.data(using: .utf8))
+            let helloSpans = try XCTUnwrap(JSONSerialization.jsonObject(with: helloData) as? [[String: Any]])
+            XCTAssertEqual(helloSpans.first?["start"] as? Int, 0)
         }
     }
 
@@ -4007,14 +4027,28 @@ final class StreamDocumentTests: XCTestCase {
                 documentMarkdown: "Captured context"
             )
 
-            let spans = try service.loadSpans(streamId: stream.id)
+            // Kept as a pending append: its offsets are into the fragment, and
+            // turning those into document positions needs an editor.
+            XCTAssertTrue(try service.loadSpans(streamId: stream.id).isEmpty)
+            let spans = try service.loadPendingAppends(streamId: stream.id)
             XCTAssertEqual(spans.count, 1)
-            XCTAssertEqual(spans[0].origin, "ai")
-            XCTAssertEqual(spans[0].requestId, "quick-ai-request")
-            XCTAssertEqual(spans[0].start, 0)
-            XCTAssertEqual(spans[0].end, UTF16Offsets.utf16Length("AI answer"))
-            XCTAssertEqual(spans[0].textHash, FNV1a.hash("AI answer"))
-            let spanMetaData = try XCTUnwrap(spans[0].meta.data(using: .utf8))
+            XCTAssertEqual(spans[0].fragment, "AI answer")
+
+            // Decoded rather than matched as a substring: Foundation escapes a
+            // forward slash, so "provider/model" is never literally in the JSON.
+            let rawSpanData = try XCTUnwrap(spans[0].rawSpansJSON.data(using: .utf8))
+            let rawSpans = try XCTUnwrap(JSONSerialization.jsonObject(with: rawSpanData) as? [[String: Any]])
+            XCTAssertEqual(rawSpans.count, 1)
+            XCTAssertEqual(rawSpans[0]["requestId"] as? String, "quick-ai-request")
+            XCTAssertEqual(rawSpans[0]["origin"] as? String, "ai")
+            // The point of the row: offsets relative to the FRAGMENT, not shifted
+            // into the document's Markdown.
+            XCTAssertEqual(rawSpans[0]["start"] as? Int, 0)
+            XCTAssertEqual(rawSpans[0]["end"] as? Int, UTF16Offsets.utf16Length("AI answer"))
+
+            // The span's own metadata rides along, so an editor gets it back
+            // unchanged when it converts the coordinates.
+            let spanMetaData = try XCTUnwrap((rawSpans[0]["meta"] as? String)?.data(using: .utf8))
             let spanMeta = try XCTUnwrap(JSONSerialization.jsonObject(with: spanMetaData) as? [String: String])
             XCTAssertEqual(spanMeta["model"], "provider/model")
             XCTAssertEqual(spanMeta["verb"], "develop")
@@ -4056,11 +4090,13 @@ final class StreamDocumentTests: XCTestCase {
 
             let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
             XCTAssertEqual(document.markdown, savedMarkdown)
-            let spans = try service.loadSpans(streamId: stream.id)
+            XCTAssertTrue(try service.loadSpans(streamId: stream.id).isEmpty)
+            let spans = try service.loadPendingAppends(streamId: stream.id)
             XCTAssertEqual(spans.count, 1)
-            XCTAssertEqual(spans[0].origin, "ai")
-            XCTAssertEqual(spans[0].requestId, "kept-panel-ai")
-            XCTAssertEqual(spans[0].textHash, FNV1a.hash(savedMarkdown))
+            let keptData = try XCTUnwrap(spans[0].rawSpansJSON.data(using: .utf8))
+            let keptSpans = try XCTUnwrap(JSONSerialization.jsonObject(with: keptData) as? [[String: Any]])
+            XCTAssertEqual(keptSpans.first?["origin"] as? String, "ai")
+            XCTAssertEqual(keptSpans.first?["requestId"] as? String, "kept-panel-ai")
             let exchange = try XCTUnwrap(service.loadExchange(requestId: "kept-panel-ai"))
             XCTAssertEqual(exchange.sourceManifest, manifest)
             XCTAssertEqual(exchange.responseRaw, rawResponse)
