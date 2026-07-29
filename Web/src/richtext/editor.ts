@@ -11,7 +11,7 @@ type ClipboardParseOptions = ParseOptions & {
   ruleFromNode?: (node: Node) => { ignore?: boolean } | null;
 };
 import { EditorState, type Command } from 'prosemirror-state';
-import { EditorView } from 'prosemirror-view';
+import { EditorView, type NodeView } from 'prosemirror-view';
 import {
   indentListItem,
   outdentListItem,
@@ -22,10 +22,10 @@ import {
   toggleUnderline,
 } from './commands';
 import { parseMarkdown, serializeMarkdown } from './markdown';
-import { aiWritingHighlight } from './operations';
+import { aiWritingHighlight, setImageWidth } from './operations';
 import { provenance } from './provenance';
 import { normalizationEdits, normalizeForMarkdown } from './normalize';
-import { BREAK_ATTRIBUTES, tickerSchema } from './schema';
+import { BREAK_ATTRIBUTES, MAX_IMAGE_WIDTH, MIN_IMAGE_WIDTH, tickerSchema } from './schema';
 
 /**
  * The editor itself. The ProseMirror state is the live document; markdown exists
@@ -140,6 +140,73 @@ class TickerClipboardParser extends DOMParser {
 
 const clipboardParser = new TickerClipboardParser(tickerSchema, DOMParser.fromSchema(tickerSchema).rules);
 
+function imageView(node: ProseNode, view: EditorView, getPos: () => number | undefined): NodeView {
+  const dom = document.createElement('span');
+  dom.className = 'richtext-image';
+  dom.contentEditable = 'false';
+
+  const image = document.createElement('img');
+  const handle = document.createElement('button');
+  handle.type = 'button';
+  handle.className = 'richtext-image-resize-handle';
+  handle.title = 'Resize image';
+  handle.setAttribute('aria-label', 'Resize image');
+  dom.append(image, handle);
+
+  const render = () => {
+    image.setAttribute('src', String(node.attrs.src));
+    image.setAttribute('alt', String(node.attrs.alt ?? ''));
+    if (node.attrs.title) image.setAttribute('title', String(node.attrs.title));
+    else image.removeAttribute('title');
+    if (node.attrs.width) image.setAttribute('width', String(node.attrs.width));
+    else image.removeAttribute('width');
+    image.style.removeProperty('width');
+  };
+  render();
+
+  handle.onmousedown = (event) => {
+    if (!view.editable) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startWidth = Number(node.attrs.width) || image.getBoundingClientRect().width;
+    let width = Math.max(MIN_IMAGE_WIDTH, Math.min(MAX_IMAGE_WIDTH, Math.round(startWidth)));
+    let moved = false;
+
+    const move = (next: MouseEvent) => {
+      moved = true;
+      width = Math.max(MIN_IMAGE_WIDTH, Math.min(
+        MAX_IMAGE_WIDTH,
+        Math.round(startWidth + next.clientX - startX),
+      ));
+      image.style.width = `${width}px`;
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      if (!moved) {
+        image.style.removeProperty('width');
+        return;
+      }
+      const pos = getPos();
+      if (pos !== undefined) setImageWidth(view, pos, width);
+    };
+
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  return {
+    dom,
+    update(next) {
+      node = next;
+      render();
+      return true;
+    },
+  };
+}
+
 function stateFor(doc: ProseNode): EditorState {
   // Order matters: our keymap gets first refusal, then the stock bindings.
   return EditorState.create({
@@ -186,6 +253,7 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
   const view = new EditorView(parent, {
     state: stateFor(parseMarkdown(markdown)),
     clipboardParser,
+    nodeViews: { image: imageView },
 
     /**
      * One plain click opens a link. The old editor made this ambiguous — the URL

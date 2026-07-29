@@ -148,11 +148,51 @@
   display: block;
   max-width: 100%;
   height: auto;
-  margin: var(--space-2) 0;
   border-radius: var(--radius);
 }
 
-.richtext-editor .ProseMirror img.ProseMirror-selectednode {
+.richtext-editor .ProseMirror .richtext-image {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  margin: var(--space-2) 0;
+  line-height: 0;
+}
+
+.richtext-editor .ProseMirror .richtext-image-resize-handle {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  width: var(--space-5);
+  height: var(--space-5);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--control-shadow);
+  color: var(--text-muted);
+  cursor: nwse-resize;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.richtext-editor .ProseMirror .richtext-image-resize-handle::before {
+  display: block;
+  width: var(--space-2);
+  height: var(--space-2);
+  margin: auto;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  content: "";
+}
+
+.richtext-editor .ProseMirror .richtext-image:hover .richtext-image-resize-handle,
+.richtext-editor .ProseMirror .richtext-image:focus-within .richtext-image-resize-handle {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.richtext-editor .ProseMirror .richtext-image.ProseMirror-selectednode {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }

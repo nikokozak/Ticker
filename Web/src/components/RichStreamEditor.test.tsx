@@ -17,6 +17,7 @@ beforeAll(() => {
     proto.getClientRects ??= none;
     proto.getBoundingClientRect ??= empty;
   }
+  document.elementFromPoint ??= () => null;
 });
 
 const stream: Stream = {
@@ -65,6 +66,70 @@ function lastSent(): WebToSwiftBridgeMessage | undefined {
   return sent[sent.length - 1];
 }
 
+function imageFile(): File {
+  return new File(['pixels'], 'shot.png', { type: 'image/png' });
+}
+
+function clipboardEvent(file: File, text?: string): ClipboardEvent {
+  const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+  const image = { kind: 'file', type: file.type, getAsFile: () => file };
+  const items = text === undefined
+    ? [image]
+    : [{ kind: 'string', type: 'text/plain', getAsFile: () => null }, image];
+  Object.defineProperty(event, 'clipboardData', {
+    value: {
+      files: [file],
+      items,
+      types: text === undefined ? ['Files'] : ['text/plain', 'Files'],
+      getData: (type: string) => (type === 'text/plain' ? text ?? '' : ''),
+    },
+  });
+  return event;
+}
+
+function dropEvent(file: File): DragEvent {
+  const event = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent;
+  Object.defineProperty(event, 'dataTransfer', {
+    value: {
+      files: [file],
+      items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
+      types: ['Files'],
+      getData: () => '',
+    },
+  });
+  return event;
+}
+
+async function imageSaveMessage(): Promise<WebToSwiftBridgeMessage> {
+  await vi.waitFor(() => {
+    expect(sent.some((message) => message.type === 'saveImage')).toBe(true);
+  });
+  return [...sent].reverse().find((message) => message.type === 'saveImage')!;
+}
+
+async function finishImageSave(message: WebToSwiftBridgeMessage, assetUrl = 'ticker-asset://stream-1/shot.png') {
+  await act(async () => {
+    bridge.receive({
+      type: 'imageSaved',
+      payload: {
+        requestId: message.payload?.requestId,
+        assetUrl,
+        relativePath: 'stream-1/shot.png',
+      },
+    });
+    await Promise.resolve();
+  });
+}
+
+async function renderStream(next: Stream) {
+  await act(async () => {
+    root!.render(
+      <RichStreamEditor key={next.id} stream={next} onBack={() => {}} onDelete={() => {}} />,
+    );
+    await Promise.resolve();
+  });
+}
+
 beforeEach(async () => {
   document.body.innerHTML = '<div id="root"></div>';
   useToastStore.getState().clearToasts();
@@ -74,9 +139,7 @@ beforeEach(async () => {
     (async () => ({ revision: 2 })) as typeof bridge.sendAsync,
   );
   root = createRoot(document.querySelector('#root')!);
-  await act(async () => {
-    root!.render(<RichStreamEditor stream={stream} onBack={() => {}} onDelete={() => {}} />);
-  });
+  await renderStream(stream);
 });
 
 afterEach(async () => {
@@ -88,6 +151,34 @@ afterEach(async () => {
   useToastStore.getState().clearToasts();
   vi.restoreAllMocks();
   document.body.innerHTML = '';
+});
+
+describe('an image save that lands after the editor is gone', () => {
+  it('does not write into an editor that has been torn down', async () => {
+    // Paste, then leave before the host answers. The save is already in flight and
+    // will still resolve; by then this editor is destroyed and belongs to a stream
+    // the user is no longer looking at. Dispatching into it throws out of a bridge
+    // message, and the image lands nowhere the user can see.
+    await act(async () => { editor().dispatchEvent(clipboardEvent(imageFile())); });
+    const request = await imageSaveMessage();
+
+    await act(async () => {
+      root?.unmount();
+      await Promise.resolve();
+    });
+    root = null;
+
+    await finishImageSave(request);
+
+    // Measured: the insert lands in the destroyed editor, no save is ever issued
+    // for it, and nothing is said. The user pasted an image and it vanished — and
+    // the asset is on disk with nothing pointing at it.
+    const saves = vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'saveStreamDocument');
+    expect(saves).toHaveLength(0);
+    expect(useToastStore.getState().toasts.map((toast) => toast.message).join(' '))
+      .toMatch(/image/i);
+  });
 });
 
 describe('RichStreamEditor document AI', () => {
@@ -453,5 +544,247 @@ describe('RichStreamEditor document AI', () => {
     expect(document.querySelector('[aria-label="Stop document AI"]')?.getAttribute('title'))
       .toBe('AI is drafting');
     await click('Stop document AI');
+  });
+});
+
+describe('RichStreamEditor images', () => {
+  it('pastes a saved image as one undo step using the bridge wire shape', async () => {
+    const event = clipboardEvent(imageFile());
+    editor().dispatchEvent(event);
+    const save = await imageSaveMessage();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(save).toEqual({
+      type: 'saveImage',
+      payload: {
+        streamId: 'stream-1',
+        data: 'cGl4ZWxz',
+        requestId: expect.any(String),
+      },
+    });
+
+    await act(async () => {
+      bridge.receive({
+        type: 'imageSaved',
+        payload: {
+          requestId: 'a different upload',
+          assetUrl: 'ticker-asset://stream-1/wrong.png',
+          relativePath: 'stream-1/wrong.png',
+        },
+      });
+      await Promise.resolve();
+    });
+    expect(editor().querySelector('img')).toBe(null);
+
+    await finishImageSave(save);
+    expect(editor().querySelector('img')?.getAttribute('src'))
+      .toBe('ticker-asset://stream-1/shot.png');
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editor().querySelector('img')).toBe(null);
+    expect(editor().textContent).toBe('Original paragraph.');
+  });
+
+  it('drops an image file through the same save-before-insert path', async () => {
+    const event = dropEvent(imageFile());
+    editor().dispatchEvent(event);
+    const save = await imageSaveMessage();
+    expect(event.defaultPrevented).toBe(true);
+
+    await finishImageSave(save);
+    expect(editor().querySelector('img')?.getAttribute('alt')).toBe('shot');
+  });
+
+  it('leaves a mixed text-and-image paste to the text clipboard path', async () => {
+    const event = clipboardEvent(imageFile(), 'copied words');
+    await act(async () => {
+      editor().dispatchEvent(event);
+      await Promise.resolve();
+    });
+
+    expect(sent.filter((message) => message.type === 'saveImage')).toHaveLength(0);
+    expect(editor().textContent).toContain('copied words');
+  });
+
+  it('reports a failed image save and inserts nothing', async () => {
+    editor().dispatchEvent(clipboardEvent(imageFile()));
+    const save = await imageSaveMessage();
+
+    await act(async () => {
+      bridge.receive({
+        type: 'imageSaveError',
+        payload: { requestId: save.payload?.requestId, error: 'Disk is full.' },
+      });
+      await Promise.resolve();
+    });
+
+    expect(editor().querySelector('img')).toBe(null);
+    expect(useToastStore.getState().toasts.map((toast) => toast.message))
+      .toEqual(['Disk is full.']);
+  });
+
+  it('ignores an upload error after its editor has closed', async () => {
+    editor().dispatchEvent(clipboardEvent(imageFile()));
+    const failed = await imageSaveMessage();
+    await renderStream({
+      ...stream,
+      id: 'stream-2',
+      document: { ...stream.document, streamId: 'stream-2' },
+    });
+    useToastStore.getState().clearToasts();
+    await act(async () => {
+      bridge.receive({
+        type: 'imageSaveError',
+        payload: { requestId: failed.payload?.requestId, error: 'Too late.' },
+      });
+      await Promise.resolve();
+    });
+    expect(useToastStore.getState().toasts).toEqual([]);
+  });
+
+  it('stores a resize in the node attr, hides its markdown token, and undoes only the resize', async () => {
+    editor().dispatchEvent(clipboardEvent(imageFile()));
+    const save = await imageSaveMessage();
+    await finishImageSave(save);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 550));
+    });
+
+    const image = editor().querySelector('img')!;
+    image.getBoundingClientRect = () => ({
+      top: 0, bottom: 100, left: 0, right: 200, width: 200, height: 100,
+      x: 0, y: 0, toJSON: () => ({}),
+    });
+    const handle = document.querySelector('[aria-label="Resize image"]')!;
+    await act(async () => {
+      handle.dispatchEvent(new MouseEvent('mousedown', {
+        clientX: 100, bubbles: true, cancelable: true,
+      }));
+      window.dispatchEvent(new MouseEvent('mouseup'));
+    });
+    expect(image.hasAttribute('width')).toBe(false);
+
+    await act(async () => {
+      handle.dispatchEvent(new MouseEvent('mousedown', {
+        clientX: 100, bubbles: true, cancelable: true,
+      }));
+      window.dispatchEvent(new MouseEvent('mousemove', { clientX: 220 }));
+      window.dispatchEvent(new MouseEvent('mouseup'));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+
+    expect(editor().textContent).not.toContain('{width=');
+    const saves = vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'saveStreamDocument');
+    expect(saves[saves.length - 1]?.[1]?.markdown)
+      .toBe('![shot](ticker-asset://stream-1/shot.png){width=320}Original paragraph.');
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editor().querySelector('img')).not.toBe(null);
+    expect(editor().querySelector('img')?.hasAttribute('width')).toBe(false);
+
+    await click('Develop with AI');
+    await act(async () => {
+      handle.dispatchEvent(new MouseEvent('mousedown', {
+        clientX: 100, bubbles: true, cancelable: true,
+      }));
+      window.dispatchEvent(new MouseEvent('mousemove', { clientX: 220 }));
+      window.dispatchEvent(new MouseEvent('mouseup'));
+    });
+    expect(editor().querySelector('img')?.hasAttribute('width')).toBe(false);
+    await click('Stop document AI');
+  });
+});
+
+describe('RichStreamEditor scroll position', () => {
+  const withScroll = (id: string, scrollOffset: number): Stream => ({
+    ...stream,
+    id,
+    document: {
+      ...stream.document,
+      streamId: id,
+      scrollOffset,
+    },
+  });
+
+  it('restores once and never reasserts the old offset over later editor scrolling', async () => {
+    vi.useFakeTimers();
+    try {
+      const opened = withScroll('scroll-stream', 84);
+      await renderStream(opened);
+      const scroller = document.querySelector('.stream-content') as HTMLElement;
+      expect(scroller.scrollTop).toBe(84);
+
+      scroller.scrollTop = 20;
+      await act(async () => {
+        bridge.receive({
+          type: 'streamDocumentAppended',
+          payload: { streamId: opened.id, fragment: 'Appended.', revision: 2, spans: [] },
+        });
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(scroller.scrollTop).toBe(20);
+
+      await renderStream({ ...opened, document: { ...opened.document, scrollOffset: 12 } });
+      expect(scroller.scrollTop).toBe(20);
+
+      sent = [];
+      await renderStream(withScroll('next-stream', 0));
+      expect(sent.filter((message) => message.type === 'saveScrollPosition')).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('debounces scroll saves and sends the latest offset', async () => {
+    vi.useFakeTimers();
+    try {
+      await renderStream(withScroll('scroll-stream', 0));
+      sent = [];
+      const scroller = document.querySelector('.stream-content') as HTMLElement;
+
+      scroller.scrollTop = 40;
+      scroller.dispatchEvent(new Event('scroll'));
+      await vi.advanceTimersByTimeAsync(600);
+      scroller.scrollTop = 75;
+      scroller.dispatchEvent(new Event('scroll'));
+      await vi.advanceTimersByTimeAsync(400);
+      expect(sent.filter((message) => message.type === 'saveScrollPosition')).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(600);
+      expect(sent.filter((message) => message.type === 'saveScrollPosition')).toEqual([{
+        type: 'saveScrollPosition',
+        payload: { streamId: 'scroll-stream', offset: 75 },
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flushes a pending scroll save when leaving the stream', async () => {
+    vi.useFakeTimers();
+    try {
+      await renderStream(withScroll('scroll-stream', 0));
+      sent = [];
+      const scroller = document.querySelector('.stream-content') as HTMLElement;
+      scroller.scrollTop = 63;
+      scroller.dispatchEvent(new Event('scroll'));
+
+      await renderStream(withScroll('next-stream', 0));
+      expect(sent.filter((message) => message.type === 'saveScrollPosition')).toContainEqual({
+        type: 'saveScrollPosition',
+        payload: { streamId: 'scroll-stream', offset: 63 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

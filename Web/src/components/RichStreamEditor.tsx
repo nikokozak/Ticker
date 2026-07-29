@@ -6,6 +6,7 @@ import type { Stream } from '../types/models';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import {
   aiWritingRange,
+  insertImage,
   setAIWritingRange,
   streamAIMarkdown,
 } from '../richtext/operations';
@@ -52,6 +53,19 @@ interface RichStreamEditorProps {
 }
 
 const PDF_URL_PREFIX = 'ticker-pdf://';
+
+function readBlobAsBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const data = String(reader.result).split(',')[1];
+      if (data) resolve(data);
+      else reject(new Error('Invalid image encoding.'));
+    };
+    reader.onerror = () => reject(new Error('Failed to read image data.'));
+    reader.readAsDataURL(blob);
+  });
+}
 
 interface ActiveDocumentAI {
   requestId: string;
@@ -147,6 +161,37 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     bridge.send({ type: 'openExternalURL', payload: { url: href } });
   }, [stream.id]);
 
+  const saveImageToAssets = useCallback(async (blob: Blob): Promise<string> => {
+    const requestId = crypto.randomUUID();
+    const data = await readBlobAsBase64(blob);
+
+    return new Promise((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        unsubscribe();
+        reject(new Error('Timed out while saving image.'));
+      }, 15_000);
+      const unsubscribe = bridge.onMessage((message) => {
+        if (message.payload?.requestId !== requestId) return;
+        if (message.type === 'imageSaved' && typeof message.payload.assetUrl === 'string') {
+          window.clearTimeout(timeout);
+          unsubscribe();
+          resolve(message.payload.assetUrl);
+        } else if (message.type === 'imageSaveError') {
+          window.clearTimeout(timeout);
+          unsubscribe();
+          reject(new Error(
+            typeof message.payload.error === 'string' ? message.payload.error : 'Failed to save image.',
+          ));
+        }
+      });
+
+      bridge.send({
+        type: 'saveImage',
+        payload: { streamId: stream.id, data, requestId },
+      });
+    });
+  }, [stream.id]);
+
   useEffect(() => {
     if (!host.current) return undefined;
 
@@ -186,7 +231,28 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     sessionRef.current = session;
     setEditor(created);
 
+    const scroller = host.current.closest('.stream-content') as HTMLElement;
+    let scrollSaveTimer: number | undefined;
+    const sendScrollPosition = () => bridge.send({
+      type: 'saveScrollPosition',
+      payload: { streamId: stream.id, offset: Math.max(0, scroller.scrollTop) },
+    });
+    const saveScrollPosition = () => {
+      window.clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = window.setTimeout(() => {
+        scrollSaveTimer = undefined;
+        sendScrollPosition();
+      }, 1_000);
+    };
+    scroller.scrollTop = Math.max(0, stream.document?.scrollOffset ?? 0);
+    scroller.addEventListener('scroll', saveScrollPosition, { passive: true });
+
     return () => {
+      scroller.removeEventListener('scroll', saveScrollPosition);
+      if (scrollSaveTimer !== undefined) {
+        window.clearTimeout(scrollSaveTimer);
+        sendScrollPosition();
+      }
       const active = aiRequestRef.current;
       if (active) {
         bridge.send({ type: 'cancelDocumentAI', payload: { requestId: active.requestId } });
@@ -214,6 +280,65 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       });
     };
   }, [addToast, onUpdate, openLink, stream.id]);
+
+  useEffect(() => {
+    if (!editor) return undefined;
+    let live = true;
+
+    // ponytail: uploads land at the live cursor; keep a mapped bookmark if upload
+    // latency makes cursor drift observable.
+    const insertFile = async (file: File) => {
+      try {
+        const src = await saveImageToAssets(file);
+        if (!live) {
+          // ponytail: this leaves the saved asset orphaned; add a host append
+          // command when uploads must finish after navigation.
+          addToast('Image was saved but not added because the stream closed. Paste it again.', 'error');
+          return;
+        }
+        insertImage(editor.view, {
+          src,
+          alt: file.name.replace(/\.[^.]+$/, '') || 'image',
+        });
+        editor.view.focus();
+      } catch (error) {
+        if (!live) return;
+        addToast(error instanceof Error ? error.message : 'Failed to insert image.', 'error');
+      }
+    };
+    const paste = (event: ClipboardEvent) => {
+      if (Array.from(event.clipboardData?.types ?? []).some((type) => type.startsWith('text/'))) return;
+      const file = Array.from(event.clipboardData?.items ?? [])
+        .find((item) => item.type.startsWith('image/'))?.getAsFile();
+      if (!file) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void insertFile(file);
+    };
+    const drop = (event: DragEvent) => {
+      const file = Array.from(event.dataTransfer?.files ?? [])
+        .find((candidate) => candidate.type.startsWith('image/'));
+      if (!file) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void insertFile(file);
+    };
+    const dragover = (event: DragEvent) => {
+      if (Array.from(event.dataTransfer?.items ?? []).some((item) => item.type.startsWith('image/'))) {
+        event.preventDefault();
+      }
+    };
+
+    editor.view.dom.addEventListener('paste', paste, true);
+    editor.view.dom.addEventListener('drop', drop, true);
+    editor.view.dom.addEventListener('dragover', dragover, true);
+    return () => {
+      live = false;
+      editor.view.dom.removeEventListener('paste', paste, true);
+      editor.view.dom.removeEventListener('drop', drop, true);
+      editor.view.dom.removeEventListener('dragover', dragover, true);
+    };
+  }, [addToast, editor, saveImageToAssets]);
 
   const startDocumentAI = useCallback(async () => {
     const currentEditor = editorRef.current;
