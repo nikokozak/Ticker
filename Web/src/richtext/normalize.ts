@@ -147,12 +147,25 @@ function expelWhitespace(children: ProseNode[]): ProseNode[] {
 }
 
 /**
- * A list is read back as tight unless its first item starts with a paragraph, so
- * force that here rather than storing a looseness the reload will not honour.
+ * Looseness is carried by the hidden flag on a paragraph that is a DIRECT child of
+ * some list item. A list where NO item has one — every item is a blockquote or a
+ * code block — has nowhere to carry it, and reloads as tight.
+ *
+ * The narrow rule matters: an earlier version checked only the FIRST item and so
+ * flattened `* > q\n\n* p`, whose looseness is perfectly representable because the
+ * second item has a direct paragraph.
  */
 function normalizeTightness(node: ProseNode): ProseNode {
   if (!LIST_TYPES.has(node.type.name) || node.attrs.tight) return node;
-  if (node.firstChild?.firstChild?.type === tickerSchema.nodes.paragraph) return node;
+
+  let carriesLooseness = false;
+  node.forEach((item) => {
+    item.forEach((child) => {
+      if (child.type === tickerSchema.nodes.paragraph) carriesLooseness = true;
+    });
+  });
+  if (carriesLooseness) return node;
+
   return node.type.create({ ...node.attrs, tight: true }, node.content, node.marks);
 }
 

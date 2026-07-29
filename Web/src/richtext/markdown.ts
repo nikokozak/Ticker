@@ -40,6 +40,19 @@ export class InvalidMarkdownError extends Error {
   }
 }
 
+/**
+ * Text that markdown-it will DECODE on the way back in: `&amp;`, `&#32;`, `&copy;`.
+ * Written out untouched, a literal `&amp;` a user typed reloads as a bare `&`, and
+ * a literal `&#32;` reloads as a space. Only real entity syntax matches, so
+ * ordinary text — "AT&T", "a & b" — is left alone and the markdown stays clean.
+ */
+const ENTITY_START = /&(?=[a-zA-Z][a-zA-Z0-9]*;|#\d+;|#[xX][0-9a-fA-F]+;)/g;
+
+/** Escape entity syntax in a serialized attribute, where backslashes do not work. */
+function escapeEntities(value: string): string {
+  return value.replace(ENTITY_START, '&amp;');
+}
+
 const OPEN_UNDERLINE = /^<u\s*>/i;
 const CLOSE_UNDERLINE = /^<\/u\s*>/i;
 const WIDTH_SUFFIX = /^\{width=(\d{2,4})\}/;
@@ -178,7 +191,10 @@ export const tickerMarkdownParser = new MarkdownParser(tickerSchema, markdownIt,
     getAttrs: (token) => ({
       src: token.attrGet('src'),
       title: token.attrGet('title') || null,
-      alt: (token.children?.[0] && token.children[0].content) || null,
+      // Every child, not just the first. The stock spec reads children[0].content,
+      // so an alt that tokenises into more than one piece — anything containing an
+      // escape, or emphasis — silently loses everything after the first piece.
+      alt: token.children?.map((child) => child.content).join('') || null,
       width: (token.meta as { tickerWidth?: number } | undefined)?.tickerWidth ?? null,
     }),
   },
@@ -195,26 +211,54 @@ export const tickerMarkdownParser = new MarkdownParser(tickerSchema, markdownIt,
 });
 
 /**
- * markdown-it never marks looseness on the list; it marks it by UN-hiding the
- * paragraphs inside, so the whole signal is one `hidden` flag on the first item's
- * paragraph.
+ * markdown-it never marks looseness on the list itself; it marks it by HIDING the
+ * paragraphs inside a tight one. So the signal is a `hidden` flag — but only on a
+ * paragraph that is a DIRECT child of a list item.
  *
- * Measured: when an item starts with any other block — a blockquote, a fenced
- * code block — no paragraph is hidden anywhere in the list, and `* > q\n* p` and
- * `* > q\n\n* p` produce identical token streams. Tightness is then simply not
- * expressible, and this reads such a list as tight. `normalizeForMarkdown` holds
- * documents to the same rule, so the two agree and a save/reload is stable.
+ * That distinction is the whole difficulty. In `* > q\n* p` the first item holds a
+ * blockquote, and the paragraph inside that blockquote is never hidden either way.
+ * Reading the first paragraph in the token stream therefore finds the blockquote's
+ * and concludes, wrongly, that the two forms are identical. They are not: the
+ * SECOND item has a direct paragraph, and it carries the flag.
+ *
+ * Measured, scanning direct paragraphs across every item:
+ *
+ *   `* > q\n* p`           [true]        tight
+ *   `* > q\n\n* p`         [false]       loose
+ *   "* ```\nx\n```\n* p"   []            no signal at all
+ *
+ * Only that last shape — where NO item has a direct paragraph — is genuinely
+ * unrepresentable, and it is read as tight. normalizeForMarkdown applies the same
+ * narrow rule, so the two agree and a save/reload is stable.
  */
 function listIsTight(tokens: readonly Token[], index: number): boolean {
-  if (tokens[index + 1]?.type !== 'list_item_open') return true;
-  const first = tokens[index + 2];
-  return first?.type === 'paragraph_open' ? first.hidden : true;
+  let depth = 0;
+  let itemDepth = -1;
+
+  for (let i = index + 1; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token.type === 'list_item_open') {
+      itemDepth = depth;
+      depth += 1;
+      continue;
+    }
+    if (token.type === 'paragraph_open' && depth === itemDepth + 1) return token.hidden;
+    if (token.nesting === 1) depth += 1;
+    else if (token.nesting === -1) {
+      depth -= 1;
+      if (depth < 0) break; // the end of this list
+    }
+  }
+
+  return true;
 }
 
 function imageMarkdown(node: ProseNode, state: MarkdownSerializerState): string {
+  // state.esc already applies escapeExtraCharacters, which covers entity syntax;
+  // src and title are written raw and so need escapeEntities themselves.
   const alt = state.esc(node.attrs.alt || '');
-  const src = node.attrs.src.replace(/[()]/g, '\\$&');
-  const title = node.attrs.title ? ` "${node.attrs.title.replace(/"/g, '\\"')}"` : '';
+  const src = escapeEntities(String(node.attrs.src).replace(/[()]/g, '\\$&'));
+  const title = node.attrs.title ? ` "${escapeEntities(String(node.attrs.title).replace(/"/g, '\\"'))}"` : '';
   const width = node.attrs.width;
 
   if (width !== null) {
@@ -309,8 +353,13 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
   // linkify off nothing needs it, and `[url](url)` round-trips identically.
   link: {
     open: () => '[',
-    close: (_state, mark) =>
-      `](${String(mark.attrs.href).replace(/[()"]/g, '\\$&')}${mark.attrs.title ? ` "${String(mark.attrs.title).replace(/"/g, '\\"')}"` : ''})`,
+    close: (_state, mark) => {
+      const href = escapeEntities(String(mark.attrs.href).replace(/[()"]/g, '\\$&'));
+      const title = mark.attrs.title
+        ? ` "${escapeEntities(String(mark.attrs.title).replace(/"/g, '\\"'))}"`
+        : '';
+      return `](${href}${title})`;
+    },
   },
   code: {
     open: (_state, _mark, parent, index) => backticksFor(parent.child(index), -1),
@@ -319,8 +368,8 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
   },
 }, {
   // Its own output must never be something its own parser would reinterpret:
-  // literal `<u>`, a `{width=300}` a user typed, or table-shaped pipes.
-  escapeExtraCharacters: /[<>{}]/g,
+  // literal `<u>`, a `{width=300}` a user typed, or the start of an HTML entity.
+  escapeExtraCharacters: /[<>{}]|&(?=[a-zA-Z][a-zA-Z0-9]*;|#\d+;|#[xX][0-9a-fA-F]+;)/g,
 });
 
 /**

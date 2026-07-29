@@ -191,6 +191,22 @@ describe('lists', () => {
   it('loose list item beginning with a code block', () => expectClosed(
     doc(S.node('ordered_list', { order: 1, tight: false }, [codeItem(), item('p')])),
   ));
+
+  it('keeps looseness when a LATER item carries it', () => {
+    // The signal is the hidden flag on a paragraph that is a DIRECT child of some
+    // item. Here the first item has only a blockquote, but the second has a
+    // paragraph, so the looseness survives and must not be flattened.
+    const loose = doc(S.node('bullet_list', { tight: false }, [quoteItem(), item('p')]));
+    expect(normalizeForMarkdown(loose).firstChild?.attrs.tight).toBe(false);
+    expect(serializeMarkdown(normalizeForMarkdown(loose))).toBe('* > q\n\n* p');
+    expectClosed(loose);
+  });
+
+  it('only flattens a list where NO item could carry looseness', () => {
+    const nowhere = doc(S.node('bullet_list', { tight: false }, [codeItem(), quoteItem()]));
+    expect(normalizeForMarkdown(nowhere).firstChild?.attrs.tight).toBe(true);
+    expectClosed(nowhere);
+  });
   it('loose list whose first item is a paragraph keeps its looseness', () => {
     // The tightness rule must not flatten lists that CAN express it.
     const loose = doc(S.node('bullet_list', { tight: false }, [item('a'), item('b')]));
@@ -240,6 +256,30 @@ describe('link destinations survive a reload', () => {
     expect(normalized.textContent).toBe('text'); // the words are kept
     expect(normalized.rangeHasMark(0, normalized.content.size, S.marks.link)).toBe(false);
     expectClosed(doomed);
+  });
+});
+
+describe('text that markdown would decode', () => {
+  // Entities are the one thing markdown rewrites SILENTLY and stably: written out
+  // untouched, a literal "&amp;" reloads as "&", "&#32;" as a space, "&copy;" as ©.
+  // Nothing about the round-trip looks broken; the text is just quietly different.
+  const literals = ['&amp;', '&#32;', '&copy;', '&#x41;', 'a &amp; b', '&notanentity', 'AT&T', 'a & b', '&&&'];
+  for (const text of literals) it(JSON.stringify(text), () => expectClosed(doc(p(t(text)))));
+
+  it('leaves ordinary ampersands unescaped, so the markdown stays readable', () => {
+    expect(serializeMarkdown(doc(p(t('AT&T and a & b'))))).toBe('AT&T and a & b');
+  });
+
+  it('escapes only real entity syntax', () => {
+    expect(serializeMarkdown(doc(p(t('a &amp; b'))))).toBe('a \\&amp; b');
+  });
+
+  it('survives inside every attribute markdown writes raw', () => {
+    const link = S.marks.link.create({ href: 'https://x.test/?a=&amp;b', title: 'a &copy; t' });
+    expectClosed(doc(p(S.text('label', [link]))));
+    expectClosed(doc(p(S.node('image', {
+      src: 'ticker-asset://s/a&amp;b.png', alt: 'an &amp; alt', title: 'a &copy; title', width: null,
+    }))));
   });
 });
 
