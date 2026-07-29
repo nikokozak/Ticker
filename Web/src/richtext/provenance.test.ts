@@ -161,6 +161,51 @@ describe('positions are stable across a save and reload', () => {
   });
 });
 
+describe('positions survive the document settling into its stored form', () => {
+  // The subtle one. Normalising a COPY at save time made the live document and the
+  // persisted document two different trees, so a span recorded against the live one
+  // pointed into a document that was never saved. Dropping a single empty paragraph
+  // shifts everything after it by two. Normalising through a real transaction means
+  // ProseMirror maps every plugin's positions, so they stay true.
+  it('a span after an empty paragraph still covers its own text', () => {
+    const ed = open('One.');
+    // Reach the shape by typing, the way a user does: Enter twice, then more text.
+    const end = ed.view.state.doc.content.size - 1;
+    ed.view.dispatch(ed.view.state.tr.insert(end, [
+      ed.view.state.schema.nodes.paragraph.create(),
+      ed.view.state.schema.nodes.paragraph.create(null, ed.view.state.schema.text('The AI wrote this.')),
+    ]));
+    const written = span(ed, 'The AI wrote this.');
+    record(ed, written);
+    expect(provenanceText(ed.view.state.doc, written)).toBe('The AI wrote this.');
+
+    const saved = ed.getMarkdown(); // settles the document
+    expect(saved).toBe('One.\n\nThe AI wrote this.'); // the empty paragraph is gone
+
+    const [after] = provenanceSpans(ed.view.state);
+    expect(provenanceText(ed.view.state.doc, after)).toBe('The AI wrote this.');
+    expect(hashProvenanceText(ed.view.state.doc, after)).toBe(written.textHash);
+
+    // And it is still right after a reload, which is the point of storing positions.
+    ed.setMarkdown(saved);
+    ed.view.dispatch(setProvenanceSpans(ed.view.state.tr, [after]));
+    const [restored] = provenanceSpans(ed.view.state);
+    expect(provenanceText(ed.view.state.doc, restored)).toBe('The AI wrote this.');
+  });
+
+  it('settling is not something the user has to undo', () => {
+    const ed = open('One.');
+    const end = ed.view.state.doc.content.size - 1;
+    ed.view.dispatch(ed.view.state.tr.insert(end, ed.view.state.schema.nodes.paragraph.create()));
+    ed.getMarkdown();
+    const settled = ed.getMarkdown();
+    const event = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true });
+    ed.view.someProp('handleKeyDown', (handler) => handler(ed.view, event));
+    expect(ed.getMarkdown()).toBe('One.');
+    expect(settled).toBe('One.');
+  });
+});
+
 describe('spans never reach the document', () => {
   it('leaves no trace in the saved markdown', () => {
     const ed = open('One. The AI wrote this. Three.');

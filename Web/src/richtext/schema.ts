@@ -86,6 +86,9 @@ const softBreak: NodeSpec = {
   selectable: false,
   parseDOM: [{ tag: 'br[data-soft-break]', priority: 60 }],
   toDOM: (): DOMOutputSpec => ['br', { 'data-soft-break': 'true' }],
+  // Without this a break is nothing at all in plain text, so copying a paragraph
+  // and pasting it somewhere else runs the two lines together.
+  leafText: () => '\n',
 };
 
 /**
@@ -99,6 +102,7 @@ const softBreak: NodeSpec = {
 const hardBreak: NodeSpec = {
   ...base.spec.nodes.get('hard_break'),
   toDOM: (): DOMOutputSpec => ['br', { 'data-hard-break': 'true' }],
+  leafText: () => '\n',
 };
 
 /** Attributes marking a `<br>` this editor produced rather than the browser. */

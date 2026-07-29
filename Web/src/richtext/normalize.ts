@@ -70,6 +70,18 @@ function dropWhitespaceOnlyCode(node: ProseNode): ProseNode {
   return /\S/.test(node.text) ? node : node.mark(code.removeFromSet(node.marks));
 }
 
+/**
+ * An image src is a markdown destination just as an href is, so it needs the same
+ * canonicalisation: a space in it ends the destination and the image is lost, and a
+ * backslash is percent-encoded on the way back in.
+ */
+function canonicalizeImage(node: ProseNode): ProseNode {
+  if (node.type !== tickerSchema.nodes.image) return node;
+  const src = canonicalHref(String(node.attrs.src ?? ''));
+  if (src === null || src === node.attrs.src) return node;
+  return node.type.create({ ...node.attrs, src }, node.content, node.marks);
+}
+
 /** Rewrite or drop a node's link mark so the href survives a round-trip. */
 function canonicalizeLink(node: ProseNode): ProseNode {
   const mark = link.isInSet(node.marks);
@@ -185,6 +197,14 @@ function clampAttrs(node: ProseNode): ProseNode {
     return level === node.attrs.level ? node : node.type.create({ ...node.attrs, level }, node.content, node.marks);
   }
 
+  if (node.type === tickerSchema.nodes.code_block) {
+    // A fenced block's info string is the rest of ONE line, so a newline in it
+    // pushes everything after it into the code body. Flattened rather than
+    // refused: it is metadata, and none of the actual code is lost.
+    const params = String(node.attrs.params ?? '').replace(/\s+/g, ' ').trim();
+    return params === node.attrs.params ? node : node.type.create({ ...node.attrs, params }, node.content, node.marks);
+  }
+
   if (node.type === tickerSchema.nodes.ordered_list) {
     const highest = MAX_LIST_NUMBER - Math.max(0, node.childCount - 1);
     const order = Math.min(highest, Math.max(0, Math.round(Number(node.attrs.order) || 0)));
@@ -286,13 +306,13 @@ function dropEmptyParagraphs(children: ProseNode[]): ProseNode[] {
 export function normalizeForMarkdown(node: ProseNode): ProseNode {
   if (node.isTextblock) {
     const children: ProseNode[] = [];
-    node.forEach((child) => children.push(dropWhitespaceOnlyCode(canonicalizeLink(child))));
+    node.forEach((child) => children.push(canonicalizeImage(dropWhitespaceOnlyCode(canonicalizeLink(child)))));
     // Trim line ends BEFORE trimming breaks: dropping a whitespace-only node can
     // leave two breaks adjacent, and that pair may not be representable.
     return clampAttrs(node.copy(Fragment.fromArray(trimBreaks(trimBlockStart(trimLineEnds(expelWhitespace(children)))))));
   }
 
-  if (node.isLeaf) return node;
+  if (node.isLeaf) return canonicalizeImage(node);
 
   const children: ProseNode[] = [];
   node.forEach((child) => children.push(normalizeForMarkdown(child)));
@@ -302,4 +322,57 @@ export function normalizeForMarkdown(node: ProseNode): ProseNode {
 /** True when the document is already representable — nothing would change. */
 export function isNormalized(doc: ProseNode): boolean {
   return normalizeForMarkdown(doc).eq(doc);
+}
+
+/** One region to replace, in document coordinates. */
+export interface NormalizationEdit {
+  from: number;
+  to: number;
+  replacement: Fragment;
+}
+
+/**
+ * The smallest set of edits that turns `current` into `normalized`.
+ *
+ * Replacing the whole document in one step would be far simpler and completely
+ * wrong: every position inside it maps to the boundary, so provenance spans and
+ * margin notes would be destroyed by the act of saving. Trimming the matching
+ * children off each end, and recursing when only one child differs, keeps each edit
+ * next to what actually changed and leaves every other position untouched.
+ *
+ * `contentStart` is the position of the first child — 0 for the document, since a
+ * document has no opening token of its own, and pos + 1 for every other node.
+ */
+export function normalizationEdits(current: ProseNode, normalized: ProseNode, contentStart = 0): NormalizationEdit[] {
+  if (current.eq(normalized)) return [];
+
+  let prefix = 0;
+  const limit = Math.min(current.childCount, normalized.childCount);
+  while (prefix < limit && current.child(prefix).eq(normalized.child(prefix))) prefix += 1;
+
+  let suffix = 0;
+  while (
+    suffix < limit - prefix
+    && current.child(current.childCount - 1 - suffix).eq(normalized.child(normalized.childCount - 1 - suffix))
+  ) suffix += 1;
+
+  let from = contentStart;
+  for (let i = 0; i < prefix; i += 1) from += current.child(i).nodeSize;
+
+  // Exactly one child differs on each side, and it is a node with children of its
+  // own: recurse, so an edit deep inside a paragraph does not move the paragraph.
+  if (current.childCount - prefix - suffix === 1 && normalized.childCount - prefix - suffix === 1) {
+    const before = current.child(prefix);
+    const after = normalized.child(prefix);
+    if (before.sameMarkup(after) && !before.isText && !before.isLeaf) {
+      return normalizationEdits(before, after, from + 1);
+    }
+  }
+
+  let to = from;
+  for (let i = prefix; i < current.childCount - suffix; i += 1) to += current.child(i).nodeSize;
+
+  const middle: ProseNode[] = [];
+  for (let i = prefix; i < normalized.childCount - suffix; i += 1) middle.push(normalized.child(i));
+  return [{ from, to, replacement: Fragment.fromArray(middle) }];
 }

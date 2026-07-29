@@ -166,12 +166,31 @@ describe('finding text', () => {
     expect(selectText(ed.view, '**')).toBe(false);
   });
 
-  it('is not thrown off by syntax sitting between words', () => {
+  it('finds a phrase that spans a mark boundary', () => {
+    // A mark boundary SPLITS the text into separate nodes, so searching node by
+    // node cannot find "quick brown" in `*quick* brown` — even though that is
+    // exactly what the reader sees.
     const ed = open('the *quick* brown fox');
-    // In the markdown these words are separated by asterisks; in the document
-    // they are not, but they are still in separate text nodes.
     expect(selectText(ed.view, 'quick')).toBe(true);
-    expect(selectText(ed.view, 'brown fox')).toBe(true);
+    expect(selectText(ed.view, 'quick brown')).toBe(true);
+    expect(selectText(ed.view, 'the quick brown fox')).toBe(true);
+  });
+
+  it('finds a phrase that spans a line break', () => {
+    const ed = open('one\ntwo');
+    expect(selectText(ed.view, 'one two')).toBe(true);
+  });
+
+  it('finds a phrase that spans a link', () => {
+    const ed = open('see [the paper](https://x.test) now');
+    expect(selectText(ed.view, 'see the paper now')).toBe(true);
+  });
+
+  it('selects exactly the matched text', () => {
+    const ed = open('the *quick* brown fox');
+    selectText(ed.view, 'quick brown');
+    const { from, to } = ed.view.state.selection;
+    expect(ed.view.state.doc.textBetween(from, to)).toBe('quick brown');
   });
 
   it('reports a miss instead of moving the cursor', () => {

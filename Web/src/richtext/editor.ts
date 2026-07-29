@@ -24,7 +24,7 @@ import {
 import { parseMarkdown, serializeMarkdown } from './markdown';
 import { aiWritingHighlight } from './operations';
 import { provenance } from './provenance';
-import { normalizeForMarkdown } from './normalize';
+import { normalizationEdits, normalizeForMarkdown } from './normalize';
 import { BREAK_ATTRIBUTES, tickerSchema } from './schema';
 
 /**
@@ -69,6 +69,11 @@ export interface RichTextEditor {
   readonly view: EditorView;
   /** The document as markdown, in exactly the form a reload will give back. */
   getMarkdown(): string;
+  /**
+   * Settle the document into the form that will be stored. getMarkdown does this
+   * already; call it directly before recording positions against the document.
+   */
+  normalizeNow(): void;
   /** Replace the whole document, as a reload does. Clears undo history. */
   setMarkdown(markdown: string): void;
   /** Append a fragment at the end of the document, as an external write does. */
@@ -145,14 +150,32 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
   parent.classList.add('richtext-editor');
 
   /**
-   * ponytail: normalising here rather than as a transaction on the live document.
-   * Rewriting the doc under the cursor while someone types costs a selection remap
-   * on every keystroke, and after the break rules were narrowed to what markdown
-   * genuinely cannot express, the only thing left that a save can change is a break
-   * sitting at the very end of a block — which disappears the moment anything is
-   * typed after it. Revisit if a second divergence shows up.
+   * Bring the live document into the form that will be stored, as a real
+   * transaction.
+   *
+   * The earlier version normalised a COPY at serialisation time, which quietly made
+   * the live document and the persisted document two different trees. Anything
+   * holding a position — provenance spans, margin notes — then recorded coordinates
+   * into a document that was never saved: dropping one empty paragraph shifts
+   * everything after it by two. Going through a transaction means ProseMirror maps
+   * the selection and every plugin's positions for us, which is the whole reason
+   * positions are trustworthy.
+   *
+   * Not on every keystroke, though — only when the document is about to be read out.
+   * A keystroke-by-keystroke rewrite would fight the typist over a trailing space.
    */
-  const toMarkdown = (doc: ProseNode) => serializeMarkdown(normalizeForMarkdown(doc));
+  const normalizeNow = () => {
+    const normalized = normalizeForMarkdown(view.state.doc);
+    const edits = normalizationEdits(view.state.doc, normalized);
+    if (!edits.length) return;
+
+    const tr = view.state.tr;
+    // Back to front, so an earlier edit's positions are still valid.
+    for (const edit of [...edits].reverse()) tr.replaceWith(edit.from, edit.to, edit.replacement);
+    // Not an edit the user made, and not one they should have to undo.
+    tr.setMeta('addToHistory', false);
+    view.dispatch(tr);
+  };
 
   const view = new EditorView(parent, {
     state: stateFor(parseMarkdown(markdown)),
@@ -173,14 +196,27 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
     dispatchTransaction(transaction) {
       const next = view.state.apply(transaction);
       view.updateState(next);
-      if (transaction.docChanged) onChange?.(toMarkdown(next.doc));
+      // The normalised form, without normalising mid-keystroke: what onChange
+      // reports is exactly what getMarkdown would store.
+      if (transaction.docChanged) onChange?.(serializeMarkdown(normalizeForMarkdown(next.doc)));
       onUpdate?.();
     },
   });
 
   return {
     view,
-    getMarkdown: () => toMarkdown(view.state.doc),
+
+    /**
+     * Reading the document out is what settles it. After this the live document IS
+     * the stored one, so a position recorded now still means the same thing after a
+     * reload.
+     */
+    getMarkdown() {
+      normalizeNow();
+      return serializeMarkdown(view.state.doc);
+    },
+
+    normalizeNow,
 
     setMarkdown(next: string) {
       view.updateState(stateFor(parseMarkdown(next)));

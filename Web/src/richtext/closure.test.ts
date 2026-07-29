@@ -154,7 +154,9 @@ describe('whitespace at the edges of a line', () => {
   it('keeps indentation typed after a line break, which is deliberate', () => {
     const indented = doc(p(t('foo'), soft(), t('   bar')));
     expect(serializeMarkdown(normalizeForMarkdown(indented))).toBe('foo\n&#32;&#32;&#32;bar');
-    expect(parseMarkdown('foo\n&#32;&#32;&#32;bar').textContent).toBe('foo   bar');
+    // The break itself now reads as a newline, which is what makes a plain-text
+    // copy of a paragraph keep its line breaks.
+    expect(parseMarkdown('foo\n&#32;&#32;&#32;bar').textContent).toBe('foo\n   bar');
   });
 
   it('drops a space at the very start of a block, which is an editing artifact', () => {
