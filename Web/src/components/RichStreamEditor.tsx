@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Slice } from 'prosemirror-model';
-import type { Command } from 'prosemirror-state';
+import { TextSelection, type Command, type Transaction } from 'prosemirror-state';
 import {
   bridge,
+  getExchange,
   type DocumentAIVerb,
   type SourceTitlePayload,
   type StreamDocumentConflictPayload,
 } from '../types/bridge';
-import type { SourceReference, SourceScope, Stream } from '../types/models';
+import type { AIExchangeJSON, SourceReference, SourceScope, Stream } from '../types/models';
+import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { Modal } from './Modal';
 import { SourcesModal } from './SourcesModal';
 import {
@@ -27,6 +29,7 @@ import { DocumentSession, type SaveState } from '../richtext/session';
 import {
   addProvenanceSpans,
   hashProvenanceText,
+  provenanceSpanAt,
   spanFromJSON,
   type ProvenanceSpanJSON,
 } from '../richtext/provenance';
@@ -38,6 +41,12 @@ import {
   parseDocumentAICitations,
   swapCitationMarkersWithMetadata,
 } from '../utils/citationMarkers';
+import {
+  beginPDFAnchorPick,
+  buildTickerPDFLinkURL,
+  mapPendingPDFAnchorSelection,
+  type PendingPDFAnchorSelection,
+} from '../utils/pdfAnchorSelection';
 import {
   activeFormats,
   toggleBlockquote,
@@ -154,6 +163,7 @@ export function RichStreamEditor({
   const sessionRef = useRef<DocumentSession | null>(null);
   const aiRequestRef = useRef<ActiveDocumentAI | null>(null);
   const aiInFlightRef = useRef(false);
+  const pendingPDFAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
   // ponytail: one stream-wide PDF AI lock; track host operation ids if concurrent
   // PDF jobs ever become a supported workflow.
   const pdfAIInFlightRef = useRef(false);
@@ -168,6 +178,7 @@ export function RichStreamEditor({
   const [leaving, setLeaving] = useState(false);
   const deleting = useRef(false);
   const [xray, setXray] = useState(false);
+  const [exchangeOverlay, setExchangeOverlay] = useState<AIExchangeJSON | null>(null);
   const [title, setTitle] = useState(stream.title);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
@@ -257,6 +268,18 @@ export function RichStreamEditor({
     bridge.send({ type: 'openSource', payload: { sourceId: source.id } });
   }, []);
 
+  const openExchangeManifestEntry = useCallback((entry: ExchangeManifestEntry) => {
+    bridge.send({
+      type: 'openPdfDestination',
+      payload: {
+        streamId: stream.id,
+        sourceId: entry.sourceId,
+        page: entry.page,
+        chunkId: entry.chunkId,
+      },
+    });
+  }, [stream.id]);
+
   const removeSource = useCallback((sourceId: string) => {
     setSources((previous) => previous.filter((source) => source.id !== sourceId));
   }, [setSources]);
@@ -270,6 +293,13 @@ export function RichStreamEditor({
   // Which formatting buttons are lit depends on the SELECTION, so the menu has to
   // redraw on every transaction and not only on edits.
   const onUpdate = useCallback(() => redraw((n) => n + 1), []);
+  const onTransaction = useCallback((transaction: Transaction) => {
+    const pending = pendingPDFAnchorSelectionRef.current;
+    if (!pending) return;
+    pendingPDFAnchorSelectionRef.current = mapPendingPDFAnchorSelection(pending, {
+      mapPos: (pos, assoc) => transaction.mapping.map(pos, assoc),
+    });
+  }, []);
 
   /**
    * A citation is not an external URL. Swift rejects any non-HTTP scheme from
@@ -326,6 +356,7 @@ export function RichStreamEditor({
       onChange: () => {
         if (!aiInFlightRef.current) sessionRef.current?.documentChanged();
       },
+      onTransaction,
       onUpdate,
       onOpenLink: openLink,
     });
@@ -402,7 +433,7 @@ export function RichStreamEditor({
         created.destroy();
       });
     };
-  }, [addToast, onUpdate, openLink, stream.id]);
+  }, [addToast, onTransaction, onUpdate, openLink, stream.id]);
 
   useEffect(() => {
     if (!editor) return undefined;
@@ -466,6 +497,42 @@ export function RichStreamEditor({
       editor.view.dom.removeEventListener('dragover', dragover, true);
     };
   }, [addToast, editor, saveImageToAssets]);
+
+  useEffect(() => {
+    editor?.view.dom.parentElement?.classList.toggle('richtext-xray', xray);
+  }, [editor, xray]);
+
+  useEffect(() => {
+    if (!editor || !xray) return undefined;
+    let live = true;
+    const inspect = (event: MouseEvent) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLElement>('.richtext-provenance')
+        : null;
+      if (!target) return;
+      const span = provenanceSpanAt(
+        editor.view.state,
+        editor.view.posAtDOM(target, 0),
+      );
+      if (!span?.requestId) return;
+
+      // ProseMirror moves the selection on mousedown. Opening provenance is not an
+      // edit, so it must not retarget the cursor before the exchange arrives.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void getExchange(span.requestId)
+        .then(({ exchange }) => {
+          if (live && exchange?.streamId === stream.id) setExchangeOverlay(exchange);
+        })
+        .catch(() => undefined);
+    };
+
+    editor.view.dom.addEventListener('mousedown', inspect, true);
+    return () => {
+      live = false;
+      editor.view.dom.removeEventListener('mousedown', inspect, true);
+    };
+  }, [editor, stream.id, xray]);
 
   useEffect(() => {
     if (!editor || !pendingMatchText) return;
@@ -635,6 +702,34 @@ export function RichStreamEditor({
         sourceName: (payload as SourceTitlePayload | undefined)?.sourceName,
         shortTitle: (payload as SourceTitlePayload | undefined)?.shortTitle,
       });
+      return;
+    }
+
+    if (message.type === 'pdfAnchorPickCancelled') {
+      if (payload?.streamId === stream.id) pendingPDFAnchorSelectionRef.current = null;
+      return;
+    }
+
+    if (message.type === 'pdfAnchorPlaced') {
+      if (payload?.streamId !== stream.id) return;
+      const pending = pendingPDFAnchorSelectionRef.current;
+      pendingPDFAnchorSelectionRef.current = null;
+      if (!pending) return;
+
+      const sourceId = payload.sourceId;
+      const highlightId = payload.highlightId;
+      if (typeof sourceId !== 'string' || typeof highlightId !== 'string') return;
+
+      const view = editorRef.current!.view;
+      const rawPage = Number(payload.page);
+      const page = Number.isFinite(rawPage) ? Math.max(1, Math.round(rawPage)) : 1;
+      const href = buildTickerPDFLinkURL({ sourceId, highlightId, page });
+      const link = view.state.schema.marks.link.create({ href, title: null });
+      const tr = view.state.tr.addMark(pending.from, pending.to, link);
+      tr.setSelection(TextSelection.create(tr.doc, pending.from, pending.to));
+      view.dispatch(tr.scrollIntoView());
+      view.focus();
+      addToast('Anchored selection in PDF.', 'success');
       return;
     }
 
@@ -844,6 +939,22 @@ export function RichStreamEditor({
   const openPDFTitle = pdfPaneState.visible && pdfPaneState.streamId === stream.id
     ? pdfPaneState.shortTitle ?? pdfPaneState.sourceName ?? 'Open PDF'
     : null;
+  const canAnchorSelection = Boolean(
+    editor
+    && openPDFTitle
+    && editor.view.state.doc.textBetween(
+      editor.view.state.selection.from,
+      editor.view.state.selection.to,
+      '\n',
+      '',
+    ).trim(),
+  );
+
+  const startPDFAnchorPick = () => {
+    const { from, to } = editor!.view.state.selection;
+    pendingPDFAnchorSelectionRef.current = { from, to };
+    beginPDFAnchorPick(stream.id);
+  };
 
   const formatButton = (label: string, active: boolean, command: Command, hint: string) => (
     <button
@@ -961,6 +1072,14 @@ export function RichStreamEditor({
         </Modal>
       )}
 
+      {exchangeOverlay && (
+        <ExchangeOverlay
+          exchange={exchangeOverlay}
+          onClose={() => setExchangeOverlay(null)}
+          onOpenManifestEntry={openExchangeManifestEntry}
+        />
+      )}
+
       {formats && (
         <div className="stream-format-bar">
           <button
@@ -1023,6 +1142,17 @@ export function RichStreamEditor({
           >
             Sources: {sourceScopeLabel}
           </button>
+          {canAnchorSelection && (
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--text"
+              aria-label="Anchor selection in PDF"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={startPDFAnchorPick}
+            >
+              Anchor in PDF
+            </button>
+          )}
           {formatButton('B', formats.bold, toggleBold, 'Bold ⌘B')}
           {formatButton('I', formats.italic, toggleItalic, 'Italic ⌘I')}
           {formatButton('U', formats.underline, toggleUnderline, 'Underline ⌘U')}

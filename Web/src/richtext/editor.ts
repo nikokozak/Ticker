@@ -10,7 +10,7 @@ import { DOMParser, Fragment, Slice, type ParseOptions, type Node as ProseNode }
 type ClipboardParseOptions = ParseOptions & {
   ruleFromNode?: (node: Node) => { ignore?: boolean } | null;
 };
-import { EditorState, type Command } from 'prosemirror-state';
+import { EditorState, type Command, type Transaction } from 'prosemirror-state';
 import { EditorView, type NodeView } from 'prosemirror-view';
 import {
   indentListItem,
@@ -101,6 +101,11 @@ export interface RichTextEditorOptions {
    * on the document.
    */
   onUpdate?: () => void;
+  /**
+   * Positions held outside editor state must see every mapping or the next edit
+   * can apply metadata to text that moved while an async host action was open.
+   */
+  onTransaction?: (transaction: Transaction) => void;
 }
 
 /** The href of a link at this position, if there is one. */
@@ -216,7 +221,7 @@ function stateFor(doc: ProseNode): EditorState {
 }
 
 export function createRichTextEditor(options: RichTextEditorOptions): RichTextEditor {
-  const { parent, markdown, onChange, onOpenLink, onUpdate } = options;
+  const { parent, markdown, onChange, onOpenLink, onTransaction, onUpdate } = options;
   parent.classList.add('richtext-editor');
 
   /**
@@ -273,6 +278,7 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
       // The normalised form, without normalising mid-keystroke: what onChange
       // reports is exactly what getMarkdown would store.
       if (transaction.docChanged) onChange?.(serializeMarkdown(normalizeForMarkdown(next.doc)));
+      onTransaction?.(transaction);
       onUpdate?.();
     },
   });

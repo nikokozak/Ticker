@@ -1,4 +1,3 @@
-import type { ChangeDesc } from '@codemirror/state';
 import { bridge } from '../types/bridge';
 
 export interface PendingPDFAnchorSelection {
@@ -15,7 +14,7 @@ export interface PDFAnchorLinkEdit {
 
 export function mapPendingPDFAnchorSelection(
   selection: PendingPDFAnchorSelection,
-  changes: ChangeDesc
+  changes: { mapPos(pos: number, assoc?: number): number }
 ): PendingPDFAnchorSelection | null {
   const from = changes.mapPos(selection.from, 1);
   const to = changes.mapPos(selection.to, -1);

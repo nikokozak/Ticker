@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { EditorView } from 'prosemirror-view';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bridge,
   type SwiftToWebBridgeMessage,
   type WebToSwiftBridgeMessage,
 } from '../types/bridge';
-import type { SourceReference, Stream } from '../types/models';
+import type { AIExchangeJSON, SourceReference, Stream } from '../types/models';
 import { DocumentSession } from '../richtext/session';
 import { useToastStore } from '../store/toastStore';
 import { fnv1a } from '../utils/fnv1a';
@@ -82,6 +83,31 @@ async function selectEditorText(text: string) {
     document.dispatchEvent(new Event('selectionchange'));
     await Promise.resolve();
   });
+}
+
+async function toggleXray() {
+  const button = document.querySelector('.stream-xray-button') as HTMLButtonElement;
+  expect(button, 'Expected Xray button').toBeDefined();
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+  });
+}
+
+async function pressProvenance(): Promise<MouseEvent> {
+  const span = document.querySelector('.richtext-provenance');
+  expect(span, 'Expected a provenance span').toBeDefined();
+  const event = new MouseEvent('mousedown', {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+  });
+  await act(async () => {
+    span!.dispatchEvent(event);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  return event;
 }
 
 async function enterPrompt(value: string) {
@@ -204,6 +230,35 @@ async function renderStreamLoaded(message: SwiftToWebBridgeMessage) {
       scrollOffset: Number(payload.scrollOffset),
     },
   });
+}
+
+async function showPDFPane(streamId = stream.id) {
+  await act(async () => {
+    bridge.receive({
+      type: 'pdfPaneStateChanged',
+      payload: {
+        visible: true,
+        streamId,
+        sourceId: 'source-1',
+        sourceName: 'paper.pdf',
+        shortTitle: 'Paper',
+      },
+    });
+  });
+}
+
+function placedPDFAnchor(streamId = stream.id): SwiftToWebBridgeMessage {
+  return {
+    type: 'pdfAnchorPlaced',
+    payload: {
+      streamId,
+      sourceId: 'source-1',
+      sourceName: 'paper.pdf',
+      shortTitle: 'Paper',
+      highlightId: 'highlight-1',
+      page: 4,
+    },
+  };
 }
 
 beforeEach(async () => {
@@ -1187,6 +1242,166 @@ describe('RichStreamEditor sources', () => {
   });
 });
 
+describe('RichStreamEditor provenance exchanges', () => {
+  const exchange: AIExchangeJSON = {
+    requestId: 'request-1',
+    streamId: 'provenance-stream',
+    verb: 'develop',
+    userInput: 'Develop this passage.',
+    sourceManifest: JSON.stringify([{
+      sourceId: 'source-1',
+      chunkId: 'chunk-1',
+      page: 4,
+      shortTitle: 'Paper',
+    }]),
+    responseRaw: 'AI answer.',
+    model: 'provider/model',
+    createdAt: new Date(0).toISOString(),
+  };
+
+  const withProvenance = (
+    id: string,
+    requestId: string | null = 'request-1',
+  ): Stream => ({
+    ...stream,
+    id,
+    document: {
+      ...stream.document,
+      streamId: id,
+      markdown: 'Local. AI answer.',
+    },
+    spans: [{
+      spanId: 'ai-span',
+      start: 8,
+      end: 18,
+      origin: 'ai',
+      ...(requestId ? { requestId } : {}),
+      meta: '{}',
+      textHash: fnv1a('AI answer.'),
+      createdAt: new Date(0).toISOString(),
+    }],
+  });
+
+  const answerExchange = (
+    result: { exchange: AIExchangeJSON | null } | Promise<{ exchange: AIExchangeJSON | null }>,
+  ) => {
+    vi.mocked(bridge.sendAsync).mockImplementation(
+      (async (type) => (
+        type === 'getExchange' ? await result : { revision: 2 }
+      )) as typeof bridge.sendAsync,
+    );
+  };
+
+  it('opens the recorded exchange without moving the selection', async () => {
+    answerExchange({ exchange });
+    await renderStream(withProvenance('provenance-stream'));
+    await selectEditorText('Local');
+    await toggleXray();
+
+    expect(document.querySelector('.richtext-editor.richtext-xray')).not.toBe(null);
+    const posAtDOM = vi.spyOn(EditorView.prototype, 'posAtDOM');
+    const ordinaryClick = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    editor().querySelector('p')!.dispatchEvent(ordinaryClick);
+    expect(ordinaryClick.defaultPrevented).toBe(false);
+    expect(posAtDOM).not.toHaveBeenCalled();
+    expect(vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'getExchange')).toHaveLength(0);
+
+    const event = await pressProvenance();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(window.getSelection()?.toString()).toBe('Local');
+    expect(vi.mocked(bridge.sendAsync)).toHaveBeenCalledWith('getExchange', {
+      requestId: 'request-1',
+    });
+    expect(document.querySelector('.exchange-modal')?.textContent)
+      .toContain('Develop this passage.');
+    expect(document.querySelector('.exchange-modal')?.textContent).toContain('AI answer.');
+    expect(document.querySelector('.exchange-modal')?.textContent).not.toContain('re-develop');
+
+    await act(async () => {
+      (document.querySelector('.exchange-link') as HTMLButtonElement).click();
+    });
+    expect(sent).toContainEqual({
+      type: 'openPdfDestination',
+      payload: {
+        streamId: 'provenance-stream',
+        sourceId: 'source-1',
+        page: 4,
+        chunkId: 'chunk-1',
+      },
+    });
+  });
+
+  it('does not intercept provenance unless xray is on and the span has a request id', async () => {
+    await renderStream(withProvenance('provenance-stream'));
+    const hiddenEvent = await pressProvenance();
+    expect(hiddenEvent.defaultPrevented).toBe(false);
+
+    await renderStream(withProvenance('provenance-without-request', null));
+    await toggleXray();
+    const localEvent = await pressProvenance();
+
+    expect(localEvent.defaultPrevented).toBe(false);
+    expect(vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'getExchange')).toHaveLength(0);
+  });
+
+  it.each([
+    ['is missing', null],
+    ['belongs to another stream', { ...exchange, streamId: 'another-stream' }],
+  ])('does not open an exchange that %s', async (_case, returnedExchange) => {
+    answerExchange({ exchange: returnedExchange });
+    await renderStream(withProvenance('provenance-stream'));
+    await toggleXray();
+    await pressProvenance();
+
+    expect(document.querySelector('.exchange-modal')).toBe(null);
+  });
+
+  it('does not open a late exchange after xray was closed', async () => {
+    let resolveExchange!: (value: { exchange: AIExchangeJSON | null }) => void;
+    const pending = new Promise<{ exchange: AIExchangeJSON | null }>((resolve) => {
+      resolveExchange = resolve;
+    });
+    answerExchange(pending);
+    await renderStream(withProvenance('provenance-stream'));
+    await toggleXray();
+    await pressProvenance();
+    await toggleXray();
+
+    await act(async () => {
+      resolveExchange({ exchange });
+      await pending;
+    });
+
+    expect(document.querySelector('.exchange-modal')).toBe(null);
+  });
+
+  it('does not open a late exchange over a different stream', async () => {
+    let resolveExchange!: (value: { exchange: AIExchangeJSON | null }) => void;
+    const pending = new Promise<{ exchange: AIExchangeJSON | null }>((resolve) => {
+      resolveExchange = resolve;
+    });
+    answerExchange(pending);
+    await renderStream(withProvenance('provenance-stream'));
+    await toggleXray();
+    await pressProvenance();
+    await renderStream({
+      ...stream,
+      id: 'another-stream',
+      document: { ...stream.document, streamId: 'another-stream' },
+    });
+
+    await act(async () => {
+      resolveExchange({ exchange });
+      await pending;
+    });
+
+    expect(document.querySelector('.exchange-modal')).toBe(null);
+  });
+});
+
 describe('RichStreamEditor PDF section AI', () => {
   const sectionRequest = (action: 'ask' | 'summarize'): SwiftToWebBridgeMessage => ({
     type: 'pdfSectionActionRequested',
@@ -1434,6 +1649,154 @@ describe('RichStreamEditor PDF section AI', () => {
       });
     });
     expect(document.querySelector('.stream-header')?.textContent).not.toContain('PDF · Paper');
+  });
+});
+
+describe('RichStreamEditor PDF anchor placement', () => {
+  async function beginAnchor(text = 'paragraph') {
+    await showPDFPane();
+    await selectEditorText(text);
+    await click('Anchor selection in PDF');
+    expect(sent).toContainEqual({
+      type: 'beginPdfAnchorPick',
+      payload: { streamId: 'stream-1' },
+    });
+  }
+
+  it('only offers anchoring for real selected text in this stream’s open PDF', async () => {
+    await selectEditorText('paragraph');
+    expect(document.querySelector('[aria-label="Anchor selection in PDF"]')).toBe(null);
+
+    await showPDFPane('another-stream');
+    expect(document.querySelector('[aria-label="Anchor selection in PDF"]')).toBe(null);
+
+    await showPDFPane();
+    expect(document.querySelector('[aria-label="Anchor selection in PDF"]')).not.toBe(null);
+
+    await selectEditorText(' ');
+    expect(document.querySelector('[aria-label="Anchor selection in PDF"]')).toBe(null);
+  });
+
+  it('adds the picked link as one undo step and routes its click back to the PDF pane', async () => {
+    await beginAnchor();
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      updateState.call(this, state);
+    });
+    await act(async () => { bridge.receive(placedPDFAnchor()); });
+
+    const link = editor().querySelector('a') as HTMLAnchorElement;
+    expect(link?.textContent).toBe('paragraph');
+    expect(link?.getAttribute('href'))
+      .toBe('ticker-pdf://source-1?highlight=highlight-1&page=4');
+    expect(editor().textContent).toBe('Original paragraph.');
+
+    // jsdom has no layout for ProseMirror's coordinate resolver. Exercise the
+    // actual click prop at the position the browser would resolve inside the link.
+    expect(liveView).not.toBe(null);
+    const handled = liveView!.someProp('handleClick', (handler) => (
+      handler(liveView!, 12, new MouseEvent('click'))
+    ));
+    expect(handled).toBe(true);
+    expect(sent).toContainEqual({
+      type: 'openPdfDestination',
+      payload: {
+        streamId: 'stream-1',
+        url: 'ticker-pdf://source-1?highlight=highlight-1&page=4',
+      },
+    });
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editor().querySelector('a')).toBe(null);
+    expect(editor().textContent).toBe('Original paragraph.');
+  });
+
+  it('clears a cancelled pick without touching the document', async () => {
+    await beginAnchor();
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfAnchorPickCancelled',
+        payload: { streamId: 'stream-1' },
+      });
+      bridge.receive(placedPDFAnchor());
+    });
+
+    expect(editor().querySelector('a')).toBe(null);
+    expect(editor().textContent).toBe('Original paragraph.');
+    expect(useToastStore.getState().toasts.map((toast) => toast.message))
+      .not.toContain('Anchored selection in PDF.');
+  });
+
+  it('ignores another stream without consuming this stream’s pending pick', async () => {
+    await beginAnchor();
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfAnchorPickCancelled',
+        payload: { streamId: 'another-stream' },
+      });
+      bridge.receive(placedPDFAnchor('another-stream'));
+    });
+    expect(editor().querySelector('a')).toBe(null);
+
+    await act(async () => { bridge.receive(placedPDFAnchor()); });
+    expect(editor().querySelector('a')?.textContent).toBe('paragraph');
+  });
+
+  it('maps the picked selection through edits made before it', async () => {
+    await renderStream({
+      ...stream,
+      id: 'stream-with-anchor',
+      document: {
+        ...stream.document,
+        streamId: 'stream-with-anchor',
+        markdown: 'Rewrite this.\n\nAnchor this.',
+      },
+    });
+    await showPDFPane('stream-with-anchor');
+    await selectEditorText('Anchor this');
+    await click('Anchor selection in PDF');
+
+    await selectEditorText('Rewrite this.');
+    await click('Send to AI');
+    const requestId = activeRequestId();
+    await act(async () => {
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Short.' } });
+      bridge.receive({ type: 'documentAIComplete', payload: { requestId } });
+      bridge.receive({
+        ...placedPDFAnchor('stream-with-anchor'),
+        payload: {
+          ...placedPDFAnchor('stream-with-anchor').payload,
+          streamId: 'stream-with-anchor',
+        },
+      });
+    });
+
+    expect(editor().querySelector('a')?.textContent).toBe('Anchor this');
+    expect(editor().textContent).toBe('Short.Anchor this.');
+  });
+
+  it('consumes a malformed placement without inserting a broken link', async () => {
+    await beginAnchor();
+    const malformed = placedPDFAnchor();
+    await act(async () => {
+      bridge.receive({
+        ...malformed,
+        payload: { ...malformed.payload, highlightId: undefined },
+      });
+      bridge.receive(placedPDFAnchor());
+    });
+
+    expect(editor().querySelector('a')).toBe(null);
+    expect(editor().textContent).toBe('Original paragraph.');
   });
 });
 

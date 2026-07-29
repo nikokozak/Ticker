@@ -12,7 +12,7 @@ export interface ExchangeManifestEntry {
 interface ExchangeOverlayProps {
   exchange: AIExchangeJSON;
   onClose: () => void;
-  onRedevelop: () => void;
+  onRedevelop?: () => void;
   onOpenManifestEntry: (entry: ExchangeManifestEntry) => void;
 }
 
@@ -96,7 +96,7 @@ export function ExchangeOverlay({
         </div>
 
         <div className="exchange-footer">
-          <button type="button" onClick={onRedevelop}>re-develop</button>
+          {onRedevelop && <button type="button" onClick={onRedevelop}>re-develop</button>}
           <button type="button" onClick={copyRaw}>copy raw</button>
         </div>
     </Modal>
