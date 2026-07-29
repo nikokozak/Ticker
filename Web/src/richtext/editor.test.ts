@@ -1,0 +1,303 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from 'vitest';
+import { TextSelection } from 'prosemirror-state';
+import type { Node as ProseNode, ResolvedPos, Slice } from 'prosemirror-model';
+import type { EditorView } from 'prosemirror-view';
+import * as prosemirrorView from 'prosemirror-view';
+import { createRichTextEditor, type RichTextEditor } from './editor';
+
+/**
+ * The real paste entry point. `parseSlice` alone ignores the `data-pm-slice` depths
+ * the copy wrote, so a copied block would merge into the paragraph it landed in.
+ * prosemirror-view exports this but does not declare it.
+ */
+const parseFromClipboard = (prosemirrorView as unknown as {
+  __parseFromClipboard: (
+    view: EditorView, text: string, html: string | null, plainText: boolean, context: ResolvedPos,
+  ) => Slice | null;
+}).__parseFromClipboard;
+
+/**
+ * These drive the real EditorView, not a stub. Earlier work in this repo tested a
+ * fake `{state, visibleRanges}` object and proved nothing about what a cursor
+ * actually does, which is how the bugs that started this rewrite got through.
+ *
+ * Everything here goes through a keystroke, a paste, or a transaction — the same
+ * paths a user takes.
+ */
+
+let editor: RichTextEditor | null = null;
+
+function open(markdown: string, onChange?: (md: string) => void): RichTextEditor {
+  const parent = document.createElement('div');
+  document.body.appendChild(parent);
+  editor = createRichTextEditor({ parent, markdown, onChange });
+  return editor;
+}
+
+afterEach(() => {
+  editor?.destroy();
+  editor = null;
+  document.body.innerHTML = '';
+});
+
+/** Send a keystroke the way the browser does, through the view's own handler. */
+function press(ed: RichTextEditor, key: string, modifiers: Partial<KeyboardEvent> = {}): boolean {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...modifiers });
+  return Boolean(ed.view.someProp('handleKeyDown', (handler) => handler(ed.view, event)));
+}
+
+/**
+ * `Mod` is Cmd on a Mac and Ctrl elsewhere, and prosemirror-keymap decides from
+ * navigator.platform — which jsdom leaves empty, so tests must send Ctrl.
+ */
+const MOD = { ctrlKey: true };
+
+/** Put the cursor at a document position, or select a range. */
+function place(ed: RichTextEditor, from: number, to = from): void {
+  ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(ed.view.state.doc, from, to)));
+}
+
+/**
+ * Position of a substring, counted the way ProseMirror counts — hand-arithmetic on
+ * document positions is how test bugs get mistaken for product bugs.
+ */
+function find(ed: RichTextEditor, text: string, offset = 0): number {
+  let at = -1;
+  ed.view.state.doc.descendants((node, pos) => {
+    if (at < 0 && node.isText && node.text?.includes(text)) at = pos + node.text.indexOf(text);
+  });
+  if (at < 0) throw new Error(`no ${JSON.stringify(text)} in ${ed.view.state.doc.toString()}`);
+  return at + offset;
+}
+
+/** Put the cursor immediately after a substring. */
+function after(ed: RichTextEditor, text: string): number {
+  return find(ed, text, text.length);
+}
+
+function type(ed: RichTextEditor, text: string): void {
+  ed.view.dispatch(ed.view.state.tr.insertText(text));
+}
+
+describe('the document survives the editor', () => {
+  it('opens markdown and gives it back unchanged', () => {
+    const source = '# Title\n\nSome **bold** and <u>underlined</u> text.\n\n* one\n* two';
+    expect(open(source).getMarkdown()).toBe(source);
+  });
+
+  it('reports a change only when the document actually changed', () => {
+    const seen: string[] = [];
+    const ed = open('hello', (md) => seen.push(md));
+    place(ed, after(ed, 'hello'));
+    expect(seen).toHaveLength(0); // moving the cursor is not an edit
+    type(ed, ' there');
+    expect(seen).toEqual(['hello there']);
+  });
+
+  it('round-trips through a reload', () => {
+    const ed = open('one');
+    place(ed, after(ed, 'one'));
+    type(ed, ' two');
+    const saved = ed.getMarkdown();
+    ed.setMarkdown(saved);
+    expect(ed.getMarkdown()).toBe(saved);
+    expect(ed.view.state.doc.textContent).toBe('one two');
+  });
+});
+
+describe('there is no markup for the cursor to walk into', () => {
+  // The bug that started the rewrite: arrowing through formatted text used to move
+  // through hidden '**' characters, and Enter inside them exposed the tags.
+  it('a bold word is exactly as many positions as its letters', () => {
+    const ed = open('one **two** three');
+    expect(ed.view.state.doc.textContent).toBe('one two three');
+    // Walking every position and back must never land "inside" a delimiter,
+    // because the delimiters are not in the document at all.
+    const size = ed.view.state.doc.content.size;
+    for (let pos = 1; pos < size; pos += 1) {
+      place(ed, pos);
+      expect(ed.view.state.selection.from).toBe(pos);
+    }
+  });
+
+  it('typing at the edge of bold text cannot produce a stray marker', () => {
+    const ed = open('one **two** three');
+    place(ed, find(ed, 'two', 1)); // between the 't' and the 'w'
+    type(ed, 'X');
+    expect(ed.getMarkdown()).toBe('one **tXwo** three');
+    expect(ed.getMarkdown()).not.toMatch(/\*{3}/);
+  });
+
+  it('Enter inside formatted text splits the paragraph, not the formatting', () => {
+    const ed = open('**bold text**');
+    place(ed, after(ed, 'bold')); // between the word and the space
+    expect(press(ed, 'Enter')).toBe(true);
+    // The trailing space of the first paragraph is invisible, so it is dropped.
+    expect(ed.getMarkdown()).toBe('**bold**\n\n**text**');
+    expect(ed.view.state.doc.childCount).toBe(2);
+  });
+});
+
+describe('keystrokes', () => {
+  it('Shift+Enter makes a line break inside the paragraph', () => {
+    const ed = open('foo');
+    place(ed, after(ed, 'foo'));
+    expect(press(ed, 'Enter', { shiftKey: true })).toBe(true);
+    type(ed, 'bar');
+    expect(ed.view.state.doc.childCount).toBe(1); // still ONE paragraph
+    expect(ed.getMarkdown()).toBe('foo\\\nbar');
+  });
+
+  it('Shift+Enter twice leaves a blank line instead of collapsing', () => {
+    const ed = open('foo');
+    place(ed, after(ed, 'foo'));
+    press(ed, 'Enter', { shiftKey: true });
+    press(ed, 'Enter', { shiftKey: true });
+    type(ed, 'bar');
+    const saved = ed.getMarkdown();
+    ed.setMarkdown(saved);
+    expect(ed.getMarkdown()).toBe(saved);
+    expect(ed.view.state.doc.firstChild?.childCount).toBe(4); // text, br, br, text
+  });
+
+  it('Enter splits a list item instead of the paragraph inside it', () => {
+    const ed = open('* one');
+    place(ed, after(ed, 'one'));
+    expect(press(ed, 'Enter')).toBe(true);
+    type(ed, 'two');
+    expect(ed.getMarkdown()).toBe('* one\n* two');
+  });
+
+  it('Tab and Shift+Tab indent and outdent a list item', () => {
+    const ed = open('* one\n* two');
+    place(ed, after(ed, 'two'));
+    expect(press(ed, 'Tab')).toBe(true);
+    expect(ed.getMarkdown()).toBe('* one\n  * two');
+    expect(press(ed, 'Tab', { shiftKey: true })).toBe(true);
+    expect(ed.getMarkdown()).toBe('* one\n* two');
+  });
+
+  it('Tab does nothing outside a list, rather than eating the keystroke', () => {
+    const ed = open('plain');
+    place(ed, after(ed, 'plain'));
+    expect(press(ed, 'Tab')).toBe(false);
+  });
+
+  it('Mod+B bolds the selection and Mod+B again removes it', () => {
+    const ed = open('one two three');
+    place(ed, find(ed, 'two'), after(ed, 'two'));
+    expect(press(ed, 'b', MOD)).toBe(true);
+    expect(ed.getMarkdown()).toBe('one **two** three');
+    place(ed, find(ed, 'two'), after(ed, 'two'));
+    press(ed, 'b', MOD);
+    expect(ed.getMarkdown()).toBe('one two three');
+  });
+
+  it('undo restores the previous document in one step', () => {
+    const ed = open('one two three');
+    place(ed, find(ed, 'two'), after(ed, 'two'));
+    press(ed, 'b', MOD);
+    expect(ed.getMarkdown()).toBe('one **two** three');
+    expect(press(ed, 'z', MOD)).toBe(true);
+    expect(ed.getMarkdown()).toBe('one two three');
+  });
+});
+
+describe('copy and paste inside the editor', () => {
+  /**
+   * The real path. ProseMirror puts a slice on the clipboard as HTML and parses
+   * HTML back even for a same-editor paste, so anything the schema's DOM rules
+   * cannot express is lost here and nowhere else. The wrapper element carries the
+   * `data-pm-slice` that records the open depths, so it is handed to the parser
+   * whole rather than through innerHTML.
+   */
+  function copy(ed: RichTextEditor, from: number, to: number): { html: string; text: string } {
+    const { dom, text } = ed.view.serializeForClipboard(ed.view.state.doc.slice(from, to));
+    return { html: (dom as HTMLElement).innerHTML, text };
+  }
+
+  function paste(ed: RichTextEditor, clipboard: { html: string; text: string }, target: number): Slice {
+    place(ed, target);
+    const slice = parseFromClipboard(
+      ed.view,
+      clipboard.text,
+      clipboard.html,
+      false,
+      ed.view.state.selection.$from,
+    );
+    if (!slice) throw new Error('the clipboard produced nothing');
+    ed.view.dispatch(ed.view.state.tr.replaceSelection(slice));
+    return slice;
+  }
+
+  /** The node kinds produced by copying the whole first paragraph and pasting it. */
+  function pastedKinds(ed: RichTextEditor): string[] {
+    const clipboard = copy(ed, find(ed, 'one'), after(ed, 'two'));
+    place(ed, after(ed, 'two'));
+    const slice = parseFromClipboard(ed.view, clipboard.text, clipboard.html, false, ed.view.state.selection.$from);
+    const names: string[] = [];
+    slice?.content.descendants((node: ProseNode) => { names.push(node.type.name); });
+    return names;
+  }
+
+  it('keeps formatting when a formatted phrase is copied', () => {
+    const ed = open('a **bold** b');
+    const clipboard = copy(ed, find(ed, 'bold'), after(ed, 'bold'));
+    paste(ed, clipboard, after(ed, ' b'));
+    expect(ed.getMarkdown()).toBe('a **bold** b**bold**');
+  });
+
+  it('keeps a line break as the same kind of break', () => {
+    const ed = open('one\ntwo');
+    expect(ed.view.state.doc.firstChild?.child(1).type.name).toBe('soft_break');
+
+    expect(pastedKinds(ed)).toContain('soft_break');
+    expect(pastedKinds(ed)).not.toContain('hard_break');
+  });
+
+  it('keeps a hard break distinct from a soft one', () => {
+    const ed = open('one\\\ntwo');
+    expect(pastedKinds(ed)).toContain('hard_break');
+    expect(pastedKinds(ed)).not.toContain('soft_break');
+  });
+
+  it('keeps a whole list, with its numbering and its tightness', () => {
+    const ed = open('3. three\n4. four\n\nafter');
+    const clipboard = copy(ed, 0, ed.view.state.doc.firstChild?.nodeSize ?? 0);
+    paste(ed, clipboard, after(ed, 'after'));
+    expect(ed.getMarkdown()).toBe('3. three\n4. four\n\nafter\n\n3. three\n4. four');
+  });
+
+  it('keeps a code block language', () => {
+    const ed = open('```ts\nconst x = 1;\n```\n\nafter');
+    const clipboard = copy(ed, 0, ed.view.state.doc.firstChild?.nodeSize ?? 0);
+    paste(ed, clipboard, after(ed, 'after'));
+    expect(ed.getMarkdown()).toBe('```ts\nconst x = 1;\n```\n\nafter\n\n```ts\nconst x = 1;\n```');
+  });
+});
+
+describe('an external append', () => {
+  // Ticker's one write primitive: the quick panel, AI and capture all append at the
+  // end of the document and never rewrite it.
+  it('adds blocks at the end without merging into the last paragraph', () => {
+    const ed = open('first paragraph');
+    ed.appendMarkdown('\n\n## Added\n\nsecond paragraph');
+    expect(ed.view.state.doc.childCount).toBe(3);
+    expect(ed.getMarkdown()).toBe('first paragraph\n\n## Added\n\nsecond paragraph');
+  });
+
+  it('reports the appended document through onChange', () => {
+    const seen: string[] = [];
+    const ed = open('one', (md) => seen.push(md));
+    ed.appendMarkdown('\n\ntwo');
+    expect(seen).toEqual(['one\n\ntwo']);
+  });
+
+  it('is undoable as its own step and does not disturb the text before it', () => {
+    const ed = open('one');
+    ed.appendMarkdown('\n\ntwo');
+    press(ed, 'z', MOD);
+    expect(ed.getMarkdown()).toBe('one');
+  });
+});

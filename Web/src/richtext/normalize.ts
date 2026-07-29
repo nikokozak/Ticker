@@ -11,6 +11,8 @@ import { tickerSchema } from './schema';
  *   - a break at the very start or end of a paragraph — markdown trims it;
  *   - emphasis wrapping flanking whitespace — `** b **` is not emphasis at all,
  *     so the spaces must sit outside the marker;
+ *   - whitespace at the end of a line — markdown strips it, and two trailing
+ *     spaces are a hard break;
  *   - a link href markdown would rewrite — a space in a destination ends it, so
  *     `[x](https://h/a b)` is not a link at all and the link is silently lost;
  *   - looseness on a list whose first item starts with a blockquote or a code
@@ -67,17 +69,32 @@ function isBreak(node: ProseNode): boolean {
   return node.type.name === 'soft_break' || node.type.name === 'hard_break';
 }
 
-/** Drop leading, trailing and repeated breaks in one inline sequence. */
+/**
+ * Drop only the breaks markdown cannot write down. Measured, not assumed:
+ *
+ *   `foo\ \ bar`   two hard breaks    ROUND-TRIPS — so Shift+Enter twice works
+ *   `\ foo`        leading hard break ROUND-TRIPS
+ *   `foo \ bar`    soft then hard     ROUND-TRIPS
+ *   `foo\ \n bar`  hard then soft     lost: the two together make a blank line,
+ *                                     which ends the paragraph
+ *   `foo\n\nbar`   two soft breaks    lost, same reason
+ *   `\nfoo`        leading soft break lost: markdown trims it
+ *   anything at the END of a block    lost: markdown trims it
+ *
+ * So a soft break cannot open a line or follow another break, and no break can
+ * end a block. Everything else stays, which is what makes repeated Shift+Enter
+ * behave the way a writer expects instead of silently collapsing.
+ */
 function trimBreaks(children: ProseNode[]): ProseNode[] {
   const kept: ProseNode[] = [];
   for (const child of children) {
-    if (isBreak(child)) {
-      if (kept.length === 0) continue; // leading
-      if (isBreak(kept[kept.length - 1])) continue; // repeated
+    if (child.type === tickerSchema.nodes.soft_break) {
+      if (kept.length === 0) continue; // opens the line
+      if (isBreak(kept[kept.length - 1])) continue; // makes a blank line
     }
     kept.push(child);
   }
-  while (kept.length && isBreak(kept[kept.length - 1])) kept.pop(); // trailing
+  while (kept.length && isBreak(kept[kept.length - 1])) kept.pop(); // ends the block
   return kept;
 }
 
@@ -139,12 +156,60 @@ function normalizeTightness(node: ProseNode): ProseNode {
   return node.type.create({ ...node.attrs, tight: true }, node.content, node.marks);
 }
 
+/**
+ * Drop whitespace at the end of a line. Markdown strips it, and two trailing
+ * spaces are a hard break, so it cannot simply be written out. It could be escaped
+ * the way leading indentation is, but a trailing space is invisible and typing a
+ * word then pressing Enter leaves one, so escaping would put a `&#32;` on the end
+ * of nearly every paragraph in a format the AI and exports read.
+ */
+function trimLineEnds(children: ProseNode[]): ProseNode[] {
+  const out: ProseNode[] = [];
+
+  for (let i = 0; i < children.length; i += 1) {
+    const child = children[i];
+    const endsLine = i + 1 === children.length || isBreak(children[i + 1]);
+    if (!endsLine || !child.isText || !child.text) {
+      out.push(child);
+      continue;
+    }
+
+    const trimmed = child.text.replace(/[ \t]+$/, '');
+    if (trimmed === child.text) out.push(child);
+    else if (trimmed) out.push(tickerSchema.text(trimmed, child.marks));
+    // else: the node was only whitespace, so it disappears entirely
+  }
+
+  return out;
+}
+
+/**
+ * Drop whitespace at the very start of a block. Splitting "bold text" after the
+ * word leaves a paragraph beginning with a space, which is an artifact of the edit
+ * rather than something anyone typed on purpose — and writing it out means a
+ * `&#32;` at the head of the paragraph, in a format the AI reads back.
+ *
+ * Indentation AFTER a line break is left alone: that one is deliberate, and it is
+ * the only way to indent inside a paragraph.
+ */
+function trimBlockStart(children: ProseNode[]): ProseNode[] {
+  const first = children[0];
+  if (!first?.isText || !first.text) return children;
+
+  const trimmed = first.text.replace(/^[ \t]+/, '');
+  if (trimmed === first.text) return children;
+  const rest = children.slice(1);
+  return trimmed ? [tickerSchema.text(trimmed, first.marks), ...rest] : rest;
+}
+
 /** Recursively rebuild the document with only representable inline sequences. */
 export function normalizeForMarkdown(node: ProseNode): ProseNode {
   if (node.isTextblock) {
     const children: ProseNode[] = [];
     node.forEach((child) => children.push(canonicalizeLink(child)));
-    return node.copy(Fragment.fromArray(trimBreaks(expelWhitespace(children))));
+    // Trim line ends BEFORE trimming breaks: dropping a whitespace-only node can
+    // leave two breaks adjacent, and that pair may not be representable.
+    return node.copy(Fragment.fromArray(trimBreaks(trimBlockStart(trimLineEnds(expelWhitespace(children))))));
   }
 
   if (node.isLeaf) return node;

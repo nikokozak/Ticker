@@ -55,11 +55,39 @@ describe('break boundaries and adjacency', () => {
     ['soft then hard break', doc(p(t('foo'), soft(), hard(), t('bar')))],
   ];
   for (const [name, node] of cases) it(name, () => expectClosed(node));
+
+  // Pressing Shift+Enter twice must actually leave a blank line, not silently
+  // collapse to one. Hard breaks repeat fine; only the shapes markdown genuinely
+  // cannot write are removed.
+  it('keeps two hard breaks', () => {
+    const input = doc(p(t('foo'), hard(), hard(), t('bar')));
+    expect(normalizeForMarkdown(input).eq(input)).toBe(true);
+    expectClosed(input);
+  });
+  it('keeps three hard breaks', () => {
+    const input = doc(p(t('foo'), hard(), hard(), hard(), t('bar')));
+    expect(normalizeForMarkdown(input).eq(input)).toBe(true);
+    expectClosed(input);
+  });
+  it('keeps a leading hard break', () => {
+    const input = doc(p(hard(), t('foo')));
+    expect(normalizeForMarkdown(input).eq(input)).toBe(true);
+    expectClosed(input);
+  });
+  it('keeps a soft break followed by a hard break', () => {
+    const input = doc(p(t('foo'), soft(), hard(), t('bar')));
+    expect(normalizeForMarkdown(input).eq(input)).toBe(true);
+    expectClosed(input);
+  });
 });
 
 describe('whitespace at the edges of a line', () => {
-  // Markdown strips it from every line, so without escaping these vanish on reload
-  // — and a doubled trailing space silently turns into a hard break.
+  // Markdown strips it from both ends of every line, so each case is either escaped
+  // or deliberately dropped. Indentation typed after a line break is kept, because
+  // it is the only way to indent inside a paragraph. Whitespace at a block's start
+  // or at any line's end is dropped: it is invisible or an artifact of an edit, and
+  // escaping it would put a `&#32;` in nearly every paragraph of a format the AI
+  // reads back.
   const cases: Array<[string, ProseNode]> = [
     ['leading space in a paragraph', doc(p(t(' foo')))],
     ['leading spaces in a paragraph', doc(p(t('   foo')))],
@@ -78,6 +106,31 @@ describe('whitespace at the edges of a line', () => {
     ['leading space inside a blockquote', doc(S.node('blockquote', null, [p(t(' quoted'))]))],
   ];
   for (const [name, node] of cases) it(name, () => expectClosed(node));
+
+  it('keeps indentation typed after a line break, which is deliberate', () => {
+    const indented = doc(p(t('foo'), soft(), t('   bar')));
+    expect(serializeMarkdown(normalizeForMarkdown(indented))).toBe('foo\n&#32;&#32;&#32;bar');
+    expect(parseMarkdown('foo\n&#32;&#32;&#32;bar').textContent).toBe('foo   bar');
+  });
+
+  it('drops a space at the very start of a block, which is an editing artifact', () => {
+    // Splitting "bold text" after the word leaves the next paragraph starting with
+    // a space; nobody typed it on purpose and writing it out means a leading entity.
+    expect(serializeMarkdown(normalizeForMarkdown(doc(p(t('   foo')))))).toBe('foo');
+  });
+
+  it('drops a trailing space rather than writing an entity nobody wants to read', () => {
+    expect(serializeMarkdown(normalizeForMarkdown(doc(p(t('foo ')))))).toBe('foo');
+    expect(serializeMarkdown(normalizeForMarkdown(doc(p(t('foo  '), soft(), t('bar')))))).toBe('foo\nbar');
+  });
+
+  it('does not leave an unrepresentable break pair behind when a line goes empty', () => {
+    // Trimming " " out of `foo⏎ ⏎bar` would put two soft breaks together, which is
+    // a blank line and ends the paragraph.
+    const input = doc(p(t('foo'), soft(), t('  '), soft(), t('bar')));
+    expectClosed(input);
+    expect(normalizeForMarkdown(input).firstChild?.childCount).toBe(3);
+  });
 });
 
 describe('block syntax at a line start created by a break', () => {
@@ -109,7 +162,9 @@ describe('marked whitespace', () => {
     const link = S.marks.link.create({ href: 'https://x.test', title: null });
     const input = doc(p(S.text(' X1 — ', [bold]), S.text('link ', [bold, link])));
     expectClosed(input);
-    expect(normalizeForMarkdown(input).textContent).toBe(' X1 — link ');
+    // The bold no longer covers the flanking spaces; the block edges then drop them.
+    expect(normalizeForMarkdown(input).textContent).toBe('X1 — link');
+    expect(serializeMarkdown(normalizeForMarkdown(input))).toBe('**X1 — [link](https://x.test)**');
   });
 });
 

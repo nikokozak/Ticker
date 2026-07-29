@@ -279,28 +279,26 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
   text: (state, node, parent, index) => {
     const text = node.text ?? '';
     const previous = index > 0 ? parent.child(index - 1).type.name : '';
-    const next = index + 1 < parent.childCount ? parent.child(index + 1).type.name : '';
-    const isBreak = (name: string) => name === 'soft_break' || name === 'hard_break';
-    const afterBreak = isBreak(previous);
-    // A break starts and ends a line just as the block boundary does.
+    const afterBreak = previous === 'soft_break' || previous === 'hard_break';
+    // A break starts a line just as the block boundary does.
     const startsLine = index === 0 || afterBreak;
-    const endsLine = index + 1 === parent.childCount || isBreak(next);
 
-    // Markdown strips whitespace from both ends of every line, so a space typed at
-    // the start or end of a paragraph — or either side of a Shift+Enter — is gone
-    // on reload, and two trailing spaces silently become a hard break. There is no
-    // escape for a space, but an entity survives: markdown-it decodes entities even
-    // with html off, and they are re-emitted here on the way back out.
-    const entities = (run: string) => run.replace(/ /g, '&#32;').replace(/\t/g, '&#9;');
+    // Markdown strips whitespace from the start of every line, so indentation the
+    // user typed is gone on reload. There is no escape for a space, but an entity
+    // survives: markdown-it decodes entities even with html off, and they are
+    // re-emitted here on the way back out.
+    //
+    // Only the START. Trailing whitespace is invisible, and preserving it would put
+    // a `&#32;` on the end of nearly every paragraph — typing a word and pressing
+    // Enter leaves one — which is real noise in a format the AI and exports read.
+    // normalizeForMarkdown drops it instead, so the two agree.
     const leading = startsLine ? (/^[ \t]+/.exec(text)?.[0] ?? '') : '';
-    const trailing = endsLine && text.length > leading.length ? (/[ \t]+$/.exec(text)?.[0] ?? '') : '';
+    if (leading) state.write(leading.replace(/ /g, '&#32;').replace(/\t/g, '&#9;'));
 
-    if (leading) state.write(entities(leading));
-    const core = text.slice(leading.length, text.length - trailing.length);
     // Once an entity is written the text is no longer at the start of a line, so
     // nothing after it can be read as block syntax.
+    const core = text.slice(leading.length);
     if (core) writeLineStart(state, core, afterBreak && !leading);
-    if (trailing) state.write(entities(trailing));
   },
 }, {
   em: { open: '*', close: '*', mixable: true, expelEnclosingWhitespace: true },
