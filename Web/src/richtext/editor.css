@@ -5,7 +5,22 @@
  * What is NOT here is the point: no rules for concealed markup, no reveal states,
  * no selection-dependent geometry. Formatting is document structure now, so it is
  * styled the way any document is.
+ *
+ * The import below is NOT optional, and it must stay first. This file was
+ * hand-written and got the obvious rules right — pre-wrap, relative positioning —
+ * while missing the ones that are only obvious if you know why they exist:
+ *
+ *   font-variant-ligatures: none   a ligature renders several characters as ONE
+ *                                  glyph, so character geometry stops matching the
+ *                                  text behind it and posAtCoords lands elsewhere
+ *   .ProseMirror li { position: relative }
+ *   .ProseMirror-hideselection *::selection { background: transparent }
+ *   gap-cursor and selected-node styling
+ *
+ * Importing the package's own stylesheet is the only way to not have this list
+ * silently go out of date.
  */
+@import 'prosemirror-view/style/prosemirror.css';
 
 .richtext-editor {
   position: relative;
