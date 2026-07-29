@@ -60,6 +60,9 @@ export class DocumentSession {
 
   private lastSaved: string;
 
+  /** The spans as last persisted, so metadata-only changes still count as dirty. */
+  private lastSavedSpans = '';
+
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   /** Saves run one at a time; a second edit while one is in flight waits for it. */
@@ -72,6 +75,7 @@ export class DocumentSession {
     this.revision = options.revision;
     this.lastSaved = options.editor.getMarkdown();
     if (options.spans?.length) this.restoreSpans(options.spans);
+    this.lastSavedSpans = this.spanFingerprint();
   }
 
   get saveState(): SaveState {
@@ -93,6 +97,19 @@ export class DocumentSession {
   }
 
   /**
+   * Dissolving a span changes no text at all. Comparing markdown alone made such a
+   * save return early, so a span the user dismissed came back on reload.
+   */
+  private spanFingerprint(): string {
+    return JSON.stringify(provenanceSpans(this.options.editor.view.state).map(spanToJSON));
+  }
+
+  private isDirty(): boolean {
+    return this.options.editor.getMarkdown() !== this.lastSaved
+      || this.spanFingerprint() !== this.lastSavedSpans;
+  }
+
+  /**
    * Write now, and resolve when the write has actually happened — what the host
    * waits on before it closes a window or quits.
    */
@@ -111,21 +128,23 @@ export class DocumentSession {
     // Read the document at the moment the write actually runs, never at the moment
     // it was queued: an append may have landed in between, and saving the older
     // snapshot against a newer revision would erase it.
-    const markdown = editor.getMarkdown();
-    if (markdown === this.lastSaved) {
+    if (!this.isDirty()) {
       this.setState('saved');
       return;
     }
 
+    const markdown = editor.getMarkdown();
     const baseRevision = this.revision;
     const spans = this.spansForSave();
+    const fingerprint = this.spanFingerprint();
 
     try {
       const { revision } = await transport.save({ streamId, markdown, baseRevision, spans: spans.map(spanToJSON) });
       if (Number.isFinite(revision)) this.revision = revision;
       this.lastSaved = markdown;
-      // Only settle if nothing was typed while the write was in flight.
-      this.setState(editor.getMarkdown() === markdown ? 'saved' : 'saving');
+      this.lastSavedSpans = fingerprint;
+      // Only settle if nothing changed while the write was in flight.
+      this.setState(this.isDirty() ? 'saving' : 'saved');
     } catch (error) {
       this.setState('error');
       transport.onError?.('Changes could not be saved. Your edits are still in the editor.', error);
@@ -158,11 +177,24 @@ export class DocumentSession {
       return;
     }
 
+    // Whether there is unsaved local work decides everything that follows.
+    const wasDirty = this.isDirty();
+
     this.options.editor.appendMarkdown(payload.fragment);
     this.revision = payload.revision;
-    // The append is already stored; recording it as the saved text keeps the next
-    // save from rewriting the identical document.
+
+    if (wasDirty) {
+      // The stored document has the fragment but NOT the local edits, so the merged
+      // document is still unsaved. Recording it as saved — which is what this used
+      // to do — made the editor report "saved" while the local edit existed only in
+      // memory, and it was gone the next time the stream was opened.
+      this.documentChanged();
+      return;
+    }
+
+    // Nothing local was pending, so the stored document and this one now agree.
     this.lastSaved = this.options.editor.getMarkdown();
+    this.lastSavedSpans = this.spanFingerprint();
     this.setState('saved');
   }
 
@@ -174,19 +206,20 @@ export class DocumentSession {
     if (payload.streamId !== this.options.streamId || typeof payload.markdown !== 'string') return;
     if (!Number.isFinite(payload.revision)) return;
 
-    this.options.editor.setMarkdown(payload.markdown);
-    this.revision = payload.revision;
-    this.lastSaved = this.options.editor.getMarkdown();
-    this.restoreSpans(payload.spans ?? []);
-    this.setState('saved');
+    this.adoptHostDocument(payload);
   }
 
   /** Load a document from the host, as opening a stream or reloading does. */
   documentLoaded(payload: { markdown: string; revision: number; spans?: ProvenanceSpan[] }): void {
+    this.adoptHostDocument(payload);
+  }
+
+  private adoptHostDocument(payload: { markdown: string; revision: number; spans?: ProvenanceSpan[] }): void {
     this.options.editor.setMarkdown(payload.markdown);
     this.revision = payload.revision;
-    this.lastSaved = this.options.editor.getMarkdown();
     this.restoreSpans(payload.spans ?? []);
+    this.lastSaved = this.options.editor.getMarkdown();
+    this.lastSavedSpans = this.spanFingerprint();
     this.setState('saved');
   }
 
@@ -201,9 +234,18 @@ export class DocumentSession {
     view.dispatch(setProvenanceSpans(view.state.tr, valid));
   }
 
-  destroy(): void {
+  /**
+   * Leaving the page. Whatever is pending is written FIRST — clearing the timer and
+   * walking away means an edit made in the last 350ms is simply gone, which is what
+   * clicking Back straight after typing used to do.
+   *
+   * The caller must let this settle before tearing the editor down, since the write
+   * reads the document.
+   */
+  destroy(): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    return this.isDirty() ? this.saveNow() : Promise.resolve();
   }
 
   private setState(next: SaveState): void {

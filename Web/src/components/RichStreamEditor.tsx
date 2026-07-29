@@ -93,8 +93,9 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     setEditor(created);
 
     return () => {
-      session.destroy();
-      created.destroy();
+      // Write what is pending BEFORE tearing the editor down — the write reads the
+      // document, and clicking Back straight after typing must not lose the edit.
+      void session.destroy().finally(() => created.destroy());
       editorRef.current = null;
       sessionRef.current = null;
       setEditor(null);
@@ -125,15 +126,31 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       return;
     }
 
+    if (message.type === 'streamLoaded') {
+      // The answer to a reload this session asked for, after an append it could not
+      // reconcile. The stream id does not change, so React keeps this component
+      // mounted and nothing else would apply the new document.
+      const document = payload?.document as { markdown?: string; revision?: number } | undefined;
+      if (String(payload?.id ?? '') !== stream.id || typeof document?.markdown !== 'string') return;
+      session.documentLoaded({
+        markdown: document.markdown,
+        revision: Number(document.revision ?? 0),
+        spans: (payload?.spans as ProvenanceSpanJSON[] | undefined)?.map(spanFromJSON),
+      });
+      return;
+    }
+
     if (message.type === 'flushEditor') {
-      // The host is closing or quitting and waits for this before it does.
+      // The host is closing or quitting and waits for this before it does. It is
+      // acknowledged either way — leaving the host hung is worse than a failed save
+      // it can see — but a failure still shows as an error and raises a toast.
       const requestId = payload?.requestId;
       if (typeof requestId !== 'string') return;
-      void session.saveNow().then(() => {
+      void session.saveNow().finally(() => {
         bridge.send({ type: 'editorFlushed', payload: { requestId } });
       });
     }
-  }), []);
+  }), [stream.id]);
 
   const saveTitle = useCallback(() => {
     const next = title.trim() || 'Untitled';

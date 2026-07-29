@@ -167,6 +167,68 @@ describe('an append from outside the editor', () => {
   });
 });
 
+describe('an append landing on unsaved edits', () => {
+  it('does not call the merged document saved', async () => {
+    // The reproduction: type, receive an append, flush. The editor said "saved"
+    // and wrote nothing, while the database held only the appended text — the
+    // local edit was gone. lastSaved had been set to a document containing work
+    // that was never persisted.
+    const h = open('base', 3);
+    type(h.ed, 'LOCAL ');
+    h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nREMOTE', revision: 4 });
+
+    await h.session.saveNow();
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0].markdown).toBe('LOCAL base\n\nREMOTE');
+    expect(h.saves[0].baseRevision).toBe(4); // against the revision the append made
+  });
+
+  it('still avoids a pointless write when there were no local edits', async () => {
+    const h = open('base', 3);
+    h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nREMOTE', revision: 4 });
+    await h.session.saveNow();
+    expect(h.saves).toHaveLength(0);
+  });
+});
+
+describe('leaving the page inside the autosave delay', () => {
+  it('writes the edit instead of dropping it', async () => {
+    // Type and immediately click Back. destroy() used to just clear the timer, so
+    // the edit was never written and was simply gone on reopening.
+    const h = open('start');
+    type(h.ed, 'x');
+    await h.session.destroy();
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0].markdown).toBe('xstart');
+  });
+
+  it('writes nothing when there is nothing to write', async () => {
+    const h = open('start');
+    await h.session.destroy();
+    expect(h.saves).toHaveLength(0);
+  });
+});
+
+describe('metadata is part of being dirty', () => {
+  it('saves when provenance changes but the text does not', async () => {
+    // Dissolving a span changes no text. Comparing markdown alone made the save
+    // return early, so the dismissed span came back on reload.
+    const h = open('One. The AI wrote this. Three.');
+    let at = -1;
+    h.ed.view.state.doc.descendants((node, pos) => {
+      if (at < 0 && node.isText && node.text?.includes('The AI wrote this.')) at = pos + node.text.indexOf('The AI wrote this.');
+    });
+    const range = { from: at, to: at + 'The AI wrote this.'.length };
+    h.ed.view.dispatch(addProvenanceSpans(h.ed.view.state.tr, [{
+      spanId: 's1', ...range, origin: 'ai', meta: {},
+      textHash: hashProvenanceText(h.ed.view.state.doc, range), createdAt: 0,
+    }]));
+    await h.session.saveNow();
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0].spans).toHaveLength(1);
+  });
+});
+
 describe('a conflict', () => {
   it('takes the host copy, because it holds work this editor never saw', () => {
     const h = open('mine', 3);
