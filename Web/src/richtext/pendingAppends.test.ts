@@ -263,8 +263,19 @@ describe('a session opening a stream with pending appends', () => {
     expect(h.saves.map((save) => save.resolvedPendingThrough)).not.toContain(4);
   });
 
-  it('never claims rows it did not convert', async () => {
+  it('claims only the revision it was told holds no rows', async () => {
+    // No rows at or below 3, so saying 3 forgets nothing — and saying it is what
+    // lets a LIVE append, whose row this session does convert, be forgotten in turn.
     const h = open('base', 3, []);
+    h.ed.view.dispatch(h.ed.view.state.tr.insertText('x', 1));
+    await h.session.saveNow();
+    expect(h.saves[0].resolvedPendingThrough).toBe(3);
+  });
+
+  it('claims nothing at all once a replay has been abandoned', async () => {
+    // The rows it could not convert are at or below this revision, so any claim
+    // would take them with it.
+    const h = open('existing text\n\nnot what the rows describe', 4, [row(4, 'a different fragment')]);
     h.ed.view.dispatch(h.ed.view.state.tr.insertText('x', 1));
     await h.session.saveNow();
     expect(h.saves[0].resolvedPendingThrough).toBeUndefined();

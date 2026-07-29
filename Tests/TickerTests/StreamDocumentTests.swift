@@ -4104,6 +4104,50 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    /// The editor's opening snapshot has to describe ONE state.
+    ///
+    /// Read separately, an append landing between the reads hands the editor a
+    /// document and a set of rows that never existed together — a row past the
+    /// document's revision, or a fragment on the end with no row to explain it.
+    /// Replaying is a proof about one consistent state, so either shape can only be
+    /// refused, and every append's provenance is lost for nothing.
+    func test_editorSnapshotIsInternallyConsistentUnderConcurrentAppends() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Snapshot")
+            try service.saveStream(stream)
+            _ = try service.saveStreamDocument(streamId: stream.id, markdown: "base", baseRevision: 0)
+
+            // Appends running WHILE the snapshot is read, repeatedly, so an
+            // interleaving actually gets a chance to happen rather than being
+            // argued away.
+            let done = expectation(description: "appends finished")
+            DispatchQueue.global().async {
+                for i in 0..<40 {
+                    _ = try? service.appendToStreamDocument(streamId: stream.id, fragment: "fragment \(i)")
+                }
+                done.fulfill()
+            }
+
+            for _ in 0..<40 {
+                let snapshot = try service.loadEditorSnapshot(streamId: stream.id)
+                // No row may describe an append the document has not got yet.
+                XCTAssertNil(snapshot.pendingAppends.first(where: { $0.revision > snapshot.document.revision }),
+                             "a pending row ran ahead of the document it was read with")
+                // And every row has to peel off the end of that same document,
+                // newest first — which is exactly what the editor's replay does.
+                var remaining = snapshot.document.markdown
+                for row in snapshot.pendingAppends.sorted(by: { $0.revision > $1.revision }) {
+                    let suffix = "\(row.separator)\(row.fragment)"
+                    XCTAssertTrue(remaining.hasSuffix(suffix),
+                                  "row \(row.revision) is not on the end of the document it was read with")
+                    remaining = String(remaining.dropLast(suffix.count))
+                }
+            }
+
+            wait(for: [done], timeout: 30)
+        }
+    }
+
     func test_staleRevisionSaveDoesNotClobberInterleavedAppend() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Conflict Guard")

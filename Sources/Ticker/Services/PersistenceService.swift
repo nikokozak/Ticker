@@ -17,6 +17,13 @@ struct AppendResult {
     let spans: [ProvenanceSpan]
 }
 
+/// What an editor opens a stream with, read as one consistent state.
+struct EditorSnapshot {
+    let document: StreamDocument
+    let spans: [ProvenanceSpan]
+    let pendingAppends: [PendingStreamAppend]
+}
+
 struct StreamDocumentRevisionConflict: Error {
     let streamId: UUID
     let markdown: String
@@ -921,44 +928,67 @@ final class PersistenceService {
     @discardableResult
     func loadOrCreateStreamDocument(streamId: UUID) throws -> StreamDocument {
         try dbQueue.write { db in
-            if let row = try Row.fetchOne(
-                db,
-                sql: "SELECT stream_id, markdown, revision, scroll_offset, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
-                arguments: [streamId.uuidString]
-            ) {
-                return StreamDocument(
-                    streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
-                    markdown: row["markdown"],
-                    revision: row["revision"],
-                    scrollOffset: row["scroll_offset"],
-                    createdAt: Date(timeIntervalSince1970: row["created_at"]),
-                    updatedAt: Date(timeIntervalSince1970: row["updated_at"])
-                )
-            }
+            try loadOrCreateStreamDocument(streamId: streamId, db: db)
+        }
+    }
 
-            // v12 seeds stream_documents for any legacy stream that still has cells,
-            // so reaching this path means the stream is genuinely document-empty.
-            let markdown = ""
-            let now = Date()
-            let nowTs = now.timeIntervalSince1970
-
-            try db.execute(
-                sql: """
-                    INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
-                    VALUES (?, ?, ?, ?)
-                """,
-                arguments: [streamId.uuidString, markdown, nowTs, nowTs]
-            )
-
-            return StreamDocument(
-                streamId: streamId,
-                markdown: markdown,
-                revision: 0,
-                scrollOffset: 0,
-                createdAt: now,
-                updatedAt: now
+    /// Everything an editor needs to open a stream, read in ONE transaction.
+    ///
+    /// Separate reads let an append land between them, and the editor then sees a
+    /// document and a set of pending rows that never existed together: a row past
+    /// the document's revision, or a fragment on the end of the document with no row
+    /// to explain it. Replaying is a proof about a single consistent state, so both
+    /// of those look like corruption and the whole replay is refused — losing the
+    /// provenance of every append, for nothing.
+    func loadEditorSnapshot(streamId: UUID) throws -> EditorSnapshot {
+        // A write, not a read, because the document may have to be created.
+        try dbQueue.write { db in
+            EditorSnapshot(
+                document: try loadOrCreateStreamDocument(streamId: streamId, db: db),
+                spans: try fetchSpans(streamId: streamId, db: db),
+                pendingAppends: try fetchPendingAppends(streamId: streamId, db: db)
             )
         }
+    }
+
+    private func loadOrCreateStreamDocument(streamId: UUID, db: Database) throws -> StreamDocument {
+        if let row = try Row.fetchOne(
+            db,
+            sql: "SELECT stream_id, markdown, revision, scroll_offset, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+            arguments: [streamId.uuidString]
+        ) {
+            return StreamDocument(
+                streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
+                markdown: row["markdown"],
+                revision: row["revision"],
+                scrollOffset: row["scroll_offset"],
+                createdAt: Date(timeIntervalSince1970: row["created_at"]),
+                updatedAt: Date(timeIntervalSince1970: row["updated_at"])
+            )
+        }
+
+        // v12 seeds stream_documents for any legacy stream that still has cells,
+        // so reaching this path means the stream is genuinely document-empty.
+        let markdown = ""
+        let now = Date()
+        let nowTs = now.timeIntervalSince1970
+
+        try db.execute(
+            sql: """
+                INSERT INTO stream_documents (stream_id, markdown, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+            """,
+            arguments: [streamId.uuidString, markdown, nowTs, nowTs]
+        )
+
+        return StreamDocument(
+            streamId: streamId,
+            markdown: markdown,
+            revision: 0,
+            scrollOffset: 0,
+            createdAt: now,
+            updatedAt: now
+        )
     }
 
     func saveScrollOffset(streamId: UUID, offset: Double) throws {
@@ -1413,23 +1443,27 @@ final class PersistenceService {
     /// Appends this stream has recorded but no editor has converted yet.
     func loadPendingAppends(streamId: UUID) throws -> [PendingStreamAppend] {
         try dbQueue.read { db in
-            try Row.fetchAll(
-                db,
-                sql: """
-                    SELECT revision, separator, fragment, raw_spans_json
-                    FROM pending_stream_appends
-                    WHERE stream_id = ?
-                    ORDER BY revision ASC
-                """,
-                arguments: [streamId.uuidString]
-            ).map { row in
-                PendingStreamAppend(
-                    revision: row["revision"],
-                    separator: row["separator"],
-                    fragment: row["fragment"],
-                    rawSpansJSON: row["raw_spans_json"]
-                )
-            }
+            try fetchPendingAppends(streamId: streamId, db: db)
+        }
+    }
+
+    private func fetchPendingAppends(streamId: UUID, db: Database) throws -> [PendingStreamAppend] {
+        try Row.fetchAll(
+            db,
+            sql: """
+                SELECT revision, separator, fragment, raw_spans_json
+                FROM pending_stream_appends
+                WHERE stream_id = ?
+                ORDER BY revision ASC
+            """,
+            arguments: [streamId.uuidString]
+        ).map { row in
+            PendingStreamAppend(
+                revision: row["revision"],
+                separator: row["separator"],
+                fragment: row["fragment"],
+                rawSpansJSON: row["raw_spans_json"]
+            )
         }
     }
 

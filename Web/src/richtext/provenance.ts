@@ -191,28 +191,6 @@ export function spanFromJSON(json: ProvenanceSpanJSON): ProvenanceSpan {
   };
 }
 
-/**
- * Place spans that were recorded against a FRAGMENT into the document that fragment
- * was just appended to.
- *
- * The host cannot do this itself: it would have to parse the document to know what
- * a ProseMirror position is, and its coordinates are relative to the fragment
- * anyway. What it can say is "these positions, inside this fragment" — and because
- * the fragment is inserted as whole blocks, a position inside the parsed fragment
- * is exactly the insertion point plus that position, minus the fragment document's
- * own leading boundary.
- */
-export function placeAppendedSpans(
-  spans: ProvenanceSpanJSON[],
-  inserted: { from: number },
-): ProvenanceSpan[] {
-  return spans.map(spanFromJSON).map((span) => ({
-    ...span,
-    from: span.from + inserted.from,
-    to: span.to + inserted.from,
-  }));
-}
-
 export function spanToJSON(span: ProvenanceSpan): ProvenanceSpanJSON {
   return {
     spanId: span.spanId,

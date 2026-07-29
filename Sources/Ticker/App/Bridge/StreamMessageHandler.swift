@@ -295,14 +295,23 @@ final class StreamMessageHandler: BridgeMessageHandler {
         }
         delegate?.setCurrentStreamIdForFileDrops(id)
         await delegate?.closePDFPaneIfShowingDifferentStream(id)
-        let document = try persistence.loadOrCreateStreamDocument(streamId: id)
-        let spans = try persistence.loadSpans(streamId: id)
+        // The document, its spans and its pending appends TOGETHER, in one
+        // transaction. Read separately, an append can land in between, and the
+        // editor is then handed a state that never existed — a row past the
+        // document's revision, or a fragment on the end of the document with no row
+        // to explain it. Replaying is a proof about one consistent state, so either
+        // one can only be refused, and the provenance of every append is lost for
+        // nothing.
+        //
+        // Those appends were made while no editor was open. Their provenance is
+        // still in fragment coordinates, since only an editor can turn those into
+        // document positions, so they travel with the document and are cleared by
+        // the save that follows.
+        let snapshot = try persistence.loadEditorSnapshot(streamId: id)
+        let document = snapshot.document
+        let spans = snapshot.spans
+        let pendingAppends = snapshot.pendingAppends
         let marginNotes = try persistence.loadMarginNotes(streamId: id)
-        // Appends made while no editor was open. Their provenance is still in
-        // fragment coordinates — only an editor can turn those into document
-        // positions — so they travel with the document and are cleared by the save
-        // that follows.
-        let pendingAppends = try persistence.loadPendingAppends(streamId: id)
         let streamPayload = StreamCodec.encodeStream(stream, document: document)
         var payload: [String: AnyCodable] = [
             "stream": AnyCodable(streamPayload),

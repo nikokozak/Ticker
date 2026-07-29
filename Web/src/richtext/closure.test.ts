@@ -406,6 +406,62 @@ describe('lists', () => {
   });
 });
 
+describe('lists that sit next to each other', () => {
+  // Two lists of one kind with nothing between them are ONE list in markdown, since
+  // the only thing a blank line does inside a list is make it loose. This is not an
+  // exotic shape: appending is how everything outside the editor writes, so a stream
+  // ending in a list and an append starting with one produce it immediately — and
+  // the merge shifts every position after it, so provenance stops covering its text.
+  const item = (text: string) => S.node('list_item', null, [p(t(text))]);
+  const bullets = (...texts: string[]) => S.node('bullet_list', { tight: true }, texts.map(item));
+  const numbers = (order: number, ...texts: string[]) => S.node('ordered_list', { order, tight: true }, texts.map(item));
+
+  it('keeps two bullet lists apart', () => {
+    const two = doc(bullets('one'), bullets('two'));
+    expectClosed(two);
+    expect(serializeMarkdown(two)).toContain('- two');
+  });
+
+  it('keeps three bullet lists apart', () => {
+    // Only NEIGHBOURS can merge, so alternating two markers is enough however many
+    // there are: the third may go back to '*' because the second is '-'.
+    expectClosed(doc(bullets('one'), bullets('two'), bullets('three')));
+  });
+
+  it('keeps two ordered lists apart', () => {
+    const two = doc(numbers(1, 'one'), numbers(1, 'two'));
+    expectClosed(two);
+    expect(serializeMarkdown(two)).toContain('1) two');
+  });
+
+  it('keeps an ordered list that restarts its numbering', () => {
+    // The shape an append actually produces: the same numbers again, which without
+    // separate lists would silently renumber to 1, 2.
+    expectClosed(doc(numbers(1, 'one'), numbers(1, 'one again')));
+  });
+
+  it('leaves lists of different kinds alone', () => expectClosed(doc(bullets('a'), numbers(1, 'b'))));
+
+  it('keeps a loose list next to a tight one', () => expectClosed(doc(
+    S.node('bullet_list', { tight: false }, [item('a'), item('b')]),
+    bullets('c'),
+  )));
+
+  it('keeps adjacent lists apart inside a blockquote', () => expectClosed(
+    doc(S.node('blockquote', null, [bullets('one'), bullets('two')])),
+  ));
+
+  it('keeps adjacent lists apart nested in a list item', () => expectClosed(
+    doc(S.node('bullet_list', { tight: false }, [
+      S.node('list_item', null, [p(t('outer')), bullets('one'), bullets('two')]),
+    ])),
+  ));
+
+  it('keeps a list apart from one an append adds after a paragraph', () => expectClosed(
+    doc(bullets('one'), p(t('between')), bullets('two')),
+  ));
+});
+
 describe('images and links', () => {
   const img = (attrs: Record<string, unknown>) => S.node('image', attrs);
   it('asset image with width', () => expectClosed(doc(p(img({ src: 'ticker-asset://s/a.png', alt: 'x', title: null, width: 300 })))));

@@ -253,6 +253,31 @@ function listIsTight(tokens: readonly Token[], index: number): boolean {
   return true;
 }
 
+/**
+ * How many lists of this exact kind sit immediately before this one.
+ *
+ * Two adjacent lists of the same kind are ONE list in markdown — there is no blank
+ * line that separates them, because a blank line inside a list only makes it loose.
+ * So `* one` followed by a separate `* two` is written, reloaded, and comes back as
+ * a single list with two items.
+ *
+ * That is not a cosmetic difference. Appending is how everything outside the editor
+ * writes (the quick panel, the AI), so a stream whose last block is a list and whose
+ * next append starts with one hits it immediately — and the merge SHIFTS every
+ * position after it, so provenance spans stop covering the text they recorded.
+ *
+ * CommonMark's own answer is that changing the bullet character or the ordered
+ * delimiter starts a new list. Alternating them keeps both lists, keeps each of them
+ * tight, and changes nothing else about the document.
+ */
+function adjacentRun(parent: ProseNode | null, index: number): number {
+  if (!parent) return 0;
+  const type = parent.child(index).type;
+  let run = 0;
+  for (let i = index - 1; i >= 0 && parent.child(i).type === type; i -= 1) run += 1;
+  return run;
+}
+
 function imageMarkdown(node: ProseNode, state: MarkdownSerializerState): string {
   // state.esc already applies escapeExtraCharacters, which covers entity syntax;
   // src and title are written raw and so need escapeEntities themselves.
@@ -294,14 +319,18 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
     state.write('---');
     state.closeBlock(node);
   },
-  bullet_list: (state, node) => state.renderList(node, '  ', () => '* '),
-  ordered_list: (state, node) => {
+  bullet_list: (state, node, parent, index) => {
+    const marker = adjacentRun(parent, index) % 2 === 0 ? '*' : '-';
+    state.renderList(node, '  ', () => `${marker} `);
+  },
+  ordered_list: (state, node, parent, index) => {
+    const delimiter = adjacentRun(parent, index) % 2 === 0 ? '.' : ')';
     const start = node.attrs.order == null ? 1 : Number(node.attrs.order);
     const maxWidth = String(start + node.childCount - 1).length;
     const space = state.repeat(' ', maxWidth + 2);
     state.renderList(node, space, (i) => {
       const label = String(start + i);
-      return `${state.repeat(' ', maxWidth - label.length)}${label}. `;
+      return `${state.repeat(' ', maxWidth - label.length)}${label}${delimiter} `;
     });
   },
   list_item: (state, node) => state.renderContent(node),

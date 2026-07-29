@@ -5,7 +5,7 @@ import type { Stream } from '../types/models';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import { DocumentSession, type SaveState } from '../richtext/session';
 import { spanFromJSON, type ProvenanceSpanJSON } from '../richtext/provenance';
-import { parseRawSpans } from '../richtext/pendingAppends';
+import { parseRawSpans, type PendingAppend } from '../richtext/pendingAppends';
 import { useToastStore } from '../store/toastStore';
 import {
   activeFormats,
@@ -37,6 +37,14 @@ interface RichStreamEditorProps {
 
 const PDF_URL_PREFIX = 'ticker-pdf://';
 
+/** The store's rows, in the shape the session proves things about. */
+const decodePendingAppends = (rows: Stream['pendingAppends']): PendingAppend[] => (rows ?? []).map((append) => ({
+  revision: append.revision,
+  separator: append.separator,
+  fragment: append.fragment,
+  rawSpans: parseRawSpans(append.rawSpansJSON),
+}));
+
 const SAVE_LABEL: Record<SaveState, string> = {
   saved: 'Saved',
   saving: 'Saving…',
@@ -50,6 +58,8 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
 
   const [editor, setEditor] = useState<RichTextEditor | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('saved');
+  const [leaving, setLeaving] = useState(false);
+  const deleting = useRef(false);
   const [xray, setXray] = useState(false);
   const [title, setTitle] = useState(stream.title);
   const [, redraw] = useState(0);
@@ -88,12 +98,7 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       editor: created,
       revision: stream.document?.revision ?? 0,
       spans: (stream.spans ?? []).map(spanFromJSON),
-      pendingAppends: (stream.pendingAppends ?? []).map((append) => ({
-        revision: append.revision,
-        separator: append.separator,
-        fragment: append.fragment,
-        rawSpans: parseRawSpans(append.rawSpansJSON),
-      })),
+      pendingAppends: decodePendingAppends(stream.pendingAppends),
       transport: {
         // Spelled out rather than spread: the contract checker verifies this
         // payload statically against bridge.v2.json, and can only do that for a
@@ -113,17 +118,48 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     setEditor(created);
 
     return () => {
-      // Write what is pending BEFORE tearing the editor down — the write reads the
-      // document, and clicking Back straight after typing must not lose the edit.
+      editorRef.current = null;
+      sessionRef.current = null;
+      setEditor(null);
+
+      // Saving a document the user just deleted writes a row for a stream that is
+      // gone, and reports the failure as if their writing were at risk.
+      if (deleting.current) {
+        created.destroy();
+        return;
+      }
+
+      // The backstop, for unmounts that did not come through `leave` below —
+      // nothing may tear the editor down before what is pending has been written,
+      // because the write reads the document.
       void session.destroy().then((saved) => {
         if (!saved) addToast('Some changes could not be saved before leaving the stream.', 'error');
         created.destroy();
       });
-      editorRef.current = null;
-      sessionRef.current = null;
-      setEditor(null);
     };
   }, [addToast, onUpdate, openLink, stream.id]);
+
+  /**
+   * Leaving is not a render, it is a write that can fail.
+   *
+   * Cleanup cannot gate it: by the time an effect's teardown runs, the navigation
+   * has already happened, so a failed save could only be reported after the editor
+   * — the one place the text still existed — was gone. So the save happens first
+   * and the page is left only if it actually landed.
+   */
+  const leave = useCallback(async () => {
+    const session = sessionRef.current;
+    if (!session) return onBack();
+    setLeaving(true);
+    if (await session.destroy()) return onBack();
+    setLeaving(false);
+    addToast('Your changes could not be saved, so this stream stayed open.', 'error');
+  }, [addToast, onBack]);
+
+  const remove = useCallback(() => {
+    deleting.current = true;
+    onDelete();
+  }, [onDelete]);
 
   useEffect(() => bridge.onMessage((message) => {
     const session = sessionRef.current;
@@ -135,6 +171,11 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
         streamId: String(payload?.streamId ?? ''),
         fragment: String(payload?.fragment ?? ''),
         revision: Number(payload?.revision),
+        // Offsets into the fragment's own markdown, which is all the host can know
+        // without parsing the document. Not forwarding them — which is what this
+        // did — dropped the provenance of everything the AI and the quick panel
+        // wrote while the stream was open.
+        spans: payload?.spans as ProvenanceSpanJSON[] | undefined,
       });
       return;
     }
@@ -183,8 +224,12 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       markdown: document.markdown,
       revision: document.revision,
       spans: (stream.spans ?? []).map(spanFromJSON),
+      // The reloaded document brings its own rows. Without them the session could
+      // never let the store forget another one, and a row that outlives the
+      // revision it was recorded at can never be replayed.
+      pendingAppends: decodePendingAppends(stream.pendingAppends),
     });
-  }, [stream.document, stream.spans]);
+  }, [stream.document, stream.pendingAppends, stream.spans]);
 
   const saveTitle = useCallback(() => {
     const next = title.trim() || 'Untitled';
@@ -219,7 +264,7 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
   return (
     <div className="stream-editor">
       <header className="stream-header">
-        <button onClick={onBack} className="back-button">← Back</button>
+        <button onClick={leave} disabled={leaving} className="back-button">← Back</button>
         <input
           type="text"
           className="stream-title-input"
@@ -246,7 +291,7 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
           >
             Xray
           </button>
-          <button onClick={onDelete} className="delete-button" title="Delete stream">Delete</button>
+          <button onClick={remove} className="delete-button" title="Delete stream">Delete</button>
         </div>
       </header>
 

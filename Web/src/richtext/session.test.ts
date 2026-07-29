@@ -16,7 +16,12 @@ let session: DocumentSession | null = null;
 interface Harness {
   ed: RichTextEditor;
   session: DocumentSession;
-  saves: Array<{ markdown: string; baseRevision: number; spans: ProvenanceSpanJSON[] }>;
+  saves: Array<{
+    markdown: string;
+    baseRevision: number;
+    spans: ProvenanceSpanJSON[];
+    resolvedPendingThrough?: number;
+  }>;
   reloads: string[];
   states: SaveState[];
   errors: string[];
@@ -36,13 +41,22 @@ function open(markdown: string, revision = 1, spans: ProvenanceSpan[] = []): Har
 
   const transport: SessionTransport = {
     async save(request) {
-      saves.push({ markdown: request.markdown, baseRevision: request.baseRevision, spans: request.spans });
+      saves.push({
+        markdown: request.markdown,
+        baseRevision: request.baseRevision,
+        spans: request.spans,
+        resolvedPendingThrough: request.resolvedPendingThrough,
+      });
       if (failure) {
         const reason = failure;
         failure = null;
         throw new Error(reason);
       }
-      revisionCounter += 1;
+      // What the store actually does: a save is accepted against the revision it
+      // names and produces the next one. Counting from the opening revision instead
+      // made the harness answer with a stale number after any external append, and
+      // the session — correctly — rejected it.
+      revisionCounter = request.baseRevision + 1;
       return { revision: revisionCounter };
     },
     reload: (streamId) => reloads.push(streamId),
@@ -143,11 +157,18 @@ describe('an append from outside the editor', () => {
     expect(h.session.currentRevision).toBe(4);
   });
 
-  it('does not then re-save the identical document', async () => {
+  it('saves once, to let the store forget the append it recorded', async () => {
+    // The text is already stored — the append is what put it there — so this write
+    // exists for the ROW. Every append records one, and only an editor that has
+    // taken its provenance into the document may say it can be forgotten. Left
+    // behind, the row outlives the revision it was recorded at, and a replay that
+    // peels fragments off the END of the document can never use it again.
     const h = open('first', 3);
-    h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nappended', revision: 4 });
+    h.session.documentAppended({ streamId: 'stream-1', fragment: 'appended', revision: 4 });
     await h.session.saveNow();
-    expect(h.saves).toHaveLength(0);
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0].markdown).toBe('first\n\nappended');
+    expect(h.saves[0].resolvedPendingThrough).toBe(4);
   });
 
   it('reloads instead of patching when a revision is MISSING', () => {
@@ -184,30 +205,48 @@ describe('an append landing on unsaved edits', () => {
     expect(h.saves[0].baseRevision).toBe(4); // against the revision the append made
   });
 
-  it('still avoids a pointless write when there were no local edits', async () => {
+  it('writes the append itself back exactly once', async () => {
     const h = open('base', 3);
-    h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nREMOTE', revision: 4 });
+    h.session.documentAppended({ streamId: 'stream-1', fragment: 'REMOTE', revision: 4 });
     await h.session.saveNow();
-    expect(h.saves).toHaveLength(0);
+    // One write, to clear the append's row; then nothing more to say.
+    expect(h.saves).toHaveLength(1);
+    await h.session.saveNow();
+    expect(h.saves).toHaveLength(1);
   });
 });
 
 describe('provenance that arrives with an append', () => {
-  it('is installed at the right place and survives the next save', async () => {
-    // The host cannot know a ProseMirror position — it would have to parse the
-    // document — so it sends positions relative to the FRAGMENT. Dropping them,
-    // which is what happened before, meant the next save replaced the whole stored
-    // span set and erased the append's provenance, orphaning its AI exchange.
-    const h = open('existing text', 3);
-    const fragment = '\n\nThe AI appended this.';
-    // Positions inside the parsed fragment: 1 opens its paragraph.
-    const spans = [{
-      spanId: 'appended-1', start: 1, end: 1 + 'The AI appended this.'.length,
-      origin: 'ai', requestId: 'req-1', meta: '{}',
-      textHash: fnv1a('The AI appended this.'), createdAt: new Date(0).toISOString(),
-    }];
+  /**
+   * What the host ACTUALLY sends. Every producer — the quick panel, document AI, the
+   * URL scheme — builds the same shape: offsets into the fragment's own markdown,
+   * from 0 to its length, hashed over that raw markdown. It cannot send anything
+   * else without parsing the document, which is the editor's job.
+   *
+   * An earlier version of this test invented ProseMirror positions instead (a span
+   * starting at 1, "inside the parsed fragment"), so it proved the live path worked
+   * on coordinates nothing produces.
+   */
+  const wireSpan = (fragment: string, overrides: Record<string, unknown> = {}): ProvenanceSpanJSON => ({
+    spanId: 'appended-1',
+    start: 0,
+    end: fragment.length,
+    origin: 'ai',
+    requestId: 'req-1',
+    meta: '{}',
+    textHash: fnv1a(fragment),
+    createdAt: new Date(0).toISOString(),
+    ...overrides,
+  });
 
-    h.session.documentAppended({ streamId: 'stream-1', fragment, revision: 4, spans });
+  it('is installed at the right place and survives the next save', async () => {
+    // Dropping it, which is what happened before, meant the next save replaced the
+    // whole stored span set and erased the append's provenance, orphaning its AI
+    // exchange.
+    const h = open('existing text', 3);
+    const fragment = 'The AI appended this.';
+
+    h.session.documentAppended({ streamId: 'stream-1', fragment, revision: 4, spans: [wireSpan(fragment)] });
 
     const installed = provenanceSpans(h.ed.view.state);
     expect(installed, 'append provenance was dropped').toHaveLength(1);
@@ -218,12 +257,47 @@ describe('provenance that arrives with an append', () => {
     expect(h.saves[0].spans.map((span) => span.spanId)).toContain('appended-1');
   });
 
+  it('places it over the text, not over the markup', () => {
+    // The offsets are into MARKDOWN, so a fragment with any formatting has more
+    // characters than the document does. Reading them as positions would land the
+    // highlight past the end of what was appended.
+    const h = open('existing text', 3);
+    const fragment = 'The **AI** appended this.';
+    h.session.documentAppended({ streamId: 'stream-1', fragment, revision: 4, spans: [wireSpan(fragment)] });
+
+    const [installed] = provenanceSpans(h.ed.view.state);
+    expect(installed, 'append provenance was dropped').toBeDefined();
+    expect(h.ed.view.state.doc.textBetween(installed.from, installed.to)).toBe('The AI appended this.');
+    // Rehashed over the document text: the markdown hash would never match again.
+    expect(installed.textHash).toBe(fnv1a('The AI appended this.'));
+  });
+
+  it('does not let the store forget a row whose spans it could not place', async () => {
+    // Half a conversion is worse than none: the save that follows would clear the
+    // row, so what could not be placed is gone rather than merely deferred.
+    const h = open('existing text', 3);
+    const fragment = 'one\n\ntwo';
+    h.session.documentAppended({
+      streamId: 'stream-1',
+      fragment,
+      revision: 4,
+      spans: [wireSpan(fragment), wireSpan(fragment, { spanId: 'appended-2', textHash: 'drifted' })],
+    });
+
+    expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
+    type(h.ed, 'edit ');
+    await h.session.saveNow();
+    // Still 3 — what it knew before the append. It must not reach 4, because the
+    // store deletes everything at or below what it is told.
+    expect(h.saves[0].resolvedPendingThrough).toBe(3);
+  });
+
   it('refuses a span whose text does not match what arrived', () => {
     const h = open('existing text', 3);
     h.session.documentAppended({
-      streamId: 'stream-1', fragment: '\n\nappended', revision: 4,
+      streamId: 'stream-1', fragment: 'appended', revision: 4,
       spans: [{
-        spanId: 'bad', start: 1, end: 9, origin: 'ai', meta: '{}',
+        spanId: 'bad', start: 0, end: 8, origin: 'ai', meta: '{}',
         textHash: 'wrong', createdAt: new Date(0).toISOString(),
       }],
     });
@@ -284,6 +358,7 @@ describe('a save that finishes after the document moved on', () => {
     const started = new Promise<void>((resolve) => { announceStart = resolve; });
     let release: (value: { revision: number }) => void = () => {};
     let held = true;
+    let failNext = false;
 
     editor = createRichTextEditor({ parent, markdown, onChange: () => session?.documentChanged() });
     session = new DocumentSession({
@@ -294,7 +369,10 @@ describe('a save that finishes after the document moved on', () => {
       transport: {
         save: (request) => {
           saves.push(request.markdown);
-          if (!held) return Promise.resolve({ revision: revision + saves.length });
+          if (!held) {
+            if (failNext) { failNext = false; return Promise.reject(new Error('offline')); }
+            return Promise.resolve({ revision: revision + saves.length });
+          }
           held = false;
           announceStart();
           return new Promise((resolve) => { release = resolve; });
@@ -303,7 +381,14 @@ describe('a save that finishes after the document moved on', () => {
       },
     });
 
-    return { ed: editor, session, saves, started, release: (r: number) => release({ revision: r }) };
+    return {
+      ed: editor,
+      session,
+      saves,
+      started,
+      release: (r: number) => release({ revision: r }),
+      failNextSave: () => { failNext = true; },
+    };
   }
 
   it('does not drag the revision backwards', async () => {
@@ -339,6 +424,36 @@ describe('a save that finishes after the document moved on', () => {
     // The local edit plus the append is unsaved work; the session must still know.
     await h.session.saveNow();
     expect(h.saves[h.saves.length - 1]).toBe('xstart\n\nappended');
+  });
+
+  it('keeps writing until nothing is left, before it answers', async () => {
+    // Type, hold the save, type again, release. The first write stores only the
+    // first edit — the second arrived while it was in flight and lives nowhere but
+    // the editor. Answering the flush here is the host being told it may quit, and
+    // the second edit is the copy it then throws away.
+    const h = openWithHeldSave('start', 3);
+    type(h.ed, 'a');
+    const flush = h.session.saveNow();
+    await h.started;
+    type(h.ed, 'b');
+    h.release(4);
+
+    expect(await flush).toBe(true);
+    expect(h.saves[h.saves.length - 1], 'the flush answered before the last edit was written').toBe('bastart');
+    expect(h.session.currentRevision).toBe(5);
+  });
+
+  it('answers false when it is the second pass that fails', async () => {
+    const h = openWithHeldSave('start', 3);
+    type(h.ed, 'a');
+    const flush = h.session.saveNow();
+    await h.started;
+    type(h.ed, 'b');
+    h.failNextSave();
+    h.release(4);
+
+    expect(await flush).toBe(false);
+    expect(h.ed.getMarkdown()).toBe('bastart'); // still there to recover
   });
 });
 
@@ -469,39 +584,102 @@ describe('a conflict arriving on top of unsaved work', () => {
   });
 });
 
-describe('a save whose reply is delayed past an append', () => {
-  it('is rejected even though nothing bumped the generation in between', async () => {
-    // The gap a generation counter alone leaves: the save wins at revision 4, its
-    // reply is delayed, an external append takes revision 5, and the stale reply
-    // then claims revision 4 — older than the store.
+describe('an append that arrives while a save is in flight', () => {
+  /**
+   * The order that actually happens, and the one a generation counter alone does
+   * not describe: the session holds revision 3 and its save is in flight, so the
+   * STORE is already at 4 while the session still says 3. An append then takes 5
+   * and is broadcast before the save's reply gets back.
+   *
+   * Only the first save is held, so a drain's later passes can still complete.
+   */
+  function openWithHeldSave(markdown: string, revision: number) {
     const parent = document.createElement('div');
     document.body.appendChild(parent);
-    let release: (value: { revision: number }) => void = () => {};
+    const reloads: string[] = [];
     let announceStart: () => void = () => {};
     const started = new Promise<void>((resolve) => { announceStart = resolve; });
+    let release: (value: { revision: number }) => void = () => {};
+    let held = true;
+    let counter = revision;
 
-    editor = createRichTextEditor({ parent, markdown: 'start', onChange: () => session?.documentChanged() });
+    editor = createRichTextEditor({ parent, markdown, onChange: () => session?.documentChanged() });
     session = new DocumentSession({
       streamId: 'stream-1',
       editor,
-      revision: 3,
+      revision,
       autosaveDelay: 5,
       transport: {
-        save: () => { announceStart(); return new Promise((resolve) => { release = resolve; }); },
-        reload: () => {},
+        save: () => {
+          if (!held) { counter += 1; return Promise.resolve({ revision: counter }); }
+          held = false;
+          announceStart();
+          return new Promise((resolve) => { release = resolve; });
+        },
+        reload: (id) => reloads.push(id),
       },
     });
+    return { ed: editor, session, started, reloads, release: (r: number) => release({ revision: r }) };
+  }
 
-    type(editor, 'x');
-    const inFlight = session.saveNow();
-    await started;
+  it('asks for a reload rather than patching a fragment it cannot place', async () => {
+    // Revision 5 against a session holding 3 means one append is unaccounted for —
+    // this one, or an earlier one this editor never heard. Appending the fragment
+    // and adopting 5 would make the next save pass the revision check and erase
+    // whatever the gap contained.
+    const h = openWithHeldSave('start', 3);
+    type(h.ed, 'x');
+    const inFlight = h.session.saveNow();
+    await h.started;
 
-    session.documentAppended({ streamId: 'stream-1', fragment: '\n\nappended', revision: 4 });
-    release({ revision: 4 });
+    h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nappended', revision: 5 });
+    expect(h.reloads).toEqual(['stream-1']);
+    expect(h.ed.getMarkdown()).toBe('xstart'); // the fragment was NOT patched in
+
+    h.release(4);
     await inFlight;
 
-    expect(session.currentRevision).toBe(4);
-    expect(editor.getMarkdown()).toBe('xstart\n\nappended'); // nothing lost
+    // The reply is the session's own save and is still current from where it sits,
+    // so it is adopted; the reload it asked for carries it the rest of the way.
+    expect(h.session.currentRevision).toBe(4);
+
+    h.session.documentLoaded({ markdown: 'xstart\n\nappended', revision: 5 });
+    expect(h.session.currentRevision).toBe(5);
+    expect(h.ed.getMarkdown()).toBe('xstart\n\nappended'); // nothing lost
+  });
+
+  it('does not regress the revision when the reload lands before the reply', async () => {
+    // Same order, but the reload answers first. The save's reply then describes a
+    // document that is gone: adopting revision 4 over 5 would make every later
+    // write fail the revision check.
+    const h = openWithHeldSave('start', 3);
+    type(h.ed, 'x');
+    const inFlight = h.session.saveNow();
+    await h.started;
+
+    h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nappended', revision: 5 });
+    h.session.documentLoaded({ markdown: 'xstart\n\nappended', revision: 5 });
+    h.release(4);
+    await inFlight;
+
+    expect(h.session.currentRevision).toBe(5);
+    expect(h.ed.getMarkdown()).toBe('xstart\n\nappended');
+  });
+
+  it('merges an append that is exactly the next revision', async () => {
+    // The ordinary case, for contrast: no gap, so the fragment is appended here too
+    // and the local edit stays unsaved until the next write.
+    const h = openWithHeldSave('start', 3);
+    type(h.ed, 'x');
+    const inFlight = h.session.saveNow();
+    await h.started;
+
+    h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nappended', revision: 4 });
+    expect(h.reloads).toEqual([]);
+    h.release(4);
+    await inFlight;
+
+    expect(h.ed.getMarkdown()).toBe('xstart\n\nappended'); // nothing lost
   });
 });
 

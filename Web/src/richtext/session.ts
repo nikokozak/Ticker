@@ -3,7 +3,6 @@ import { placeFragmentSpan, planReplay, type PendingAppend } from './pendingAppe
 import {
   addProvenanceSpans,
   hashProvenanceText,
-  placeAppendedSpans,
   provenanceSpans,
   setProvenanceSpans,
   spanToJSON,
@@ -64,6 +63,9 @@ export interface SessionOptions {
 
 const DEFAULT_AUTOSAVE_DELAY = 350;
 
+/** Enough for an edit that lands mid-write; a bound so a flush always answers. */
+const MAX_FLUSH_PASSES = 5;
+
 export class DocumentSession {
   private readonly options: Required<Pick<SessionOptions, 'autosaveDelay'>> & SessionOptions;
 
@@ -91,8 +93,18 @@ export class DocumentSession {
    */
   private generation = 0;
 
-  /** Set only by a replay in which EVERY row and EVERY span was converted. */
-  private resolvedPendingThrough: number | null = null;
+  /**
+   * The highest append revision whose provenance is safely in THIS document —
+   * converted from its pending row, or never recorded one. It is what a save
+   * reports, and the store forgets rows at or below it.
+   *
+   * `null` means this session has proven nothing and must never cause a row to be
+   * forgotten. It only ever advances by an actual proof, and only contiguously: a
+   * row that could not be converted stops it there for good, because the store
+   * deletes everything at or below what it is told, so claiming a LATER revision
+   * would take the unconverted row with it.
+   */
+  private pendingSafeThrough: number | null = null;
 
   constructor(options: SessionOptions) {
     this.options = { autosaveDelay: DEFAULT_AUTOSAVE_DELAY, ...options };
@@ -100,7 +112,7 @@ export class DocumentSession {
     this.lastSaved = options.editor.getMarkdown();
     if (options.spans?.length) this.restoreSpans(options.spans);
     this.lastSavedSpans = this.spanFingerprint();
-    if (options.pendingAppends?.length) this.convertPendingAppends(options.pendingAppends);
+    this.adoptPendingAppends(options.pendingAppends ?? []);
   }
 
   get saveState(): SaveState {
@@ -119,6 +131,23 @@ export class DocumentSession {
       this.timer = null;
       void this.saveNow();
     }, this.options.autosaveDelay);
+  }
+
+  /**
+   * Take on the pending rows for the document as it now stands — at open, and again
+   * after any reload, since a reloaded document brings its own rows and a session
+   * that ignored them could never let the store forget any of them again.
+   */
+  private adoptPendingAppends(pending: PendingAppend[]): void {
+    this.pendingSafeThrough = null;
+    if (!pending.length) {
+      // No row was recorded at or below this revision, so nothing is lost by the
+      // store forgetting that far. Saying so is what lets the row for a LIVE append
+      // — one this session does convert, below — be forgotten in turn.
+      this.pendingSafeThrough = this.revision;
+      return;
+    }
+    this.convertPendingAppends(pending);
   }
 
   /**
@@ -150,15 +179,13 @@ export class DocumentSession {
     const placed: ProvenanceSpan[] = [];
     for (const append of plan.appends) {
       const inserted = editor.appendMarkdown(append.fragment);
-      for (const raw of append.spans) {
-        const span = placeFragmentSpan(raw, append.fragment, inserted.from, editor.view.state.doc);
-        if (!span) {
-          editor.setMarkdown(before);
-          this.restoreSpans(existing);
-          return this.abandonReplay('spanUnplaceable');
-        }
-        placed.push(span);
+      const converted = this.placeFragmentSpans(append.spans, append.fragment, inserted.from, existing);
+      if (!converted) {
+        editor.setMarkdown(before);
+        this.restoreSpans(existing);
+        return this.abandonReplay('spanUnplaceable');
       }
+      placed.push(...converted);
     }
 
     if (editor.getMarkdown() !== before) {
@@ -173,7 +200,7 @@ export class DocumentSession {
 
     // Only now: every row and every span was converted, so the store may forget
     // them once this save lands.
-    this.resolvedPendingThrough = this.revision;
+    this.pendingSafeThrough = this.revision;
     // The document is byte-identical to what was stored but the SPANS are new, so
     // the session is dirty on purpose — without a save the rows are never cleared
     // and this happens again on every open.
@@ -181,9 +208,39 @@ export class DocumentSession {
     this.documentChanged();
   }
 
+  /**
+   * Turn a fragment's raw spans into document ones — ALL of them or none.
+   *
+   * The same proof for a live append as for a replayed one, because the coordinates
+   * are the same coordinates: the host records offsets into the fragment's own
+   * markdown, which is all it can know without parsing the document. Treating them
+   * as ProseMirror positions, which is what the live path used to do, lands the
+   * highlight on whatever text happens to sit at that number.
+   *
+   * A span whose id is already here is skipped rather than doubled: a converted row
+   * that was never cleared — because the save that would have cleared it did not
+   * land — arrives a second time on the next open.
+   */
+  private placeFragmentSpans(
+    raw: ProvenanceSpanJSON[],
+    fragment: string,
+    insertedAt: number,
+    existing: ProvenanceSpan[],
+  ): ProvenanceSpan[] | null {
+    const known = new Set(existing.map((span) => span.spanId));
+    const placed: ProvenanceSpan[] = [];
+    for (const one of raw) {
+      if (known.has(one.spanId)) continue;
+      const span = placeFragmentSpan(one, fragment, insertedAt, this.options.editor.view.state.doc);
+      if (!span) return null;
+      placed.push(span);
+    }
+    return placed;
+  }
+
   /** Leave the rows alone so a later version can still convert them correctly. */
   private abandonReplay(reason: string): void {
-    this.resolvedPendingThrough = null;
+    this.pendingSafeThrough = null;
     this.options.transport.onError?.(
       'Some recent additions could not have their history restored; the text itself is intact.',
       reason,
@@ -208,15 +265,39 @@ export class DocumentSession {
    * waits on before it closes a window or quits.
    */
   saveNow(): Promise<boolean> {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    this.queue = this.queue.then(() => this.write(), () => this.write());
     // Whether the document is actually stored, which a caller about to close a
     // window or quit has to know: acknowledging a flush that did not save means
     // the host throws away the only copy.
-    return this.queue.then(() => this.state !== 'error');
+    const answer = this.queue.then(() => this.drain(), () => this.drain());
+    // The queue stays a chain of settled voids, so one rejection cannot poison
+    // every later save.
+    this.queue = answer.then(() => {}, () => {});
+    return answer;
+  }
+
+  /**
+   * Write until there is nothing left to write.
+   *
+   * One pass is not enough. A write reads the document when it BEGINS, so anything
+   * typed while it is in flight is not in it — and answering there reports a
+   * document as stored while the last edit exists only in the editor. The host acts
+   * on that answer by closing the window, which is exactly when the editor is the
+   * only copy.
+   */
+  private async drain(): Promise<boolean> {
+    for (let pass = 0; pass < MAX_FLUSH_PASSES; pass += 1) {
+      // Anything the timer was going to write is written by this pass.
+      if (this.timer) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+      await this.write();
+      if (this.state === 'error') return false;
+      if (!this.isDirty()) return true;
+    }
+    // Something is changing the document faster than it can be stored. Say so
+    // rather than loop forever with a host waiting on the answer.
+    return false;
   }
 
   private async write(): Promise<void> {
@@ -237,7 +318,11 @@ export class DocumentSession {
     const generation = this.generation;
 
     try {
-      const resolvedPendingThrough = this.resolvedPendingThrough ?? undefined;
+      // Idempotent, so it is sent on every save rather than once: the store deletes
+      // rows at or below it, and repeating a number whose rows are already gone
+      // deletes nothing. Reporting it once instead meant a save that never landed
+      // took the only chance to clear them with it.
+      const resolvedPendingThrough = this.pendingSafeThrough ?? undefined;
       const { revision } = await transport.save({
         streamId, markdown, baseRevision, spans: spans.map(spanToJSON), resolvedPendingThrough,
       });
@@ -267,8 +352,6 @@ export class DocumentSession {
       this.revision = revision;
       this.lastSaved = markdown;
       this.lastSavedSpans = fingerprint;
-      // Reported once. The rows are gone, so a later save must not claim them.
-      this.resolvedPendingThrough = null;
       // Only settle if nothing changed while the write was in flight.
       this.setState(this.isDirty() ? 'saving' : 'saved');
     } catch (error) {
@@ -312,20 +395,26 @@ export class DocumentSession {
 
     // Whether there is unsaved local work decides everything that follows.
     const wasDirty = this.isDirty();
+    // Whether the rows were accounted for up to HERE, read before the revision
+    // moves: only then can this append extend the claim without skipping a row.
+    const contiguous = this.pendingSafeThrough === this.revision;
     this.generation += 1;
 
+    const { view } = this.options.editor;
+    const existing = provenanceSpans(view.state);
     const inserted = this.options.editor.appendMarkdown(payload.fragment);
     this.revision = payload.revision;
 
     // Provenance for what was just appended. Dropping it — which is what happened
     // before — meant the next save replaced the whole stored set and erased it,
     // orphaning the AI exchange it pointed at.
-    if (payload.spans?.length) {
-      const { view } = this.options.editor;
-      const placed = placeAppendedSpans(payload.spans, inserted)
-        .filter((span) => hashProvenanceText(view.state.doc, span) === span.textHash);
-      if (placed.length) view.dispatch(addProvenanceSpans(view.state.tr, placed));
-    }
+    //
+    // The store also holds a row for this append. It may only be forgotten if EVERY
+    // one of its spans was placed here, so a partial conversion leaves the row for
+    // the next open to try again instead of clearing it half-done.
+    const placed = this.placeFragmentSpans(payload.spans ?? [], payload.fragment, inserted.from, existing);
+    if (placed?.length) view.dispatch(addProvenanceSpans(view.state.tr, placed));
+    if (placed && contiguous) this.pendingSafeThrough = payload.revision;
 
     if (wasDirty) {
       // The stored document has the fragment but NOT the local edits, so the merged
@@ -336,10 +425,16 @@ export class DocumentSession {
       return;
     }
 
-    // Nothing local was pending, so the stored document and this one now agree.
+    // Nothing local was pending, so the stored TEXT and this document now agree.
     this.lastSaved = this.options.editor.getMarkdown();
-    this.lastSavedSpans = this.spanFingerprint();
-    this.setState('saved');
+
+    // The spans just placed, though, are stored NOWHERE — an append writes its
+    // provenance as a pending row, never as a span — and neither is the fact that
+    // the row may now be forgotten. Either one means a save is owed.
+    const owed = Boolean(placed?.length) || this.pendingSafeThrough === payload.revision;
+    this.lastSavedSpans = owed ? '' : this.spanFingerprint();
+    if (owed) this.documentChanged();
+    else this.setState('saved');
   }
 
   /**
@@ -390,9 +485,22 @@ export class DocumentSession {
     );
   }
 
-  /** Load a document from the host, as opening a stream or reloading does. */
-  documentLoaded(payload: { markdown: string; revision: number; spans?: ProvenanceSpan[] }): void {
+  /**
+   * Load a document from the host, as reloading after an unreconcilable gap does.
+   *
+   * The rows come with it. A reload replaces the document this session had proven
+   * things about, so without them it could never let the store forget another row —
+   * and rows that outlive the revision they were recorded at can never be replayed,
+   * since replaying means peeling them off the END of the stored markdown.
+   */
+  documentLoaded(payload: {
+    markdown: string;
+    revision: number;
+    spans?: ProvenanceSpan[];
+    pendingAppends?: PendingAppend[];
+  }): void {
     this.adoptHostDocument(payload);
+    this.adoptPendingAppends(payload.pendingAppends ?? []);
   }
 
   private adoptHostDocument(payload: { markdown: string; revision: number; spans?: ProvenanceSpan[] }): void {
@@ -402,6 +510,9 @@ export class DocumentSession {
     this.restoreSpans(payload.spans ?? []);
     this.lastSaved = this.options.editor.getMarkdown();
     this.lastSavedSpans = this.spanFingerprint();
+    // The document it had proven things about is gone; a caller that knows the new
+    // document's rows says so by calling adoptPendingAppends after this.
+    this.pendingSafeThrough = null;
     this.setState('saved');
   }
 
