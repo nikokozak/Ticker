@@ -71,6 +71,19 @@ export interface RichTextEditorOptions {
   markdown: string;
   /** Fires only when the document actually changed, with the markdown to store. */
   onChange?: (markdown: string) => void;
+  /**
+   * A click on a link. Nothing navigates on its own — a `ticker-pdf://` citation
+   * has to reach the PDF pane and an external URL has to leave the WKWebView, and
+   * both of those are the host's call, not the editor's.
+   */
+  onOpenLink?: (href: string) => void;
+}
+
+/** The href of a link at this position, if there is one. */
+function linkAt(state: EditorState, pos: number): string | null {
+  const $pos = state.doc.resolve(pos);
+  const mark = tickerSchema.marks.link.isInSet($pos.marks());
+  return mark ? String(mark.attrs.href) : null;
 }
 
 function stateFor(doc: ProseNode): EditorState {
@@ -79,7 +92,8 @@ function stateFor(doc: ProseNode): EditorState {
 }
 
 export function createRichTextEditor(options: RichTextEditorOptions): RichTextEditor {
-  const { parent, markdown, onChange } = options;
+  const { parent, markdown, onChange, onOpenLink } = options;
+  parent.classList.add('richtext-editor');
 
   /**
    * ponytail: normalising here rather than as a transaction on the live document.
@@ -93,6 +107,19 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
 
   const view = new EditorView(parent, {
     state: stateFor(parseMarkdown(markdown)),
+
+    /**
+     * One plain click opens a link. The old editor made this ambiguous — the URL
+     * was visible text you could also put a cursor in — and it was the single
+     * biggest complaint about reading a stream with citations in it.
+     */
+    handleClick(_view, pos) {
+      const href = linkAt(view.state, pos);
+      if (!href || !onOpenLink) return false;
+      onOpenLink(href);
+      return true;
+    },
+
     dispatchTransaction(transaction) {
       const next = view.state.apply(transaction);
       view.updateState(next);

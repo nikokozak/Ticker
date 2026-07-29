@@ -1,0 +1,167 @@
+/*
+ * The editor surface. Same tokens and the same measure as the CodeMirror surface
+ * it replaces, so swapping the engine does not change how a stream reads.
+ *
+ * What is NOT here is the point: no rules for concealed markup, no reveal states,
+ * no selection-dependent geometry. Formatting is document structure now, so it is
+ * styled the way any document is.
+ */
+
+.richtext-editor {
+  position: relative;
+  min-height: inherit;
+}
+
+.richtext-editor .ProseMirror {
+  max-width: 68ch;
+  min-height: inherit;
+  margin: 0 auto;
+  padding: clamp(var(--space-6), 4.6vw, var(--space-8)) clamp(var(--space-5), 4.6vw, var(--space-8))
+    clamp(220px, 30vh, 360px);
+  outline: none;
+  color: var(--color-text);
+  font-family: var(--editor-font-family);
+  font-size: var(--editor-font-size);
+  font-weight: 400;
+  line-height: var(--editor-line-height);
+  letter-spacing: 0.001em;
+  caret-color: var(--text);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.richtext-editor .ProseMirror ::selection {
+  background: var(--color-accent-soft);
+}
+
+/* Blocks --------------------------------------------------------------- */
+
+.richtext-editor .ProseMirror p {
+  margin: 0 0 var(--space-4);
+}
+
+.richtext-editor .ProseMirror > :last-child {
+  margin-bottom: 0;
+}
+
+.richtext-editor .ProseMirror h1,
+.richtext-editor .ProseMirror h2,
+.richtext-editor .ProseMirror h3,
+.richtext-editor .ProseMirror h4,
+.richtext-editor .ProseMirror h5,
+.richtext-editor .ProseMirror h6 {
+  margin: var(--space-6) 0 var(--space-3);
+  color: var(--text);
+  font-weight: 600;
+  line-height: var(--line-height-tight);
+}
+
+.richtext-editor .ProseMirror > :first-child {
+  margin-top: 0;
+}
+
+.richtext-editor .ProseMirror h1 { font-size: 1.6em; }
+.richtext-editor .ProseMirror h2 { font-size: 1.35em; }
+.richtext-editor .ProseMirror h3 { font-size: 1.15em; }
+.richtext-editor .ProseMirror h4,
+.richtext-editor .ProseMirror h5,
+.richtext-editor .ProseMirror h6 { font-size: 1em; }
+
+.richtext-editor .ProseMirror blockquote {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.richtext-editor .ProseMirror ul,
+.richtext-editor .ProseMirror ol {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-5);
+}
+
+.richtext-editor .ProseMirror li > p {
+  margin-bottom: var(--space-2);
+}
+
+/* A tight list is one the author wrote without blank lines; it should read that
+   way too, rather than gaining the spacing of a loose one. */
+.richtext-editor .ProseMirror li[data-tight] > p,
+.richtext-editor .ProseMirror ul[data-tight] li > p,
+.richtext-editor .ProseMirror ol[data-tight] li > p {
+  margin-bottom: 0;
+}
+
+.richtext-editor .ProseMirror hr {
+  margin: var(--space-6) 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.richtext-editor .ProseMirror pre {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--color-bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  line-height: var(--line-height-tight);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.richtext-editor .ProseMirror pre code {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+/* Inline --------------------------------------------------------------- */
+
+.richtext-editor .ProseMirror code {
+  padding: 0.1em 0.3em;
+  border-radius: var(--radius-small);
+  background: var(--color-bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.richtext-editor .ProseMirror a {
+  color: var(--color-accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--color-accent-soft);
+  cursor: default;
+}
+
+.richtext-editor .ProseMirror a:hover {
+  border-bottom-color: var(--color-accent);
+}
+
+.richtext-editor .ProseMirror u {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+/* Images --------------------------------------------------------------- */
+
+.richtext-editor .ProseMirror img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: var(--space-2) 0;
+  border-radius: var(--radius);
+}
+
+.richtext-editor .ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ProseMirror's own placeholder for a selected block node. */
+.richtext-editor .ProseMirror .ProseMirror-selectednode {
+  outline: 2px solid var(--color-accent);
+}
+
+.richtext-editor .ProseMirror-hideselection *::selection {
+  background: transparent;
+}

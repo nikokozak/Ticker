@@ -277,6 +277,68 @@ describe('copy and paste inside the editor', () => {
   });
 });
 
+describe('links read as links', () => {
+  // The complaint that redirected this whole rewrite: a citation URL expanded the
+  // paragraph to five times its size, it was unclear how to click one, and it was
+  // unclear how to make one. The href is no longer in the text at all.
+  function openWithLinks(markdown: string): { ed: RichTextEditor; opened: string[] } {
+    const opened: string[] = [];
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    editor = createRichTextEditor({ parent, markdown, onOpenLink: (href) => opened.push(href) });
+    return { ed: editor, opened };
+  }
+
+  it('shows the label, never the URL, however long the URL is', () => {
+    const ed = open('See [the paper](https://example.test/a/very/long/citation/url?with=query&more=params#frag).');
+    expect(ed.view.state.doc.textContent).toBe('See the paper.');
+  });
+
+  it('takes up exactly as many positions as its label', () => {
+    const ed = open('[label](ticker-pdf://s?page=3&q=a%20quote)');
+    expect(ed.view.state.doc.content.size).toBe('label'.length + 2); // + the paragraph
+  });
+
+  it('opens on a single click, and reports the href to the host', () => {
+    const { ed, opened } = openWithLinks('Read [the paper](https://example.test/x) now.');
+    const pos = find(ed, 'the paper', 2);
+    const handled = ed.view.someProp('handleClick', (fn) => fn(ed.view, pos, new MouseEvent('click')));
+    expect(handled).toBe(true);
+    expect(opened).toEqual(['https://example.test/x']);
+  });
+
+  it('leaves a click on ordinary text alone', () => {
+    const { ed, opened } = openWithLinks('Read [the paper](https://example.test/x) now.');
+    const handled = ed.view.someProp('handleClick', (fn) => fn(ed.view, find(ed, 'now'), new MouseEvent('click')));
+    expect(handled).toBeFalsy();
+    expect(opened).toEqual([]);
+  });
+
+  it('makes a citation out of a selection without anyone typing brackets', () => {
+    const ed = open('Read the paper now.');
+    const link = ed.view.state.schema.marks.link.create({ href: 'ticker-pdf://s?page=3', title: null });
+    ed.view.dispatch(ed.view.state.tr.addMark(find(ed, 'the paper'), after(ed, 'the paper'), link));
+    expect(ed.getMarkdown()).toBe('Read [the paper](ticker-pdf://s?page=3) now.');
+    expect(ed.view.state.doc.textContent).toBe('Read the paper now.'); // still no syntax
+  });
+});
+
+describe('images', () => {
+  it('renders at its stored width, with no width markup in the text', () => {
+    const ed = open('![a shot](ticker-asset://s/a.png){width=300}');
+    expect(ed.view.state.doc.textContent).toBe('');
+    const img = ed.view.dom.querySelector('img');
+    expect(img?.getAttribute('src')).toBe('ticker-asset://s/a.png');
+    expect(img?.getAttribute('width')).toBe('300');
+    expect(ed.getMarkdown()).toBe('![a shot](ticker-asset://s/a.png){width=300}');
+  });
+
+  it('renders without a width when it has none', () => {
+    const ed = open('![a shot](ticker-asset://s/a.png)');
+    expect(ed.view.dom.querySelector('img')?.hasAttribute('width')).toBe(false);
+  });
+});
+
 describe('an external append', () => {
   // Ticker's one write primitive: the quick panel, AI and capture all append at the
   // end of the document and never rewrite it.
