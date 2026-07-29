@@ -29,32 +29,72 @@ function roundTrip(input: ProseNode): { out: string; back: ProseNode } {
   return { out, back: parseMarkdown(out) };
 }
 
+/**
+ * The gate, and the gate has to be honest about its own weakness.
+ *
+ * An earlier version normalised its input and then asserted closure on the result,
+ * which means a case could pass by having the very thing under test DELETED — a
+ * paragraph ending in a break "round-tripped" beautifully once the break was gone.
+ *
+ * So this asserts three things:
+ *   1. normalisation settles — running it twice changes nothing more;
+ *   2. the persisted form is closed — what is saved reloads identically;
+ *   3. normalisation is a no-op, UNLESS the case says otherwise via expectNormalized.
+ *
+ * Point 3 is what makes it honest: a case that quietly loses content now fails,
+ * because it never declared that it would lose any.
+ */
 function expectClosed(raw: ProseNode): void {
-  // The editor keeps documents normalised, so that is what must round-trip. Shapes
-  // markdown cannot express (a break at a paragraph edge, two in a row, emphasis
-  // wrapping flanking spaces) are removed here exactly as the editor removes them.
   const input = normalizeForMarkdown(raw);
+
+  expect(normalizeForMarkdown(input).eq(input), `normalisation does not settle.\n  once:  ${input.toString()}\n  twice: ${normalizeForMarkdown(input).toString()}`).toBe(true);
+
   const { out, back } = roundTrip(input);
   // eq() compares structure, attrs and marks — not just the text.
   expect(back.eq(input), `reload changed the document.\n  markdown: ${JSON.stringify(out)}\n  before:   ${input.toString()}\n  after:    ${back.toString()}`).toBe(true);
   expect(serializeMarkdown(back)).toBe(out);
+
+  if (!declaredLossy.has(raw)) {
+    expect(input.eq(raw), `normalisation changed the document but the test never said it would — so this case may be passing only because the thing it tests was deleted.\n  before: ${raw.toString()}\n  after:  ${input.toString()}\nIf the change is intended, wrap the case in expectNormalized(raw, expectedMarkdown).`).toBe(true);
+  }
+}
+
+/** Cases that intentionally lose something on the way to markdown. */
+const declaredLossy = new WeakSet<ProseNode>();
+
+/**
+ * For a shape markdown genuinely cannot hold: declare exactly what it becomes.
+ * Naming the result is the point — it is the difference between a documented
+ * policy and silent data loss.
+ */
+function expectNormalized(raw: ProseNode, markdown: string): void {
+  declaredLossy.add(raw);
+  expect(serializeMarkdown(normalizeForMarkdown(raw))).toBe(markdown);
+  expectClosed(raw);
 }
 
 describe('break boundaries and adjacency', () => {
-  const cases: Array<[string, ProseNode]> = [
+  // A soft break cannot open a line or follow another break (either makes a blank
+  // line, which ends the paragraph), and no break can end a block. Each lossy case
+  // states what it becomes; the rest must survive untouched.
+  const kept: Array<[string, ProseNode]> = [
     ['soft break between words', doc(p(t('foo'), soft(), t('bar')))],
-    ['two adjacent soft breaks', doc(p(t('foo'), soft(), soft(), t('bar')))],
-    ['three adjacent soft breaks', doc(p(t('foo'), soft(), soft(), soft(), t('bar')))],
-    ['leading soft break', doc(p(soft(), t('foo')))],
-    ['trailing soft break', doc(p(t('foo'), soft()))],
-    ['soft break alone', doc(p(soft()))],
     ['hard break between words', doc(p(t('foo'), hard(), t('bar')))],
     ['two adjacent hard breaks', doc(p(t('foo'), hard(), hard(), t('bar')))],
-    ['trailing hard break', doc(p(t('foo'), hard()))],
-    ['hard then soft break', doc(p(t('foo'), hard(), soft(), t('bar')))],
     ['soft then hard break', doc(p(t('foo'), soft(), hard(), t('bar')))],
   ];
-  for (const [name, node] of cases) it(name, () => expectClosed(node));
+  for (const [name, node] of kept) it(name, () => expectClosed(node));
+
+  const lossy: Array<[string, ProseNode, string]> = [
+    ['two adjacent soft breaks collapse to one', doc(p(t('foo'), soft(), soft(), t('bar'))), 'foo\nbar'],
+    ['three adjacent soft breaks collapse to one', doc(p(t('foo'), soft(), soft(), soft(), t('bar'))), 'foo\nbar'],
+    ['a leading soft break is dropped', doc(p(soft(), t('foo'))), 'foo'],
+    ['a trailing soft break is dropped', doc(p(t('foo'), soft())), 'foo'],
+    ['a paragraph of only a soft break empties', doc(p(soft())), ''],
+    ['a trailing hard break is dropped', doc(p(t('foo'), hard())), 'foo'],
+    ['a soft break after a hard break is dropped', doc(p(t('foo'), hard(), soft(), t('bar'))), 'foo\\\nbar'],
+  ];
+  for (const [name, node, markdown] of lossy) it(name, () => expectNormalized(node, markdown));
 
   // Pressing Shift+Enter twice must actually leave a blank line, not silently
   // collapse to one. Hard breaks repeat fine; only the shapes markdown genuinely
@@ -88,24 +128,28 @@ describe('whitespace at the edges of a line', () => {
   // or at any line's end is dropped: it is invisible or an artifact of an edit, and
   // escaping it would put a `&#32;` in nearly every paragraph of a format the AI
   // reads back.
-  const cases: Array<[string, ProseNode]> = [
-    ['leading space in a paragraph', doc(p(t(' foo')))],
-    ['leading spaces in a paragraph', doc(p(t('   foo')))],
-    ['leading tab in a paragraph', doc(p(t('\tfoo')))],
-    ['trailing space in a paragraph', doc(p(t('foo ')))],
-    ['two trailing spaces in a paragraph', doc(p(t('foo  ')))],
-    ['space at both ends', doc(p(t(' foo ')))],
-    ['a paragraph of only spaces', doc(p(t('   ')))],
-    ['space before a soft break', doc(p(t('foo '), soft(), t('bar')))],
+  const kept: Array<[string, ProseNode]> = [
     ['space after a soft break', doc(p(t('foo'), soft(), t(' bar')))],
-    ['spaces around a soft break', doc(p(t('foo  '), soft(), t('  bar')))],
-    ['space before a hard break', doc(p(t('foo '), hard(), t('bar')))],
     ['indented continuation line', doc(p(t('foo'), soft(), t('    indented')))],
-    ['leading space in a heading', doc(S.node('heading', { level: 2 }, [t(' Title')]))],
-    ['trailing space in a list item', doc(S.node('bullet_list', { tight: true }, [S.node('list_item', null, [p(t('item '))])]))],
-    ['leading space inside a blockquote', doc(S.node('blockquote', null, [p(t(' quoted'))]))],
   ];
-  for (const [name, node] of cases) it(name, () => expectClosed(node));
+  for (const [name, node] of kept) it(name, () => expectClosed(node));
+
+  const dropped: Array<[string, ProseNode, string]> = [
+    ['a leading space in a paragraph', doc(p(t(' foo'))), 'foo'],
+    ['leading spaces in a paragraph', doc(p(t('   foo'))), 'foo'],
+    ['a leading tab in a paragraph', doc(p(t('\tfoo'))), 'foo'],
+    ['a trailing space in a paragraph', doc(p(t('foo '))), 'foo'],
+    ['two trailing spaces in a paragraph', doc(p(t('foo  '))), 'foo'],
+    ['a space at both ends', doc(p(t(' foo '))), 'foo'],
+    ['a paragraph of only spaces', doc(p(t('   '))), ''],
+    ['a space before a soft break', doc(p(t('foo '), soft(), t('bar'))), 'foo\nbar'],
+    ['spaces around a soft break', doc(p(t('foo  '), soft(), t('  bar'))), 'foo\n&#32;&#32;bar'],
+    ['a space before a hard break', doc(p(t('foo '), hard(), t('bar'))), 'foo\\\nbar'],
+    ['a leading space in a heading', doc(S.node('heading', { level: 2 }, [t(' Title')])), '## Title'],
+    ['a trailing space in a list item', doc(S.node('bullet_list', { tight: true }, [S.node('list_item', null, [p(t('item '))])])), '* item'],
+    ['a leading space inside a blockquote', doc(S.node('blockquote', null, [p(t(' quoted'))])), '> quoted'],
+  ];
+  for (const [name, node, markdown] of dropped) it(`drops ${name}`, () => expectNormalized(node, markdown));
 
   it('keeps indentation typed after a line break, which is deliberate', () => {
     const indented = doc(p(t('foo'), soft(), t('   bar')));
@@ -128,9 +172,91 @@ describe('whitespace at the edges of a line', () => {
     // Trimming " " out of `foo⏎ ⏎bar` would put two soft breaks together, which is
     // a blank line and ends the paragraph.
     const input = doc(p(t('foo'), soft(), t('  '), soft(), t('bar')));
-    expectClosed(input);
+    expectNormalized(input, 'foo\nbar');
     expect(normalizeForMarkdown(input).firstChild?.childCount).toBe(3);
   });
+});
+
+describe('empty and near-empty blocks the keyboard can reach', () => {
+  const item = (...content: ProseNode[]) => S.node('list_item', null, content);
+
+  it('drops an empty paragraph between two others', () => {
+    // Pressing Enter twice. A blank line SEPARATES paragraphs in markdown, it is
+    // not a paragraph, so this leaves no trace in storage — and it needs none: the
+    // gap the user wanted is already there, from paragraph spacing.
+    expectNormalized(doc(p(t('a')), p(), p(t('b'))), 'a\n\nb');
+  });
+
+  it('drops several empty paragraphs', () => {
+    expectNormalized(doc(p(t('a')), p(), p(), p(), p(t('b'))), 'a\n\nb');
+  });
+
+  it('drops a trailing empty paragraph', () => {
+    expectNormalized(doc(p(t('a')), p()), 'a');
+  });
+
+  it('keeps a document that is nothing but an empty paragraph', () => {
+    // The schema requires block+, so there is nothing to drop it in favour of.
+    expectClosed(doc(p()));
+  });
+
+  it('keeps an empty heading', () => expectClosed(doc(S.node('heading', { level: 2 }, []))));
+  it('keeps an empty list item', () => expectClosed(doc(S.node('bullet_list', { tight: true }, [item(p())]))));
+  it('keeps an empty blockquote', () => expectClosed(doc(S.node('blockquote', null, [p()]))));
+  it('keeps an empty code block', () => expectClosed(doc(S.node('code_block', { params: '' }, []))));
+
+  it('drops an empty paragraph inside a list item that has other content', () => {
+    expectNormalized(
+      doc(S.node('bullet_list', { tight: true }, [item(p(t('a')), p()), item(p(t('b')))])),
+      '* a\n* b',
+    );
+  });
+});
+
+describe('inline code at its edges', () => {
+  const codeMark = S.marks.code.create();
+  it('moves flanking whitespace outside the marker', () => {
+    // CommonMark strips one space from each end of `` ` x ` ``, so the spaces
+    // cannot live inside the code span.
+    expectNormalized(doc(p(t('a'), S.text(' x ', [codeMark]), t('b'))), 'a `x` b');
+  });
+  it('drops a code mark that covers nothing but spaces', () => {
+    expectNormalized(doc(p(t('a'), S.text('   ', [codeMark]), t('b'))), 'a   b');
+  });
+  it('drops a code mark on a single space', () => {
+    expectNormalized(doc(p(t('a'), S.text(' ', [codeMark]), t('b'))), 'a b');
+  });
+  it('keeps interior whitespace', () => expectClosed(doc(p(S.text('a  b', [codeMark])))));
+});
+
+describe('attributes markdown cannot spell', () => {
+  const item = (text: string) => S.node('list_item', null, [p(t(text))]);
+
+  it('clamps a negative ordered-list start', () => {
+    // Reachable by pasting <ol start="-1"> from a web page. Serialised as `-1.` it
+    // reloads as a paragraph, taking the whole list with it.
+    expectNormalized(doc(S.node('ordered_list', { order: -1, tight: true }, [item('a')])), '0. a');
+  });
+
+  it('clamps a start whose LATER items would overflow', () => {
+    // The last marker matters as much as the first: two items from 999999999 puts a
+    // ten-digit number on item two.
+    expectNormalized(
+      doc(S.node('ordered_list', { order: 999999999, tight: true }, [item('a'), item('b')])),
+      '999999998. a\n999999999. b',
+    );
+  });
+
+  it('keeps the largest start that still fits', () => {
+    expectClosed(doc(S.node('ordered_list', { order: 999999999, tight: true }, [item('a')])));
+  });
+
+  it('clamps a heading level above 6', () => {
+    // `####### x` is not a heading in CommonMark; it reloads as plain text.
+    expectNormalized(doc(S.node('heading', { level: 7 }, [t('x')])), '###### x');
+  });
+
+  it('clamps a heading level below 1', () => expectNormalized(doc(S.node('heading', { level: 0 }, [t('x')])), '# x'));
 });
 
 describe('block syntax at a line start created by a break', () => {
@@ -144,7 +270,10 @@ describe('block syntax at a line start created by a break', () => {
 describe('marked whitespace', () => {
   const bold = S.marks.strong.create();
   const under = S.marks.underline.create();
-  it('bold around leading and trailing spaces', () => expectClosed(doc(p(t('a'), S.text(' b ', [bold]), t('c')))));
+  it('bold around leading and trailing spaces moves them outside the marker', () => {
+    // `** b **` is not emphasis at all in markdown, so the spaces must sit outside.
+    expectNormalized(doc(p(t('a'), S.text(' b ', [bold]), t('c'))), 'a **b** c');
+  });
   it('underline around leading and trailing spaces', () => expectClosed(doc(p(t('a'), S.text(' b ', [under]), t('c')))));
   it('underline of a single space', () => expectClosed(doc(p(t('a'), S.text(' ', [under]), t('c')))));
 
@@ -161,10 +290,9 @@ describe('marked whitespace', () => {
   it('still expels whitespace at the outer edges of that run', () => {
     const link = S.marks.link.create({ href: 'https://x.test', title: null });
     const input = doc(p(S.text(' X1 — ', [bold]), S.text('link ', [bold, link])));
-    expectClosed(input);
     // The bold no longer covers the flanking spaces; the block edges then drop them.
+    expectNormalized(input, '**X1 — [link](https://x.test)**');
     expect(normalizeForMarkdown(input).textContent).toBe('X1 — link');
-    expect(serializeMarkdown(normalizeForMarkdown(input))).toBe('**X1 — [link](https://x.test)**');
   });
 });
 
@@ -204,8 +332,8 @@ describe('lists', () => {
 
   it('only flattens a list where NO item could carry looseness', () => {
     const nowhere = doc(S.node('bullet_list', { tight: false }, [codeItem(), quoteItem()]));
+    expectNormalized(nowhere, '* ```\n  x\n  ```\n* > q');
     expect(normalizeForMarkdown(nowhere).firstChild?.attrs.tight).toBe(true);
-    expectClosed(nowhere);
   });
   it('loose list whose first item is a paragraph keeps its looseness', () => {
     // The tightness rule must not flatten lists that CAN express it.
@@ -236,26 +364,28 @@ describe('link destinations survive a reload', () => {
   // rewrites some of them and refuses others outright, so the editor holds hrefs
   // in the form markdown will give back.
   const linked = (href: string) => doc(p(S.text('text', [S.marks.link.create({ href, title: null })])));
-  const hrefs = [
-    'https://x.test/a b', // a space ENDS a destination — without canonicalising, the link vanishes
-    'https://x.test/a<b>c',
-    'https://x.test/a(b)',
-    'https://x.test/a"b',
-    'https://x.test/?q=a%20quote&r=1',
-    'https://exämple.test/ä',
-    'ticker-pdf://s?page=3&q=a%20quote',
-    'ticker-asset://s/a.png',
-    '#anchor',
-    '',
+  // Already in the form markdown gives back, so they survive untouched.
+  const canonical = ['https://x.test/a(b)', 'https://x.test/?q=a%20quote&r=1', 'ticker-pdf://s?page=3&q=a%20quote', 'ticker-asset://s/a.png', '#anchor', ''];
+  for (const href of canonical) it(JSON.stringify(href), () => expectClosed(linked(href)));
+
+  // markdown-it percent-encodes a destination on the way in, so an href the editor
+  // invented is rewritten to the form it will come back as. A space is the sharp
+  // case: it ENDS a destination, so without this the link vanishes entirely.
+  const rewritten: Array<[string, string]> = [
+    ['https://x.test/a b', '[text](https://x.test/a%20b)'],
+    ['https://x.test/a<b>c', '[text](https://x.test/a%3Cb%3Ec)'],
+    ['https://x.test/a"b', '[text](https://x.test/a%22b)'],
+    ['https://exämple.test/ä', '[text](https://xn--exmple-cua.test/%C3%A4)'],
   ];
-  for (const href of hrefs) it(JSON.stringify(href), () => expectClosed(linked(href)));
+  for (const [href, markdown] of rewritten) {
+    it(`canonicalises ${JSON.stringify(href)}`, () => expectNormalized(linked(href), markdown));
+  }
 
   it('drops a link markdown would refuse rather than storing a dead one', () => {
     const doomed = linked('javascript:alert(1)');
+    expectNormalized(doomed, 'text'); // the words are kept, the link is not
     const normalized = normalizeForMarkdown(doomed);
-    expect(normalized.textContent).toBe('text'); // the words are kept
     expect(normalized.rangeHasMark(0, normalized.content.size, S.marks.link)).toBe(false);
-    expectClosed(doomed);
   });
 });
 

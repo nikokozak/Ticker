@@ -88,13 +88,29 @@ const softBreak: NodeSpec = {
   toDOM: (): DOMOutputSpec => ['br', { 'data-soft-break': 'true' }],
 };
 
+/**
+ * The stock hard break, tagged.
+ *
+ * A contenteditable browser puts a padding `<br>` at the end of a block, so
+ * ProseMirror's clipboard IGNORES a trailing `<br>` — which silently ate a real
+ * break whenever a copied selection ended on one. The attribute is what lets the
+ * clipboard parser tell our break from the browser's filler; see BREAK_ATTRIBUTES.
+ */
+const hardBreak: NodeSpec = {
+  ...base.spec.nodes.get('hard_break'),
+  toDOM: (): DOMOutputSpec => ['br', { 'data-hard-break': 'true' }],
+};
+
+/** Attributes marking a `<br>` this editor produced rather than the browser. */
+export const BREAK_ATTRIBUTES = ['data-soft-break', 'data-hard-break'];
+
 const underline: MarkSpec = {
   parseDOM: [{ tag: 'u' }, { style: 'text-decoration=underline' }],
   toDOM: (): DOMOutputSpec => ['u', 0],
 };
 
 export const tickerSchema = new Schema({
-  nodes: base.spec.nodes.update('image', image).addToEnd('soft_break', softBreak),
+  nodes: base.spec.nodes.update('image', image).update('hard_break', hardBreak).addToEnd('soft_break', softBreak),
   // Before `em` so underline is the outermost mark, which fixes one canonical
   // nesting and keeps serialisation deterministic.
   marks: base.spec.marks.addBefore('em', 'underline', underline),

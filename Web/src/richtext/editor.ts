@@ -1,7 +1,15 @@
 import { baseKeymap, chainCommands, exitCode } from 'prosemirror-commands';
 import { history, redo, undo } from 'prosemirror-history';
 import { keymap } from 'prosemirror-keymap';
-import { Fragment, Slice, type Node as ProseNode } from 'prosemirror-model';
+import { DOMParser, Fragment, Slice, type ParseOptions, type Node as ProseNode } from 'prosemirror-model';
+
+/**
+ * prosemirror-model accepts `ruleFromNode` as a parse option but does not declare
+ * it — prosemirror-view passes one in from its own clipboard code.
+ */
+type ClipboardParseOptions = ParseOptions & {
+  ruleFromNode?: (node: Node) => { ignore?: boolean } | null;
+};
 import { EditorState, type Command } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import {
@@ -16,7 +24,7 @@ import {
 import { parseMarkdown, serializeMarkdown } from './markdown';
 import { aiWritingHighlight } from './operations';
 import { normalizeForMarkdown } from './normalize';
-import { tickerSchema } from './schema';
+import { BREAK_ATTRIBUTES, tickerSchema } from './schema';
 
 /**
  * The editor itself. The ProseMirror state is the live document; markdown exists
@@ -93,6 +101,36 @@ function linkAt(state: EditorState, pos: number): string | null {
   return mark ? String(mark.attrs.href) : null;
 }
 
+/**
+ * A clipboard parser that does not throw away a break at the end of a copied
+ * selection.
+ *
+ * prosemirror-view hard-codes a `ruleFromNode` that ignores any trailing `<br>`,
+ * because a contenteditable browser adds one as padding at the end of a block. That
+ * heuristic is right for foreign HTML and wrong for our own: copying "one" plus the
+ * line break after it pasted just "one", for soft and hard breaks alike.
+ *
+ * The option is passed to parseSlice, so it cannot be overridden by rules — but
+ * parseSlice is called on THIS object, so it can be wrapped. Our breaks carry a data
+ * attribute; a browser's padding `<br>` does not, and is still ignored.
+ */
+class TickerClipboardParser extends DOMParser {
+  parseSlice(dom: HTMLElement, options: ClipboardParseOptions = {}): Slice {
+    const inherited = options.ruleFromNode;
+    const wrapped: ClipboardParseOptions = {
+      ...options,
+      ruleFromNode: (node: Node) => {
+        const element = node as HTMLElement;
+        if (element.nodeName === 'BR' && BREAK_ATTRIBUTES.some((name) => element.hasAttribute?.(name))) return null;
+        return inherited ? inherited(node) : null;
+      },
+    };
+    return super.parseSlice(dom, wrapped);
+  }
+}
+
+const clipboardParser = new TickerClipboardParser(tickerSchema, DOMParser.fromSchema(tickerSchema).rules);
+
 function stateFor(doc: ProseNode): EditorState {
   // Order matters: our keymap gets first refusal, then the stock bindings.
   return EditorState.create({
@@ -117,6 +155,7 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
 
   const view = new EditorView(parent, {
     state: stateFor(parseMarkdown(markdown)),
+    clipboardParser,
 
     /**
      * One plain click opens a link. The old editor made this ambiguous — the URL

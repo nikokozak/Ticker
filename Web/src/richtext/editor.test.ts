@@ -262,6 +262,21 @@ describe('copy and paste inside the editor', () => {
     expect(pastedKinds(ed)).not.toContain('soft_break');
   });
 
+  it('keeps a break at the very END of the copied selection', () => {
+    // A contenteditable browser adds a padding <br> at the end of a block, so
+    // ProseMirror ignores a trailing one — which silently ate a real break whenever
+    // a selection ended on it. Both kinds were affected.
+    for (const [markdown, kind] of [['one\ntwo', 'soft_break'], ['one\\\ntwo', 'hard_break']] as Array<[string, string]>) {
+      const ed = open(markdown);
+      const clipboard = copy(ed, find(ed, 'one'), after(ed, 'one') + 1); // "one" + the break
+      place(ed, after(ed, 'two'));
+      const slice = parseFromClipboard(ed.view, clipboard.text, clipboard.html, false, ed.view.state.selection.$from);
+      const names: string[] = [];
+      slice?.content.descendants((node: ProseNode) => { names.push(node.type.name); });
+      expect(names, `${kind} lost at the end of a copied selection`).toContain(kind);
+    }
+  });
+
   it('keeps a whole list, with its numbering and its tightness', () => {
     const ed = open('3. three\n4. four\n\nafter');
     const clipboard = copy(ed, 0, ed.view.state.doc.firstChild?.nodeSize ?? 0);

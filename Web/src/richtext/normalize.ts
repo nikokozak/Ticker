@@ -13,6 +13,10 @@ import { tickerSchema } from './schema';
  *     so the spaces must sit outside the marker;
  *   - whitespace at the end of a line — markdown strips it, and two trailing
  *     spaces are a hard break;
+ *   - an empty paragraph — a blank line is a paragraph SEPARATOR in markdown, not
+ *     a paragraph, so `a\n\n\n\nb` is still just two paragraphs;
+ *   - inline code that is nothing but whitespace — `` `   ` `` reloads as one
+ *     space, and `` ` ` `` as nothing at all;
  *   - a link href markdown would rewrite — a space in a destination ends it, so
  *     `[x](https://h/a b)` is not a link at all and the link is silently lost;
  *   - looseness on a list whose first item starts with a blockquote or a code
@@ -28,9 +32,13 @@ import { tickerSchema } from './schema';
  * chokepoint beats five.
  */
 
-const { em, link, strong } = tickerSchema.marks;
-/** Marks markdown cannot wrap around flanking whitespace. Underline (HTML) can. */
-const WHITESPACE_INTOLERANT = [em, strong];
+const { code, em, link, strong } = tickerSchema.marks;
+/**
+ * Marks markdown cannot wrap around flanking whitespace. Emphasis because `** b **`
+ * is not emphasis at all; inline code because CommonMark strips one space from each
+ * end of `` ` x ` ``. Underline is HTML and has no such rule.
+ */
+const WHITESPACE_INTOLERANT = [em, strong, code];
 const LIST_TYPES = new Set(['bullet_list', 'ordered_list']);
 
 /**
@@ -51,6 +59,15 @@ function canonicalHref(href: string): string | null {
     return null; // malformed percent-escapes; mdurl throws rather than returning
   }
   return markdownIt.validateLink(normalized) ? normalized : null;
+}
+
+/**
+ * A code mark on nothing but whitespace cannot survive: `` `   ` `` reloads as a
+ * single space and `` ` ` `` as nothing. The text is kept, the mark is not.
+ */
+function dropWhitespaceOnlyCode(node: ProseNode): ProseNode {
+  if (!node.isText || !node.text || !code.isInSet(node.marks)) return node;
+  return /\S/.test(node.text) ? node : node.mark(code.removeFromSet(node.marks));
 }
 
 /** Rewrite or drop a node's link mark so the href survives a round-trip. */
@@ -147,6 +164,37 @@ function expelWhitespace(children: ProseNode[]): ProseNode[] {
 }
 
 /**
+ * The largest number CommonMark accepts as an ordered-list marker: 9 digits.
+ * Beyond it the marker is not a list marker at all, and the "list" reloads as a
+ * paragraph — taking every item with it.
+ */
+const MAX_LIST_NUMBER = 999999999;
+
+/**
+ * Clamp attributes to what markdown can actually spell. These arrive from OUTSIDE
+ * the editor — `<ol start="-1">` pasted from a web page, a heading level from a
+ * command — and each one silently destroys its whole block on reload: `-1.` is not
+ * a list marker, and `####### x` is not a heading.
+ *
+ * The last item matters as much as the first: a two-item list starting at 999999999
+ * has a second marker that is ten digits long.
+ */
+function clampAttrs(node: ProseNode): ProseNode {
+  if (node.type === tickerSchema.nodes.heading) {
+    const level = Math.min(6, Math.max(1, Math.round(Number(node.attrs.level) || 1)));
+    return level === node.attrs.level ? node : node.type.create({ ...node.attrs, level }, node.content, node.marks);
+  }
+
+  if (node.type === tickerSchema.nodes.ordered_list) {
+    const highest = MAX_LIST_NUMBER - Math.max(0, node.childCount - 1);
+    const order = Math.min(highest, Math.max(0, Math.round(Number(node.attrs.order) || 0)));
+    return order === node.attrs.order ? node : node.type.create({ ...node.attrs, order }, node.content, node.marks);
+  }
+
+  return node;
+}
+
+/**
  * Looseness is carried by the hidden flag on a paragraph that is a DIRECT child of
  * some list item. A list where NO item has one — every item is a blockquote or a
  * code block — has nowhere to carry it, and reloads as tight.
@@ -215,21 +263,40 @@ function trimBlockStart(children: ProseNode[]): ProseNode[] {
   return trimmed ? [tickerSchema.text(trimmed, first.marks), ...rest] : rest;
 }
 
+/**
+ * Drop empty paragraphs.
+ *
+ * In markdown a blank line SEPARATES paragraphs; it is not a paragraph. So
+ * `a\n\n\n\nb` is two paragraphs, and an empty one between them cannot be written
+ * down. Pressing Enter twice therefore leaves no trace in storage.
+ *
+ * That is the right behaviour here rather than merely the possible one: paragraph
+ * spacing already renders the gap the user wanted, it is what every markdown editor
+ * does, and the alternative is writing filler into a format the AI reads back.
+ *
+ * A container cannot be left with nothing — the schema requires block+ — so the
+ * last empty paragraph in an otherwise empty container stays.
+ */
+function dropEmptyParagraphs(children: ProseNode[]): ProseNode[] {
+  const kept = children.filter((child) => child.type !== tickerSchema.nodes.paragraph || child.content.size > 0);
+  return kept.length ? kept : children.slice(0, 1);
+}
+
 /** Recursively rebuild the document with only representable inline sequences. */
 export function normalizeForMarkdown(node: ProseNode): ProseNode {
   if (node.isTextblock) {
     const children: ProseNode[] = [];
-    node.forEach((child) => children.push(canonicalizeLink(child)));
+    node.forEach((child) => children.push(dropWhitespaceOnlyCode(canonicalizeLink(child))));
     // Trim line ends BEFORE trimming breaks: dropping a whitespace-only node can
     // leave two breaks adjacent, and that pair may not be representable.
-    return node.copy(Fragment.fromArray(trimBreaks(trimBlockStart(trimLineEnds(expelWhitespace(children))))));
+    return clampAttrs(node.copy(Fragment.fromArray(trimBreaks(trimBlockStart(trimLineEnds(expelWhitespace(children)))))));
   }
 
   if (node.isLeaf) return node;
 
   const children: ProseNode[] = [];
   node.forEach((child) => children.push(normalizeForMarkdown(child)));
-  return normalizeTightness(node.copy(Fragment.fromArray(children)));
+  return normalizeTightness(clampAttrs(node.copy(Fragment.fromArray(dropEmptyParagraphs(children)))));
 }
 
 /** True when the document is already representable — nothing would change. */
