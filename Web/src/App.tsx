@@ -6,23 +6,24 @@ import { RichStreamEditor } from './components/RichStreamEditor';
 /**
  * Which editor the stream page uses.
  *
- * The ProseMirror editor is the one this branch exists to build: formatting is
- * document structure, so there is no markup behind the text for a cursor to walk
- * into. It carries the editing core, save/append/conflict and provenance, and does
- * carries the editing core, save/append/conflict, provenance, document AI with its
- * citations and exchange inspection, images, scroll restore, find, sources and PDF
- * section AI and anchors.
+ * The ProseMirror editor reached message parity with the CodeMirror one and was
+ * turned on for one real run on 2026-07-29. It is OFF again, because that run
+ * showed it is not usable for writing:
  *
- * ON as of 2026-07-29. It sends and receives every host message the CodeMirror
- * editor does except the margin-note ones, which are deliberately gone — margin
- * notes are not a feature of this editor, and `challenge` went with them since that
- * is where it wrote.
+ *   - pressing Enter and pausing deletes the new line. The autosave's dirty check
+ *     calls getMarkdown(), which MUTATES the live document by normalising it, and
+ *     the policy deletes empty paragraphs because CommonMark cannot spell one.
+ *   - selection and formatting land on the wrong text. ProseMirror's mandatory
+ *     stylesheet was never imported; the hand-written CSS omits the ligature and
+ *     white-space rules that caret geometry depends on.
+ *   - re-entering a stream can hang the app. Not yet diagnosed.
  *
- * Two differences from the old editor are on purpose, not oversights: provenance is
- * inspected with the xray on plus a click rather than a hover popover, and a paste
- * carrying both an image and real plain text is a text paste.
+ * 640 passing tests said none of this, because every one of them tested the codec
+ * or the session and not one asked whether a person can type.
+ *
+ * docs/RICHTEXT_VERDICT.md has the full analysis and the options.
  */
-const USE_RICH_TEXT_EDITOR = true;
+const USE_RICH_TEXT_EDITOR = false;
 import { SearchModal } from './components/SearchModal';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
