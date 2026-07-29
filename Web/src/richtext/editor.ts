@@ -77,6 +77,12 @@ export interface RichTextEditorOptions {
    * both of those are the host's call, not the editor's.
    */
   onOpenLink?: (href: string) => void;
+  /**
+   * Fires after every transaction, including one that only moved the cursor. A
+   * selection menu needs this: which buttons are lit depends on the selection, not
+   * on the document.
+   */
+  onUpdate?: () => void;
 }
 
 /** The href of a link at this position, if there is one. */
@@ -92,7 +98,7 @@ function stateFor(doc: ProseNode): EditorState {
 }
 
 export function createRichTextEditor(options: RichTextEditorOptions): RichTextEditor {
-  const { parent, markdown, onChange, onOpenLink } = options;
+  const { parent, markdown, onChange, onOpenLink, onUpdate } = options;
   parent.classList.add('richtext-editor');
 
   /**
@@ -124,6 +130,7 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
       const next = view.state.apply(transaction);
       view.updateState(next);
       if (transaction.docChanged) onChange?.(toMarkdown(next.doc));
+      onUpdate?.();
     },
   });
 
@@ -133,6 +140,7 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
 
     setMarkdown(next: string) {
       view.updateState(stateFor(parseMarkdown(next)));
+      onUpdate?.();
     },
 
     appendMarkdown(fragment: string) {
