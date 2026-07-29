@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge, Stream, StreamSummary, type AIOperationState } from './types';
 import { StreamEditor } from './components/StreamEditor';
+import { RichStreamEditor } from './components/RichStreamEditor';
+
+/**
+ * Which editor the stream page uses.
+ *
+ * The ProseMirror editor is the one this branch exists to build: formatting is
+ * document structure, so there is no markup behind the text for a cursor to walk
+ * into. It carries the editing core, save/append/conflict and provenance, and does
+ * NOT yet carry document AI, PDF citations, margin notes, find, or image drop.
+ *
+ * Flip to false for the CodeMirror editor while those are ported.
+ */
+const USE_RICH_TEXT_EDITOR = true;
 import { SearchModal } from './components/SearchModal';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
@@ -465,7 +478,14 @@ export function App() {
   } else if (view === 'stream' && currentStream) {
     // key={currentStream.id} forces React to remount the editor when switching streams.
     // This ensures stream-local editor state does not leak across streams.
-    viewContent = (
+    viewContent = USE_RICH_TEXT_EDITOR ? (
+      <RichStreamEditor
+        key={currentStream.id}
+        stream={currentStream}
+        onBack={handleBackToList}
+        onDelete={handleDeleteStream}
+      />
+    ) : (
       <StreamEditor
         key={currentStream.id}
         stream={currentStream}

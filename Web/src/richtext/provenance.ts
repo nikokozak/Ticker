@@ -138,3 +138,60 @@ export function provenance(): Plugin<ProvenanceSpan[]> {
     },
   });
 }
+
+/**
+ * The wire shape. `start`/`end` keep their names but now hold ProseMirror
+ * positions rather than offsets into the markdown — the same integers, measured
+ * against the document instead of its serialisation. Existing rows therefore need
+ * a migration; there is no way to tell the two apart by looking.
+ */
+export interface ProvenanceSpanJSON {
+  spanId: string;
+  start: number;
+  end: number;
+  origin: string;
+  requestId?: string;
+  sourceId?: string;
+  meta: string;
+  textHash: string;
+  createdAt: string;
+}
+
+const ORIGINS: ProvenanceSpan['origin'][] = ['ai', 'source', 'capture'];
+
+export function spanFromJSON(json: ProvenanceSpanJSON): ProvenanceSpan {
+  let meta: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(json.meta || '{}');
+    if (parsed && typeof parsed === 'object') meta = parsed as Record<string, unknown>;
+  } catch {
+    meta = {}; // a span with unreadable metadata is still a span
+  }
+
+  const origin = ORIGINS.find((known) => known === json.origin) ?? 'ai';
+  return {
+    spanId: json.spanId,
+    from: json.start,
+    to: json.end,
+    origin,
+    requestId: json.requestId,
+    sourceId: json.sourceId,
+    meta,
+    textHash: json.textHash,
+    createdAt: Date.parse(json.createdAt) || 0,
+  };
+}
+
+export function spanToJSON(span: ProvenanceSpan): ProvenanceSpanJSON {
+  return {
+    spanId: span.spanId,
+    start: span.from,
+    end: span.to,
+    origin: span.origin,
+    requestId: span.requestId,
+    sourceId: span.sourceId,
+    meta: JSON.stringify(span.meta ?? {}),
+    textHash: span.textHash,
+    createdAt: new Date(span.createdAt || 0).toISOString(),
+  };
+}

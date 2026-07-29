@@ -3,7 +3,9 @@ import {
   hashProvenanceText,
   provenanceSpans,
   setProvenanceSpans,
+  spanToJSON,
   type ProvenanceSpan,
+  type ProvenanceSpanJSON,
 } from './provenance';
 
 /**
@@ -31,7 +33,7 @@ export interface SessionTransport {
     streamId: string;
     markdown: string;
     baseRevision: number;
-    spans: ProvenanceSpan[];
+    spans: ProvenanceSpanJSON[];
   }): Promise<SaveResult>;
   /** Ask the host to send the document again, after a gap it cannot reconcile. */
   reload(streamId: string): void;
@@ -119,7 +121,7 @@ export class DocumentSession {
     const spans = this.spansForSave();
 
     try {
-      const { revision } = await transport.save({ streamId, markdown, baseRevision, spans });
+      const { revision } = await transport.save({ streamId, markdown, baseRevision, spans: spans.map(spanToJSON) });
       if (Number.isFinite(revision)) this.revision = revision;
       this.lastSaved = markdown;
       // Only settle if nothing was typed while the write was in flight.

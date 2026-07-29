@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import { DocumentSession, type SaveState, type SessionTransport } from './session';
-import { addProvenanceSpans, hashProvenanceText, provenanceSpans, type ProvenanceSpan } from './provenance';
+import { addProvenanceSpans, hashProvenanceText, provenanceSpans, spanFromJSON, type ProvenanceSpan, type ProvenanceSpanJSON } from './provenance';
 
 /**
  * These are the rules that corrupt a user's notes when they are wrong, so they are
@@ -15,7 +15,7 @@ let session: DocumentSession | null = null;
 interface Harness {
   ed: RichTextEditor;
   session: DocumentSession;
-  saves: Array<{ markdown: string; baseRevision: number; spans: ProvenanceSpan[] }>;
+  saves: Array<{ markdown: string; baseRevision: number; spans: ProvenanceSpanJSON[] }>;
   reloads: string[];
   states: SaveState[];
   errors: string[];
@@ -222,7 +222,7 @@ describe('provenance travels with the document', () => {
     await h.session.saveNow();
 
     const [saved] = h.saves[0].spans;
-    const reloaded = open(h.saves[0].markdown, 2, [saved]);
+    const reloaded = open(h.saves[0].markdown, 2, [spanFromJSON(saved)]);
     expect(provenanceSpans(reloaded.ed.view.state)).toHaveLength(1);
     const [restored] = provenanceSpans(reloaded.ed.view.state);
     expect(reloaded.ed.view.state.doc.textBetween(restored.from, restored.to)).toBe('The AI wrote this.');

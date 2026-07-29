@@ -1,0 +1,225 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Command } from 'prosemirror-state';
+import { bridge } from '../types/bridge';
+import type { Stream } from '../types/models';
+import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
+import { DocumentSession, type SaveState } from '../richtext/session';
+import { spanFromJSON, type ProvenanceSpanJSON } from '../richtext/provenance';
+import { useToastStore } from '../store/toastStore';
+import {
+  activeFormats,
+  toggleBlockquote,
+  toggleBold,
+  toggleBulletList,
+  toggleCode,
+  toggleHeading,
+  toggleItalic,
+  toggleOrderedList,
+  toggleUnderline,
+} from '../richtext/commands';
+import '../richtext/editor.css';
+
+/**
+ * The editor page, on the ProseMirror editor.
+ *
+ * The component is deliberately thin. Everything that can be wrong in a way that
+ * loses a user's writing — the codec, save/append/conflict, provenance — lives in
+ * `src/richtext/` with its own tests. What is left here is wiring: the bridge on
+ * one side, the chrome on the other.
+ */
+
+interface RichStreamEditorProps {
+  stream: Stream;
+  onBack: () => void;
+  onDelete: () => void;
+}
+
+const SAVE_LABEL: Record<SaveState, string> = {
+  saved: 'Saved',
+  saving: 'Saving…',
+  error: 'Save failed',
+};
+
+export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorProps) {
+  const host = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<RichTextEditor | null>(null);
+  const sessionRef = useRef<DocumentSession | null>(null);
+
+  const [editor, setEditor] = useState<RichTextEditor | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>('saved');
+  const [xray, setXray] = useState(false);
+  const [title, setTitle] = useState(stream.title);
+  const [, redraw] = useState(0);
+  const addToast = useToastStore((state) => state.addToast);
+
+  // Which formatting buttons are lit depends on the SELECTION, so the menu has to
+  // redraw on every transaction and not only on edits.
+  const onUpdate = useCallback(() => redraw((n) => n + 1), []);
+
+  useEffect(() => {
+    if (!host.current) return undefined;
+
+    const created = createRichTextEditor({
+      parent: host.current,
+      markdown: stream.document?.markdown ?? '',
+      onChange: () => sessionRef.current?.documentChanged(),
+      onUpdate,
+      // A ticker-pdf:// citation belongs to the PDF pane and an external URL has to
+      // leave the WKWebView; both are the host's decision, not the editor's.
+      onOpenLink: (href) => bridge.send({ type: 'openExternalURL', payload: { url: href } }),
+    });
+
+    const session = new DocumentSession({
+      streamId: stream.id,
+      editor: created,
+      revision: stream.document?.revision ?? 0,
+      spans: (stream.spans ?? []).map(spanFromJSON),
+      transport: {
+        // Spelled out rather than spread: the contract checker verifies this
+        // payload statically against bridge.v2.json, and can only do that for a
+        // literal.
+        save: ({ streamId, markdown, baseRevision, spans }) => bridge.sendAsync<{ revision: number }>(
+          'saveStreamDocument',
+          { streamId, markdown, baseRevision, spans },
+        ),
+        reload: (streamId) => bridge.send({ type: 'loadStream', payload: { id: streamId } }),
+        onSaveStateChange: setSaveState,
+        onError: (message) => addToast(message, 'error'),
+      },
+    });
+
+    editorRef.current = created;
+    sessionRef.current = session;
+    setEditor(created);
+
+    return () => {
+      session.destroy();
+      created.destroy();
+      editorRef.current = null;
+      sessionRef.current = null;
+      setEditor(null);
+    };
+  }, [addToast, onUpdate, stream.id]);
+
+  useEffect(() => bridge.onMessage((message) => {
+    const session = sessionRef.current;
+    if (!session) return;
+    const payload = message.payload as Record<string, unknown> | undefined;
+
+    if (message.type === 'streamDocumentAppended') {
+      session.documentAppended({
+        streamId: String(payload?.streamId ?? ''),
+        fragment: String(payload?.fragment ?? ''),
+        revision: Number(payload?.revision),
+      });
+      return;
+    }
+
+    if (message.type === 'streamDocumentConflict') {
+      session.documentConflict({
+        streamId: String(payload?.streamId ?? ''),
+        markdown: String(payload?.markdown ?? ''),
+        revision: Number(payload?.revision),
+        spans: (payload?.spans as ProvenanceSpanJSON[] | undefined)?.map(spanFromJSON),
+      });
+      return;
+    }
+
+    if (message.type === 'flushEditor') {
+      // The host is closing or quitting and waits for this before it does.
+      const requestId = payload?.requestId;
+      if (typeof requestId !== 'string') return;
+      void session.saveNow().then(() => {
+        bridge.send({ type: 'editorFlushed', payload: { requestId } });
+      });
+    }
+  }), []);
+
+  const saveTitle = useCallback(() => {
+    const next = title.trim() || 'Untitled';
+    setTitle(next);
+    if (next !== stream.title) {
+      bridge.send({ type: 'updateStreamTitle', payload: { id: stream.id, title: next } });
+    }
+  }, [stream.id, stream.title, title]);
+
+  const run = (command: Command) => () => {
+    if (!editor) return;
+    command(editor.view.state, editor.view.dispatch, editor.view);
+    editor.view.focus();
+  };
+
+  const formats = editor ? activeFormats(editor.view.state) : null;
+
+  const formatButton = (label: string, active: boolean, command: Command, hint: string) => (
+    <button
+      key={label}
+      type="button"
+      className={`selection-action-button ${active ? 'selection-action-button--active' : ''}`}
+      title={hint}
+      // Keep the selection: the editor must not lose focus to the button.
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={run(command)}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="stream-editor">
+      <header className="stream-header">
+        <button onClick={onBack} className="back-button">← Back</button>
+        <input
+          type="text"
+          className="stream-title-input"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={saveTitle}
+          onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+        />
+        <div className="stream-header-actions">
+          <span
+            className={`stream-save-status stream-save-status--${saveState}`}
+            role="status"
+            aria-live="polite"
+            aria-label={SAVE_LABEL[saveState]}
+            title={SAVE_LABEL[saveState]}
+          >
+            <span className="stream-save-status-dot" aria-hidden="true" />
+            <span className="stream-save-status-label">{SAVE_LABEL[saveState]}</span>
+          </span>
+          <button
+            onClick={() => setXray((value) => !value)}
+            className={`stream-xray-button ${xray ? 'stream-xray-button--active' : ''}`}
+            title="Toggle provenance x-ray"
+          >
+            Xray
+          </button>
+          <button onClick={onDelete} className="delete-button" title="Delete stream">Delete</button>
+        </div>
+      </header>
+
+      {formats && (
+        <div className="stream-format-bar">
+          {formatButton('B', formats.bold, toggleBold, 'Bold ⌘B')}
+          {formatButton('I', formats.italic, toggleItalic, 'Italic ⌘I')}
+          {formatButton('U', formats.underline, toggleUnderline, 'Underline ⌘U')}
+          {formatButton('Code', formats.code, toggleCode, 'Code')}
+          {formatButton('H2', formats.heading === 2, toggleHeading(2), 'Heading')}
+          {formatButton('H3', formats.heading === 3, toggleHeading(3), 'Subheading')}
+          {formatButton('List', formats.bulletList, toggleBulletList, 'Bullets')}
+          {formatButton('1.', formats.orderedList, toggleOrderedList, 'Numbers')}
+          {formatButton('Quote', formats.blockquote, toggleBlockquote, 'Quote')}
+        </div>
+      )}
+
+      <div className="stream-body">
+        <div className="stream-content">
+          <div className={`document-editor-shell ${xray ? 'richtext-xray' : ''}`}>
+            <div ref={host} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
