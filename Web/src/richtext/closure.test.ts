@@ -202,10 +202,53 @@ describe('empty and near-empty blocks the keyboard can reach', () => {
     expectClosed(doc(p()));
   });
 
-  it('keeps an empty heading', () => expectClosed(doc(S.node('heading', { level: 2 }, []))));
-  it('keeps an empty list item', () => expectClosed(doc(S.node('bullet_list', { tight: true }, [item(p())]))));
-  it('keeps an empty blockquote', () => expectClosed(doc(S.node('blockquote', null, [p()]))));
+  // Each of these IS representable, so it must survive untouched — the empty
+  // paragraph rule must not reach in and delete a block's only child.
+  it('keeps an empty heading', () => {
+    expectClosed(doc(S.node('heading', { level: 2 }, [])));
+    expect(serializeMarkdown(doc(S.node('heading', { level: 2 }, [])))).toBe('## ');
+  });
+  it('keeps an empty blockquote', () => {
+    expectClosed(doc(S.node('blockquote', null, [p()])));
+    expect(serializeMarkdown(doc(S.node('blockquote', null, [p()])))).toBe('> ');
+  });
   it('keeps an empty code block', () => expectClosed(doc(S.node('code_block', { params: '' }, []))));
+  it('keeps an empty bullet item', () => {
+    expectClosed(doc(S.node('bullet_list', { tight: true }, [item(p())])));
+    expect(serializeMarkdown(doc(S.node('bullet_list', { tight: true }, [item(p())])))).toBe('* ');
+  });
+  it('keeps an empty ordered item', () => {
+    const list = doc(S.node('ordered_list', { order: 3, tight: true }, [item(p())]));
+    expectClosed(list);
+    expect(serializeMarkdown(list)).toBe('3. ');
+  });
+
+  // An empty item in each position, because a first, middle and last one are three
+  // different jobs for the serializer.
+  const filled = (text: string) => item(p(t(text)));
+  it('keeps an empty FIRST list item', () => expectClosed(
+    doc(S.node('bullet_list', { tight: true }, [item(p()), filled('b'), filled('c')])),
+  ));
+  it('keeps an empty MIDDLE list item', () => expectClosed(
+    doc(S.node('bullet_list', { tight: true }, [filled('a'), item(p()), filled('c')])),
+  ));
+  it('keeps an empty LAST list item', () => expectClosed(
+    doc(S.node('bullet_list', { tight: true }, [filled('a'), filled('b'), item(p())])),
+  ));
+
+  it('keeps a paragraph that is nothing but a hard break', () => {
+    // Reachable: Shift+Enter into an empty paragraph. The break has nothing to
+    // separate, so it goes, and the empty paragraph is then the only child.
+    expectNormalized(doc(p(t('a')), p(hard()), p(t('b'))), 'a\n\nb');
+  });
+
+  it('drops an empty paragraph beside content inside a blockquote', () => {
+    expectNormalized(doc(S.node('blockquote', null, [p(t('q')), p()])), '> q');
+  });
+
+  it('keeps the sole empty paragraph of a blockquote', () => {
+    expectClosed(doc(S.node('blockquote', null, [p()])));
+  });
 
   it('drops an empty paragraph inside a list item that has other content', () => {
     expectNormalized(
@@ -229,6 +272,24 @@ describe('inline code at its edges', () => {
     expectNormalized(doc(p(t('a'), S.text(' ', [codeMark]), t('b'))), 'a b');
   });
   it('keeps interior whitespace', () => expectClosed(doc(p(S.text('a  b', [codeMark])))));
+
+  it('expels at the edges of a RUN, not of each text node', () => {
+    // A code run split across two text nodes — a link boundary does it — must keep
+    // the whitespace that is interior to the run.
+    const link = S.marks.link.create({ href: 'https://x.test', title: null });
+    const input = doc(p(t('x'), S.text(' a ', [codeMark]), S.text(' b ', [codeMark, link]), t('y')));
+    // Two code spans, because the link has to open between them — and closed, which
+    // is what matters: the whitespace interior to the run is still there.
+    expectNormalized(input, 'x `a `[` b` ](https://x.test)y');
+  });
+
+  it('cannot be combined with formatting markdown would render literally', () => {
+    // `<u>b</u>` inside a code span shows the tags. The schema forbids the
+    // combination so the selection menu cannot build it in the first place.
+    const marks = S.marks.underline.create().addToSet([S.marks.code.create()]);
+    expect(marks.map((mark) => mark.type.name)).toEqual(['code']);
+    expect(S.marks.code.create().addToSet([S.marks.underline.create()]).map((m) => m.type.name)).toEqual(['code']);
+  });
 });
 
 describe('attributes markdown cannot spell', () => {

@@ -2,7 +2,7 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { TextSelection } from 'prosemirror-state';
 import { createRichTextEditor, type RichTextEditor } from './editor';
-import { aiWritingRange, applyAIMarkdown, focusAtEnd, insertImage, selectText, setImageWidth } from './operations';
+import { aiWritingRange, applyAIMarkdown, focusAtEnd, insertImage, selectText, setImageWidth, streamAIMarkdown } from './operations';
 
 /**
  * ProseMirror measures the DOM to scroll a selection into view, and jsdom
@@ -208,5 +208,42 @@ describe('focusing at the end', () => {
     expect(ed.view.state.selection.empty).toBe(true);
     // Inside the last paragraph, not after it.
     expect(ed.view.state.selection.from).toBe(ed.view.state.doc.content.size - 1);
+  });
+});
+
+describe('a streaming AI reply', () => {
+  // Chunks cannot be parsed independently: a stream splits wherever it likes, so
+  // `**bo` and `ld**` each parse to plain text and neither is bold.
+  it('is correct even when a chunk splits a marker', () => {
+    const ed = open('Replace this.');
+    const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
+    for (const chunk of ['Now **bo', 'ld** and ', '[lin', 'ked](https://x.', 'test).']) stream.push(chunk);
+    expect(ed.getMarkdown()).toBe('Now **bold** and [linked](https://x.test).');
+  });
+
+  it('is correct when a chunk splits a list marker', () => {
+    const ed = open('Replace this.');
+    const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
+    for (const chunk of ['* one\n', '* t', 'wo']) stream.push(chunk);
+    expect(ed.getMarkdown()).toBe('* one\n* two');
+  });
+
+  it('is still ONE undo step however many frames it took', () => {
+    const ed = open('One. Replace this. Three.');
+    const before = ed.getMarkdown();
+    const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
+    for (const chunk of ['A ', '**streamed** ', 'reply.']) stream.push(chunk);
+    expect(ed.getMarkdown()).toBe('One. A **streamed** reply. Three.');
+    undo(ed);
+    expect(ed.getMarkdown()).toBe(before);
+  });
+
+  it('reports the range it wrote, and highlights it', () => {
+    const ed = open('One. Replace this. Three.');
+    const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
+    stream.push('A reply.');
+    const range = stream.done();
+    expect(ed.view.state.doc.textBetween(range.from, range.to)).toBe('A reply.');
+    expect(aiWritingRange(ed.view.state)).toEqual(range);
   });
 });

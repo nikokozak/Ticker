@@ -72,6 +72,7 @@ export function applyAIMarkdown(
   view: EditorView,
   range: { from: number; to: number },
   markdown: string,
+  options: { addToHistory?: boolean } = {},
 ): { from: number; to: number } {
   const parsed = parseMarkdown(markdown);
   const inline = parsed.childCount === 1
@@ -84,8 +85,45 @@ export function applyAIMarkdown(
   const tr = view.state.tr.replaceRange(range.from, range.to, slice);
   const to = tr.mapping.map(range.to, 1);
   setAIWritingRange(tr, { from: range.from, to });
+  if (options.addToHistory === false) tr.setMeta('addToHistory', false);
   view.dispatch(tr.scrollIntoView());
   return { from: range.from, to };
+}
+
+/**
+ * A streaming AI reply, applied to the document as it arrives.
+ *
+ * Chunks cannot be parsed independently: a stream splits wherever it likes, so
+ * `**bo` and `ld**` each parse to plain text and neither is bold. The same goes for
+ * a link split across its bracket, a list split mid-marker, a fence split mid-open.
+ * So every chunk reparses the WHOLE accumulated buffer and replaces what the last
+ * one wrote — correct at every frame rather than only at the end.
+ *
+ * The replacements do not stack in the undo history, so accepting a streamed reply
+ * is still one undo step however many frames it took.
+ */
+export function streamAIMarkdown(view: EditorView, range: { from: number; to: number }) {
+  let buffer = '';
+  let written = { from: range.from, to: range.to };
+  let started = false;
+
+  return {
+    push(chunk: string): void {
+      buffer += chunk;
+      // The FIRST frame is the one history records, so undoing it restores the
+      // text that was there before the AI started. Later frames are rebased into
+      // that same history item, which is what keeps the whole reply a single undo.
+      written = applyAIMarkdown(view, written, buffer, { addToHistory: !started });
+      started = true;
+    },
+    /** Finish, leaving exactly one undoable step behind. */
+    done(): { from: number; to: number } {
+      return written;
+    },
+    get markdown(): string {
+      return buffer;
+    },
+  };
 }
 
 /* Images ---------------------------------------------------------------- */

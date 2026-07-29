@@ -113,9 +113,23 @@ const underline: MarkSpec = {
   toDOM: (): DOMOutputSpec => ['u', 0],
 };
 
+/**
+ * A markdown code span is LITERAL — `` `<u>b</u>` `` shows the tags rather than
+ * underlining anything — so inline code cannot also be bold, italic or underlined.
+ * Saying so in the schema means the selection menu and ⌘B simply cannot build the
+ * combination, instead of building one that serialises into visible markup.
+ *
+ * Links are not excluded: a link whose label contains a code span is ordinary
+ * markdown and round-trips fine.
+ */
+const code: MarkSpec = {
+  ...base.spec.marks.get('code'),
+  excludes: 'em strong underline code',
+};
+
 export const tickerSchema = new Schema({
   nodes: base.spec.nodes.update('image', image).update('hard_break', hardBreak).addToEnd('soft_break', softBreak),
   // Before `em` so underline is the outermost mark, which fixes one canonical
   // nesting and keeps serialisation deterministic.
-  marks: base.spec.marks.addBefore('em', 'underline', underline),
+  marks: base.spec.marks.addBefore('em', 'underline', underline).update('code', code),
 });
