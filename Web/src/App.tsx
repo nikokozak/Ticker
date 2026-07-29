@@ -9,15 +9,20 @@ import { RichStreamEditor } from './components/RichStreamEditor';
  * The ProseMirror editor is the one this branch exists to build: formatting is
  * document structure, so there is no markup behind the text for a cursor to walk
  * into. It carries the editing core, save/append/conflict and provenance, and does
- * NOT yet carry document AI, PDF citations, margin notes, find, or image drop.
+ * carries the editing core, save/append/conflict, provenance, document AI with its
+ * citations and exchange inspection, images, scroll restore, find, sources and PDF
+ * section AI and anchors.
  *
- * OFF until the session/persistence blockers close. A review found six paths that
- * lose a user's writing — an append landing on unsaved edits, navigating away
- * inside the autosave debounce, a failed save still acknowledging a flush — and
- * none of them are worth risking on real notes to shorten a spike. It stays fully
- * testable at /richtext.html and in 490 tests either way.
+ * ON as of 2026-07-29. It sends and receives every host message the CodeMirror
+ * editor does except the margin-note ones, which are deliberately gone — margin
+ * notes are not a feature of this editor, and `challenge` went with them since that
+ * is where it wrote.
+ *
+ * Two differences from the old editor are on purpose, not oversights: provenance is
+ * inspected with the xray on plus a click rather than a hover popover, and a paste
+ * carrying both an image and real plain text is a text paste.
  */
-const USE_RICH_TEXT_EDITOR = false;
+const USE_RICH_TEXT_EDITOR = true;
 import { SearchModal } from './components/SearchModal';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
