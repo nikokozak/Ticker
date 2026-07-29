@@ -170,7 +170,8 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     streamId: streamId,
                     markdown: markdown,
                     baseRevision: baseRevision,
-                    spans: spans
+                    spans: spans,
+                    resolvedPendingThrough: payload["resolvedPendingThrough"]?.intValue
                 )
                 await bridgeService.respond(to: callbackId, with: [
                     "revision": AnyCodable(revision)

@@ -98,9 +98,9 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
         // Spelled out rather than spread: the contract checker verifies this
         // payload statically against bridge.v2.json, and can only do that for a
         // literal.
-        save: ({ streamId, markdown, baseRevision, spans }) => bridge.sendAsync<{ revision: number }>(
+        save: ({ streamId, markdown, baseRevision, spans, resolvedPendingThrough }) => bridge.sendAsync<{ revision: number }>(
           'saveStreamDocument',
-          { streamId, markdown, baseRevision, spans },
+          { streamId, markdown, baseRevision, spans, resolvedPendingThrough },
         ),
         reload: (streamId) => bridge.send({ type: 'loadStream', payload: { id: streamId } }),
         onSaveStateChange: setSaveState,

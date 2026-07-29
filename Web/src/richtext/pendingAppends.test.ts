@@ -175,10 +175,17 @@ describe('a session opening a stream with pending appends', () => {
   function open(markdown: string, revision: number, pending: PendingAppend[]) {
     const parent = document.createElement('div');
     document.body.appendChild(parent);
-    const saves: Array<{ markdown: string; spans: unknown[] }> = [];
+    const saves: Array<{ markdown: string; spans: unknown[]; resolvedPendingThrough?: number }> = [];
     const errors: string[] = [];
     const transport: SessionTransport = {
-      save: async (request) => { saves.push({ markdown: request.markdown, spans: request.spans }); return { revision: revision + 1 }; },
+      save: async (request) => {
+        saves.push({
+          markdown: request.markdown,
+          spans: request.spans,
+          resolvedPendingThrough: request.resolvedPendingThrough,
+        });
+        return { revision: revision + 1 };
+      },
       reload: () => {},
       onError: (message) => errors.push(message),
     };
@@ -205,6 +212,8 @@ describe('a session opening a stream with pending appends', () => {
     expect(h.saves).toHaveLength(1);
     expect(h.saves[0].markdown).toBe(stored);
     expect(h.saves[0].spans).toHaveLength(1);
+    // Only a save that says so may clear the rows.
+    expect(h.saves[0].resolvedPendingThrough).toBe(4);
   });
 
   it('places provenance across several appends', () => {
@@ -228,11 +237,36 @@ describe('a session opening a stream with pending appends', () => {
     expect(h.errors[0]).toMatch(/text itself is intact/);
   });
 
-  it('keeps the text when only the span cannot be placed', () => {
+  it('keeps the text when only one span cannot be placed', () => {
     const fragment = 'The AI appended this.';
     const stored = `existing text\n\n${fragment}`;
     const h = open(stored, 4, [row(4, fragment, [rawSpan(fragment, fragment.length, { textHash: 'drifted' })])]);
     expect(h.ed.getMarkdown()).toBe(stored);
     expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
+  });
+
+  it('converts ALL of a row or none of it', async () => {
+    // A partial conversion is the worst outcome: the save that follows would clear
+    // the rows, so a span that could not be placed is gone permanently rather than
+    // merely deferred until a version that can place it.
+    const fragment = 'First AI addition.\n\nSecond AI addition.';
+    const stored = `base\n\n${fragment}`;
+    const h = open(stored, 4, [row(4, fragment, [
+      rawSpan(fragment, 'First AI addition.'.length),
+      rawSpan(fragment, fragment.length, { spanId: 'raw-2', textHash: 'drifted' }),
+    ])]);
+
+    expect(provenanceSpans(h.ed.view.state), 'a placeable span was kept from a failed row').toHaveLength(0);
+    expect(h.ed.getMarkdown()).toBe(stored);
+    await h.session.saveNow();
+    // Nothing is saved, so nothing clears the rows.
+    expect(h.saves.map((save) => save.resolvedPendingThrough)).not.toContain(4);
+  });
+
+  it('never claims rows it did not convert', async () => {
+    const h = open('base', 3, []);
+    h.ed.view.dispatch(h.ed.view.state.tr.insertText('x', 1));
+    await h.session.saveNow();
+    expect(h.saves[0].resolvedPendingThrough).toBeUndefined();
   });
 });

@@ -991,8 +991,24 @@ final class PersistenceService {
     }
 
     @discardableResult
-    func saveStreamDocument(streamId: UUID, markdown: String, baseRevision: Int, spans: [ProvenanceSpan]) throws -> Int {
-        try saveStreamDocument(streamId: streamId, markdown: markdown, baseRevision: baseRevision, spans: Optional(spans))
+    /// `resolvedPendingThrough` is the highest append revision whose provenance the
+    /// editor has converted into the spans it is sending. Only those rows are
+    /// forgotten; an editor that does not understand pending appends omits it and
+    /// leaves every row in place.
+    func saveStreamDocument(
+        streamId: UUID,
+        markdown: String,
+        baseRevision: Int,
+        spans: [ProvenanceSpan],
+        resolvedPendingThrough: Int? = nil
+    ) throws -> Int {
+        try saveStreamDocument(
+            streamId: streamId,
+            markdown: markdown,
+            baseRevision: baseRevision,
+            spans: Optional(spans),
+            resolvedPendingThrough: resolvedPendingThrough
+        )
     }
 
     @discardableResult
@@ -1000,7 +1016,8 @@ final class PersistenceService {
         streamId: UUID,
         markdown: String,
         baseRevision: Int,
-        spans: [ProvenanceSpan]?
+        spans: [ProvenanceSpan]?,
+        resolvedPendingThrough: Int? = nil
     ) throws -> Int {
         let now = Date().timeIntervalSince1970
         return try dbQueue.write { db in
@@ -1040,6 +1057,12 @@ final class PersistenceService {
                     let validSpans = validatedSpans(spans, streamId: streamId)
                     logDroppedSpans(total: spans.count, kept: validSpans.count, context: "saveStreamDocument")
                     try replaceSpans(streamId: streamId, spans: validSpans, db: db)
+                    try clearResolvedPendingAppends(
+                        streamId: streamId,
+                        through: resolvedPendingThrough,
+                        baseRevision: baseRevision,
+                        db: db
+                    )
                     try deleteOrphanExchanges(streamId: streamId, db: db)
                 }
 
@@ -1073,14 +1096,11 @@ final class PersistenceService {
                 let validSpans = validatedSpans(spans, streamId: streamId)
                 logDroppedSpans(total: spans.count, kept: validSpans.count, context: "saveStreamDocument")
                 try replaceSpans(streamId: streamId, spans: validSpans, db: db)
-
-                // This save passed the revision check, so the editor had every
-                // append up to its base and has now converted their provenance into
-                // the spans just stored. A CONFLICTING save clears nothing, which is
-                // why this sits inside the successful path.
-                try db.execute(
-                    sql: "DELETE FROM pending_stream_appends WHERE stream_id = ? AND revision <= ?",
-                    arguments: [streamId.uuidString, baseRevision]
+                try clearResolvedPendingAppends(
+                    streamId: streamId,
+                    through: resolvedPendingThrough,
+                    baseRevision: baseRevision,
+                    db: db
                 )
                 try deleteOrphanExchanges(streamId: streamId, db: db)
             }
@@ -1411,6 +1431,26 @@ final class PersistenceService {
                 )
             }
         }
+    }
+
+    /// Forget the appends whose provenance an editor has just converted.
+    ///
+    /// Gated on the editor SAYING which revisions it resolved, never on a save
+    /// merely carrying spans: an editor that does not understand pending rows also
+    /// sends spans, and deleting rows it never converted destroys the provenance
+    /// permanently. Nothing beyond the save's own base revision is cleared either,
+    /// since anything later arrived after the editor read the document.
+    private func clearResolvedPendingAppends(
+        streamId: UUID,
+        through: Int?,
+        baseRevision: Int,
+        db: Database
+    ) throws {
+        guard let through, through > 0 else { return }
+        try db.execute(
+            sql: "DELETE FROM pending_stream_appends WHERE stream_id = ? AND revision <= ?",
+            arguments: [streamId.uuidString, min(through, baseRevision)]
+        )
     }
 
     private func logDroppedSpans(total: Int, kept: Int, context: String) {

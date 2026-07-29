@@ -237,6 +237,7 @@
       },
       "saveStreamDocument": {
         "requiredPayloadKeys": ["streamId", "markdown", "baseRevision", "spans"],
+        "optionalPayloadKeys": ["resolvedPendingThrough"],
         "requiredCallbackId": true
       },
       "saveScrollPosition": {

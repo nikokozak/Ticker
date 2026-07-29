@@ -37,6 +37,12 @@ export interface SessionTransport {
     markdown: string;
     baseRevision: number;
     spans: ProvenanceSpanJSON[];
+    /**
+     * The highest append revision whose provenance this editor has converted. The
+     * store forgets only those rows; without it, it keeps every one — an editor
+     * that does not understand pending appends must not be able to delete them.
+     */
+    resolvedPendingThrough?: number;
   }): Promise<SaveResult>;
   /** Ask the host to send the document again, after a gap it cannot reconcile. */
   reload(streamId: string): void;
@@ -85,6 +91,9 @@ export class DocumentSession {
    */
   private generation = 0;
 
+  /** Set only by a replay in which EVERY row and EVERY span was converted. */
+  private resolvedPendingThrough: number | null = null;
+
   constructor(options: SessionOptions) {
     this.options = { autosaveDelay: DEFAULT_AUTOSAVE_DELAY, ...options };
     this.revision = options.revision;
@@ -128,34 +137,57 @@ export class DocumentSession {
   private convertPendingAppends(pending: PendingAppend[]): void {
     const { editor } = this.options;
     const plan = planReplay(this.lastSaved, this.revision, pending);
-    if (!plan.ok) {
-      this.options.transport.onError?.(
-        'Some recent additions could not have their history restored; the text itself is intact.',
-        plan.reason,
-      );
-      return;
-    }
+    if (!plan.ok) return this.abandonReplay(plan.reason);
     if (!plan.appends.length) return;
 
     const existing = provenanceSpans(editor.view.state);
+    const before = editor.getMarkdown();
     editor.setMarkdown(plan.baseMarkdown);
 
-    const placed: ProvenanceSpan[] = [...existing];
+    // Everything is placed before anything is committed. A partial conversion is
+    // the worst outcome: the save that follows would delete the rows, so the spans
+    // that could not be placed are gone permanently rather than merely deferred.
+    const placed: ProvenanceSpan[] = [];
     for (const append of plan.appends) {
       const inserted = editor.appendMarkdown(append.fragment);
       for (const raw of append.spans) {
         const span = placeFragmentSpan(raw, append.fragment, inserted.from, editor.view.state.doc);
-        if (span) placed.push(span);
+        if (!span) {
+          editor.setMarkdown(before);
+          this.restoreSpans(existing);
+          return this.abandonReplay('spanUnplaceable');
+        }
+        placed.push(span);
       }
     }
 
-    editor.view.dispatch(setProvenanceSpans(editor.view.state.tr, placed));
+    if (editor.getMarkdown() !== before) {
+      // Replaying the fragments did not reproduce the stored document, so the
+      // positions would describe something that was never saved.
+      editor.setMarkdown(before);
+      this.restoreSpans(existing);
+      return this.abandonReplay('replayDiverged');
+    }
 
-    // The document is byte-identical to what was stored, but the SPANS are new, so
-    // the session is dirty on purpose: without a save the pending rows are never
-    // cleared and the same work happens on every open.
+    editor.view.dispatch(setProvenanceSpans(editor.view.state.tr, [...existing, ...placed]));
+
+    // Only now: every row and every span was converted, so the store may forget
+    // them once this save lands.
+    this.resolvedPendingThrough = this.revision;
+    // The document is byte-identical to what was stored but the SPANS are new, so
+    // the session is dirty on purpose — without a save the rows are never cleared
+    // and this happens again on every open.
     this.lastSavedSpans = '';
     this.documentChanged();
+  }
+
+  /** Leave the rows alone so a later version can still convert them correctly. */
+  private abandonReplay(reason: string): void {
+    this.resolvedPendingThrough = null;
+    this.options.transport.onError?.(
+      'Some recent additions could not have their history restored; the text itself is intact.',
+      reason,
+    );
   }
 
   /**
@@ -205,7 +237,10 @@ export class DocumentSession {
     const generation = this.generation;
 
     try {
-      const { revision } = await transport.save({ streamId, markdown, baseRevision, spans: spans.map(spanToJSON) });
+      const resolvedPendingThrough = this.resolvedPendingThrough ?? undefined;
+      const { revision } = await transport.save({
+        streamId, markdown, baseRevision, spans: spans.map(spanToJSON), resolvedPendingThrough,
+      });
 
       /*
        * Something replaced or appended to the document while this was in flight, so
@@ -232,6 +267,8 @@ export class DocumentSession {
       this.revision = revision;
       this.lastSaved = markdown;
       this.lastSavedSpans = fingerprint;
+      // Reported once. The rows are gone, so a later save must not claim them.
+      this.resolvedPendingThrough = null;
       // Only settle if nothing changed while the write was in flight.
       this.setState(this.isDirty() ? 'saving' : 'saved');
     } catch (error) {
