@@ -5,6 +5,7 @@ import type { Stream } from '../types/models';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import { DocumentSession, type SaveState } from '../richtext/session';
 import { spanFromJSON, type ProvenanceSpanJSON } from '../richtext/provenance';
+import { parseRawSpans } from '../richtext/pendingAppends';
 import { useToastStore } from '../store/toastStore';
 import {
   activeFormats,
@@ -87,6 +88,12 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       editor: created,
       revision: stream.document?.revision ?? 0,
       spans: (stream.spans ?? []).map(spanFromJSON),
+      pendingAppends: (stream.pendingAppends ?? []).map((append) => ({
+        revision: append.revision,
+        separator: append.separator,
+        fragment: append.fragment,
+        rawSpans: parseRawSpans(append.rawSpansJSON),
+      })),
       transport: {
         // Spelled out rather than spread: the contract checker verifies this
         // payload statically against bridge.v2.json, and can only do that for a

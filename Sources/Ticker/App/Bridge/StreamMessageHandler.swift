@@ -98,6 +98,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     "sourceScope": AnyCodable(stream.sourceScope.rawValue),
                     "scrollOffset": AnyCodable(document.scrollOffset),
                     "spans": AnyCodable(StreamCodec.encodeSpans([])),
+                    "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends([])),
                     "marginNotes": AnyCodable([])
                 ]
                 await bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
@@ -296,13 +297,19 @@ final class StreamMessageHandler: BridgeMessageHandler {
         let document = try persistence.loadOrCreateStreamDocument(streamId: id)
         let spans = try persistence.loadSpans(streamId: id)
         let marginNotes = try persistence.loadMarginNotes(streamId: id)
+        // Appends made while no editor was open. Their provenance is still in
+        // fragment coordinates — only an editor can turn those into document
+        // positions — so they travel with the document and are cleared by the save
+        // that follows.
+        let pendingAppends = try persistence.loadPendingAppends(streamId: id)
         let streamPayload = StreamCodec.encodeStream(stream, document: document)
         var payload: [String: AnyCodable] = [
             "stream": AnyCodable(streamPayload),
             "sourceScope": AnyCodable(stream.sourceScope.rawValue),
             "scrollOffset": AnyCodable(document.scrollOffset),
             "spans": AnyCodable(StreamCodec.encodeSpans(spans)),
-            "marginNotes": AnyCodable(StreamCodec.encodeMarginNotes(marginNotes))
+            "marginNotes": AnyCodable(StreamCodec.encodeMarginNotes(marginNotes)),
+            "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends(pendingAppends))
         ]
         if let requestId {
             payload["requestId"] = AnyCodable(requestId)

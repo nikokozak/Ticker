@@ -110,7 +110,7 @@
       },
       "streamLoaded": {
         "requiredPayloadKeys": ["stream", "spans", "marginNotes"],
-        "optionalPayloadKeys": ["scrollOffset", "sourceScope", "requestId"]
+        "optionalPayloadKeys": ["scrollOffset", "sourceScope", "requestId", "pendingAppends"]
       },
       "streamLoadFailed": {
         "requiredPayloadKeys": ["id", "reason"],

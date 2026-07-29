@@ -6,6 +6,7 @@ export interface Stream {
   sources: SourceReference[];
   document: StreamDocument;
   spans: ProvenanceSpanJSON[];
+  pendingAppends?: PendingAppendJSON[];
   marginNotes: MarginNoteJSON[];
   createdAt: string;
   updatedAt: string;
@@ -21,6 +22,18 @@ export interface StreamDocument {
   scrollOffset: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * An append made while no editor was open. Its provenance is still in fragment
+ * coordinates — only an editor can turn those into document positions — so it
+ * travels with the document and is cleared by the save that follows.
+ */
+export interface PendingAppendJSON {
+  revision: number;
+  separator: string;
+  fragment: string;
+  rawSpansJSON: string;
 }
 
 export interface ProvenanceSpanJSON {

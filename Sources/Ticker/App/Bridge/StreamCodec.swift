@@ -163,4 +163,18 @@ enum StreamCodec {
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// The wire form of an append still waiting for an editor to place its
+    /// provenance. Built here rather than inline so the payload literal stays
+    /// simple enough for the contract checker to read.
+    static func encodePendingAppends(_ appends: [PendingStreamAppend]) -> [[String: AnyCodable]] {
+        appends.map { append in
+            [
+                "revision": AnyCodable(append.revision),
+                "separator": AnyCodable(append.separator),
+                "fragment": AnyCodable(append.fragment),
+                "rawSpansJSON": AnyCodable(append.rawSpansJSON)
+            ]
+        }
+    }
 }

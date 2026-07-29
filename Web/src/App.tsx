@@ -299,6 +299,11 @@ export function App() {
             ...payloadStream,
             sourceScope,
             spans: deserializeProvenanceSpans(message.payload?.spans),
+            // Appends made while no editor was open; the editor converts their
+            // provenance out of fragment coordinates the first time it opens.
+            pendingAppends: (Array.isArray(message.payload?.pendingAppends)
+              ? message.payload.pendingAppends
+              : []) as Stream['pendingAppends'],
             marginNotes: (Array.isArray(message.payload?.marginNotes) ? message.payload.marginNotes : []) as Stream['marginNotes'],
             document: {
               ...payloadStream.document,

@@ -1,4 +1,5 @@
 import type { RichTextEditor } from './editor';
+import { placeFragmentSpan, planReplay, type PendingAppend } from './pendingAppends';
 import {
   addProvenanceSpans,
   hashProvenanceText,
@@ -49,6 +50,8 @@ export interface SessionOptions {
   transport: SessionTransport;
   revision: number;
   spans?: ProvenanceSpan[];
+  /** Appends recorded while no editor was open, still in fragment coordinates. */
+  pendingAppends?: PendingAppend[];
   /** Milliseconds of quiet before an edit is written. */
   autosaveDelay?: number;
 }
@@ -88,6 +91,7 @@ export class DocumentSession {
     this.lastSaved = options.editor.getMarkdown();
     if (options.spans?.length) this.restoreSpans(options.spans);
     this.lastSavedSpans = this.spanFingerprint();
+    if (options.pendingAppends?.length) this.convertPendingAppends(options.pendingAppends);
   }
 
   get saveState(): SaveState {
@@ -106,6 +110,52 @@ export class DocumentSession {
       this.timer = null;
       void this.saveNow();
     }, this.options.autosaveDelay);
+  }
+
+  /**
+   * Place the provenance of appends that happened while no editor was open.
+   *
+   * The editor was constructed from the FULL stored markdown, fragments included,
+   * so nothing is re-inserted: the document is rebuilt from the base and the
+   * fragments are replayed through the same append path, which is what makes each
+   * fragment's position knowable.
+   *
+   * Any proof that fails abandons the whole replay and leaves the rows alone. A
+   * half-converted span points at the wrong text and claims the AI wrote something
+   * it did not, which is worse than no highlighting; the rows survive, so a later
+   * version can still convert them correctly.
+   */
+  private convertPendingAppends(pending: PendingAppend[]): void {
+    const { editor } = this.options;
+    const plan = planReplay(this.lastSaved, this.revision, pending);
+    if (!plan.ok) {
+      this.options.transport.onError?.(
+        'Some recent additions could not have their history restored; the text itself is intact.',
+        plan.reason,
+      );
+      return;
+    }
+    if (!plan.appends.length) return;
+
+    const existing = provenanceSpans(editor.view.state);
+    editor.setMarkdown(plan.baseMarkdown);
+
+    const placed: ProvenanceSpan[] = [...existing];
+    for (const append of plan.appends) {
+      const inserted = editor.appendMarkdown(append.fragment);
+      for (const raw of append.spans) {
+        const span = placeFragmentSpan(raw, append.fragment, inserted.from, editor.view.state.doc);
+        if (span) placed.push(span);
+      }
+    }
+
+    editor.view.dispatch(setProvenanceSpans(editor.view.state.tr, placed));
+
+    // The document is byte-identical to what was stored, but the SPANS are new, so
+    // the session is dirty on purpose: without a save the pending rows are never
+    // cleared and the same work happens on every open.
+    this.lastSavedSpans = '';
+    this.documentChanged();
   }
 
   /**
