@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import { DocumentSession, type SaveState, type SessionTransport } from './session';
 import { addProvenanceSpans, hashProvenanceText, provenanceSpans, spanFromJSON, type ProvenanceSpan, type ProvenanceSpanJSON } from './provenance';
+import { fnv1a } from '../utils/fnv1a';
 
 /**
  * These are the rules that corrupt a user's notes when they are wrong, so they are
@@ -188,6 +189,45 @@ describe('an append landing on unsaved edits', () => {
     h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nREMOTE', revision: 4 });
     await h.session.saveNow();
     expect(h.saves).toHaveLength(0);
+  });
+});
+
+describe('provenance that arrives with an append', () => {
+  it('is installed at the right place and survives the next save', async () => {
+    // The host cannot know a ProseMirror position — it would have to parse the
+    // document — so it sends positions relative to the FRAGMENT. Dropping them,
+    // which is what happened before, meant the next save replaced the whole stored
+    // span set and erased the append's provenance, orphaning its AI exchange.
+    const h = open('existing text', 3);
+    const fragment = '\n\nThe AI appended this.';
+    // Positions inside the parsed fragment: 1 opens its paragraph.
+    const spans = [{
+      spanId: 'appended-1', start: 1, end: 1 + 'The AI appended this.'.length,
+      origin: 'ai', requestId: 'req-1', meta: '{}',
+      textHash: fnv1a('The AI appended this.'), createdAt: new Date(0).toISOString(),
+    }];
+
+    h.session.documentAppended({ streamId: 'stream-1', fragment, revision: 4, spans });
+
+    const installed = provenanceSpans(h.ed.view.state);
+    expect(installed, 'append provenance was dropped').toHaveLength(1);
+    expect(h.ed.view.state.doc.textBetween(installed[0].from, installed[0].to)).toBe('The AI appended this.');
+
+    type(h.ed, 'edit ');
+    await h.session.saveNow();
+    expect(h.saves[0].spans.map((span) => span.spanId)).toContain('appended-1');
+  });
+
+  it('refuses a span whose text does not match what arrived', () => {
+    const h = open('existing text', 3);
+    h.session.documentAppended({
+      streamId: 'stream-1', fragment: '\n\nappended', revision: 4,
+      spans: [{
+        spanId: 'bad', start: 1, end: 9, origin: 'ai', meta: '{}',
+        textHash: 'wrong', createdAt: new Date(0).toISOString(),
+      }],
+    });
+    expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
   });
 });
 

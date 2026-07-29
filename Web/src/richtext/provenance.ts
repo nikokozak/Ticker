@@ -71,37 +71,46 @@ export function hashProvenanceText(doc: ProseNode, span: { from: number; to: num
   return fnv1a(provenanceText(doc, span));
 }
 
-/** True when a change fell strictly INSIDE the span rather than beside it. */
-function spanWasEdited(span: ProvenanceSpan, tr: Transaction): boolean {
-  let edited = false;
+/**
+ * Follow one span through a transaction, step by step.
+ *
+ * Step by step is the whole point: each step's map is expressed in the coordinates
+ * of the document as it was BEFORE that step, so comparing every step against the
+ * span's ORIGINAL position is wrong the moment a transaction has more than one.
+ * Insert before a span and then edit inside its shifted range in the same
+ * transaction, and the edit is missed — the user's own text stays attributed to
+ * the AI. Normalisation now emits several steps at once, so this is routine.
+ *
+ * Each edge maps INWARDS, so text typed against a boundary stays outside the span.
+ * Writing next to what the AI wrote is not the AI having written it.
+ */
+function followSpan(span: ProvenanceSpan, tr: Transaction): ProvenanceSpan | null {
+  let { from, to } = span;
+
   for (const step of tr.steps) {
     const map = step.getMap();
+    let edited = false;
     map.forEach((fromA, toA) => {
+      // A pure insertion only counts when it lands strictly within the span;
+      // typing against either edge is writing next to it, not rewriting it.
       if (fromA === toA) {
-        // A pure insertion only counts when it lands strictly within the span;
-        // typing against either edge is writing next to it, not rewriting it.
-        if (fromA > span.from && fromA < span.to) edited = true;
-      } else if (fromA < span.to && toA > span.from) {
+        if (fromA > from && fromA < to) edited = true;
+      } else if (fromA < to && toA > from) {
         edited = true;
       }
     });
+    if (edited) return null;
+
+    from = map.map(from, 1);
+    to = map.map(to, -1);
   }
-  return edited;
+
+  return to - from >= MIN_SPAN_LENGTH ? { ...span, from, to } : null;
 }
 
 function mapSpans(spans: ProvenanceSpan[], tr: Transaction): ProvenanceSpan[] {
   if (!tr.docChanged) return spans;
-
-  const kept: ProvenanceSpan[] = [];
-  for (const span of spans) {
-    if (spanWasEdited(span, tr)) continue;
-    // Bias each edge INWARDS, so text typed against a boundary stays outside the
-    // span. Writing next to what the AI wrote is not the AI having written it.
-    const from = tr.mapping.map(span.from, 1);
-    const to = tr.mapping.map(span.to, -1);
-    if (to - from >= MIN_SPAN_LENGTH) kept.push({ ...span, from, to });
-  }
-  return kept;
+  return spans.map((span) => followSpan(span, tr)).filter((span): span is ProvenanceSpan => span !== null);
 }
 
 /** Drop spans that do not fit the document, which is what a bad restore looks like. */
@@ -180,6 +189,28 @@ export function spanFromJSON(json: ProvenanceSpanJSON): ProvenanceSpan {
     textHash: json.textHash,
     createdAt: Date.parse(json.createdAt) || 0,
   };
+}
+
+/**
+ * Place spans that were recorded against a FRAGMENT into the document that fragment
+ * was just appended to.
+ *
+ * The host cannot do this itself: it would have to parse the document to know what
+ * a ProseMirror position is, and its coordinates are relative to the fragment
+ * anyway. What it can say is "these positions, inside this fragment" — and because
+ * the fragment is inserted as whole blocks, a position inside the parsed fragment
+ * is exactly the insertion point plus that position, minus the fragment document's
+ * own leading boundary.
+ */
+export function placeAppendedSpans(
+  spans: ProvenanceSpanJSON[],
+  inserted: { from: number },
+): ProvenanceSpan[] {
+  return spans.map(spanFromJSON).map((span) => ({
+    ...span,
+    from: span.from + inserted.from,
+    to: span.to + inserted.from,
+  }));
 }
 
 export function spanToJSON(span: ProvenanceSpan): ProvenanceSpanJSON {

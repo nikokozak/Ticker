@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
+import { TextSelection } from 'prosemirror-state';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import {
   addProvenanceSpans,
@@ -193,6 +194,44 @@ describe('positions survive the document settling into its stored form', () => {
     expect(provenanceText(ed.view.state.doc, restored)).toBe('The AI wrote this.');
   });
 
+  it('leaves an untouched paragraph BETWEEN two changed ones alone', () => {
+    // The case that breaks a naive diff: dropping the empty paragraphs from
+    // A / empty / AI / empty / Z leaves one differing run that CONTAINS the
+    // unchanged AI paragraph, so replacing that run wholesale dissolves its spans.
+    const ed = open('A');
+    const { schema } = ed.view.state;
+    const para = (text?: string) => schema.nodes.paragraph.create(null, text ? schema.text(text) : undefined);
+    ed.view.dispatch(ed.view.state.tr.insert(ed.view.state.doc.content.size - 1, [
+      para(), para('The AI wrote this.'), para(), para('Z'),
+    ]));
+
+    const written = span(ed, 'The AI wrote this.');
+    record(ed, written);
+    const selectionAt = written.from + 3;
+    ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(ed.view.state.doc, selectionAt)));
+
+    expect(ed.getMarkdown()).toBe('A\n\nThe AI wrote this.\n\nZ');
+
+    const [survived] = provenanceSpans(ed.view.state);
+    expect(survived, 'the span in the untouched paragraph was dissolved').toBeDefined();
+    expect(provenanceText(ed.view.state.doc, survived)).toBe('The AI wrote this.');
+    // And the cursor is still inside the same word, not collapsed to a boundary.
+    expect(ed.view.state.doc.textBetween(ed.view.state.selection.from - 3, ed.view.state.selection.from)).toBe('The');
+  });
+
+  it('leaves positions after a trimmed text node alone', () => {
+    const ed = open('One.');
+    const { schema } = ed.view.state;
+    ed.view.dispatch(ed.view.state.tr.insert(ed.view.state.doc.content.size - 1, [
+      schema.nodes.paragraph.create(null, schema.text('trailing space here   ')),
+      schema.nodes.paragraph.create(null, schema.text('The AI wrote this.')),
+    ]));
+    record(ed, span(ed, 'The AI wrote this.'));
+    ed.getMarkdown();
+    const [survived] = provenanceSpans(ed.view.state);
+    expect(provenanceText(ed.view.state.doc, survived)).toBe('The AI wrote this.');
+  });
+
   it('settling is not something the user has to undo', () => {
     const ed = open('One.');
     const end = ed.view.state.doc.content.size - 1;
@@ -218,5 +257,37 @@ describe('spans never reach the document', () => {
     record(ed, span(ed, 'The AI wrote this.'));
     expect(ed.view.dom.querySelector('.richtext-provenance-ai')).not.toBe(null);
     expect(ed.view.state.doc.textContent).toBe('One. The AI wrote this. Three.');
+  });
+});
+
+describe('a transaction with several steps', () => {
+  // Each step's map is expressed in the coordinates of the document BEFORE that
+  // step, so comparing every step against the span's ORIGINAL position is wrong as
+  // soon as a transaction has more than one. Normalisation emits several at once.
+  it('notices an edit inside the span even after an earlier step moved it', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    const written = span(ed, 'The AI wrote this.');
+    record(ed, written);
+
+    const tr = ed.view.state.tr;
+    tr.insertText('XXXXXXXX', 1);              // shifts the span right by 8
+    tr.insertText('!', written.from + 8 + 4);  // lands INSIDE the shifted span
+    ed.view.dispatch(tr);
+
+    expect(provenanceSpans(ed.view.state), 'the edit inside the span was missed').toHaveLength(0);
+  });
+
+  it('still keeps a span when both steps fall outside it', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    const written = span(ed, 'The AI wrote this.');
+    record(ed, written);
+
+    const tr = ed.view.state.tr;
+    tr.insertText('XX', 1);
+    tr.insertText('YY', ed.view.state.doc.content.size - 1);
+    ed.view.dispatch(tr);
+
+    const [survived] = provenanceSpans(ed.view.state);
+    expect(provenanceText(ed.view.state.doc, survived)).toBe('The AI wrote this.');
   });
 });

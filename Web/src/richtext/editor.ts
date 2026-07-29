@@ -76,8 +76,11 @@ export interface RichTextEditor {
   normalizeNow(): void;
   /** Replace the whole document, as a reload does. Clears undo history. */
   setMarkdown(markdown: string): void;
-  /** Append a fragment at the end of the document, as an external write does. */
-  appendMarkdown(markdown: string): void;
+  /**
+   * Append a fragment at the end of the document, as an external write does, and
+   * report where it landed so metadata can be placed inside it.
+   */
+  appendMarkdown(markdown: string): { from: number; to: number };
   destroy(): void;
 }
 
@@ -225,12 +228,17 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
 
     appendMarkdown(fragment: string) {
       const parsed = parseMarkdown(fragment);
-      if (parsed.childCount === 0) return;
+      if (parsed.childCount === 0) return { from: 0, to: 0 };
       const end = view.state.doc.content.size;
       // A whole-block insert at the very end: openStart/openEnd 0, so the blocks
       // arrive intact rather than being merged into the last paragraph.
       const slice = new Slice(Fragment.from(parsed.content), 0, 0);
-      view.dispatch(view.state.tr.replace(end, end, slice).scrollIntoView());
+      const tr = view.state.tr.replace(end, end, slice);
+      view.dispatch(tr.scrollIntoView());
+      // Where the fragment landed, so a caller can place metadata inside it. The
+      // inserted blocks keep their internal structure, so a position measured
+      // inside the parsed fragment is this base plus that position.
+      return { from: end, to: view.state.doc.content.size };
     },
 
     destroy: () => view.destroy(),

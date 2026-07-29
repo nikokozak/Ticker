@@ -522,6 +522,17 @@ final class PersistenceService {
             }
         }
 
+        /// Provenance coordinates changed meaning: `start`/`end` now hold
+        /// ProseMirror document positions instead of offsets into the Markdown.
+        /// They are the same integers measured against a different thing, so an old
+        /// row is indistinguishable from a new one and cannot be converted without
+        /// parsing every document. Clearing the table loses the AI-authorship
+        /// highlighting on existing streams; it does not touch a word of anyone's
+        /// writing, and the alternative is highlights that point at the wrong text.
+        migrator.registerMigration("v24_provenance_document_positions") { db in
+            try db.execute(sql: "DELETE FROM provenance_spans")
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -994,7 +1005,7 @@ final class PersistenceService {
                 )
 
                 if let spans {
-                    let validSpans = validatedSpans(spans, markdown: markdown, streamId: streamId)
+                    let validSpans = validatedSpans(spans, streamId: streamId)
                     logDroppedSpans(total: spans.count, kept: validSpans.count, context: "saveStreamDocument")
                     try replaceSpans(streamId: streamId, spans: validSpans, db: db)
                     try deleteOrphanExchanges(streamId: streamId, db: db)
@@ -1027,7 +1038,7 @@ final class PersistenceService {
             )
 
             if let spans {
-                let validSpans = validatedSpans(spans, markdown: markdown, streamId: streamId)
+                let validSpans = validatedSpans(spans, streamId: streamId)
                 logDroppedSpans(total: spans.count, kept: validSpans.count, context: "saveStreamDocument")
                 try replaceSpans(streamId: streamId, spans: validSpans, db: db)
                 try deleteOrphanExchanges(streamId: streamId, db: db)
@@ -1083,7 +1094,7 @@ final class PersistenceService {
                     createdAt: span.createdAt
                 )
             }
-            let validSpans = validatedSpans(absoluteSpans, markdown: markdown, streamId: streamId)
+            let validSpans = validatedSpans(absoluteSpans, streamId: streamId)
             logDroppedSpans(total: absoluteSpans.count, kept: validSpans.count, context: "appendToStreamDocument")
 
             try db.execute(
@@ -1275,13 +1286,21 @@ final class PersistenceService {
         }
     }
 
-    private func validatedSpans(_ spans: [ProvenanceSpan], markdown: String, streamId: UUID) -> [ProvenanceSpan] {
+    /// Provenance coordinates are ProseMirror document positions, not offsets into
+    /// the Markdown. They keep the `start`/`end` column names — the same integers,
+    /// measured against the document rather than against its serialisation — so
+    /// there is no way to tell an old row from a new one by looking, and migration
+    /// v24 clears the table rather than guessing.
+    ///
+    /// This can therefore no longer check the text a span covers: slicing Markdown
+    /// by a document position is meaningless, and hashing that slice silently
+    /// dropped EVERY span. A span over `bold` in `**bold**` hashed `*bol`. The
+    /// editor owns that check now, because only the editor has the document; what
+    /// is left here is the structural check, which still catches a malformed
+    /// payload.
+    private func validatedSpans(_ spans: [ProvenanceSpan], streamId: UUID) -> [ProvenanceSpan] {
         spans.compactMap { span in
-            guard span.start >= 0,
-                  span.start < span.end,
-                  span.end <= UTF16Offsets.utf16Length(markdown),
-                  let coveredText = UTF16Offsets.substring(markdown, start: span.start, end: span.end),
-                  FNV1a.hash(coveredText) == span.textHash else {
+            guard span.start >= 0, span.start < span.end else {
                 return nil
             }
 

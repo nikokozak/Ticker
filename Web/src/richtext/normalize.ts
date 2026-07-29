@@ -336,43 +336,80 @@ export interface NormalizationEdit {
  *
  * Replacing the whole document in one step would be far simpler and completely
  * wrong: every position inside it maps to the boundary, so provenance spans and
- * margin notes would be destroyed by the act of saving. Trimming the matching
- * children off each end, and recursing when only one child differs, keeps each edit
- * next to what actually changed and leaves every other position untouched.
+ * margin notes would be destroyed by the act of saving.
  *
- * `contentStart` is the position of the first child — 0 for the document, since a
- * document has no opening token of its own, and pos + 1 for every other node.
+ * Trimming matching children off each end is not enough either. Dropping the two
+ * empty paragraphs from `A / empty / AI / empty / Z` leaves one differing run that
+ * CONTAINS the unchanged AI paragraph, so replacing that run wholesale dissolves
+ * its spans. So the children are aligned properly: matching pairs are skipped,
+ * a child that reappears later means the ones before it were deleted, and a single
+ * changed child is recursed into rather than replaced.
+ *
+ * `contentStart` is the position of the first child — 0 for the document, which has
+ * no opening token of its own, and pos + 1 for every other node.
  */
 export function normalizationEdits(current: ProseNode, normalized: ProseNode, contentStart = 0): NormalizationEdit[] {
   if (current.eq(normalized)) return [];
 
-  let prefix = 0;
-  const limit = Math.min(current.childCount, normalized.childCount);
-  while (prefix < limit && current.child(prefix).eq(normalized.child(prefix))) prefix += 1;
+  const edits: NormalizationEdit[] = [];
+  let pos = contentStart;
+  let i = 0;
+  let j = 0;
 
-  let suffix = 0;
-  while (
-    suffix < limit - prefix
-    && current.child(current.childCount - 1 - suffix).eq(normalized.child(normalized.childCount - 1 - suffix))
-  ) suffix += 1;
+  /** Where does normalized[j] turn up again in current, if it does? */
+  const nextMatch = (from: number, node: ProseNode) => {
+    for (let k = from; k < current.childCount; k += 1) if (current.child(k).eq(node)) return k;
+    return -1;
+  };
 
-  let from = contentStart;
-  for (let i = 0; i < prefix; i += 1) from += current.child(i).nodeSize;
-
-  // Exactly one child differs on each side, and it is a node with children of its
-  // own: recurse, so an edit deep inside a paragraph does not move the paragraph.
-  if (current.childCount - prefix - suffix === 1 && normalized.childCount - prefix - suffix === 1) {
-    const before = current.child(prefix);
-    const after = normalized.child(prefix);
-    if (before.sameMarkup(after) && !before.isText && !before.isLeaf) {
-      return normalizationEdits(before, after, from + 1);
+  while (i < current.childCount || j < normalized.childCount) {
+    if (i < current.childCount && j < normalized.childCount && current.child(i).eq(normalized.child(j))) {
+      pos += current.child(i).nodeSize;
+      i += 1;
+      j += 1;
+      continue;
     }
+
+    if (j >= normalized.childCount) {
+      // Everything left over was deleted.
+      let to = pos;
+      for (let k = i; k < current.childCount; k += 1) to += current.child(k).nodeSize;
+      edits.push({ from: pos, to, replacement: Fragment.empty });
+      break;
+    }
+
+    if (i >= current.childCount) {
+      const added: ProseNode[] = [];
+      for (let k = j; k < normalized.childCount; k += 1) added.push(normalized.child(k));
+      edits.push({ from: pos, to: pos, replacement: Fragment.fromArray(added) });
+      break;
+    }
+
+    // This child of `normalized` survives further along, so what sits before it was
+    // deleted — an empty paragraph, most often.
+    const reappearsAt = nextMatch(i, normalized.child(j));
+    if (reappearsAt > i) {
+      let to = pos;
+      for (let k = i; k < reappearsAt; k += 1) to += current.child(k).nodeSize;
+      edits.push({ from: pos, to, replacement: Fragment.empty });
+      pos = to;
+      i = reappearsAt;
+      continue;
+    }
+
+    // One child genuinely changed. Recurse when it can hold children of its own, so
+    // an edit deep inside a paragraph does not move the whole paragraph.
+    const before = current.child(i);
+    const after = normalized.child(j);
+    if (before.sameMarkup(after) && !before.isText && !before.isLeaf) {
+      edits.push(...normalizationEdits(before, after, pos + 1));
+    } else {
+      edits.push({ from: pos, to: pos + before.nodeSize, replacement: Fragment.from(after) });
+    }
+    pos += before.nodeSize;
+    i += 1;
+    j += 1;
   }
 
-  let to = from;
-  for (let i = prefix; i < current.childCount - suffix; i += 1) to += current.child(i).nodeSize;
-
-  const middle: ProseNode[] = [];
-  for (let i = prefix; i < normalized.childCount - suffix; i += 1) middle.push(normalized.child(i));
-  return [{ from, to, replacement: Fragment.fromArray(middle) }];
+  return edits;
 }

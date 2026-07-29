@@ -34,6 +34,8 @@ interface RichStreamEditorProps {
   onDelete: () => void;
 }
 
+const PDF_URL_PREFIX = 'ticker-pdf://';
+
 const SAVE_LABEL: Record<SaveState, string> = {
   saved: 'Saved',
   saving: 'Saving…',
@@ -56,6 +58,19 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
   // redraw on every transaction and not only on edits.
   const onUpdate = useCallback(() => redraw((n) => n + 1), []);
 
+  /**
+   * A citation is not an external URL. Swift rejects any non-HTTP scheme from
+   * openExternalURL, so routing `ticker-pdf://` there did nothing at all — the
+   * click was simply swallowed. Citations go to the PDF pane instead.
+   */
+  const openLink = useCallback((href: string) => {
+    if (href.startsWith(PDF_URL_PREFIX)) {
+      bridge.send({ type: 'openPdfDestination', payload: { streamId: stream.id, url: href } });
+      return;
+    }
+    bridge.send({ type: 'openExternalURL', payload: { url: href } });
+  }, [stream.id]);
+
   useEffect(() => {
     if (!host.current) return undefined;
 
@@ -64,9 +79,7 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       markdown: stream.document?.markdown ?? '',
       onChange: () => sessionRef.current?.documentChanged(),
       onUpdate,
-      // A ticker-pdf:// citation belongs to the PDF pane and an external URL has to
-      // leave the WKWebView; both are the host's decision, not the editor's.
-      onOpenLink: (href) => bridge.send({ type: 'openExternalURL', payload: { url: href } }),
+      onOpenLink: openLink,
     });
 
     const session = new DocumentSession({
@@ -100,7 +113,7 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       sessionRef.current = null;
       setEditor(null);
     };
-  }, [addToast, onUpdate, stream.id]);
+  }, [addToast, onUpdate, openLink, stream.id]);
 
   useEffect(() => bridge.onMessage((message) => {
     const session = sessionRef.current;

@@ -185,7 +185,10 @@ function flattenText(doc: ProseNode): { text: string; positions: number[] } {
     return true;
   });
 
-  positions.push(doc.content.size);
+  // The sentinel for the end of the last character must be a position INSIDE its
+  // textblock. doc.content.size sits after the last block, and selecting up to it
+  // throws "endpoint not pointing into a node with inline content".
+  positions.push(positions.length ? positions[positions.length - 1] + 1 : 0);
   return { text, positions };
 }
 
@@ -206,7 +209,8 @@ export function selectText(view: EditorView, needle: string): boolean {
 
   const from = positions[index];
   const to = positions[Math.min(index + needle.length, positions.length - 1)];
-  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to)).scrollIntoView());
+  const selection = TextSelection.create(view.state.doc, from, to);
+  view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
   view.focus();
   return true;
 }

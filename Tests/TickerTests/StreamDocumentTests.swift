@@ -4156,7 +4156,12 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_saveStreamDocumentWithSpansDropsInvalidRows() throws {
+    /// Provenance coordinates are ProseMirror document positions now, so the store
+    /// can no longer check the text a span covers — slicing Markdown by a document
+    /// position is meaningless, and hashing that slice dropped every span (a span
+    /// over `bold` in `**bold**` hashed `*bol`). The editor owns that check,
+    /// because only the editor has the document. What remains here is structural.
+    func test_saveStreamDocumentWithSpansDropsStructurallyInvalidRows() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Span Validation")
             try service.saveStream(stream)
@@ -4170,33 +4175,44 @@ final class StreamDocumentTests: XCTestCase {
                 textHash: FNV1a.hash("Hello"),
                 createdAt: Date(timeIntervalSince1970: 2_010)
             )
-            let badHash = ProvenanceSpan(
-                spanId: "span-bad-hash",
+            // A hash the store cannot verify is kept: only the editor can say
+            // whether it matches, and it does so on load.
+            let unverifiableHash = ProvenanceSpan(
+                spanId: "span-unverifiable-hash",
                 streamId: stream.id,
                 start: 6,
                 end: 11,
                 origin: "ai",
-                textHash: FNV1a.hash("wrong"),
+                textHash: FNV1a.hash("checked in the editor"),
                 createdAt: Date(timeIntervalSince1970: 2_011)
             )
-            let outOfBounds = ProvenanceSpan(
-                spanId: "span-bounds",
+            let negative = ProvenanceSpan(
+                spanId: "span-negative",
                 streamId: stream.id,
-                start: 12,
-                end: 20,
+                start: -1,
+                end: 4,
                 origin: "ai",
-                textHash: FNV1a.hash("missing"),
+                textHash: FNV1a.hash("bad"),
                 createdAt: Date(timeIntervalSince1970: 2_012)
+            )
+            let inverted = ProvenanceSpan(
+                spanId: "span-inverted",
+                streamId: stream.id,
+                start: 9,
+                end: 3,
+                origin: "ai",
+                textHash: FNV1a.hash("bad"),
+                createdAt: Date(timeIntervalSince1970: 2_013)
             )
 
             _ = try service.saveStreamDocument(
                 streamId: stream.id,
                 markdown: "Hello world",
                 baseRevision: initialDocument.revision,
-                spans: [validSpan, badHash, outOfBounds]
+                spans: [validSpan, unverifiableHash, negative, inverted]
             )
 
-            XCTAssertEqual(try service.loadSpans(streamId: stream.id), [validSpan])
+            XCTAssertEqual(try service.loadSpans(streamId: stream.id), [validSpan, unverifiableHash])
         }
     }
 

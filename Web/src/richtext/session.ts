@@ -1,6 +1,8 @@
 import type { RichTextEditor } from './editor';
 import {
+  addProvenanceSpans,
   hashProvenanceText,
+  placeAppendedSpans,
   provenanceSpans,
   setProvenanceSpans,
   spanToJSON,
@@ -165,7 +167,13 @@ export class DocumentSession {
    * Something outside the editor wrote to this stream. The fragment is appended;
    * nothing already in the document is touched.
    */
-  documentAppended(payload: { streamId: string; fragment: string; revision: number }): void {
+  documentAppended(payload: {
+    streamId: string;
+    fragment: string;
+    revision: number;
+    /** Positions relative to the fragment, since the host cannot know PM ones. */
+    spans?: ProvenanceSpanJSON[];
+  }): void {
     if (payload.streamId !== this.options.streamId || !payload.fragment) return;
 
     // A gap means this editor missed an earlier append — it was not listening when
@@ -180,8 +188,18 @@ export class DocumentSession {
     // Whether there is unsaved local work decides everything that follows.
     const wasDirty = this.isDirty();
 
-    this.options.editor.appendMarkdown(payload.fragment);
+    const inserted = this.options.editor.appendMarkdown(payload.fragment);
     this.revision = payload.revision;
+
+    // Provenance for what was just appended. Dropping it — which is what happened
+    // before — meant the next save replaced the whole stored set and erased it,
+    // orphaning the AI exchange it pointed at.
+    if (payload.spans?.length) {
+      const { view } = this.options.editor;
+      const placed = placeAppendedSpans(payload.spans, inserted)
+        .filter((span) => hashProvenanceText(view.state.doc, span) === span.textHash);
+      if (placed.length) view.dispatch(addProvenanceSpans(view.state.tr, placed));
+    }
 
     if (wasDirty) {
       // The stored document has the fragment but NOT the local edits, so the merged
