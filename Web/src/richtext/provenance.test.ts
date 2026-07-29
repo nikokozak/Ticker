@@ -1,0 +1,177 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from 'vitest';
+import { createRichTextEditor, type RichTextEditor } from './editor';
+import {
+  addProvenanceSpans,
+  dissolveProvenanceSpans,
+  hashProvenanceText,
+  provenanceSpanAt,
+  provenanceSpans,
+  provenanceText,
+  setProvenanceSpans,
+  type ProvenanceSpan,
+} from './provenance';
+
+let editor: RichTextEditor | null = null;
+
+function open(markdown: string): RichTextEditor {
+  const parent = document.createElement('div');
+  document.body.appendChild(parent);
+  editor = createRichTextEditor({ parent, markdown });
+  return editor;
+}
+
+afterEach(() => {
+  editor?.destroy();
+  editor = null;
+  document.body.innerHTML = '';
+});
+
+function find(ed: RichTextEditor, text: string): { from: number; to: number } {
+  let at = -1;
+  ed.view.state.doc.descendants((node, pos) => {
+    if (at < 0 && node.isText && node.text?.includes(text)) at = pos + node.text.indexOf(text);
+  });
+  if (at < 0) throw new Error(`no ${JSON.stringify(text)}`);
+  return { from: at, to: at + text.length };
+}
+
+function span(ed: RichTextEditor, text: string, overrides: Partial<ProvenanceSpan> = {}): ProvenanceSpan {
+  const { from, to } = find(ed, text);
+  return {
+    spanId: overrides.spanId ?? `span-${text}`,
+    from,
+    to,
+    origin: 'ai',
+    meta: {},
+    textHash: hashProvenanceText(ed.view.state.doc, { from, to }),
+    createdAt: 0,
+    ...overrides,
+  };
+}
+
+function record(ed: RichTextEditor, ...spans: ProvenanceSpan[]): void {
+  ed.view.dispatch(addProvenanceSpans(ed.view.state.tr, spans));
+}
+
+describe('spans follow the document', () => {
+  it('records a span and finds it by position', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    const written = span(ed, 'The AI wrote this.');
+    record(ed, written);
+    expect(provenanceSpans(ed.view.state)).toHaveLength(1);
+    expect(provenanceSpanAt(ed.view.state, written.from + 2)?.spanId).toBe(written.spanId);
+    expect(provenanceSpanAt(ed.view.state, 1)).toBe(null);
+  });
+
+  it('moves with text inserted before it', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    record(ed, span(ed, 'The AI wrote this.'));
+    ed.view.dispatch(ed.view.state.tr.insertText('XXXX', 1));
+    const [moved] = provenanceSpans(ed.view.state);
+    expect(provenanceText(ed.view.state.doc, moved)).toBe('The AI wrote this.');
+  });
+
+  it('survives an edit far away in the document', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    record(ed, span(ed, 'The AI wrote this.'));
+    ed.view.dispatch(ed.view.state.tr.insertText(' Added.', ed.view.state.doc.content.size - 1));
+    expect(provenanceSpans(ed.view.state)).toHaveLength(1);
+  });
+
+  it('dissolves when its OWN text is edited', () => {
+    // "The AI wrote this" stops being true the moment the user rewrites it. A span
+    // that survived editing is exactly the stale highlight reported as broken.
+    const ed = open('One. The AI wrote this. Three.');
+    const written = span(ed, 'The AI wrote this.');
+    record(ed, written);
+    ed.view.dispatch(ed.view.state.tr.insertText('!', written.from + 4));
+    expect(provenanceSpans(ed.view.state)).toHaveLength(0);
+  });
+
+  it('dissolves when its text is deleted', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    const written = span(ed, 'The AI wrote this.');
+    record(ed, written);
+    ed.view.dispatch(ed.view.state.tr.delete(written.from + 2, written.from + 8));
+    expect(provenanceSpans(ed.view.state)).toHaveLength(0);
+  });
+
+  it('survives typing against its edges, which is writing beside it', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    const written = span(ed, 'The AI wrote this.');
+    record(ed, written);
+    ed.view.dispatch(ed.view.state.tr.insertText('X', written.from));
+    expect(provenanceSpans(ed.view.state)).toHaveLength(1);
+    const [after] = provenanceSpans(ed.view.state);
+    expect(provenanceText(ed.view.state.doc, after)).toBe('The AI wrote this.');
+  });
+
+  it('forgets spans by id', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    record(ed, span(ed, 'One.'), span(ed, 'Three.'));
+    ed.view.dispatch(dissolveProvenanceSpans(ed.view.state.tr, ['span-One.']));
+    expect(provenanceSpans(ed.view.state).map((s) => s.spanId)).toEqual(['span-Three.']);
+  });
+});
+
+describe('positions are stable across a save and reload', () => {
+  // The reason positions can be stored at all: parsing is deterministic, so the
+  // same markdown always yields the same positions. This is what replaces the
+  // CodeMirror version's offsets into the markdown, which mean nothing once the
+  // markdown is a derived artefact rather than the live document.
+  it('a restored span covers the same text', () => {
+    const source = '# Title\n\nOne. **The AI** wrote this. Three.\n\n* a\n* b';
+    const ed = open(source);
+    const written = span(ed, 'wrote this');
+    record(ed, written);
+    const text = provenanceText(ed.view.state.doc, written);
+
+    const saved = ed.getMarkdown();
+    expect(saved).toBe(source);
+    ed.setMarkdown(saved);
+    ed.view.dispatch(setProvenanceSpans(ed.view.state.tr, [written]));
+
+    const [restored] = provenanceSpans(ed.view.state);
+    expect(provenanceText(ed.view.state.doc, restored)).toBe(text);
+    expect(hashProvenanceText(ed.view.state.doc, restored)).toBe(written.textHash);
+  });
+
+  it('the hash detects a span restored onto text that has changed', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    const written = span(ed, 'The AI wrote this.');
+    ed.setMarkdown('One. Something else entirely. Three.');
+    ed.view.dispatch(setProvenanceSpans(ed.view.state.tr, [written]));
+    const [restored] = provenanceSpans(ed.view.state);
+    expect(hashProvenanceText(ed.view.state.doc, restored)).not.toBe(written.textHash);
+  });
+
+  it('refuses a span that does not fit the document', () => {
+    const ed = open('short');
+    ed.view.dispatch(setProvenanceSpans(ed.view.state.tr, [
+      { ...span(ed, 'short'), from: 0, to: 9999 },
+    ]));
+    expect(provenanceSpans(ed.view.state)).toHaveLength(0);
+  });
+
+  it('refuses a span too short to mean anything', () => {
+    const ed = open('One. Two. Three.');
+    ed.view.dispatch(setProvenanceSpans(ed.view.state.tr, [{ ...span(ed, 'One.'), from: 1, to: 2 }]));
+    expect(provenanceSpans(ed.view.state)).toHaveLength(0);
+  });
+});
+
+describe('spans never reach the document', () => {
+  it('leaves no trace in the saved markdown', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    record(ed, span(ed, 'The AI wrote this.'));
+    expect(ed.getMarkdown()).toBe('One. The AI wrote this. Three.');
+  });
+
+  it('renders as a decoration the document does not contain', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    record(ed, span(ed, 'The AI wrote this.'));
+    expect(ed.view.dom.querySelector('.richtext-provenance-ai')).not.toBe(null);
+    expect(ed.view.state.doc.textContent).toBe('One. The AI wrote this. Three.');
+  });
+});

@@ -178,3 +178,21 @@
   border-radius: var(--radius-small);
   box-decoration-break: clone;
 }
+
+/*
+ * Provenance — which parts the AI wrote. Also a decoration, and shown only while
+ * the xray is on, so ordinary reading is undisturbed.
+ */
+.richtext-editor .ProseMirror .richtext-provenance {
+  background: transparent;
+  box-decoration-break: clone;
+}
+
+.richtext-editor.richtext-xray .ProseMirror .richtext-provenance-ai {
+  background: var(--color-accent-soft);
+}
+
+.richtext-editor.richtext-xray .ProseMirror .richtext-provenance-source,
+.richtext-editor.richtext-xray .ProseMirror .richtext-provenance-capture {
+  background: var(--color-surface-active);
+}

@@ -23,6 +23,7 @@ import {
 } from './commands';
 import { parseMarkdown, serializeMarkdown } from './markdown';
 import { aiWritingHighlight } from './operations';
+import { provenance } from './provenance';
 import { normalizeForMarkdown } from './normalize';
 import { BREAK_ATTRIBUTES, tickerSchema } from './schema';
 
@@ -135,7 +136,7 @@ function stateFor(doc: ProseNode): EditorState {
   // Order matters: our keymap gets first refusal, then the stock bindings.
   return EditorState.create({
     doc,
-    plugins: [history(), tickerKeymap(), keymap(baseKeymap), aiWritingHighlight()],
+    plugins: [history(), tickerKeymap(), keymap(baseKeymap), aiWritingHighlight(), provenance()],
   });
 }
 
