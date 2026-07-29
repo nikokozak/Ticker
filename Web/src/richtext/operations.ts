@@ -166,30 +166,40 @@ export function setImageWidth(view: EditorView, pos: number, width: number | nul
  * "quick brown" is not found in `*quick* brown` even though the reader sees exactly
  * that. Flattening first is the only way to search what is on the screen.
  */
-function flattenText(doc: ProseNode): { text: string; positions: number[] } {
+function flattenText(doc: ProseNode): { text: string; starts: number[]; ends: number[] } {
   let text = '';
-  const positions: number[] = [];
+  // Every character needs BOTH boundaries. One array cannot serve as each: the
+  // position after the last character of a paragraph is inside that paragraph,
+  // while the position before the first character of the next one is inside THAT
+  // paragraph, and they are different numbers. Selecting from a start to the next
+  // entry's start crosses a block boundary and ProseMirror rejects the endpoint.
+  const starts: number[] = [];
+  const ends: number[] = [];
 
   doc.descendants((node: ProseNode, pos: number) => {
     if (node.isText && node.text) {
-      for (let i = 0; i < node.text.length; i += 1) positions.push(pos + i);
+      for (let i = 0; i < node.text.length; i += 1) {
+        starts.push(pos + i);
+        ends.push(pos + i + 1);
+      }
       text += node.text;
     } else if (node.isLeaf && node.type.spec.leafText) {
       // A line break reads as a space when searching across it.
-      positions.push(pos);
+      starts.push(pos);
+      ends.push(pos + node.nodeSize);
       text += ' ';
     } else if (node.isBlock && text && !text.endsWith(' ')) {
-      positions.push(pos);
+      // A synthetic space for the gap between blocks. It has no width, so both of
+      // its boundaries stay on the side of the text that precedes it.
+      const previous = ends.length ? ends[ends.length - 1] : pos;
+      starts.push(previous);
+      ends.push(previous);
       text += ' ';
     }
     return true;
   });
 
-  // The sentinel for the end of the last character must be a position INSIDE its
-  // textblock. doc.content.size sits after the last block, and selecting up to it
-  // throws "endpoint not pointing into a node with inline content".
-  positions.push(positions.length ? positions[positions.length - 1] + 1 : 0);
-  return { text, positions };
+  return { text, starts, ends };
 }
 
 /**
@@ -203,12 +213,12 @@ function flattenText(doc: ProseNode): { text: string; positions: number[] } {
 export function selectText(view: EditorView, needle: string): boolean {
   if (!needle) return false;
 
-  const { text, positions } = flattenText(view.state.doc);
+  const { text, starts, ends } = flattenText(view.state.doc);
   const index = text.toLowerCase().indexOf(needle.toLowerCase());
   if (index < 0) return false;
 
-  const from = positions[index];
-  const to = positions[Math.min(index + needle.length, positions.length - 1)];
+  const from = starts[index];
+  const to = ends[Math.min(index + needle.length - 1, ends.length - 1)];
   const selection = TextSelection.create(view.state.doc, from, to);
   view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
   view.focus();

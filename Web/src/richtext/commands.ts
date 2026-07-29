@@ -1,4 +1,4 @@
-import { setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
+import { lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
 import type { Command, EditorState } from 'prosemirror-state';
 import type { MarkType, NodeType } from 'prosemirror-model';
@@ -51,7 +51,10 @@ export const toggleOrderedList: Command = (state, dispatch, view) => (
 
 export const toggleBlockquote: Command = (state, dispatch, view) => (
   isInside(state, 'blockquote')
-    ? liftBlockquote(state, dispatch)
+    // ProseMirror's own lift, not a hand-rolled replace of the whole quote: a
+    // replacement step maps every position inside to its boundary, so unquoting a
+    // paragraph dissolved the provenance on text that had not changed at all.
+    ? lift(state, dispatch)
     : wrapIn(nodes.blockquote as NodeType)(state, dispatch, view)
 );
 
@@ -78,21 +81,6 @@ function isInside(state: EditorState, typeName: string): boolean {
 
 function isInsideList(state: EditorState, listType: string): boolean {
   return isInside(state, listType);
-}
-
-function liftBlockquote(state: EditorState, dispatch?: (tr: EditorState['tr']) => void): boolean {
-  const { $from } = state.selection;
-  for (let depth = $from.depth; depth > 0; depth -= 1) {
-    if ($from.node(depth).type !== nodes.blockquote) continue;
-    if (dispatch) {
-      const start = $from.before(depth);
-      const end = $from.after(depth);
-      const inner = state.doc.slice(start + 1, end - 1);
-      dispatch(state.tr.replaceWith(start, end, inner.content).scrollIntoView());
-    }
-    return true;
-  }
-  return false;
 }
 
 /** Which formatting is active, for rendering the selection menu's pressed states. */

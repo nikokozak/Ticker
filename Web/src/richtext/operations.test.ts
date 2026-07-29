@@ -247,3 +247,32 @@ describe('a streaming AI reply', () => {
     expect(aiWritingRange(ed.view.state)).toEqual(range);
   });
 });
+
+describe('finding text near a block boundary', () => {
+  // The position after the last character of a paragraph and the position before
+  // the first character of the next one are different numbers, and a selection
+  // between them crosses a boundary ProseMirror rejects.
+  const cases: Array<[string, string]> = [
+    ['match ending at a paragraph end', 'foo\n\nbar'],
+    ['match at the very end of the document', 'foo\n\nbar'],
+    ['match ending at a heading end', '## foo\n\nbar'],
+    ['match ending at a list item end', '* foo\n* bar'],
+  ];
+  for (const [name, markdown] of cases) {
+    it(name, () => {
+      const ed = open(markdown);
+      expect(selectText(ed.view, 'foo')).toBe(true);
+      const { from, to } = ed.view.state.selection;
+      expect(ed.view.state.doc.textBetween(from, to)).toBe('foo');
+      // The endpoints must sit in the same textblock, or the selection is invalid.
+      expect(ed.view.state.doc.resolve(from).parent).toBe(ed.view.state.doc.resolve(to).parent);
+    });
+  }
+
+  it('finds the last word of the document', () => {
+    const ed = open('foo\n\nbar');
+    expect(selectText(ed.view, 'bar')).toBe(true);
+    const { from, to } = ed.view.state.selection;
+    expect(ed.view.state.doc.textBetween(from, to)).toBe('bar');
+  });
+});

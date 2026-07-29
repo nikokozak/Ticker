@@ -153,15 +153,29 @@ export class DocumentSession {
     try {
       const { revision } = await transport.save({ streamId, markdown, baseRevision, spans: spans.map(spanToJSON) });
 
-      // Something replaced or appended to the document while this was in flight.
-      // What came back describes a document that is gone; adopting any of it would
-      // both regress the revision and call unsaved work saved.
-      if (generation !== this.generation) {
+      /*
+       * Something replaced or appended to the document while this was in flight, so
+       * what came back describes a document that is gone. Adopting any of it would
+       * both regress the revision and call unsaved work saved.
+       *
+       * The base revision is checked as well as the generation, and the answer has
+       * to be exactly base + 1. A generation counter alone leaves a gap: a save can
+       * win at revision 4 and have its reply delayed, an external append can take
+       * revision 5, and the reload that follows arrives as a fresh document rather
+       * than through a path that bumps the generation — and the stale reply is then
+       * accepted. Requiring the base to still be current closes it.
+       */
+      if (generation !== this.generation || this.revision !== baseRevision) {
         this.setState(this.isDirty() ? 'saving' : 'saved');
         return;
       }
+      if (!Number.isFinite(revision) || revision !== baseRevision + 1) {
+        this.setState('error');
+        transport.onError?.('The stream moved on while saving; the last change was not stored.', { revision, baseRevision });
+        return;
+      }
 
-      if (Number.isFinite(revision)) this.revision = revision;
+      this.revision = revision;
       this.lastSaved = markdown;
       this.lastSavedSpans = fingerprint;
       // Only settle if nothing changed while the write was in flight.
@@ -245,7 +259,44 @@ export class DocumentSession {
     if (payload.streamId !== this.options.streamId || typeof payload.markdown !== 'string') return;
     if (!Number.isFinite(payload.revision)) return;
 
-    this.adoptHostDocument(payload);
+    // Nothing local is pending, so the host copy is simply newer.
+    if (!this.isDirty()) {
+      this.adoptHostDocument(payload);
+      return;
+    }
+
+    /*
+     * There IS unsaved local work, and taking the host copy would delete it —
+     * type a sentence, lose the revision race to a quick-panel capture, and the
+     * sentence is gone. So the host copy is only merged when it can be PROVEN to
+     * be this editor's last saved document plus something appended to the end,
+     * which is what a conflict almost always is. Then the appended part is added
+     * here too and the document stays dirty, so the local work is written next.
+     */
+    if (payload.markdown.startsWith(this.lastSaved)) {
+      const appended = payload.markdown.slice(this.lastSaved.length);
+      this.generation += 1;
+      if (appended.trim()) this.options.editor.appendMarkdown(appended.replace(/^\n+/, '\n\n'));
+      this.revision = payload.revision;
+      this.documentChanged();
+      return;
+    }
+
+    /*
+     * The host copy is not an extension of what this editor last saved, so the two
+     * genuinely diverged and nothing here can merge them safely. The local text is
+     * kept and the revision is NOT adopted: saves keep failing, the error stays
+     * visible, and nothing is lost. Better a save the user can see failing than a
+     * paragraph that quietly disappears.
+     *
+     * ponytail: no merge UI. Add one if this fires in practice — it needs a real
+     * divergence, which the append-only write path makes rare.
+     */
+    this.setState('error');
+    this.options.transport.onError?.(
+      'This stream changed elsewhere. Your edits are still here, but they cannot be saved until the conflict is resolved.',
+      payload,
+    );
   }
 
   /** Load a document from the host, as opening a stream or reloading does. */

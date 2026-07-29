@@ -317,12 +317,13 @@ describe('a save that finishes after the document moved on', () => {
     const inFlight = h.session.saveNow();
     await h.started;
 
-    h.session.documentConflict({ streamId: 'stream-1', markdown: 'from the host', revision: 11 });
+    // Prefix-provable, so the conflict merges and adopts revision 11.
+    h.session.documentConflict({ streamId: 'stream-1', markdown: 'start\n\nfrom the host', revision: 11 });
     h.release(4);
     await inFlight;
 
     expect(h.session.currentRevision).toBe(11);
-    expect(h.ed.getMarkdown()).toBe('from the host');
+    expect(h.ed.getMarkdown()).toBe('xstart\n\nfrom the host');
   });
 
   it('does not mark the superseded document as the saved one', async () => {
@@ -342,14 +343,6 @@ describe('a save that finishes after the document moved on', () => {
 });
 
 describe('a conflict', () => {
-  it('takes the host copy, because it holds work this editor never saw', () => {
-    const h = open('mine', 3);
-    type(h.ed, 'x');
-    h.session.documentConflict({ streamId: 'stream-1', markdown: 'theirs, with more', revision: 11 });
-    expect(h.ed.getMarkdown()).toBe('theirs, with more');
-    expect(h.session.currentRevision).toBe(11);
-  });
-
   it('does not immediately write the document it was just given', async () => {
     const h = open('mine', 3);
     h.session.documentConflict({ streamId: 'stream-1', markdown: 'theirs', revision: 11 });
@@ -437,5 +430,77 @@ describe('flushing before the window closes', () => {
     await h.session.saveNow();
     expect(h.session.saveState).toBe('saved');
     expect(h.session.currentRevision).toBe(2);
+  });
+});
+
+describe('a conflict arriving on top of unsaved work', () => {
+  it('keeps the local edit and merges what the host added', async () => {
+    // Type a sentence, lose the revision race to a quick-panel capture. Taking the
+    // host copy wholesale — which is what "host wins" did — deletes the sentence.
+    const h = open('base', 3);
+    type(h.ed, 'LOCAL ');
+    h.session.documentConflict({
+      streamId: 'stream-1', markdown: 'base\n\nfrom the quick panel', revision: 4,
+    });
+
+    expect(h.ed.getMarkdown()).toBe('LOCAL base\n\nfrom the quick panel');
+    await h.session.saveNow();
+    expect(h.saves[0].markdown).toBe('LOCAL base\n\nfrom the quick panel');
+    expect(h.saves[0].baseRevision).toBe(4);
+  });
+
+  it('keeps the local text when the two genuinely diverged', async () => {
+    const h = open('base', 3);
+    type(h.ed, 'LOCAL ');
+    h.session.documentConflict({
+      streamId: 'stream-1', markdown: 'something else entirely', revision: 4,
+    });
+
+    expect(h.ed.getMarkdown()).toBe('LOCAL base'); // nothing thrown away
+    expect(h.session.saveState).toBe('error');
+    expect(h.errors[0]).toMatch(/still here/);
+  });
+
+  it('still takes the host copy when nothing local is pending', () => {
+    const h = open('base', 3);
+    h.session.documentConflict({ streamId: 'stream-1', markdown: 'the host copy', revision: 9 });
+    expect(h.ed.getMarkdown()).toBe('the host copy');
+    expect(h.session.currentRevision).toBe(9);
+  });
+});
+
+describe('a save whose reply is delayed past an append', () => {
+  it('is rejected even though nothing bumped the generation in between', async () => {
+    // The gap a generation counter alone leaves: the save wins at revision 4, its
+    // reply is delayed, an external append takes revision 5, and the stale reply
+    // then claims revision 4 — older than the store.
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    let release: (value: { revision: number }) => void = () => {};
+    let announceStart: () => void = () => {};
+    const started = new Promise<void>((resolve) => { announceStart = resolve; });
+
+    editor = createRichTextEditor({ parent, markdown: 'start', onChange: () => session?.documentChanged() });
+    session = new DocumentSession({
+      streamId: 'stream-1',
+      editor,
+      revision: 3,
+      autosaveDelay: 5,
+      transport: {
+        save: () => { announceStart(); return new Promise((resolve) => { release = resolve; }); },
+        reload: () => {},
+      },
+    });
+
+    type(editor, 'x');
+    const inFlight = session.saveNow();
+    await started;
+
+    session.documentAppended({ streamId: 'stream-1', fragment: '\n\nappended', revision: 4 });
+    release({ revision: 4 });
+    await inFlight;
+
+    expect(session.currentRevision).toBe(4);
+    expect(editor.getMarkdown()).toBe('xstart\n\nappended'); // nothing lost
   });
 });

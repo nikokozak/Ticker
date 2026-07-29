@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { TextSelection } from 'prosemirror-state';
 import { createRichTextEditor, type RichTextEditor } from './editor';
+import { toggleBlockquote } from './commands';
 import {
   addProvenanceSpans,
   dissolveProvenanceSpans,
@@ -289,5 +290,32 @@ describe('a transaction with several steps', () => {
 
     const [survived] = provenanceSpans(ed.view.state);
     expect(provenanceText(ed.view.state.doc, survived)).toBe('The AI wrote this.');
+  });
+});
+
+describe('formatting commands do not destroy provenance they did not touch', () => {
+  it('survives quoting and unquoting the same text', () => {
+    // Unwrapping by replacing the whole blockquote maps every position inside to
+    // its boundary, so the text came back identical and its span did not.
+    const ed = open('The AI wrote this.');
+    record(ed, span(ed, 'The AI wrote this.'));
+
+    toggleBlockquote(ed.view.state, ed.view.dispatch, ed.view);
+    expect(ed.getMarkdown()).toBe('> The AI wrote this.');
+    toggleBlockquote(ed.view.state, ed.view.dispatch, ed.view);
+    expect(ed.getMarkdown()).toBe('The AI wrote this.');
+
+    const [survived] = provenanceSpans(ed.view.state);
+    expect(survived, 'the span was dissolved by formatting that changed no text').toBeDefined();
+    expect(provenanceText(ed.view.state.doc, survived)).toBe('The AI wrote this.');
+  });
+
+  it('survives bolding a word inside it', () => {
+    const ed = open('One. The AI wrote this. Three.');
+    record(ed, span(ed, 'The AI wrote this.'));
+    const at = span(ed, 'wrote');
+    ed.view.dispatch(ed.view.state.tr.addMark(at.from, at.to, ed.view.state.schema.marks.strong.create()));
+    const [survived] = provenanceSpans(ed.view.state);
+    expect(survived).toBeDefined();
   });
 });

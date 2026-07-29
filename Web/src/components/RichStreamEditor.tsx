@@ -139,20 +139,6 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       return;
     }
 
-    if (message.type === 'streamLoaded') {
-      // The answer to a reload this session asked for, after an append it could not
-      // reconcile. The stream id does not change, so React keeps this component
-      // mounted and nothing else would apply the new document.
-      const document = payload?.document as { markdown?: string; revision?: number } | undefined;
-      if (String(payload?.id ?? '') !== stream.id || typeof document?.markdown !== 'string') return;
-      session.documentLoaded({
-        markdown: document.markdown,
-        revision: Number(document.revision ?? 0),
-        spans: (payload?.spans as ProvenanceSpanJSON[] | undefined)?.map(spanFromJSON),
-      });
-      return;
-    }
-
     if (message.type === 'flushEditor') {
       // The host is closing or quitting and waits for this before it does. It is
       // acknowledged either way — leaving the host hung is worse than a failed save
@@ -164,6 +150,29 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       });
     }
   }), [stream.id]);
+
+  /**
+   * A reload this session asked for, after an append it could not reconcile.
+   *
+   * It arrives as new props rather than as a message: App already decodes
+   * streamLoaded — including the request-id check that stops a stale response
+   * being applied — and the stream id does not change, so React keeps this
+   * component mounted and nothing else would apply the document. Reading the
+   * decoded props avoids a second decoder that can disagree with the first, which
+   * is exactly what happened: the payload nests under `stream`, and a handler
+   * reading `payload.document` returned early every time.
+   */
+  useEffect(() => {
+    const session = sessionRef.current;
+    const document = stream.document;
+    if (!session || !document) return;
+    if (document.revision <= session.currentRevision) return;
+    session.documentLoaded({
+      markdown: document.markdown,
+      revision: document.revision,
+      spans: (stream.spans ?? []).map(spanFromJSON),
+    });
+  }, [stream.document, stream.spans]);
 
   const saveTitle = useCallback(() => {
     const next = title.trim() || 'Untitled';
