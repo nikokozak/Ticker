@@ -238,6 +238,24 @@ describe('a streaming AI reply', () => {
     expect(ed.getMarkdown()).toBe(before);
   });
 
+  it('keeps that undo when a later frame changes the block structure', () => {
+    const ed = open('Replace this.');
+    const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
+    stream.push('A reply.');
+    stream.push('\n\n* with a source');
+    undo(ed);
+    expect(ed.getMarkdown()).toBe('Replace this.');
+  });
+
+  it('does not include the preceding user edit in its undo', () => {
+    const ed = open('Replace this.');
+    ed.view.dispatch(ed.view.state.tr.insertText('User ', 1));
+    const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
+    stream.push('AI reply.');
+    undo(ed);
+    expect(ed.getMarkdown()).toBe('User Replace this.');
+  });
+
   it('reports the range it wrote, and highlights it', () => {
     const ed = open('One. Replace this. Three.');
     const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
@@ -274,5 +292,25 @@ describe('finding text near a block boundary', () => {
     expect(selectText(ed.view, 'bar')).toBe(true);
     const { from, to } = ed.view.state.selection;
     expect(ed.view.state.doc.textBetween(from, to)).toBe('bar');
+  });
+});
+
+describe('typing while the AI is streaming', () => {
+  it('does not let the AI undo swallow what the user typed mid-stream', () => {
+    const ed = open('Replace this.');
+    const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
+    stream.push('AI ');
+
+    expect(ed.view.editable).toBe(false);
+    // A browser only turns typing into a transaction for an editable view.
+    if (ed.view.editable) ed.view.dispatch(ed.view.state.tr.insertText('MINE ', 1));
+    expect(ed.view.state.doc.textContent).toBe('AI');
+
+    stream.push('reply.');
+    stream.done();
+    expect(ed.view.editable).toBe(true);
+    expect(ed.getMarkdown()).toBe('AI reply.');
+    undo(ed);
+    expect(ed.getMarkdown()).toBe('Replace this.');
   });
 });

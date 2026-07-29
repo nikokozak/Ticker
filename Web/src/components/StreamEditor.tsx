@@ -6,7 +6,7 @@ import { Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type Exten
 import { isolateHistory } from '@codemirror/commands';
 import { HighlightStyle, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
-import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAICitation, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON, type AIOperationState } from '../types';
+import { bridge, getExchange, updateMarginNote, type Stream, type SourceReference, type SourceScope, type DocumentAIVerb, type DocumentAISourceContextMode, type SourceTitlePayload, type ProvenanceSpanJSON, type AIExchangeJSON, type AIOperationState } from '../types';
 import { SourcesModal } from './SourcesModal';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { Modal } from './Modal';
@@ -29,7 +29,7 @@ import {
   type MarginNote,
 } from '../extensions/MarginNotes';
 import { computeAppendInsertion } from '../utils/appendInsertion';
-import { buildProvenanceLine, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
+import { buildProvenanceLine, parseDocumentAICitations, swapCitationMarkersWithMetadata } from '../utils/citationMarkers';
 import { debugWarn } from '../utils/debug';
 import { fnv1a } from '../utils/fnv1a';
 import { deserializeProvenanceSpans, serializeProvenanceSpans } from '../utils/provenanceSpans';
@@ -278,24 +278,6 @@ export function buildDocumentAIProvenanceSpan(options: {
     textHash: fnv1a(options.text),
     createdAt: options.createdAt ?? Date.now(),
   };
-}
-
-function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
-  if (!Array.isArray(value)) return null;
-
-  return value.flatMap((item): DocumentAICitation[] => {
-    if (!item || typeof item !== 'object') return [];
-    const candidate = item as Record<string, unknown>;
-    const n = Number(candidate.n);
-    const page = Number(candidate.page);
-    const chunkId = typeof candidate.chunkId === 'string' ? candidate.chunkId : '';
-    const sourceId = typeof candidate.sourceId === 'string' ? candidate.sourceId : '';
-    const shortTitle = typeof candidate.shortTitle === 'string' ? candidate.shortTitle : '';
-    if (!Number.isInteger(n) || n <= 0) return [];
-    if (!Number.isInteger(page) || page <= 0) return [];
-    if (!chunkId || !sourceId || !shortTitle) return [];
-    return [{ n, page, chunkId, sourceId, shortTitle }];
-  });
 }
 
 export function parseDocumentAISourceContextMode(value: unknown): DocumentAISourceContextMode | undefined {

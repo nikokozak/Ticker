@@ -1,12 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Slice } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { bridge, type StreamDocumentConflictPayload } from '../types/bridge';
 import type { Stream } from '../types/models';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
+import {
+  aiWritingRange,
+  setAIWritingRange,
+  streamAIMarkdown,
+} from '../richtext/operations';
 import { DocumentSession, type SaveState } from '../richtext/session';
-import { spanFromJSON, type ProvenanceSpanJSON } from '../richtext/provenance';
+import {
+  addProvenanceSpans,
+  hashProvenanceText,
+  spanFromJSON,
+  type ProvenanceSpanJSON,
+} from '../richtext/provenance';
 import { parseRawSpans, type PendingAppend } from '../richtext/pendingAppends';
 import { useToastStore } from '../store/toastStore';
+import {
+  buildProvenanceLine,
+  parseDocumentAICitations,
+  swapCitationMarkersWithMetadata,
+} from '../utils/citationMarkers';
 import {
   activeFormats,
   toggleBlockquote,
@@ -37,6 +53,32 @@ interface RichStreamEditorProps {
 
 const PDF_URL_PREFIX = 'ticker-pdf://';
 
+interface ActiveDocumentAI {
+  requestId: string;
+  editor: RichTextEditor;
+  original: Slice;
+  stream: ReturnType<typeof streamAIMarkdown>;
+  verb: 'develop';
+  model?: string;
+}
+
+function documentAITarget(editor: RichTextEditor): { from: number; to: number; text: string } | null {
+  const { doc, selection } = editor.view.state;
+  const from = selection.empty ? selection.$head.start() : selection.from;
+  const to = selection.empty ? selection.$head.end() : selection.to;
+  const text = doc.textBetween(from, to, '\n', '').trim();
+  return text ? { from, to, text } : null;
+}
+
+function restoreDocumentAI(editor: RichTextEditor, active: ActiveDocumentAI): void {
+  const { view } = editor;
+  const written = active.stream.done();
+  const range = aiWritingRange(view.state) ?? written;
+  const tr = view.state.tr.replaceRange(range.from, range.to, active.original);
+  setAIWritingRange(tr, null).setMeta('addToHistory', false);
+  view.dispatch(tr);
+}
+
 /** The store's rows, in the shape the session proves things about. */
 const decodePendingAppends = (rows: Stream['pendingAppends']): PendingAppend[] => (rows ?? []).map((append) => ({
   revision: append.revision,
@@ -55,15 +97,38 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
   const host = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditor | null>(null);
   const sessionRef = useRef<DocumentSession | null>(null);
+  const aiRequestRef = useRef<ActiveDocumentAI | null>(null);
+  const aiInFlightRef = useRef(false);
 
   const [editor, setEditor] = useState<RichTextEditor | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('saved');
+  const [aiRunning, setAIRunning] = useState(false);
+  const [aiDetail, setAIDetail] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
   const deleting = useRef(false);
   const [xray, setXray] = useState(false);
   const [title, setTitle] = useState(stream.title);
   const [, redraw] = useState(0);
   const addToast = useToastStore((state) => state.addToast);
+
+  const cancelDocumentAI = useCallback((notifyHost = true) => {
+    const active = aiRequestRef.current;
+    if (!active) {
+      // A save may still be draining before the request is sent. Clearing this
+      // token makes that continuation stop instead of starting AI while leaving.
+      aiInFlightRef.current = false;
+      return;
+    }
+    if (notifyHost) {
+      bridge.send({ type: 'cancelDocumentAI', payload: { requestId: active.requestId } });
+    }
+    const currentEditor = editorRef.current;
+    if (currentEditor) restoreDocumentAI(currentEditor, active);
+    aiRequestRef.current = null;
+    aiInFlightRef.current = false;
+    setAIRunning(false);
+    setAIDetail(null);
+  }, []);
 
   // Which formatting buttons are lit depends on the SELECTION, so the menu has to
   // redraw on every transaction and not only on edits.
@@ -88,7 +153,11 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     const created = createRichTextEditor({
       parent: host.current,
       markdown: stream.document?.markdown ?? '',
-      onChange: () => sessionRef.current?.documentChanged(),
+      // Every streamed frame is temporary until completion. Letting any one of
+      // them arm autosave stores a reply the user never actually received.
+      onChange: () => {
+        if (!aiInFlightRef.current) sessionRef.current?.documentChanged();
+      },
       onUpdate,
       onOpenLink: openLink,
     });
@@ -118,6 +187,13 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     setEditor(created);
 
     return () => {
+      const active = aiRequestRef.current;
+      if (active) {
+        bridge.send({ type: 'cancelDocumentAI', payload: { requestId: active.requestId } });
+        restoreDocumentAI(created, active);
+        aiRequestRef.current = null;
+      }
+      aiInFlightRef.current = false;
       editorRef.current = null;
       sessionRef.current = null;
       setEditor(null);
@@ -139,6 +215,59 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     };
   }, [addToast, onUpdate, openLink, stream.id]);
 
+  const startDocumentAI = useCallback(async () => {
+    const currentEditor = editorRef.current;
+    const session = sessionRef.current;
+    if (!currentEditor || !session || aiInFlightRef.current) return;
+
+    // Clear any already-armed save before streaming begins. Merely suppressing the
+    // chunks is insufficient: a timer from the edit that started the request can
+    // otherwise fire over the first half of the reply.
+    aiInFlightRef.current = true;
+    const saved = await session.saveNow();
+    if (!aiInFlightRef.current || editorRef.current !== currentEditor || sessionRef.current !== session) {
+      aiInFlightRef.current = false;
+      return;
+    }
+    if (!saved) {
+      aiInFlightRef.current = false;
+      addToast('Save your changes before asking AI to rewrite them.', 'error');
+      return;
+    }
+
+    const target = documentAITarget(currentEditor);
+    if (!target) {
+      aiInFlightRef.current = false;
+      addToast('Select text or place the cursor in a paragraph to send.', 'info');
+      return;
+    }
+
+    const requestId = crypto.randomUUID();
+    aiRequestRef.current = {
+      requestId,
+      editor: currentEditor,
+      original: currentEditor.view.state.doc.slice(target.from, target.to),
+      stream: streamAIMarkdown(currentEditor.view, target),
+      verb: 'develop',
+    };
+    setAIRunning(true);
+    setAIDetail('AI is writing');
+    // ponytail: text-only first slice; collect selected image nodes when this
+    // page exposes multimodal document-AI actions.
+    bridge.send({
+      type: 'thinkDocument',
+      payload: {
+        requestId,
+        streamId: stream.id,
+        query: target.text,
+        context: undefined,
+        sourceScope: stream.sourceScope ?? 'auto',
+        verb: 'develop',
+        imageURLs: [],
+      },
+    });
+  }, [addToast, stream.id, stream.sourceScope]);
+
   /**
    * Leaving is not a render, it is a write that can fail.
    *
@@ -148,13 +277,14 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
    * and the page is left only if it actually landed.
    */
   const leave = useCallback(async () => {
+    cancelDocumentAI();
     const session = sessionRef.current;
     if (!session) return onBack();
     setLeaving(true);
     if (await session.destroy()) return onBack();
     setLeaving(false);
     addToast('Your changes could not be saved, so this stream stayed open.', 'error');
-  }, [addToast, onBack]);
+  }, [addToast, cancelDocumentAI, onBack]);
 
   const remove = useCallback(() => {
     deleting.current = true;
@@ -165,6 +295,101 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     const session = sessionRef.current;
     if (!session) return;
     const payload = message.payload as Record<string, unknown> | undefined;
+
+    if (message.type === 'getEditorSelection') {
+      const requestId = payload?.requestId;
+      if (typeof requestId !== 'string') return;
+      const view = editorRef.current?.view;
+      const selection = view?.state.selection;
+      const text = view && selection && !selection.empty
+        ? view.state.doc.textBetween(selection.from, selection.to, '\n', '')
+        : '';
+      bridge.send({ type: 'editorSelection', payload: { requestId, text } });
+      return;
+    }
+
+    const activeAI = aiRequestRef.current;
+
+    if (message.type === 'aiOperationChanged') {
+      if (!activeAI || payload?.requestId !== activeAI.requestId) return;
+      const detail = typeof payload.message === 'string' ? payload.message : payload.state;
+      if (typeof detail === 'string') setAIDetail(`AI ${detail}`);
+      return;
+    }
+
+    if (message.type === 'documentModelSelected') {
+      if (!activeAI || payload?.requestId !== activeAI.requestId || typeof payload.modelId !== 'string') return;
+      activeAI.model = payload.modelId;
+      setAIDetail(`AI model: ${payload.modelId}`);
+      return;
+    }
+
+    if (message.type === 'documentAIChunk') {
+      if (!activeAI || payload?.requestId !== activeAI.requestId || typeof payload.chunk !== 'string' || !payload.chunk) return;
+      activeAI.stream.push(payload.chunk);
+      return;
+    }
+
+    if (message.type === 'documentAIError') {
+      if (!activeAI || payload?.requestId !== activeAI.requestId) return;
+      const cancelled = payload.errorCode === 'cancelled';
+      const error = typeof payload.error === 'string' ? payload.error : 'AI request failed.';
+      cancelDocumentAI(false);
+      if (!cancelled) addToast(error, 'error');
+      return;
+    }
+
+    if (message.type === 'documentAIComplete') {
+      if (!activeAI || payload?.requestId !== activeAI.requestId) return;
+      const rawOutput = activeAI.stream.markdown.trim();
+      if (!rawOutput) {
+        // The chunks have already replaced the target, so accepting an empty
+        // buffer here permanently deletes the text the request was meant to edit.
+        cancelDocumentAI(false);
+        addToast('AI returned empty output.', 'error');
+        return;
+      }
+
+      const { view } = activeAI.editor;
+
+      const citations = parseDocumentAICitations(payload.citations);
+      let finalOutput = rawOutput;
+      let provenanceLine: string | null = null;
+      if (citations) {
+        const result = swapCitationMarkersWithMetadata(rawOutput, citations);
+        finalOutput = result.text;
+        provenanceLine = buildProvenanceLine(result.swappedCitations);
+      } else if (payload.sourceContextMode === 'none') {
+        provenanceLine = '*From model knowledge.*';
+      } else if (payload.sourceContextMode === 'unavailable') {
+        provenanceLine = '*Source retrieval unavailable — answered from model knowledge.*';
+      }
+      if (provenanceLine) finalOutput = `${finalOutput}\n\n${provenanceLine}`;
+
+      // The citation pass has to join the stream's history event. Otherwise Undo
+      // stops on the raw provider markers instead of restoring the user's text.
+      activeAI.stream.finalize(finalOutput);
+      const written = activeAI.stream.done();
+      const span = {
+        spanId: crypto.randomUUID(),
+        ...written,
+        origin: 'ai' as const,
+        requestId: activeAI.requestId,
+        meta: { model: activeAI.model ?? null, verb: activeAI.verb },
+        textHash: hashProvenanceText(view.state.doc, written),
+        createdAt: Date.now(),
+      };
+      const tr = addProvenanceSpans(setAIWritingRange(view.state.tr, null), [span])
+        .setMeta('addToHistory', false);
+      view.dispatch(tr);
+
+      aiRequestRef.current = null;
+      aiInFlightRef.current = false;
+      setAIRunning(false);
+      setAIDetail(null);
+      session.documentChanged();
+      return;
+    }
 
     if (message.type === 'streamDocumentAppended') {
       session.documentAppended({
@@ -181,6 +406,7 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     }
 
     if (message.type === 'streamDocumentConflict') {
+      cancelDocumentAI();
       const conflict = payload as Partial<StreamDocumentConflictPayload> | undefined;
       session.documentConflict({
         streamId: String(conflict?.streamId ?? ''),
@@ -200,13 +426,14 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       // it can see — but a failure still shows as an error and raises a toast.
       const requestId = payload?.requestId;
       if (typeof requestId !== 'string') return;
+      cancelDocumentAI();
       void session.saveNow().then((saved) => {
         // Reported truthfully: the host cancels quitting on a false, because
         // closing over an editor that could not save discards the only copy.
         bridge.send({ type: 'editorFlushed', payload: { requestId, saved } });
       });
     }
-  }), [stream.id]);
+  }), [addToast, cancelDocumentAI, stream.id]);
 
   /**
    * A reload this session asked for, after an append it could not reconcile.
@@ -224,6 +451,7 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
     const document = stream.document;
     if (!session || !document) return;
     if (document.revision <= session.currentRevision) return;
+    cancelDocumentAI();
     session.documentLoaded({
       markdown: document.markdown,
       revision: document.revision,
@@ -233,7 +461,7 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
       // revision it was recorded at can never be replayed.
       pendingAppends: decodePendingAppends(stream.pendingAppends),
     });
-  }, [stream.document, stream.pendingAppends, stream.spans]);
+  }, [cancelDocumentAI, stream.document, stream.pendingAppends, stream.spans]);
 
   const saveTitle = useCallback(() => {
     const next = title.trim() || 'Untitled';
@@ -301,6 +529,16 @@ export function RichStreamEditor({ stream, onBack, onDelete }: RichStreamEditorP
 
       {formats && (
         <div className="stream-format-bar">
+          <button
+            type="button"
+            className="selection-action-button selection-action-button--text selection-action-button--ai"
+            aria-label={aiRunning ? 'Stop document AI' : 'Develop with AI'}
+            title={aiDetail ?? 'Develop the selection or current paragraph with AI'}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => { if (aiRunning) cancelDocumentAI(); else void startDocumentAI(); }}
+          >
+            {aiRunning ? 'Stop AI' : 'AI'}
+          </button>
           {formatButton('B', formats.bold, toggleBold, 'Bold ⌘B')}
           {formatButton('I', formats.italic, toggleItalic, 'Italic ⌘I')}
           {formatButton('U', formats.underline, toggleUnderline, 'Underline ⌘U')}

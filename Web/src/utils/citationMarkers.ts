@@ -6,6 +6,23 @@ const CITATION_MARKER_PATTERN = /【(\d+)(?:\|(["“”][^】【]*?["“”]|[^�
 const QUOTE_DELIMITERS = new Set(['"', '“', '”']);
 const MAX_QUOTE_QUERY_LENGTH = 200;
 
+export function parseDocumentAICitations(value: unknown): DocumentAICitation[] | null {
+  if (!Array.isArray(value)) return null;
+
+  return value.flatMap((item): DocumentAICitation[] => {
+    if (!item || typeof item !== 'object') return [];
+    const candidate = item as Record<string, unknown>;
+    const n = Number(candidate.n);
+    const page = Number(candidate.page);
+    const chunkId = typeof candidate.chunkId === 'string' ? candidate.chunkId : '';
+    const sourceId = typeof candidate.sourceId === 'string' ? candidate.sourceId : '';
+    const shortTitle = typeof candidate.shortTitle === 'string' ? candidate.shortTitle : '';
+    if (!Number.isInteger(n) || n <= 0 || !Number.isInteger(page) || page <= 0) return [];
+    if (!chunkId || !sourceId || !shortTitle) return [];
+    return [{ n, page, chunkId, sourceId, shortTitle }];
+  });
+}
+
 export interface SwappedCitation {
   n: number;
   chunkId: string;

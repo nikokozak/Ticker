@@ -1,4 +1,5 @@
 import { Plugin, PluginKey, Selection, TextSelection, type EditorState, type Transaction } from 'prosemirror-state';
+import { closeHistory } from 'prosemirror-history';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import { Fragment, Slice, type Node as ProseNode } from 'prosemirror-model';
 import { parseMarkdown } from './markdown';
@@ -72,7 +73,7 @@ export function applyAIMarkdown(
   view: EditorView,
   range: { from: number; to: number },
   markdown: string,
-  options: { addToHistory?: boolean } = {},
+  options: { addToHistory?: boolean; historyGroup?: 'start' | 'continue' } = {},
 ): { from: number; to: number } {
   const parsed = parseMarkdown(markdown);
   const inline = parsed.childCount === 1
@@ -85,6 +86,12 @@ export function applyAIMarkdown(
   const tr = view.state.tr.replaceRange(range.from, range.to, slice);
   const to = tr.mapping.map(range.to, 1);
   setAIWritingRange(tr, { from: range.from, to });
+  if (options.historyGroup) {
+    // A stream can outlast ProseMirror's time window. One fixed time keeps every
+    // reparse in its undo event; closing the first keeps adjacent user typing out.
+    tr.setTime(1);
+    if (options.historyGroup === 'start') closeHistory(tr);
+  }
   if (options.addToHistory === false) tr.setMeta('addToHistory', false);
   view.dispatch(tr.scrollIntoView());
   return { from: range.from, to };
@@ -99,25 +106,38 @@ export function applyAIMarkdown(
  * So every chunk reparses the WHOLE accumulated buffer and replaces what the last
  * one wrote — correct at every frame rather than only at the end.
  *
- * The replacements do not stack in the undo history, so accepting a streamed reply
- * is still one undo step however many frames it took.
+ * Every reparse joins one isolated history event, so accepting a streamed reply is
+ * still one undo step however many frames it took.
  */
 export function streamAIMarkdown(view: EditorView, range: { from: number; to: number }) {
+  const editable = view.props.editable;
+  // A foreign edit makes both the saved range and its history group untrustworthy.
+  // Refusing DOM edits while the stream owns that range removes both races.
+  view.setProps({ editable: () => false });
   let buffer = '';
   let written = { from: range.from, to: range.to };
   let started = false;
 
+  const write = (markdown: string) => {
+    buffer = markdown;
+    // ponytail: history stores one transform per chunk; add event squashing only
+    // if long replies make that memory cost measurable.
+    written = applyAIMarkdown(view, written, buffer, {
+      historyGroup: started ? 'continue' : 'start',
+    });
+    started = true;
+  };
+
   return {
     push(chunk: string): void {
-      buffer += chunk;
-      // The FIRST frame is the one history records, so undoing it restores the
-      // text that was there before the AI started. Later frames are rebased into
-      // that same history item, which is what keeps the whole reply a single undo.
-      written = applyAIMarkdown(view, written, buffer, { addToHistory: !started });
-      started = true;
+      write(buffer + chunk);
+    },
+    finalize(markdown: string): void {
+      write(markdown);
     },
     /** Finish, leaving exactly one undoable step behind. */
     done(): { from: number; to: number } {
+      view.setProps({ editable });
       return written;
     },
     get markdown(): string {
