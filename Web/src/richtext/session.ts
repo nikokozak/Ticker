@@ -72,6 +72,15 @@ export class DocumentSession {
 
   private state: SaveState = 'saved';
 
+  /**
+   * Bumped whenever the document is replaced or appended to from outside. A save
+   * that answers after its generation has passed is answering about a document
+   * that no longer exists, so its revision must not be adopted: doing so left the
+   * session claiming a base revision older than the store, and every subsequent
+   * write failed the revision check.
+   */
+  private generation = 0;
+
   constructor(options: SessionOptions) {
     this.options = { autosaveDelay: DEFAULT_AUTOSAVE_DELAY, ...options };
     this.revision = options.revision;
@@ -139,15 +148,26 @@ export class DocumentSession {
     const baseRevision = this.revision;
     const spans = this.spansForSave();
     const fingerprint = this.spanFingerprint();
+    const generation = this.generation;
 
     try {
       const { revision } = await transport.save({ streamId, markdown, baseRevision, spans: spans.map(spanToJSON) });
+
+      // Something replaced or appended to the document while this was in flight.
+      // What came back describes a document that is gone; adopting any of it would
+      // both regress the revision and call unsaved work saved.
+      if (generation !== this.generation) {
+        this.setState(this.isDirty() ? 'saving' : 'saved');
+        return;
+      }
+
       if (Number.isFinite(revision)) this.revision = revision;
       this.lastSaved = markdown;
       this.lastSavedSpans = fingerprint;
       // Only settle if nothing changed while the write was in flight.
       this.setState(this.isDirty() ? 'saving' : 'saved');
     } catch (error) {
+      if (generation !== this.generation) return; // the document moved on; not this save's problem
       this.setState('error');
       transport.onError?.('Changes could not be saved. Your edits are still in the editor.', error);
     }
@@ -187,6 +207,7 @@ export class DocumentSession {
 
     // Whether there is unsaved local work decides everything that follows.
     const wasDirty = this.isDirty();
+    this.generation += 1;
 
     const inserted = this.options.editor.appendMarkdown(payload.fragment);
     this.revision = payload.revision;
@@ -233,6 +254,7 @@ export class DocumentSession {
   }
 
   private adoptHostDocument(payload: { markdown: string; revision: number; spans?: ProvenanceSpan[] }): void {
+    this.generation += 1;
     this.options.editor.setMarkdown(payload.markdown);
     this.revision = payload.revision;
     this.restoreSpans(payload.spans ?? []);

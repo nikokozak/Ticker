@@ -269,6 +269,78 @@ describe('metadata is part of being dirty', () => {
   });
 });
 
+describe('a save that finishes after the document moved on', () => {
+  /**
+   * A save that is genuinely IN FLIGHT — the transport has been called and has not
+   * answered yet. Waiting on `started` matters: the queue defers the write to a
+   * microtask, so anything dispatched immediately after saveNow() would otherwise
+   * land before the write even began and the test would pass for the wrong reason.
+   */
+  function openWithHeldSave(markdown: string, revision: number) {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const saves: string[] = [];
+    let announceStart: () => void = () => {};
+    const started = new Promise<void>((resolve) => { announceStart = resolve; });
+    let release: (value: { revision: number }) => void = () => {};
+    let held = true;
+
+    editor = createRichTextEditor({ parent, markdown, onChange: () => session?.documentChanged() });
+    session = new DocumentSession({
+      streamId: 'stream-1',
+      editor,
+      revision,
+      autosaveDelay: 5,
+      transport: {
+        save: (request) => {
+          saves.push(request.markdown);
+          if (!held) return Promise.resolve({ revision: revision + saves.length });
+          held = false;
+          announceStart();
+          return new Promise((resolve) => { release = resolve; });
+        },
+        reload: () => {},
+      },
+    });
+
+    return { ed: editor, session, saves, started, release: (r: number) => release({ revision: r }) };
+  }
+
+  it('does not drag the revision backwards', async () => {
+    // A save goes out at revision 3. While it is in flight a conflict replaces the
+    // document at revision 11. The save then answers with revision 4 — the number
+    // it produced for a document that no longer exists. Adopting it would make the
+    // next save claim a base of 4 against a store at 11, and the revision check
+    // would reject every write from then on.
+    const h = openWithHeldSave('start', 3);
+    type(h.ed, 'x');
+    const inFlight = h.session.saveNow();
+    await h.started;
+
+    h.session.documentConflict({ streamId: 'stream-1', markdown: 'from the host', revision: 11 });
+    h.release(4);
+    await inFlight;
+
+    expect(h.session.currentRevision).toBe(11);
+    expect(h.ed.getMarkdown()).toBe('from the host');
+  });
+
+  it('does not mark the superseded document as the saved one', async () => {
+    const h = openWithHeldSave('start', 3);
+    type(h.ed, 'x');
+    const inFlight = h.session.saveNow();
+    await h.started;
+
+    h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nappended', revision: 4 });
+    h.release(4);
+    await inFlight;
+
+    // The local edit plus the append is unsaved work; the session must still know.
+    await h.session.saveNow();
+    expect(h.saves[h.saves.length - 1]).toBe('xstart\n\nappended');
+  });
+});
+
 describe('a conflict', () => {
   it('takes the host copy, because it holds work this editor never saw', () => {
     const h = open('mine', 3);
