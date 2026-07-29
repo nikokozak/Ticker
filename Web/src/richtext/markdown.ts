@@ -194,13 +194,21 @@ export const tickerMarkdownParser = new MarkdownParser(tickerSchema, markdownIt,
   code_inline: { mark: 'code', noCloseToken: true },
 });
 
+/**
+ * markdown-it never marks looseness on the list; it marks it by UN-hiding the
+ * paragraphs inside, so the whole signal is one `hidden` flag on the first item's
+ * paragraph.
+ *
+ * Measured: when an item starts with any other block — a blockquote, a fenced
+ * code block — no paragraph is hidden anywhere in the list, and `* > q\n* p` and
+ * `* > q\n\n* p` produce identical token streams. Tightness is then simply not
+ * expressible, and this reads such a list as tight. `normalizeForMarkdown` holds
+ * documents to the same rule, so the two agree and a save/reload is stable.
+ */
 function listIsTight(tokens: readonly Token[], index: number): boolean {
-  // markdown-it marks looseness on the paragraphs inside, not on the list.
-  for (let i = index + 1; i < tokens.length; i += 1) {
-    if (tokens[i].type !== 'list_item_open') continue;
-    return !(tokens[i + 1] && tokens[i + 1].hidden === false && tokens[i + 1].type === 'paragraph_open');
-  }
-  return false;
+  if (tokens[index + 1]?.type !== 'list_item_open') return true;
+  const first = tokens[index + 2];
+  return first?.type === 'paragraph_open' ? first.hidden : true;
 }
 
 function imageMarkdown(node: ProseNode, state: MarkdownSerializerState): string {
@@ -270,38 +278,29 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
   soft_break: (state) => state.write('\n'),
   text: (state, node, parent, index) => {
     const text = node.text ?? '';
-    // A soft break starts a new LINE, and prosemirror-markdown only applies
-    // start-of-line escaping at the start of a BLOCK. Without this, typing
-    // Shift+Enter then '# x' reloads as a heading, '- x' as a list, and worst of
-    // all '---' turns the whole paragraph into a setext heading and eats the line.
     const previous = index > 0 ? parent.child(index - 1).type.name : '';
-    if (previous === 'soft_break' || previous === 'hard_break') {
-      const ordered = /^(\s*)(\d+)\./.exec(text);
-      if (ordered) {
-        state.write(`${ordered[1]}${ordered[2]}\\.`);
-        state.text(text.slice(ordered[0].length));
-        return;
-      }
-      // Only characters nothing else escapes. '*' and '>' are already handled by
-      // the inline escape and escapeExtraCharacters; prefixing them again yields a
-      // literal backslash in the user's text.
-      // CommonMark strips leading whitespace from a continuation line, so a space
-      // typed straight after Shift+Enter vanishes on reload. There is no escape for
-      // a space, but an entity survives — markdown-it decodes them even with html
-      // off, and the entity is re-emitted here on the way back out.
-      const indent = /^[ \t]+/.exec(text);
-      if (indent) {
-        state.write(indent[0].replace(/ /g, '&#32;').replace(/\t/g, '&#9;'));
-        state.text(text.slice(indent[0].length));
-        return;
-      }
-      if (/^[:#\-+]/.test(text)) {
-        state.write('\\');
-        state.text(text);
-        return;
-      }
-    }
-    state.text(text);
+    const next = index + 1 < parent.childCount ? parent.child(index + 1).type.name : '';
+    const isBreak = (name: string) => name === 'soft_break' || name === 'hard_break';
+    const afterBreak = isBreak(previous);
+    // A break starts and ends a line just as the block boundary does.
+    const startsLine = index === 0 || afterBreak;
+    const endsLine = index + 1 === parent.childCount || isBreak(next);
+
+    // Markdown strips whitespace from both ends of every line, so a space typed at
+    // the start or end of a paragraph — or either side of a Shift+Enter — is gone
+    // on reload, and two trailing spaces silently become a hard break. There is no
+    // escape for a space, but an entity survives: markdown-it decodes entities even
+    // with html off, and they are re-emitted here on the way back out.
+    const entities = (run: string) => run.replace(/ /g, '&#32;').replace(/\t/g, '&#9;');
+    const leading = startsLine ? (/^[ \t]+/.exec(text)?.[0] ?? '') : '';
+    const trailing = endsLine && text.length > leading.length ? (/[ \t]+$/.exec(text)?.[0] ?? '') : '';
+
+    if (leading) state.write(entities(leading));
+    const core = text.slice(leading.length, text.length - trailing.length);
+    // Once an entity is written the text is no longer at the start of a line, so
+    // nothing after it can be read as block syntax.
+    if (core) writeLineStart(state, core, afterBreak && !leading);
+    if (trailing) state.write(entities(trailing));
   },
 }, {
   em: { open: '*', close: '*', mixable: true, expelEnclosingWhitespace: true },
@@ -325,6 +324,32 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
   // literal `<u>`, a `{width=300}` a user typed, or table-shaped pipes.
   escapeExtraCharacters: /[<>{}]/g,
 });
+
+/**
+ * A soft break starts a new LINE, but prosemirror-markdown only applies its
+ * start-of-line escaping at the start of a BLOCK. Without this, typing Shift+Enter
+ * then '# x' reloads as a heading, '- x' as a list, and worst of all '---' turns
+ * the whole paragraph into a setext heading and eats the line above it.
+ */
+function writeLineStart(state: MarkdownSerializerState, text: string, afterBreak: boolean): void {
+  if (afterBreak) {
+    const ordered = /^\d+\./.exec(text);
+    if (ordered) {
+      state.write(`${ordered[0].slice(0, -1)}\\.`);
+      state.text(text.slice(ordered[0].length));
+      return;
+    }
+    // Only characters nothing else escapes. '*' and '>' are already handled by the
+    // inline escape and escapeExtraCharacters; prefixing them again would leave a
+    // literal backslash in the user's text.
+    if (/^[:#\-+]/.test(text)) {
+      state.write('\\');
+      state.text(text);
+      return;
+    }
+  }
+  state.text(text);
+}
 
 function backticksFor(node: ProseNode, side: number): string {
   const ticks = /`+/g;
