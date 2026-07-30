@@ -6,20 +6,11 @@ import { RichStreamEditor } from './components/RichStreamEditor';
 /**
  * Which editor the stream page uses.
  *
- * The ProseMirror editor reached message parity with the CodeMirror one and was
- * turned on for one real run on 2026-07-29. It is OFF again, because that run
- * showed it is not usable for writing:
- *
- *   - pressing Enter and pausing deletes the new line. The autosave's dirty check
- *     calls getMarkdown(), which MUTATES the live document by normalising it, and
- *     the policy deletes empty paragraphs because CommonMark cannot spell one.
- *   - selection and formatting land on the wrong text. ProseMirror's mandatory
- *     stylesheet was never imported; the hand-written CSS omits the ligature and
- *     white-space rules that caret geometry depends on.
- *   - re-entering a stream can hang the app. Not yet diagnosed.
- *
- * 640 passing tests said none of this, because every one of them tested the codec
- * or the session and not one asked whether a person can type.
+ * The ProseMirror editor reached message parity with the CodeMirror one, but stays
+ * OFF until the doc_json cutover is complete. It now saves the document model
+ * without normalising live edits, but external writers still append to Markdown;
+ * enabling it before the durable inbox reducer exists would make two canonical
+ * documents again.
  *
  * docs/RICHTEXT_VERDICT.md has the full analysis and the options.
  */

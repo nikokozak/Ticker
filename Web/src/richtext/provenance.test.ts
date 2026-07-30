@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { TextSelection } from 'prosemirror-state';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import { toggleBlockquote } from './commands';
+import { parseMarkdown } from './markdown';
 import {
   addProvenanceSpans,
   dissolveProvenanceSpans,
@@ -19,7 +20,10 @@ let editor: RichTextEditor | null = null;
 function open(markdown: string): RichTextEditor {
   const parent = document.createElement('div');
   document.body.appendChild(parent);
-  editor = createRichTextEditor({ parent, markdown });
+  editor = createRichTextEditor({
+    parent,
+    docJSON: JSON.stringify(parseMarkdown(markdown).toJSON()),
+  });
   return editor;
 }
 
@@ -117,11 +121,7 @@ describe('spans follow the document', () => {
   });
 });
 
-describe('positions are stable across a save and reload', () => {
-  // The reason positions can be stored at all: parsing is deterministic, so the
-  // same markdown always yields the same positions. This is what replaces the
-  // CodeMirror version's offsets into the markdown, which mean nothing once the
-  // markdown is a derived artefact rather than the live document.
+describe('positions are stable across a document JSON save and reload', () => {
   it('a restored span covers the same text', () => {
     const source = '# Title\n\nOne. **The AI** wrote this. Three.\n\n* a\n* b';
     const ed = open(source);
@@ -129,9 +129,8 @@ describe('positions are stable across a save and reload', () => {
     record(ed, written);
     const text = provenanceText(ed.view.state.doc, written);
 
-    const saved = ed.getMarkdown();
-    expect(saved).toBe(source);
-    ed.setMarkdown(saved);
+    const saved = ed.getDocumentJSON();
+    ed.setDocumentJSON(saved);
     ed.view.dispatch(setProvenanceSpans(ed.view.state.tr, [written]));
 
     const [restored] = provenanceSpans(ed.view.state);
@@ -142,7 +141,7 @@ describe('positions are stable across a save and reload', () => {
   it('the hash detects a span restored onto text that has changed', () => {
     const ed = open('One. The AI wrote this. Three.');
     const written = span(ed, 'The AI wrote this.');
-    ed.setMarkdown('One. Something else entirely. Three.');
+    ed.setDocumentJSON(JSON.stringify(parseMarkdown('One. Something else entirely. Three.').toJSON()));
     ed.view.dispatch(setProvenanceSpans(ed.view.state.tr, [written]));
     const [restored] = provenanceSpans(ed.view.state);
     expect(hashProvenanceText(ed.view.state.doc, restored)).not.toBe(written.textHash);
@@ -163,12 +162,7 @@ describe('positions are stable across a save and reload', () => {
   });
 });
 
-describe('positions survive the document settling into its stored form', () => {
-  // The subtle one. Normalising a COPY at save time made the live document and the
-  // persisted document two different trees, so a span recorded against the live one
-  // pointed into a document that was never saved. Dropping a single empty paragraph
-  // shifts everything after it by two. Normalising through a real transaction means
-  // ProseMirror maps every plugin's positions, so they stay true.
+describe('positions survive canonical document reloads and projection reads', () => {
   it('a span after an empty paragraph still covers its own text', () => {
     const ed = open('One.');
     // Reach the shape by typing, the way a user does: Enter twice, then more text.
@@ -181,24 +175,21 @@ describe('positions survive the document settling into its stored form', () => {
     record(ed, written);
     expect(provenanceText(ed.view.state.doc, written)).toBe('The AI wrote this.');
 
-    const saved = ed.getMarkdown(); // settles the document
-    expect(saved).toBe('One.\n\nThe AI wrote this.'); // the empty paragraph is gone
+    const saved = ed.getDocumentJSON();
 
     const [after] = provenanceSpans(ed.view.state);
     expect(provenanceText(ed.view.state.doc, after)).toBe('The AI wrote this.');
     expect(hashProvenanceText(ed.view.state.doc, after)).toBe(written.textHash);
 
     // And it is still right after a reload, which is the point of storing positions.
-    ed.setMarkdown(saved);
+    ed.setDocumentJSON(saved);
     ed.view.dispatch(setProvenanceSpans(ed.view.state.tr, [after]));
+    expect(ed.view.state.doc.childCount).toBe(3);
     const [restored] = provenanceSpans(ed.view.state);
     expect(provenanceText(ed.view.state.doc, restored)).toBe('The AI wrote this.');
   });
 
   it('leaves an untouched paragraph BETWEEN two changed ones alone', () => {
-    // The case that breaks a naive diff: dropping the empty paragraphs from
-    // A / empty / AI / empty / Z leaves one differing run that CONTAINS the
-    // unchanged AI paragraph, so replacing that run wholesale dissolves its spans.
     const ed = open('A');
     const { schema } = ed.view.state;
     const para = (text?: string) => schema.nodes.paragraph.create(null, text ? schema.text(text) : undefined);
@@ -211,7 +202,7 @@ describe('positions survive the document settling into its stored form', () => {
     const selectionAt = written.from + 3;
     ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(ed.view.state.doc, selectionAt)));
 
-    expect(ed.getMarkdown()).toBe('A\n\nThe AI wrote this.\n\nZ');
+    expect(ed.getMarkdownProjection()).toBe('A\n\nThe AI wrote this.\n\nZ');
 
     const [survived] = provenanceSpans(ed.view.state);
     expect(survived, 'the span in the untouched paragraph was dissolved').toBeDefined();
@@ -220,7 +211,7 @@ describe('positions survive the document settling into its stored form', () => {
     expect(ed.view.state.doc.textBetween(ed.view.state.selection.from - 3, ed.view.state.selection.from)).toBe('The');
   });
 
-  it('leaves positions after a trimmed text node alone', () => {
+  it('leaves positions after projecting trailing whitespace alone', () => {
     const ed = open('One.');
     const { schema } = ed.view.state;
     ed.view.dispatch(ed.view.state.tr.insert(ed.view.state.doc.content.size - 1, [
@@ -228,20 +219,20 @@ describe('positions survive the document settling into its stored form', () => {
       schema.nodes.paragraph.create(null, schema.text('The AI wrote this.')),
     ]));
     record(ed, span(ed, 'The AI wrote this.'));
-    ed.getMarkdown();
+    ed.getMarkdownProjection();
     const [survived] = provenanceSpans(ed.view.state);
     expect(provenanceText(ed.view.state.doc, survived)).toBe('The AI wrote this.');
   });
 
-  it('settling is not something the user has to undo', () => {
+  it('reading a projection is not something the user has to undo', () => {
     const ed = open('One.');
     const end = ed.view.state.doc.content.size - 1;
     ed.view.dispatch(ed.view.state.tr.insert(end, ed.view.state.schema.nodes.paragraph.create()));
-    ed.getMarkdown();
-    const settled = ed.getMarkdown();
+    ed.getMarkdownProjection();
+    const settled = ed.getMarkdownProjection();
     const event = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true });
     ed.view.someProp('handleKeyDown', (handler) => handler(ed.view, event));
-    expect(ed.getMarkdown()).toBe('One.');
+    expect(ed.getMarkdownProjection()).toBe('One.');
     expect(settled).toBe('One.');
   });
 });
@@ -250,7 +241,7 @@ describe('spans never reach the document', () => {
   it('leaves no trace in the saved markdown', () => {
     const ed = open('One. The AI wrote this. Three.');
     record(ed, span(ed, 'The AI wrote this.'));
-    expect(ed.getMarkdown()).toBe('One. The AI wrote this. Three.');
+    expect(ed.getMarkdownProjection()).toBe('One. The AI wrote this. Three.');
   });
 
   it('renders as a decoration the document does not contain', () => {
@@ -301,9 +292,9 @@ describe('formatting commands do not destroy provenance they did not touch', () 
     record(ed, span(ed, 'The AI wrote this.'));
 
     toggleBlockquote(ed.view.state, ed.view.dispatch, ed.view);
-    expect(ed.getMarkdown()).toBe('> The AI wrote this.');
+    expect(ed.getMarkdownProjection()).toBe('> The AI wrote this.');
     toggleBlockquote(ed.view.state, ed.view.dispatch, ed.view);
-    expect(ed.getMarkdown()).toBe('The AI wrote this.');
+    expect(ed.getMarkdownProjection()).toBe('The AI wrote this.');
 
     const [survived] = provenanceSpans(ed.view.state);
     expect(survived, 'the span was dissolved by formatting that changed no text').toBeDefined();
@@ -320,11 +311,8 @@ describe('formatting commands do not destroy provenance they did not touch', () 
   });
 });
 
-describe('settling keeps node identity', () => {
-  it('does not confuse two blocks that normalisation makes identical', () => {
-    // Trimming the space from the first of `" AI text" / "AI text"` makes the two
-    // identical. Searching for a match then treats the first as deleted and the
-    // second as inserted — the right document, every position in it destroyed.
+describe('projection reads keep node identity', () => {
+  it('does not confuse two blocks whose projections are similar', () => {
     const ed = open('placeholder');
     const { schema } = ed.view.state;
     const para = (text: string) => schema.nodes.paragraph.create(null, schema.text(text));
@@ -332,7 +320,7 @@ describe('settling keeps node identity', () => {
       para(' AI text'), para('AI text'),
     ]));
 
-    // A span on the SECOND paragraph, the one normalisation does not touch.
+    // A span on the second paragraph must not move when a derived value is read.
     let at = -1;
     ed.view.state.doc.descendants((node, pos) => {
       if (node.isText && node.text === 'AI text') at = pos;
@@ -343,21 +331,24 @@ describe('settling keeps node identity', () => {
       textHash: hashProvenanceText(ed.view.state.doc, range), createdAt: 0,
     });
 
-    ed.getMarkdown();
+    ed.getMarkdownProjection();
     const [survived] = provenanceSpans(ed.view.state);
     expect(survived, 'the span on the untouched paragraph was destroyed').toBeDefined();
     expect(provenanceText(ed.view.state.doc, survived)).toBe('AI text');
   });
 
-  it('clamps a list attribute without replacing the list', () => {
-    // Replacing the list to fix its start maps every position inside it to the
-    // boundary, taking the provenance in its items with it.
+  it('preserves a list attribute and its span through document JSON', () => {
     const ed = open('1. The AI wrote this.\n2. And this.');
     record(ed, span(ed, 'The AI wrote this.'));
     const list = ed.view.state.doc.firstChild!;
     ed.view.dispatch(ed.view.state.tr.setNodeMarkup(0, undefined, { ...list.attrs, order: 999999999 }));
 
-    expect(ed.getMarkdown()).toBe('999999998. The AI wrote this.\n999999999. And this.');
+    const [before] = provenanceSpans(ed.view.state);
+    const saved = ed.getDocumentJSON();
+    ed.setDocumentJSON(saved);
+    ed.view.dispatch(setProvenanceSpans(ed.view.state.tr, [before]));
+
+    expect(ed.view.state.doc.firstChild?.attrs.order).toBe(999999999);
     const [survived] = provenanceSpans(ed.view.state);
     expect(survived, 'the span was destroyed by an attribute clamp').toBeDefined();
     expect(provenanceText(ed.view.state.doc, survived)).toBe('The AI wrote this.');

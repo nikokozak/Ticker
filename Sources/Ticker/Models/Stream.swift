@@ -46,9 +46,11 @@ enum StreamTitleResolution: Equatable {
     case ambiguous
 }
 
-/// Canonical stream editor document (Markdown)
+/// Canonical stream editor document plus its derived Markdown projection.
 struct StreamDocument: Codable {
     let streamId: UUID
+    var docJSON: String?
+    var docFormatVersion: Int?
     var markdown: String
     var revision: Int
     var scrollOffset: Double
@@ -57,6 +59,8 @@ struct StreamDocument: Codable {
 
     init(
         streamId: UUID,
+        docJSON: String? = nil,
+        docFormatVersion: Int? = nil,
         markdown: String = "",
         revision: Int = 0,
         scrollOffset: Double = 0,
@@ -64,6 +68,8 @@ struct StreamDocument: Codable {
         updatedAt: Date = Date()
     ) {
         self.streamId = streamId
+        self.docJSON = docJSON
+        self.docFormatVersion = docFormatVersion
         self.markdown = markdown
         self.revision = revision
         self.scrollOffset = scrollOffset

@@ -1,4 +1,4 @@
-/** A thinking session containing a Markdown document and source references */
+/** A thinking session containing a document and source references. */
 export interface Stream {
   id: string;
   title: string;
@@ -14,9 +14,11 @@ export interface Stream {
 
 export type SourceScope = 'auto' | 'all' | 'none';
 
-/** Canonical Markdown document for a stream */
+/** The document plus its derived Markdown projection. */
 export interface StreamDocument {
   streamId: string;
+  docJSON?: string;
+  docFormatVersion?: number;
   markdown: string;
   revision: number;
   scrollOffset: number;

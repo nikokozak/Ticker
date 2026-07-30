@@ -3972,6 +3972,125 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_saveCanonicalStreamDocumentIsAtomicAndRevisionChecked() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Canonical save")
+            try service.saveStream(stream)
+            let initial = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            let firstJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"First"}]}]}"#
+
+            let revision = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: firstJSON,
+                docFormatVersion: 1,
+                markdown: "First",
+                baseRevision: initial.revision,
+                spans: []
+            )
+
+            let first = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(first.docJSON, firstJSON)
+            XCTAssertEqual(first.docFormatVersion, 1)
+            XCTAssertEqual(first.markdown, "First")
+            XCTAssertEqual(first.revision, revision)
+            let payload = StreamCodec.encodeStream(stream, document: first)
+            let wireDocument = try XCTUnwrap(payload["document"] as? [String: Any])
+            XCTAssertEqual(wireDocument["docJSON"] as? String, firstJSON)
+            XCTAssertEqual(wireDocument["docFormatVersion"] as? Int, 1)
+
+            let staleJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Stale"}]}]}"#
+            do {
+                _ = try service.saveStreamDocument(
+                    streamId: stream.id,
+                    docJSON: staleJSON,
+                    docFormatVersion: 1,
+                    markdown: "Stale",
+                    baseRevision: initial.revision,
+                    spans: []
+                )
+                XCTFail("Expected stale canonical save to throw")
+            } catch let conflict as StreamDocumentRevisionConflict {
+                XCTAssertEqual(conflict.docJSON, firstJSON)
+                XCTAssertEqual(conflict.docFormatVersion, 1)
+                XCTAssertEqual(conflict.markdown, "First")
+                XCTAssertEqual(conflict.revision, revision)
+            }
+
+            let after = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(after.docJSON, firstJSON)
+            XCTAssertEqual(after.docFormatVersion, 1)
+            XCTAssertEqual(after.markdown, "First")
+            XCTAssertEqual(after.revision, revision)
+        }
+    }
+
+    func test_legacyWritersInvalidateCanonicalDocumentInsteadOfLeavingItStale() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Canonical invalidation")
+            try service.saveStream(stream)
+            let json = #"{"type":"doc","content":[{"type":"paragraph"}]}"#
+            let firstRevision = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: json,
+                docFormatVersion: 1,
+                markdown: "",
+                baseRevision: 0,
+                spans: []
+            )
+
+            let secondRevision = try service.saveStreamDocument(
+                streamId: stream.id,
+                markdown: "CodeMirror edit",
+                baseRevision: firstRevision
+            )
+            let afterLegacySave = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertNil(afterLegacySave.docJSON)
+            XCTAssertNil(afterLegacySave.docFormatVersion)
+
+            _ = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: json,
+                docFormatVersion: 1,
+                markdown: "",
+                baseRevision: secondRevision,
+                spans: []
+            )
+            _ = try service.appendToStreamDocument(streamId: stream.id, fragment: "Capture")
+            let afterAppend = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertNil(afterAppend.docJSON)
+            XCTAssertNil(afterAppend.docFormatVersion)
+        }
+    }
+
+    func test_saveCanonicalStreamDocumentRejectsUnknownFormatWithoutWriting() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Unknown canonical format")
+            try service.saveStream(stream)
+
+            XCTAssertThrowsError(try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: #"{"type":"doc","content":[]}"#,
+                docFormatVersion: 2,
+                markdown: "",
+                baseRevision: 0,
+                spans: []
+            ))
+            XCTAssertThrowsError(try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: "{not json",
+                docFormatVersion: 1,
+                markdown: "",
+                baseRevision: 0,
+                spans: []
+            ))
+
+            let document = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            XCTAssertNil(document.docJSON)
+            XCTAssertNil(document.docFormatVersion)
+            XCTAssertEqual(document.revision, 0)
+        }
+    }
+
     func test_appendToStreamDocumentIncrementsRevision() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Append Revision")

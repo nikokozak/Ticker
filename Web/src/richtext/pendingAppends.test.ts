@@ -172,7 +172,7 @@ describe('a session opening a stream with pending appends', () => {
     document.body.innerHTML = '';
   });
 
-  function open(markdown: string, revision: number, pending: PendingAppend[]) {
+  function open(markdown: string, revision: number, pending: PendingAppend[], docJSON?: string) {
     const parent = document.createElement('div');
     document.body.appendChild(parent);
     const saves: Array<{ markdown: string; spans: unknown[]; resolvedPendingThrough?: number }> = [];
@@ -189,7 +189,11 @@ describe('a session opening a stream with pending appends', () => {
       reload: () => {},
       onError: (message) => errors.push(message),
     };
-    editor = createRichTextEditor({ parent, markdown, onChange: () => session?.documentChanged() });
+    editor = createRichTextEditor({
+      parent,
+      docJSON: docJSON ?? JSON.stringify(parseMarkdown(markdown).toJSON()),
+      onChange: () => session?.documentChanged(),
+    });
     session = new DocumentSession({
       streamId: 'stream-1', editor, transport, revision, autosaveDelay: 5, pendingAppends: pending,
     });
@@ -201,7 +205,7 @@ describe('a session opening a stream with pending appends', () => {
     const stored = `existing text\n\n${fragment}`;
     const h = open(stored, 4, [row(4, fragment, [rawSpan(fragment)])]);
 
-    expect(h.ed.getMarkdown()).toBe(stored);
+    expect(h.ed.getMarkdownProjection()).toBe(stored);
     const [placed] = provenanceSpans(h.ed.view.state);
     expect(placed, 'the append provenance was not converted').toBeDefined();
     expect(provenanceText(h.ed.view.state.doc, placed)).toBe('The AI appended this.');
@@ -232,16 +236,37 @@ describe('a session opening a stream with pending appends', () => {
   it('leaves the document untouched when the sequence cannot be proven', () => {
     const stored = 'existing text\n\nsomething the rows do not describe';
     const h = open(stored, 4, [row(4, 'a different fragment', [rawSpan('a different fragment')])]);
-    expect(h.ed.getMarkdown()).toBe(stored);
+    expect(h.ed.getMarkdownProjection()).toBe(stored);
     expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
     expect(h.errors[0]).toMatch(/text itself is intact/);
+  });
+
+  it('refuses rows whose replayed tree is not the canonical document', async () => {
+    const fragment = 'The AI appended this.';
+    const stored = `existing text\n\n${fragment}`;
+    const parsed = parseMarkdown(stored);
+    const withBlankParagraph = parsed.copy(
+      parsed.content.addToEnd(parsed.type.schema.nodes.paragraph.create()),
+    );
+    const h = open(
+      stored,
+      4,
+      [row(4, fragment, [rawSpan(fragment)])],
+      JSON.stringify(withBlankParagraph.toJSON()),
+    );
+
+    expect(h.ed.view.state.doc.childCount).toBe(3);
+    expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
+    expect(h.errors[0]).toMatch(/text itself is intact/);
+    await h.session.saveNow();
+    expect(h.saves.map((save) => save.resolvedPendingThrough)).not.toContain(4);
   });
 
   it('keeps the text when only one span cannot be placed', () => {
     const fragment = 'The AI appended this.';
     const stored = `existing text\n\n${fragment}`;
     const h = open(stored, 4, [row(4, fragment, [rawSpan(fragment, fragment.length, { textHash: 'drifted' })])]);
-    expect(h.ed.getMarkdown()).toBe(stored);
+    expect(h.ed.getMarkdownProjection()).toBe(stored);
     expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
   });
 
@@ -257,7 +282,7 @@ describe('a session opening a stream with pending appends', () => {
     ])]);
 
     expect(provenanceSpans(h.ed.view.state), 'a placeable span was kept from a failed row').toHaveLength(0);
-    expect(h.ed.getMarkdown()).toBe(stored);
+    expect(h.ed.getMarkdownProjection()).toBe(stored);
     await h.session.saveNow();
     // Nothing is saved, so nothing clears the rows.
     expect(h.saves.map((save) => save.resolvedPendingThrough)).not.toContain(4);

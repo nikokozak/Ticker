@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { TextSelection } from 'prosemirror-state';
 import { createRichTextEditor, type RichTextEditor } from './editor';
+import { parseMarkdown } from './markdown';
 import { aiWritingRange, applyAIMarkdown, focusAtEnd, insertImage, selectText, setImageWidth, streamAIMarkdown } from './operations';
 
 /**
@@ -23,7 +24,10 @@ let editor: RichTextEditor | null = null;
 function open(markdown: string): RichTextEditor {
   const parent = document.createElement('div');
   document.body.appendChild(parent);
-  editor = createRichTextEditor({ parent, markdown });
+  editor = createRichTextEditor({
+    parent,
+    docJSON: JSON.stringify(parseMarkdown(markdown).toJSON()),
+  });
   return editor;
 }
 
@@ -51,31 +55,31 @@ describe('applying what the AI wrote', () => {
   it('rewrites a sentence inline rather than making it its own block', () => {
     const ed = open('One sentence. Second sentence. Third.');
     applyAIMarkdown(ed.view, find(ed, 'Second sentence.'), 'A rewritten sentence.');
-    expect(ed.getMarkdown()).toBe('One sentence. A rewritten sentence. Third.');
+    expect(ed.getMarkdownProjection()).toBe('One sentence. A rewritten sentence. Third.');
     expect(ed.view.state.doc.childCount).toBe(1);
   });
 
   it('keeps the formatting the AI asked for', () => {
     const ed = open('Replace this.');
     applyAIMarkdown(ed.view, find(ed, 'Replace this.'), 'Now **bold** and [linked](https://x.test).');
-    expect(ed.getMarkdown()).toBe('Now **bold** and [linked](https://x.test).');
+    expect(ed.getMarkdownProjection()).toBe('Now **bold** and [linked](https://x.test).');
   });
 
   it('inserts whole blocks when the AI produced them', () => {
     const ed = open('Before.\n\nReplace me.\n\nAfter.');
     applyAIMarkdown(ed.view, find(ed, 'Replace me.'), '## A heading\n\nAnd a paragraph.');
-    expect(ed.getMarkdown()).toBe('Before.\n\n## A heading\n\nAnd a paragraph.\n\nAfter.');
+    expect(ed.getMarkdownProjection()).toBe('Before.\n\n## A heading\n\nAnd a paragraph.\n\nAfter.');
   });
 
   it('is exactly ONE undo step', () => {
     // The property the old editor kept losing: an operation assembled from several
     // dispatches takes several undos to remove, which reads as a broken undo.
     const ed = open('One sentence. Second sentence. Third.');
-    const before = ed.getMarkdown();
+    const before = ed.getMarkdownProjection();
     applyAIMarkdown(ed.view, find(ed, 'Second sentence.'), 'A **much** longer rewritten sentence, with formatting.');
-    expect(ed.getMarkdown()).not.toBe(before);
+    expect(ed.getMarkdownProjection()).not.toBe(before);
     undo(ed);
-    expect(ed.getMarkdown()).toBe(before);
+    expect(ed.getMarkdownProjection()).toBe(before);
   });
 
   it('reports the range it wrote, and highlights it', () => {
@@ -114,8 +118,8 @@ describe('applying what the AI wrote', () => {
   it('never writes the highlight into the document', () => {
     const ed = open('One. Two. Three.');
     applyAIMarkdown(ed.view, find(ed, 'Two.'), 'AI text.');
-    expect(ed.getMarkdown()).toBe('One. AI text. Three.');
-    expect(ed.getMarkdown()).not.toMatch(/richtext-ai-written|<span/);
+    expect(ed.getMarkdownProjection()).toBe('One. AI text. Three.');
+    expect(ed.getMarkdownProjection()).not.toMatch(/richtext-ai-written|<span/);
   });
 });
 
@@ -124,7 +128,7 @@ describe('images', () => {
     const ed = open('before');
     focusAtEnd(ed.view);
     insertImage(ed.view, { src: 'ticker-asset://s/a.png', alt: 'shot' });
-    expect(ed.getMarkdown()).toBe('before![shot](ticker-asset://s/a.png)');
+    expect(ed.getMarkdownProjection()).toBe('before![shot](ticker-asset://s/a.png)');
     expect(ed.view.state.doc.textContent).toBe('before');
   });
 
@@ -132,9 +136,9 @@ describe('images', () => {
     const ed = open('![shot](ticker-asset://s/a.png)');
     const pos = ed.view.state.doc.content.size - 2;
     setImageWidth(ed.view, pos, 300);
-    expect(ed.getMarkdown()).toBe('![shot](ticker-asset://s/a.png){width=300}');
+    expect(ed.getMarkdownProjection()).toBe('![shot](ticker-asset://s/a.png){width=300}');
     undo(ed);
-    expect(ed.getMarkdown()).toBe('![shot](ticker-asset://s/a.png)');
+    expect(ed.getMarkdownProjection()).toBe('![shot](ticker-asset://s/a.png)');
   });
 
   it('refuses a width on an image that is not a ticker asset', () => {
@@ -146,7 +150,7 @@ describe('images', () => {
     const ed = open('![shot](ticker-asset://s/a.png)');
     const pos = ed.view.state.doc.content.size - 2;
     setImageWidth(ed.view, pos, 5000);
-    expect(ed.getMarkdown()).toBe('![shot](ticker-asset://s/a.png)');
+    expect(ed.getMarkdownProjection()).toBe('![shot](ticker-asset://s/a.png)');
   });
 });
 
@@ -218,24 +222,24 @@ describe('a streaming AI reply', () => {
     const ed = open('Replace this.');
     const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
     for (const chunk of ['Now **bo', 'ld** and ', '[lin', 'ked](https://x.', 'test).']) stream.push(chunk);
-    expect(ed.getMarkdown()).toBe('Now **bold** and [linked](https://x.test).');
+    expect(ed.getMarkdownProjection()).toBe('Now **bold** and [linked](https://x.test).');
   });
 
   it('is correct when a chunk splits a list marker', () => {
     const ed = open('Replace this.');
     const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
     for (const chunk of ['* one\n', '* t', 'wo']) stream.push(chunk);
-    expect(ed.getMarkdown()).toBe('* one\n* two');
+    expect(ed.getMarkdownProjection()).toBe('* one\n* two');
   });
 
   it('is still ONE undo step however many frames it took', () => {
     const ed = open('One. Replace this. Three.');
-    const before = ed.getMarkdown();
+    const before = ed.getMarkdownProjection();
     const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
     for (const chunk of ['A ', '**streamed** ', 'reply.']) stream.push(chunk);
-    expect(ed.getMarkdown()).toBe('One. A **streamed** reply. Three.');
+    expect(ed.getMarkdownProjection()).toBe('One. A **streamed** reply. Three.');
     undo(ed);
-    expect(ed.getMarkdown()).toBe(before);
+    expect(ed.getMarkdownProjection()).toBe(before);
   });
 
   it('keeps that undo when a later frame changes the block structure', () => {
@@ -244,7 +248,7 @@ describe('a streaming AI reply', () => {
     stream.push('A reply.');
     stream.push('\n\n* with a source');
     undo(ed);
-    expect(ed.getMarkdown()).toBe('Replace this.');
+    expect(ed.getMarkdownProjection()).toBe('Replace this.');
   });
 
   it('does not include the preceding user edit in its undo', () => {
@@ -253,7 +257,7 @@ describe('a streaming AI reply', () => {
     const stream = streamAIMarkdown(ed.view, find(ed, 'Replace this.'));
     stream.push('AI reply.');
     undo(ed);
-    expect(ed.getMarkdown()).toBe('User Replace this.');
+    expect(ed.getMarkdownProjection()).toBe('User Replace this.');
   });
 
   it('reports the range it wrote, and highlights it', () => {
@@ -309,8 +313,8 @@ describe('typing while the AI is streaming', () => {
     stream.push('reply.');
     stream.done();
     expect(ed.view.editable).toBe(true);
-    expect(ed.getMarkdown()).toBe('AI reply.');
+    expect(ed.getMarkdownProjection()).toBe('AI reply.');
     undo(ed);
-    expect(ed.getMarkdown()).toBe('Replace this.');
+    expect(ed.getMarkdownProjection()).toBe('Replace this.');
   });
 });

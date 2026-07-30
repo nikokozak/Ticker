@@ -228,8 +228,8 @@ export const tickerMarkdownParser = new MarkdownParser(tickerSchema, markdownIt,
  *   "* ```\nx\n```\n* p"   []            no signal at all
  *
  * Only that last shape — where NO item has a direct paragraph — is genuinely
- * unrepresentable, and it is read as tight. normalizeForMarkdown applies the same
- * narrow rule, so the two agree and a save/reload is stable.
+ * unrepresentable in Markdown and is read as tight. doc_json keeps the actual
+ * list attribute; the projection is allowed to lose this edge case.
  */
 function listIsTight(tokens: readonly Token[], index: number): boolean {
   let depth = 0;
@@ -361,10 +361,8 @@ export const tickerMarkdownSerializer = new MarkdownSerializer({
     // survives: markdown-it decodes entities even with html off, and they are
     // re-emitted here on the way back out.
     //
-    // Only the START. Trailing whitespace is invisible, and preserving it would put
-    // a `&#32;` on the end of nearly every paragraph — typing a word and pressing
-    // Enter leaves one — which is real noise in a format the AI and exports read.
-    // normalizeForMarkdown drops it instead, so the two agree.
+    // Only the START. The projection is for AI and export, not for reconstructing
+    // the live document, so it does not get to rewrite whitespace in the editor.
     const leading = startsLine ? (/^[ \t]+/.exec(text)?.[0] ?? '') : '';
     if (leading) state.write(leading.replace(/ /g, '&#32;').replace(/\t/g, '&#9;'));
 

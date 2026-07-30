@@ -3,6 +3,7 @@ import type { Command } from 'prosemirror-state';
 import { createRoot } from 'react-dom/client';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import { activeFormats, toggleBlockquote, toggleBold, toggleBulletList, toggleHeading, toggleItalic, toggleOrderedList, toggleUnderline } from './commands';
+import { parseMarkdown } from './markdown';
 import './editor.css';
 import '../styles/index.css';
 
@@ -13,9 +14,8 @@ import '../styles/index.css';
  *
  *   npm run dev, then open /richtext.html
  *
- * The right-hand pane is the markdown that would be STORED. Watching it while
- * typing is the fastest way to catch the editor writing something ugly, and the
- * fastest way to confirm the left-hand pane never shows syntax.
+ * The right-hand pane is the derived Markdown projection used at the edges. It can
+ * be lossy; the left-hand ProseMirror document is what will be stored.
  */
 
 const SAMPLE = `# Reading a document
@@ -101,10 +101,11 @@ function Demo() {
 
   useEffect(() => {
     if (!host.current) return undefined;
-    const created = createRichTextEditor({
+    let created: RichTextEditor;
+    created = createRichTextEditor({
       parent: host.current,
-      markdown: SAMPLE,
-      onChange: setMarkdown,
+      docJSON: JSON.stringify(parseMarkdown(SAMPLE).toJSON()),
+      onChange: () => setMarkdown(created.getMarkdownProjection()),
       onUpdate,
       // Not an alert: a modal dialog freezes the WKWebView and the browser tooling.
       onOpenLink: setOpened,
@@ -121,7 +122,7 @@ function Demo() {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <div style={{ padding: 12, borderBottom: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', font: 'var(--type-ui-small) var(--font-editor-sans)' }}>
-          {opened ? `the host would open: ${opened}` : 'what gets stored — this is what the AI and exports see'}
+          {opened ? `the host would open: ${opened}` : 'derived Markdown — what the AI and exports see'}
         </div>
         <pre style={{ flex: 1, margin: 0, padding: 16, overflow: 'auto', whiteSpace: 'pre-wrap', font: '12px var(--font-mono)', color: 'var(--color-text-secondary)' }}>
           {markdown}

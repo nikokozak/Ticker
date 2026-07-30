@@ -3,6 +3,18 @@ import Foundation
 enum StreamCodec {
     static func encodeStream(_ stream: Stream, document: StreamDocument) -> [String: Any] {
         let formatter = ISO8601DateFormatter()
+        var documentPayload: [String: Any] = [
+            "streamId": document.streamId.uuidString,
+            "markdown": document.markdown,
+            "revision": document.revision,
+            "scrollOffset": document.scrollOffset,
+            "createdAt": formatter.string(from: document.createdAt),
+            "updatedAt": formatter.string(from: document.updatedAt)
+        ]
+        if let docJSON = document.docJSON, let docFormatVersion = document.docFormatVersion {
+            documentPayload["docJSON"] = docJSON
+            documentPayload["docFormatVersion"] = docFormatVersion
+        }
         return [
             "id": stream.id.uuidString,
             "title": stream.title,
@@ -27,14 +39,7 @@ enum StreamCodec {
             },
             "createdAt": formatter.string(from: stream.createdAt),
             "updatedAt": formatter.string(from: stream.updatedAt),
-            "document": [
-                "streamId": document.streamId.uuidString,
-                "markdown": document.markdown,
-                "revision": document.revision,
-                "scrollOffset": document.scrollOffset,
-                "createdAt": formatter.string(from: document.createdAt),
-                "updatedAt": formatter.string(from: document.updatedAt)
-            ]
+            "document": documentPayload
         ]
     }
 

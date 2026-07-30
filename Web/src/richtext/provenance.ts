@@ -10,9 +10,8 @@ import { fnv1a } from '../utils/fnv1a';
  * Positions are ProseMirror positions, not offsets into the markdown. That is the
  * whole change from the CodeMirror version, and it is what makes the feature
  * possible at all now: the markdown is derived, so an offset into it means nothing
- * while editing, and would have to be recomputed on every keystroke. Parsing is
- * deterministic, so a PM position computed from the same markdown is the same
- * position every time — stable across save and reload.
+ * while editing, and would have to be recomputed on every keystroke. The stored
+ * ProseMirror JSON recreates the same tree, so these positions survive reload.
  *
  * A span is dropped as soon as its own text is edited. "The AI wrote this" stops
  * being true the moment the user rewrites it, and a span that survived editing is
@@ -79,7 +78,7 @@ export function hashProvenanceText(doc: ProseNode, span: { from: number; to: num
  * span's ORIGINAL position is wrong the moment a transaction has more than one.
  * Insert before a span and then edit inside its shifted range in the same
  * transaction, and the edit is missed — the user's own text stays attributed to
- * the AI. Normalisation now emits several steps at once, so this is routine.
+ * the AI. Paste and structural commands routinely emit several steps at once.
  *
  * Each edge maps INWARDS, so text typed against a boundary stays outside the span.
  * Writing next to what the AI wrote is not the AI having written it.

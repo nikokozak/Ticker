@@ -106,7 +106,8 @@
         "requiredPayloadKeys": ["streamId", "fragment", "revision", "isNewStream", "source", "spans"]
       },
       "streamDocumentConflict": {
-        "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans", "pendingAppends"]
+        "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans", "pendingAppends"],
+        "optionalPayloadKeys": ["docJSON", "docFormatVersion"]
       },
       "streamLoaded": {
         "requiredPayloadKeys": ["stream", "spans", "marginNotes"],
@@ -234,6 +235,11 @@
           "editorFontSize",
           "editorLineSpacing"
         ]
+      },
+      "saveRichStreamDocument": {
+        "requiredPayloadKeys": ["streamId", "docJSON", "docFormatVersion", "markdown", "baseRevision", "spans"],
+        "optionalPayloadKeys": ["resolvedPendingThrough"],
+        "requiredCallbackId": true
       },
       "saveStreamDocument": {
         "requiredPayloadKeys": ["streamId", "markdown", "baseRevision", "spans"],

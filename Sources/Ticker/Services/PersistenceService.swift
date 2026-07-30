@@ -26,6 +26,8 @@ struct EditorSnapshot {
 
 struct StreamDocumentRevisionConflict: Error {
     let streamId: UUID
+    let docJSON: String?
+    let docFormatVersion: Int?
     let markdown: String
     let revision: Int
     let spans: [ProvenanceSpan]
@@ -920,7 +922,7 @@ final class PersistenceService {
         try dbQueue.read { db in
             guard let row = try Row.fetchOne(
                 db,
-                sql: "SELECT stream_id, markdown, revision, scroll_offset, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+                sql: "SELECT stream_id, doc_json, doc_format_version, markdown, revision, scroll_offset, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
                 arguments: [streamId.uuidString]
             ) else {
                 return nil
@@ -928,6 +930,8 @@ final class PersistenceService {
 
             return StreamDocument(
                 streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
+                docJSON: row["doc_json"],
+                docFormatVersion: row["doc_format_version"],
                 markdown: row["markdown"],
                 revision: row["revision"],
                 scrollOffset: row["scroll_offset"],
@@ -966,11 +970,13 @@ final class PersistenceService {
     private func loadOrCreateStreamDocument(streamId: UUID, db: Database) throws -> StreamDocument {
         if let row = try Row.fetchOne(
             db,
-            sql: "SELECT stream_id, markdown, revision, scroll_offset, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
+            sql: "SELECT stream_id, doc_json, doc_format_version, markdown, revision, scroll_offset, created_at, updated_at FROM stream_documents WHERE stream_id = ?",
             arguments: [streamId.uuidString]
         ) {
             return StreamDocument(
                 streamId: UUID(uuidString: row["stream_id"]) ?? streamId,
+                docJSON: row["doc_json"],
+                docFormatVersion: row["doc_format_version"],
                 markdown: row["markdown"],
                 revision: row["revision"],
                 scrollOffset: row["scroll_offset"],
@@ -1054,26 +1060,56 @@ final class PersistenceService {
     }
 
     @discardableResult
+    func saveStreamDocument(
+        streamId: UUID,
+        docJSON: String,
+        docFormatVersion: Int,
+        markdown: String,
+        baseRevision: Int,
+        spans: [ProvenanceSpan],
+        resolvedPendingThrough: Int? = nil
+    ) throws -> Int {
+        guard docFormatVersion == 1,
+              let data = docJSON.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
+            throw PersistenceError.encodingFailed("Invalid canonical stream document")
+        }
+        return try saveStreamDocument(
+            streamId: streamId,
+            markdown: markdown,
+            baseRevision: baseRevision,
+            spans: Optional(spans),
+            resolvedPendingThrough: resolvedPendingThrough,
+            canonicalDocument: (docJSON, docFormatVersion)
+        )
+    }
+
+    @discardableResult
     private func saveStreamDocument(
         streamId: UUID,
         markdown: String,
         baseRevision: Int,
         spans: [ProvenanceSpan]?,
-        resolvedPendingThrough: Int? = nil
+        resolvedPendingThrough: Int? = nil,
+        canonicalDocument: (json: String, version: Int)? = nil
     ) throws -> Int {
         let now = Date().timeIntervalSince1970
         return try dbQueue.write { db in
             if let row = try Row.fetchOne(
                 db,
-                sql: "SELECT markdown, revision FROM stream_documents WHERE stream_id = ?",
+                sql: "SELECT doc_json, doc_format_version, markdown, revision FROM stream_documents WHERE stream_id = ?",
                 arguments: [streamId.uuidString]
             ) {
+                let currentDocJSON: String? = row["doc_json"]
+                let currentDocFormatVersion: Int? = row["doc_format_version"]
                 let currentMarkdown: String = row["markdown"]
                 let currentRevision: Int = row["revision"]
 
                 guard baseRevision == currentRevision else {
                     throw StreamDocumentRevisionConflict(
                         streamId: streamId,
+                        docJSON: currentDocJSON,
+                        docFormatVersion: currentDocFormatVersion,
                         markdown: currentMarkdown,
                         revision: currentRevision,
                         spans: try fetchSpans(streamId: streamId, db: db),
@@ -1082,14 +1118,37 @@ final class PersistenceService {
                 }
 
                 let newRevision = currentRevision + 1
-                try db.execute(
-                    sql: """
-                        UPDATE stream_documents
-                        SET markdown = ?, word_count = ?, revision = ?, updated_at = ?
-                        WHERE stream_id = ?
-                    """,
-                    arguments: [markdown, Self.wordCount(in: markdown), newRevision, now, streamId.uuidString]
-                )
+                if let canonicalDocument {
+                    try db.execute(
+                        sql: """
+                            UPDATE stream_documents
+                            SET doc_json = ?, doc_format_version = ?,
+                                markdown = ?, word_count = ?, revision = ?, updated_at = ?
+                            WHERE stream_id = ?
+                        """,
+                        arguments: [
+                            canonicalDocument.json,
+                            canonicalDocument.version,
+                            markdown,
+                            Self.wordCount(in: markdown),
+                            newRevision,
+                            now,
+                            streamId.uuidString
+                        ]
+                    )
+                } else {
+                    // A legacy writer changed the projection, so the previous JSON
+                    // no longer describes this revision and must not look usable.
+                    try db.execute(
+                        sql: """
+                            UPDATE stream_documents
+                            SET doc_json = NULL, doc_format_version = NULL,
+                                markdown = ?, word_count = ?, revision = ?, updated_at = ?
+                            WHERE stream_id = ?
+                        """,
+                        arguments: [markdown, Self.wordCount(in: markdown), newRevision, now, streamId.uuidString]
+                    )
+                }
 
                 try db.execute(
                     sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
@@ -1115,6 +1174,8 @@ final class PersistenceService {
             guard baseRevision == 0 else {
                 throw StreamDocumentRevisionConflict(
                     streamId: streamId,
+                    docJSON: nil,
+                    docFormatVersion: nil,
                     markdown: "",
                     revision: 0,
                     spans: [],
@@ -1123,13 +1184,33 @@ final class PersistenceService {
             }
 
             let newRevision = 1
-            try db.execute(
-                sql: """
-                    INSERT INTO stream_documents (stream_id, markdown, word_count, revision, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                arguments: [streamId.uuidString, markdown, Self.wordCount(in: markdown), newRevision, now, now]
-            )
+            if let canonicalDocument {
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_documents
+                            (stream_id, doc_json, doc_format_version, markdown, word_count, revision, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        streamId.uuidString,
+                        canonicalDocument.json,
+                        canonicalDocument.version,
+                        markdown,
+                        Self.wordCount(in: markdown),
+                        newRevision,
+                        now,
+                        now
+                    ]
+                )
+            } else {
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_documents (stream_id, markdown, word_count, revision, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    arguments: [streamId.uuidString, markdown, Self.wordCount(in: markdown), newRevision, now, now]
+                )
+            }
 
             try db.execute(
                 sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
@@ -1198,6 +1279,8 @@ final class PersistenceService {
                     INSERT INTO stream_documents (stream_id, markdown, word_count, revision, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(stream_id) DO UPDATE SET
+                        doc_json = NULL,
+                        doc_format_version = NULL,
                         markdown = excluded.markdown,
                         word_count = excluded.word_count,
                         revision = excluded.revision,

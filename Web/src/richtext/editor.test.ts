@@ -5,6 +5,7 @@ import type { Node as ProseNode, ResolvedPos, Slice } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import * as prosemirrorView from 'prosemirror-view';
 import { createRichTextEditor, type RichTextEditor } from './editor';
+import { parseMarkdown } from './markdown';
 
 /**
  * The real paste entry point. `parseSlice` alone ignores the `data-pm-slice` depths
@@ -28,10 +29,14 @@ const parseFromClipboard = (prosemirrorView as unknown as {
 
 let editor: RichTextEditor | null = null;
 
-function open(markdown: string, onChange?: (md: string) => void): RichTextEditor {
+function open(markdown: string, onChange?: () => void): RichTextEditor {
   const parent = document.createElement('div');
   document.body.appendChild(parent);
-  editor = createRichTextEditor({ parent, markdown, onChange });
+  editor = createRichTextEditor({
+    parent,
+    docJSON: JSON.stringify(parseMarkdown(markdown).toJSON()),
+    onChange,
+  });
   return editor;
 }
 
@@ -83,26 +88,41 @@ function type(ed: RichTextEditor, text: string): void {
 describe('the document survives the editor', () => {
   it('opens markdown and gives it back unchanged', () => {
     const source = '# Title\n\nSome **bold** and <u>underlined</u> text.\n\n* one\n* two';
-    expect(open(source).getMarkdown()).toBe(source);
+    expect(open(source).getMarkdownProjection()).toBe(source);
   });
 
   it('reports a change only when the document actually changed', () => {
-    const seen: string[] = [];
-    const ed = open('hello', (md) => seen.push(md));
+    let changes = 0;
+    const ed = open('hello', () => { changes += 1; });
     place(ed, after(ed, 'hello'));
-    expect(seen).toHaveLength(0); // moving the cursor is not an edit
+    expect(changes).toBe(0); // moving the cursor is not an edit
     type(ed, ' there');
-    expect(seen).toEqual(['hello there']);
+    expect(changes).toBe(1);
+    expect(ed.getMarkdownProjection()).toBe('hello there');
   });
 
   it('round-trips through a reload', () => {
     const ed = open('one');
     place(ed, after(ed, 'one'));
     type(ed, ' two');
-    const saved = ed.getMarkdown();
-    ed.setMarkdown(saved);
-    expect(ed.getMarkdown()).toBe(saved);
+    const saved = ed.getMarkdownProjection();
+    ed.setDocumentJSON(JSON.stringify(parseMarkdown(saved).toJSON()));
+    expect(ed.getMarkdownProjection()).toBe(saved);
     expect(ed.view.state.doc.textContent).toBe('one two');
+  });
+
+  it('round-trips blank paragraphs through document JSON', () => {
+    const ed = open('one');
+    place(ed, after(ed, 'one'));
+    press(ed, 'Enter');
+    press(ed, 'Enter');
+    const saved = ed.getDocumentJSON();
+
+    ed.setDocumentJSON(JSON.stringify(parseMarkdown('changed').toJSON()));
+    ed.setDocumentJSON(saved);
+
+    expect(ed.view.state.doc.childCount).toBe(3);
+    expect(ed.view.state.doc.textContent).toBe('one');
   });
 });
 
@@ -125,28 +145,43 @@ describe('there is no markup for the cursor to walk into', () => {
     const ed = open('one **two** three');
     place(ed, find(ed, 'two', 1)); // between the 't' and the 'w'
     type(ed, 'X');
-    expect(ed.getMarkdown()).toBe('one **tXwo** three');
-    expect(ed.getMarkdown()).not.toMatch(/\*{3}/);
+    expect(ed.getMarkdownProjection()).toBe('one **tXwo** three');
+    expect(ed.getMarkdownProjection()).not.toMatch(/\*{3}/);
   });
 
   it('Enter inside formatted text splits the paragraph, not the formatting', () => {
     const ed = open('**bold text**');
     place(ed, after(ed, 'bold')); // between the word and the space
     expect(press(ed, 'Enter')).toBe(true);
-    // The trailing space of the first paragraph is invisible, so it is dropped.
-    expect(ed.getMarkdown()).toBe('**bold**\n\n**text**');
     expect(ed.view.state.doc.childCount).toBe(2);
+    expect(ed.view.state.doc.child(0).textContent).toBe('bold');
+    expect(ed.view.state.doc.child(1).textContent).toBe(' text');
   });
 });
 
 describe('keystrokes', () => {
+  it('reading the markdown projection does not delete a paragraph break', () => {
+    const ed = open('foo');
+    place(ed, after(ed, 'foo'));
+    expect(press(ed, 'Enter')).toBe(true);
+    expect(ed.view.state.doc.childCount).toBe(2);
+
+    ed.getMarkdownProjection();
+
+    expect(ed.view.state.doc.childCount).toBe(2);
+    expect(press(ed, 'Enter')).toBe(true);
+    ed.getMarkdownProjection();
+    expect(ed.view.state.doc.childCount).toBe(3);
+    expect(ed.view.state.selection.$from.parentOffset).toBe(0);
+  });
+
   it('Shift+Enter makes a line break inside the paragraph', () => {
     const ed = open('foo');
     place(ed, after(ed, 'foo'));
     expect(press(ed, 'Enter', { shiftKey: true })).toBe(true);
     type(ed, 'bar');
     expect(ed.view.state.doc.childCount).toBe(1); // still ONE paragraph
-    expect(ed.getMarkdown()).toBe('foo\\\nbar');
+    expect(ed.getMarkdownProjection()).toBe('foo\\\nbar');
   });
 
   it('Shift+Enter twice leaves a blank line instead of collapsing', () => {
@@ -155,9 +190,9 @@ describe('keystrokes', () => {
     press(ed, 'Enter', { shiftKey: true });
     press(ed, 'Enter', { shiftKey: true });
     type(ed, 'bar');
-    const saved = ed.getMarkdown();
-    ed.setMarkdown(saved);
-    expect(ed.getMarkdown()).toBe(saved);
+    const saved = ed.getMarkdownProjection();
+    ed.setDocumentJSON(JSON.stringify(parseMarkdown(saved).toJSON()));
+    expect(ed.getMarkdownProjection()).toBe(saved);
     expect(ed.view.state.doc.firstChild?.childCount).toBe(4); // text, br, br, text
   });
 
@@ -166,16 +201,16 @@ describe('keystrokes', () => {
     place(ed, after(ed, 'one'));
     expect(press(ed, 'Enter')).toBe(true);
     type(ed, 'two');
-    expect(ed.getMarkdown()).toBe('* one\n* two');
+    expect(ed.getMarkdownProjection()).toBe('* one\n* two');
   });
 
   it('Tab and Shift+Tab indent and outdent a list item', () => {
     const ed = open('* one\n* two');
     place(ed, after(ed, 'two'));
     expect(press(ed, 'Tab')).toBe(true);
-    expect(ed.getMarkdown()).toBe('* one\n  * two');
+    expect(ed.getMarkdownProjection()).toBe('* one\n  * two');
     expect(press(ed, 'Tab', { shiftKey: true })).toBe(true);
-    expect(ed.getMarkdown()).toBe('* one\n* two');
+    expect(ed.getMarkdownProjection()).toBe('* one\n* two');
   });
 
   it('Tab does nothing outside a list, rather than eating the keystroke', () => {
@@ -188,19 +223,19 @@ describe('keystrokes', () => {
     const ed = open('one two three');
     place(ed, find(ed, 'two'), after(ed, 'two'));
     expect(press(ed, 'b', MOD)).toBe(true);
-    expect(ed.getMarkdown()).toBe('one **two** three');
+    expect(ed.getMarkdownProjection()).toBe('one **two** three');
     place(ed, find(ed, 'two'), after(ed, 'two'));
     press(ed, 'b', MOD);
-    expect(ed.getMarkdown()).toBe('one two three');
+    expect(ed.getMarkdownProjection()).toBe('one two three');
   });
 
   it('undo restores the previous document in one step', () => {
     const ed = open('one two three');
     place(ed, find(ed, 'two'), after(ed, 'two'));
     press(ed, 'b', MOD);
-    expect(ed.getMarkdown()).toBe('one **two** three');
+    expect(ed.getMarkdownProjection()).toBe('one **two** three');
     expect(press(ed, 'z', MOD)).toBe(true);
-    expect(ed.getMarkdown()).toBe('one two three');
+    expect(ed.getMarkdownProjection()).toBe('one two three');
   });
 });
 
@@ -245,7 +280,7 @@ describe('copy and paste inside the editor', () => {
     const ed = open('a **bold** b');
     const clipboard = copy(ed, find(ed, 'bold'), after(ed, 'bold'));
     paste(ed, clipboard, after(ed, ' b'));
-    expect(ed.getMarkdown()).toBe('a **bold** b**bold**');
+    expect(ed.getMarkdownProjection()).toBe('a **bold** b**bold**');
   });
 
   it('keeps a line break as the same kind of break', () => {
@@ -281,14 +316,14 @@ describe('copy and paste inside the editor', () => {
     const ed = open('3. three\n4. four\n\nafter');
     const clipboard = copy(ed, 0, ed.view.state.doc.firstChild?.nodeSize ?? 0);
     paste(ed, clipboard, after(ed, 'after'));
-    expect(ed.getMarkdown()).toBe('3. three\n4. four\n\nafter\n\n3. three\n4. four');
+    expect(ed.getMarkdownProjection()).toBe('3. three\n4. four\n\nafter\n\n3. three\n4. four');
   });
 
   it('keeps a code block language', () => {
     const ed = open('```ts\nconst x = 1;\n```\n\nafter');
     const clipboard = copy(ed, 0, ed.view.state.doc.firstChild?.nodeSize ?? 0);
     paste(ed, clipboard, after(ed, 'after'));
-    expect(ed.getMarkdown()).toBe('```ts\nconst x = 1;\n```\n\nafter\n\n```ts\nconst x = 1;\n```');
+    expect(ed.getMarkdownProjection()).toBe('```ts\nconst x = 1;\n```\n\nafter\n\n```ts\nconst x = 1;\n```');
   });
 });
 
@@ -300,7 +335,11 @@ describe('links read as links', () => {
     const opened: string[] = [];
     const parent = document.createElement('div');
     document.body.appendChild(parent);
-    editor = createRichTextEditor({ parent, markdown, onOpenLink: (href) => opened.push(href) });
+    editor = createRichTextEditor({
+      parent,
+      docJSON: JSON.stringify(parseMarkdown(markdown).toJSON()),
+      onOpenLink: (href) => opened.push(href),
+    });
     return { ed: editor, opened };
   }
 
@@ -333,7 +372,7 @@ describe('links read as links', () => {
     const ed = open('Read the paper now.');
     const link = ed.view.state.schema.marks.link.create({ href: 'ticker-pdf://s?page=3', title: null });
     ed.view.dispatch(ed.view.state.tr.addMark(find(ed, 'the paper'), after(ed, 'the paper'), link));
-    expect(ed.getMarkdown()).toBe('Read [the paper](ticker-pdf://s?page=3) now.');
+    expect(ed.getMarkdownProjection()).toBe('Read [the paper](ticker-pdf://s?page=3) now.');
     expect(ed.view.state.doc.textContent).toBe('Read the paper now.'); // still no syntax
   });
 });
@@ -345,7 +384,7 @@ describe('images', () => {
     const img = ed.view.dom.querySelector('img');
     expect(img?.getAttribute('src')).toBe('ticker-asset://s/a.png');
     expect(img?.getAttribute('width')).toBe('300');
-    expect(ed.getMarkdown()).toBe('![a shot](ticker-asset://s/a.png){width=300}');
+    expect(ed.getMarkdownProjection()).toBe('![a shot](ticker-asset://s/a.png){width=300}');
   });
 
   it('renders without a width when it has none', () => {
@@ -361,20 +400,21 @@ describe('an external append', () => {
     const ed = open('first paragraph');
     ed.appendMarkdown('\n\n## Added\n\nsecond paragraph');
     expect(ed.view.state.doc.childCount).toBe(3);
-    expect(ed.getMarkdown()).toBe('first paragraph\n\n## Added\n\nsecond paragraph');
+    expect(ed.getMarkdownProjection()).toBe('first paragraph\n\n## Added\n\nsecond paragraph');
   });
 
   it('reports the appended document through onChange', () => {
-    const seen: string[] = [];
-    const ed = open('one', (md) => seen.push(md));
+    let changes = 0;
+    const ed = open('one', () => { changes += 1; });
     ed.appendMarkdown('\n\ntwo');
-    expect(seen).toEqual(['one\n\ntwo']);
+    expect(changes).toBe(1);
+    expect(ed.getMarkdownProjection()).toBe('one\n\ntwo');
   });
 
   it('is undoable as its own step and does not disturb the text before it', () => {
     const ed = open('one');
     ed.appendMarkdown('\n\ntwo');
     press(ed, 'z', MOD);
-    expect(ed.getMarkdown()).toBe('one');
+    expect(ed.getMarkdownProjection()).toBe('one');
   });
 });

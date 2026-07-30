@@ -73,6 +73,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'saveImage',
   'saveSettings',
   'saveScrollPosition',
+  'saveRichStreamDocument',
   'saveStreamDocument',
   'setFileDropContext',
   'setSourceAIExclusion',
@@ -112,6 +113,8 @@ export interface BridgeMessage {
 
 export interface StreamDocumentConflictPayload extends Record<string, unknown> {
   streamId: string;
+  docJSON?: string;
+  docFormatVersion?: number;
   markdown: string;
   revision: number;
   spans: ProvenanceSpanJSON[];

@@ -347,19 +347,32 @@ export function RichStreamEditor({
 
   useEffect(() => {
     if (!host.current) return undefined;
+    const { docJSON, docFormatVersion } = stream.document;
+    if (docFormatVersion !== 1 || typeof docJSON !== 'string') {
+      // ponytail: converted rows are the launch gate; add mixed-version recovery
+      // UI only if a partially converted database ever becomes a supported state.
+      addToast('This stream has not been converted to the rich-text document format.', 'error');
+      return undefined;
+    }
 
-    const created = createRichTextEditor({
-      parent: host.current,
-      markdown: stream.document?.markdown ?? '',
-      // Every streamed frame is temporary until completion. Letting any one of
-      // them arm autosave stores a reply the user never actually received.
-      onChange: () => {
-        if (!aiInFlightRef.current) sessionRef.current?.documentChanged();
-      },
-      onTransaction,
-      onUpdate,
-      onOpenLink: openLink,
-    });
+    let created: RichTextEditor;
+    try {
+      created = createRichTextEditor({
+        parent: host.current,
+        docJSON,
+        // Every streamed frame is temporary until completion. Letting any one of
+        // them arm autosave stores a reply the user never actually received.
+        onChange: () => {
+          if (!aiInFlightRef.current) sessionRef.current?.documentChanged();
+        },
+        onTransaction,
+        onUpdate,
+        onOpenLink: openLink,
+      });
+    } catch {
+      addToast('This stream’s rich-text document could not be read.', 'error');
+      return undefined;
+    }
 
     const session = new DocumentSession({
       streamId: stream.id,
@@ -371,9 +384,25 @@ export function RichStreamEditor({
         // Spelled out rather than spread: the contract checker verifies this
         // payload statically against bridge.v2.json, and can only do that for a
         // literal.
-        save: ({ streamId, markdown, baseRevision, spans, resolvedPendingThrough }) => bridge.sendAsync<{ revision: number }>(
-          'saveStreamDocument',
-          { streamId, markdown, baseRevision, spans, resolvedPendingThrough },
+        save: ({
+          streamId,
+          docJSON: savedDocJSON,
+          docFormatVersion: savedDocFormatVersion,
+          markdown,
+          baseRevision,
+          spans,
+          resolvedPendingThrough,
+        }) => bridge.sendAsync<{ revision: number }>(
+          'saveRichStreamDocument',
+          {
+            streamId,
+            docJSON: savedDocJSON,
+            docFormatVersion: savedDocFormatVersion,
+            markdown,
+            baseRevision,
+            spans,
+            resolvedPendingThrough,
+          },
         ),
         reload: (streamId) => bridge.send({ type: 'loadStream', payload: { id: streamId } }),
         onSaveStateChange: setSaveState,
@@ -861,6 +890,8 @@ export function RichStreamEditor({
       const conflict = payload as Partial<StreamDocumentConflictPayload> | undefined;
       session.documentConflict({
         streamId: String(conflict?.streamId ?? ''),
+        docJSON: conflict?.docJSON,
+        docFormatVersion: conflict?.docFormatVersion,
         markdown: String(conflict?.markdown ?? ''),
         revision: Number(conflict?.revision),
         spans: conflict?.spans?.map(spanFromJSON),
@@ -910,6 +941,8 @@ export function RichStreamEditor({
     if (document.revision <= session.currentRevision) return;
     cancelDocumentAI();
     session.documentLoaded({
+      docJSON: document.docJSON,
+      docFormatVersion: document.docFormatVersion,
       markdown: document.markdown,
       revision: document.revision,
       spans: (stream.spans ?? []).map(spanFromJSON),

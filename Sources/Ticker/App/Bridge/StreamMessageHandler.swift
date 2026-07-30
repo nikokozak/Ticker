@@ -15,6 +15,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         "createStream",
         "updateStreamTitle",
         "deleteStream",
+        "saveRichStreamDocument",
         "saveStreamDocument",
         "saveScrollPosition",
         "setSourceScope",
@@ -150,9 +151,9 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 DebugLog.log("[WebViewManager] Failed to delete stream (\(DebugLog.errorSummary(error)))")
             }
 
-        case "saveStreamDocument":
+        case "saveStreamDocument", "saveRichStreamDocument":
             guard let callbackId = message.callbackId else {
-                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for saveStreamDocument")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Missing callbackId for \(message.type)")
                 return
             }
             guard let payload = message.payload,
@@ -165,14 +166,38 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 await bridgeService.respondWithError(to: callbackId, error: "Invalid saveStreamDocument payload")
                 return
             }
+            let canonicalDocument: (json: String, version: Int)?
+            if message.type == "saveRichStreamDocument" {
+                guard let docJSON = payload["docJSON"]?.value as? String,
+                      let docFormatVersion = payload["docFormatVersion"]?.intValue else {
+                    await bridgeService.respondWithError(to: callbackId, error: "Invalid saveRichStreamDocument payload")
+                    return
+                }
+                canonicalDocument = (docJSON, docFormatVersion)
+            } else {
+                canonicalDocument = nil
+            }
             do {
-                let revision = try persistence.saveStreamDocument(
-                    streamId: streamId,
-                    markdown: markdown,
-                    baseRevision: baseRevision,
-                    spans: spans,
-                    resolvedPendingThrough: payload["resolvedPendingThrough"]?.intValue
-                )
+                let revision: Int
+                if let canonicalDocument {
+                    revision = try persistence.saveStreamDocument(
+                        streamId: streamId,
+                        docJSON: canonicalDocument.json,
+                        docFormatVersion: canonicalDocument.version,
+                        markdown: markdown,
+                        baseRevision: baseRevision,
+                        spans: spans,
+                        resolvedPendingThrough: payload["resolvedPendingThrough"]?.intValue
+                    )
+                } else {
+                    revision = try persistence.saveStreamDocument(
+                        streamId: streamId,
+                        markdown: markdown,
+                        baseRevision: baseRevision,
+                        spans: spans,
+                        resolvedPendingThrough: payload["resolvedPendingThrough"]?.intValue
+                    )
+                }
                 await bridgeService.respond(to: callbackId, with: [
                     "revision": AnyCodable(revision)
                 ])
@@ -183,13 +208,18 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 }
             } catch let conflict as StreamDocumentRevisionConflict {
                 let pendingAppends = StreamCodec.encodePendingAppends(conflict.pendingAppends)
-                await bridgeService.send(BridgeMessage(type: "streamDocumentConflict", payload: [
+                var conflictPayload: [String: AnyCodable] = [
                     "streamId": AnyCodable(conflict.streamId.uuidString),
                     "markdown": AnyCodable(conflict.markdown),
                     "revision": AnyCodable(conflict.revision),
                     "spans": AnyCodable(StreamCodec.encodeSpans(conflict.spans)),
                     "pendingAppends": AnyCodable(pendingAppends)
-                ]))
+                ]
+                if let docJSON = conflict.docJSON, let docFormatVersion = conflict.docFormatVersion {
+                    conflictPayload["docJSON"] = AnyCodable(docJSON)
+                    conflictPayload["docFormatVersion"] = AnyCodable(docFormatVersion)
+                }
+                await bridgeService.send(BridgeMessage(type: "streamDocumentConflict", payload: conflictPayload))
                 await bridgeService.respondWithError(to: callbackId, error: "Stream document revision conflict")
             } catch {
                 DebugLog.log("[WebViewManager] Failed to save stream document (\(DebugLog.errorSummary(error)))")

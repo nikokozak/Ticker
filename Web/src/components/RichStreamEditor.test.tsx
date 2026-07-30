@@ -10,6 +10,7 @@ import {
 } from '../types/bridge';
 import type { AIExchangeJSON, SourceReference, Stream } from '../types/models';
 import { DocumentSession } from '../richtext/session';
+import { parseMarkdown } from '../richtext/markdown';
 import { useToastStore } from '../store/toastStore';
 import { fnv1a } from '../utils/fnv1a';
 import { RichStreamEditor } from './RichStreamEditor';
@@ -32,6 +33,8 @@ beforeAll(() => {
   };
 });
 
+const docJSON = (markdown: string) => JSON.stringify(parseMarkdown(markdown).toJSON());
+
 const stream: Stream = {
   id: 'stream-1',
   title: 'Test',
@@ -39,6 +42,8 @@ const stream: Stream = {
   sources: [],
   document: {
     streamId: 'stream-1',
+    docJSON: docJSON('Original paragraph.'),
+    docFormatVersion: 1,
     markdown: 'Original paragraph.',
     revision: 1,
     scrollOffset: 0,
@@ -305,7 +310,7 @@ describe('an image save that lands after the editor is gone', () => {
     // for it, and nothing is said. The user pasted an image and it vanished — and
     // the asset is on disk with nothing pointing at it.
     const saves = vi.mocked(bridge.sendAsync).mock.calls
-      .filter(([type]) => type === 'saveStreamDocument');
+      .filter(([type]) => type === 'saveRichStreamDocument');
     expect(saves).toHaveLength(0);
     expect(useToastStore.getState().toasts.map((toast) => toast.message).join(' '))
       .toMatch(/image/i);
@@ -366,7 +371,12 @@ describe('RichStreamEditor document AI', () => {
     await renderStream({
       ...stream,
       id: 'empty-stream',
-      document: { ...stream.document, streamId: 'empty-stream', markdown: '' },
+      document: {
+        ...stream.document,
+        streamId: 'empty-stream',
+        docJSON: docJSON(''),
+        markdown: '',
+      },
     });
     await click('Send and prompt AI');
 
@@ -546,9 +556,11 @@ describe('RichStreamEditor document AI', () => {
       });
 
       const saves = vi.mocked(bridge.sendAsync).mock.calls
-        .filter(([type]) => type === 'saveStreamDocument');
+        .filter(([type]) => type === 'saveRichStreamDocument');
       expect(saves).toHaveLength(1);
       expect(saves[0]?.[1]).toMatchObject({
+        docJSON: expect.any(String),
+        docFormatVersion: 1,
         markdown: '**Bold** reply.',
         spans: [{
           start: 1,
@@ -760,13 +772,13 @@ describe('RichStreamEditor document AI', () => {
       });
 
       expect(vi.mocked(bridge.sendAsync).mock.calls
-        .filter(([type]) => type === 'saveStreamDocument')).toHaveLength(0);
+        .filter(([type]) => type === 'saveRichStreamDocument')).toHaveLength(0);
       await act(async () => {
         bridge.receive({ type: 'documentAIComplete', payload: { requestId } });
         await vi.advanceTimersByTimeAsync(400);
       });
       expect(vi.mocked(bridge.sendAsync).mock.calls
-        .filter(([type]) => type === 'saveStreamDocument')).toHaveLength(1);
+        .filter(([type]) => type === 'saveRichStreamDocument')).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
@@ -990,7 +1002,7 @@ describe('RichStreamEditor images', () => {
 
     expect(editor().textContent).not.toContain('{width=');
     const saves = vi.mocked(bridge.sendAsync).mock.calls
-      .filter(([type]) => type === 'saveStreamDocument');
+      .filter(([type]) => type === 'saveRichStreamDocument');
     expect(saves[saves.length - 1]?.[1]?.markdown)
       .toBe('![shot](ticker-asset://stream-1/shot.png){width=320}Original paragraph.');
 
@@ -1107,6 +1119,7 @@ describe('RichStreamEditor search arrival', () => {
     document: {
       ...stream.document,
       streamId: 'match-stream',
+      docJSON: docJSON('First paragraph.\n\nA needle in the second paragraph.'),
       markdown: 'First paragraph.\n\nA needle in the second paragraph.',
     },
   };
@@ -1268,6 +1281,7 @@ describe('RichStreamEditor provenance exchanges', () => {
     document: {
       ...stream.document,
       streamId: id,
+      docJSON: docJSON('Local. AI answer.'),
       markdown: 'Local. AI answer.',
     },
     spans: [{
@@ -1758,6 +1772,7 @@ describe('RichStreamEditor PDF anchor placement', () => {
       document: {
         ...stream.document,
         streamId: 'stream-with-anchor',
+        docJSON: docJSON('Rewrite this.\n\nAnchor this.'),
         markdown: 'Rewrite this.\n\nAnchor this.',
       },
     });
@@ -1801,6 +1816,39 @@ describe('RichStreamEditor PDF anchor placement', () => {
 });
 
 describe('RichStreamEditor host wire gate', () => {
+  it('refuses an unconverted document visibly instead of falling back to markdown', async () => {
+    await renderStream({
+      ...stream,
+      id: 'unconverted-stream',
+      document: {
+        ...stream.document,
+        streamId: 'unconverted-stream',
+        docJSON: undefined,
+        docFormatVersion: undefined,
+      },
+    });
+
+    expect(document.querySelector('.ProseMirror')).toBe(null);
+    expect(useToastStore.getState().toasts.map((toast) => toast.message))
+      .toContain('This stream has not been converted to the rich-text document format.');
+  });
+
+  it('reports malformed canonical JSON instead of throwing out of mount', async () => {
+    await renderStream({
+      ...stream,
+      id: 'malformed-stream',
+      document: {
+        ...stream.document,
+        streamId: 'malformed-stream',
+        docJSON: '{not json',
+      },
+    });
+
+    expect(document.querySelector('.ProseMirror')).toBe(null);
+    expect(useToastStore.getState().toasts.map((toast) => toast.message))
+      .toContain('This stream’s rich-text document could not be read.');
+  });
+
   it('opens and appends using the exact payload shapes emitted by Swift', async () => {
     const loaded: SwiftToWebBridgeMessage = {
       type: 'streamLoaded',
@@ -1827,6 +1875,8 @@ describe('RichStreamEditor host wire gate', () => {
           updatedAt: '1970-01-01T00:00:00Z',
           document: {
             streamId: '00000000-0000-0000-0000-000000000001',
+            docJSON: docJSON('Host paragraph.'),
+            docFormatVersion: 1,
             markdown: 'Host paragraph.',
             revision: 1,
             scrollOffset: 23,
@@ -1875,12 +1925,21 @@ describe('RichStreamEditor host wire gate', () => {
     // real coordinates exercise.
     await vi.waitFor(() => {
       expect(vi.mocked(bridge.sendAsync).mock.calls
-        .some(([type]) => type === 'saveStreamDocument')).toBe(true);
+        .some(([type]) => type === 'saveRichStreamDocument')).toBe(true);
     });
     const save = vi.mocked(bridge.sendAsync).mock.calls
-      .filter(([type]) => type === 'saveStreamDocument')
-      .pop()?.[1] as { markdown: string; baseRevision: number; spans: Array<Record<string, unknown>>; resolvedPendingThrough?: number } | undefined;
+      .filter(([type]) => type === 'saveRichStreamDocument')
+      .pop()?.[1] as {
+        docJSON: string;
+        docFormatVersion: number;
+        markdown: string;
+        baseRevision: number;
+        spans: Array<Record<string, unknown>>;
+        resolvedPendingThrough?: number;
+      } | undefined;
     expect(save, 'the append was never written back').toBeDefined();
+    expect(save!.docFormatVersion).toBe(1);
+    expect((JSON.parse(save!.docJSON) as { content: unknown[] }).content).toHaveLength(2);
     expect(save!.baseRevision).toBe(2);
     expect(save!.spans).toHaveLength(1);
     expect(save!.spans[0]).toMatchObject({ spanId: 'host-span', origin: 'capture' });

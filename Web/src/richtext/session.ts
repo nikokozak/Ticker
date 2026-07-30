@@ -1,4 +1,5 @@
 import type { RichTextEditor } from './editor';
+import type { Node as ProseNode } from 'prosemirror-model';
 import { parseMarkdown } from './markdown';
 import { placeFragmentSpan, planReplay, type PendingAppend } from './pendingAppends';
 import {
@@ -34,6 +35,8 @@ export interface SaveResult {
 export interface SessionTransport {
   save(request: {
     streamId: string;
+    docJSON: string;
+    docFormatVersion: 1;
     markdown: string;
     baseRevision: number;
     spans: ProvenanceSpanJSON[];
@@ -63,6 +66,7 @@ export interface SessionOptions {
 }
 
 const DEFAULT_AUTOSAVE_DELAY = 350;
+const DOCUMENT_FORMAT_VERSION = 1;
 
 /** Enough for an edit that lands mid-write; a bound so a flush always answers. */
 const MAX_FLUSH_PASSES = 5;
@@ -72,7 +76,10 @@ export class DocumentSession {
 
   private revision: number;
 
-  private lastSaved: string;
+  private lastSavedDocument: string;
+
+  /** Needed only while legacy pending rows still prove suffixes in markdown. */
+  private lastSavedMarkdown: string;
 
   /** The spans as last persisted, so metadata-only changes still count as dirty. */
   private lastSavedSpans = '';
@@ -110,7 +117,8 @@ export class DocumentSession {
   constructor(options: SessionOptions) {
     this.options = { autosaveDelay: DEFAULT_AUTOSAVE_DELAY, ...options };
     this.revision = options.revision;
-    this.lastSaved = options.editor.getMarkdown();
+    this.lastSavedDocument = options.editor.getDocumentJSON();
+    this.lastSavedMarkdown = options.editor.getMarkdownProjection();
     if (options.spans?.length) this.restoreSpans(options.spans);
     this.lastSavedSpans = this.spanFingerprint();
     this.adoptPendingAppends(options.pendingAppends ?? []);
@@ -154,10 +162,9 @@ export class DocumentSession {
   /**
    * Place the provenance of appends that happened while no editor was open.
    *
-   * The editor was constructed from the FULL stored markdown, fragments included,
-   * so nothing is re-inserted: the document is rebuilt from the base and the
-   * fragments are replayed through the same append path, which is what makes each
-   * fragment's position knowable.
+   * The converter already folded the rows into doc_json. Rebuild their claimed
+   * document off-screen so a failed legacy proof cannot touch the user's live
+   * document, selection, or undo history.
    *
    * Any proof that fails abandons the whole replay and leaves the rows alone. A
    * half-converted span points at the wrong text and claims the AI wrote something
@@ -166,34 +173,37 @@ export class DocumentSession {
    */
   private convertPendingAppends(pending: PendingAppend[]): void {
     const { editor } = this.options;
-    const plan = planReplay(this.lastSaved, this.revision, pending);
+    const plan = planReplay(this.lastSavedMarkdown, this.revision, pending);
     if (!plan.ok) return this.abandonReplay(plan.reason);
     if (!plan.appends.length) return;
 
     const existing = provenanceSpans(editor.view.state);
-    const before = editor.getMarkdown();
-    editor.setMarkdown(plan.baseMarkdown);
+    let replayed = parseMarkdown(plan.baseMarkdown);
 
     // Everything is placed before anything is committed. A partial conversion is
     // the worst outcome: the save that follows would delete the rows, so the spans
     // that could not be placed are gone permanently rather than merely deferred.
     const placed: ProvenanceSpan[] = [];
     for (const append of plan.appends) {
-      const inserted = editor.appendMarkdown(append.fragment);
-      const converted = this.placeFragmentSpans(append.spans, append.fragment, inserted.from, existing);
+      const fragment = parseMarkdown(append.fragment);
+      const insertedAt = replayed.content.size;
+      replayed = replayed.copy(replayed.content.append(fragment.content));
+      const converted = this.placeFragmentSpans(
+        append.spans,
+        append.fragment,
+        insertedAt,
+        [...existing, ...placed],
+        replayed,
+      );
       if (!converted) {
-        editor.setMarkdown(before);
-        this.restoreSpans(existing);
         return this.abandonReplay('spanUnplaceable');
       }
       placed.push(...converted);
     }
 
-    if (editor.getMarkdown() !== before) {
-      // Replaying the fragments did not reproduce the stored document, so the
-      // positions would describe something that was never saved.
-      editor.setMarkdown(before);
-      this.restoreSpans(existing);
+    if (!replayed.eq(editor.view.state.doc)) {
+      // The rows describe a different tree, so their positions do not belong to
+      // the canonical document even if their Markdown happens to look similar.
       return this.abandonReplay('replayDiverged');
     }
 
@@ -227,12 +237,13 @@ export class DocumentSession {
     fragment: string,
     insertedAt: number,
     existing: ProvenanceSpan[],
+    doc: ProseNode = this.options.editor.view.state.doc,
   ): ProvenanceSpan[] | null {
     const known = new Set(existing.map((span) => span.spanId));
     const placed: ProvenanceSpan[] = [];
     for (const one of raw) {
       if (known.has(one.spanId)) continue;
-      const span = placeFragmentSpan(one, fragment, insertedAt, this.options.editor.view.state.doc);
+      const span = placeFragmentSpan(one, fragment, insertedAt, doc);
       if (!span) return null;
       placed.push(span);
     }
@@ -257,7 +268,7 @@ export class DocumentSession {
   }
 
   private isDirty(): boolean {
-    return this.options.editor.getMarkdown() !== this.lastSaved
+    return this.options.editor.getDocumentJSON() !== this.lastSavedDocument
       || this.spanFingerprint() !== this.lastSavedSpans;
   }
 
@@ -312,7 +323,8 @@ export class DocumentSession {
       return;
     }
 
-    const markdown = editor.getMarkdown();
+    const docJSON = editor.getDocumentJSON();
+    const markdown = editor.getMarkdownProjection();
     const baseRevision = this.revision;
     const spans = this.spansForSave();
     const fingerprint = this.spanFingerprint();
@@ -325,7 +337,13 @@ export class DocumentSession {
       // took the only chance to clear them with it.
       const resolvedPendingThrough = this.pendingSafeThrough ?? undefined;
       const { revision } = await transport.save({
-        streamId, markdown, baseRevision, spans: spans.map(spanToJSON), resolvedPendingThrough,
+        streamId,
+        docJSON,
+        docFormatVersion: DOCUMENT_FORMAT_VERSION,
+        markdown,
+        baseRevision,
+        spans: spans.map(spanToJSON),
+        resolvedPendingThrough,
       });
 
       /*
@@ -351,7 +369,8 @@ export class DocumentSession {
       }
 
       this.revision = revision;
-      this.lastSaved = markdown;
+      this.lastSavedDocument = docJSON;
+      this.lastSavedMarkdown = markdown;
       this.lastSavedSpans = fingerprint;
       // Only settle if nothing changed while the write was in flight.
       this.setState(this.isDirty() ? 'saving' : 'saved');
@@ -362,10 +381,7 @@ export class DocumentSession {
     }
   }
 
-  /**
-   * Spans as they stand in the document being saved. getMarkdown has already
-   * settled the document, so these positions are the ones a reload will reproduce.
-   */
+  /** Spans as they stand in the canonical document being saved. */
   private spansForSave(): ProvenanceSpan[] {
     const { doc } = this.options.editor.view.state;
     return provenanceSpans(this.options.editor.view.state)
@@ -426,8 +442,9 @@ export class DocumentSession {
       return;
     }
 
-    // Nothing local was pending, so the stored TEXT and this document now agree.
-    this.lastSaved = this.options.editor.getMarkdown();
+    // The legacy append writer updated only the projection. Keep the old JSON
+    // fingerprint dirty until this editor has restored the canonical document.
+    this.lastSavedMarkdown = this.options.editor.getMarkdownProjection();
 
     // The spans just placed, though, are stored NOWHERE — an append writes its
     // provenance as a pending row, never as a span — and neither is the fact that
@@ -441,6 +458,8 @@ export class DocumentSession {
   /** The save was rejected because the stored document moved on. */
   documentConflict(payload: {
     streamId: string;
+    docJSON?: string;
+    docFormatVersion?: number;
     markdown: string;
     revision: number;
     spans?: ProvenanceSpan[];
@@ -451,7 +470,7 @@ export class DocumentSession {
 
     // Nothing local is pending, so the host copy is simply newer.
     if (!this.isDirty()) {
-      this.adoptHostDocument(payload);
+      if (!this.adoptHostDocument(payload)) return;
       this.adoptPendingAppends(payload.pendingAppends ?? []);
       return;
     }
@@ -472,7 +491,7 @@ export class DocumentSession {
       this.refuseConflict(payload, plan.reason);
       return;
     }
-    if (plan.baseMarkdown !== this.lastSaved) {
+    if (plan.baseMarkdown !== this.lastSavedMarkdown) {
       this.refuseConflict(payload, 'baseMismatch');
       return;
     }
@@ -515,7 +534,7 @@ export class DocumentSession {
 
     this.revision = payload.revision;
     if (pendingWasContiguous) this.pendingSafeThrough = payload.revision;
-    // lastSaved deliberately stays put: it does not include the local edit or the
+    // The saved fingerprints deliberately stay put: they do not include the local edit or the
     // newly merged fragments, so the whole live document is still owed a save.
     this.documentChanged();
   }
@@ -537,26 +556,55 @@ export class DocumentSession {
    * since replaying means peeling them off the END of the stored markdown.
    */
   documentLoaded(payload: {
+    docJSON?: string;
+    docFormatVersion?: number;
     markdown: string;
     revision: number;
     spans?: ProvenanceSpan[];
     pendingAppends?: PendingAppend[];
   }): void {
-    this.adoptHostDocument(payload);
+    if (!this.adoptHostDocument(payload)) return;
     this.adoptPendingAppends(payload.pendingAppends ?? []);
   }
 
-  private adoptHostDocument(payload: { markdown: string; revision: number; spans?: ProvenanceSpan[] }): void {
+  private adoptHostDocument(payload: {
+    docJSON?: string;
+    docFormatVersion?: number;
+    markdown: string;
+    revision: number;
+    spans?: ProvenanceSpan[];
+  }): boolean {
+    if (payload.docFormatVersion !== DOCUMENT_FORMAT_VERSION || typeof payload.docJSON !== 'string') {
+      this.refuseHostDocument('missingCanonicalDocument');
+      return false;
+    }
+
+    try {
+      this.options.editor.setDocumentJSON(payload.docJSON);
+    } catch (error) {
+      this.refuseHostDocument('invalidCanonicalDocument', error);
+      return false;
+    }
+
     this.generation += 1;
-    this.options.editor.setMarkdown(payload.markdown);
     this.revision = payload.revision;
     this.restoreSpans(payload.spans ?? []);
-    this.lastSaved = this.options.editor.getMarkdown();
+    this.lastSavedDocument = this.options.editor.getDocumentJSON();
+    this.lastSavedMarkdown = payload.markdown;
     this.lastSavedSpans = this.spanFingerprint();
     // The document it had proven things about is gone; a caller that knows the new
     // document's rows says so by calling adoptPendingAppends after this.
     this.pendingSafeThrough = null;
     this.setState('saved');
+    return true;
+  }
+
+  private refuseHostDocument(reason: string, detail?: unknown): void {
+    this.setState('error');
+    this.options.transport.onError?.(
+      'This stream has no readable rich-text document. Your current text was left untouched.',
+      { reason, detail },
+    );
   }
 
   /**
@@ -566,7 +614,12 @@ export class DocumentSession {
    */
   private restoreSpans(spans: ProvenanceSpan[]): void {
     const { view } = this.options.editor;
-    const valid = spans.filter((span) => hashProvenanceText(view.state.doc, span) === span.textHash);
+    const valid = spans.filter((span) => (
+      span.from >= 0
+      && span.to <= view.state.doc.content.size
+      && span.from < span.to
+      && hashProvenanceText(view.state.doc, span) === span.textHash
+    ));
     view.dispatch(setProvenanceSpans(view.state.tr, valid));
   }
 

@@ -24,7 +24,6 @@ import {
 import { parseMarkdown, serializeMarkdown } from './markdown';
 import { aiWritingHighlight, setImageWidth } from './operations';
 import { provenance } from './provenance';
-import { normalizationEdits, normalizeForMarkdown } from './normalize';
 import { BREAK_ATTRIBUTES, MAX_IMAGE_WIDTH, MIN_IMAGE_WIDTH, tickerSchema } from './schema';
 
 /**
@@ -67,15 +66,12 @@ function tickerKeymap() {
 
 export interface RichTextEditor {
   readonly view: EditorView;
-  /** The document as markdown, in exactly the form a reload will give back. */
-  getMarkdown(): string;
-  /**
-   * Settle the document into the form that will be stored. getMarkdown does this
-   * already; call it directly before recording positions against the document.
-   */
-  normalizeNow(): void;
-  /** Replace the whole document, as a reload does. Clears undo history. */
-  setMarkdown(markdown: string): void;
+  /** The canonical document snapshot stored in stream_documents.doc_json. */
+  getDocumentJSON(): string;
+  /** Replace the whole document from its canonical snapshot. Clears undo history. */
+  setDocumentJSON(docJSON: string): void;
+  /** A derived markdown projection. Reading it must never rewrite the live document. */
+  getMarkdownProjection(): string;
   /**
    * Append a fragment at the end of the document, as an external write does, and
    * report where it landed so metadata can be placed inside it.
@@ -86,9 +82,9 @@ export interface RichTextEditor {
 
 export interface RichTextEditorOptions {
   parent: HTMLElement;
-  markdown: string;
-  /** Fires only when the document actually changed, with the markdown to store. */
-  onChange?: (markdown: string) => void;
+  docJSON: string;
+  /** Fires only when the document actually changed. */
+  onChange?: () => void;
   /**
    * A click on a link. Nothing navigates on its own — a `ticker-pdf://` citation
    * has to reach the PDF pane and an external URL has to leave the WKWebView, and
@@ -221,42 +217,11 @@ function stateFor(doc: ProseNode): EditorState {
 }
 
 export function createRichTextEditor(options: RichTextEditorOptions): RichTextEditor {
-  const { parent, markdown, onChange, onOpenLink, onTransaction, onUpdate } = options;
+  const { parent, docJSON, onChange, onOpenLink, onTransaction, onUpdate } = options;
   parent.classList.add('richtext-editor');
 
-  /**
-   * Bring the live document into the form that will be stored, as a real
-   * transaction.
-   *
-   * The earlier version normalised a COPY at serialisation time, which quietly made
-   * the live document and the persisted document two different trees. Anything
-   * holding a position — provenance spans, margin notes — then recorded coordinates
-   * into a document that was never saved: dropping one empty paragraph shifts
-   * everything after it by two. Going through a transaction means ProseMirror maps
-   * the selection and every plugin's positions for us, which is the whole reason
-   * positions are trustworthy.
-   *
-   * Not on every keystroke, though — only when the document is about to be read out.
-   * A keystroke-by-keystroke rewrite would fight the typist over a trailing space.
-   */
-  const normalizeNow = () => {
-    const normalized = normalizeForMarkdown(view.state.doc);
-    const edits = normalizationEdits(view.state.doc, normalized);
-    if (!edits.length) return;
-
-    const tr = view.state.tr;
-    // Back to front, so an earlier edit's positions are still valid.
-    for (const edit of [...edits].reverse()) {
-      if (edit.kind === 'attrs') tr.setNodeMarkup(edit.pos, undefined, edit.attrs);
-      else tr.replaceWith(edit.from, edit.to, edit.replacement);
-    }
-    // Not an edit the user made, and not one they should have to undo.
-    tr.setMeta('addToHistory', false);
-    view.dispatch(tr);
-  };
-
   const view = new EditorView(parent, {
-    state: stateFor(parseMarkdown(markdown)),
+    state: stateFor(tickerSchema.nodeFromJSON(JSON.parse(docJSON))),
     clipboardParser,
     nodeViews: { image: imageView },
 
@@ -275,9 +240,7 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
     dispatchTransaction(transaction) {
       const next = view.state.apply(transaction);
       view.updateState(next);
-      // The normalised form, without normalising mid-keystroke: what onChange
-      // reports is exactly what getMarkdown would store.
-      if (transaction.docChanged) onChange?.(serializeMarkdown(normalizeForMarkdown(next.doc)));
+      if (transaction.docChanged) onChange?.();
       onTransaction?.(transaction);
       onUpdate?.();
     },
@@ -286,21 +249,17 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
   return {
     view,
 
-    /**
-     * Reading the document out is what settles it. After this the live document IS
-     * the stored one, so a position recorded now still means the same thing after a
-     * reload.
-     */
-    getMarkdown() {
-      normalizeNow();
-      return serializeMarkdown(view.state.doc);
+    getDocumentJSON() {
+      return JSON.stringify(view.state.doc.toJSON());
     },
 
-    normalizeNow,
-
-    setMarkdown(next: string) {
-      view.updateState(stateFor(parseMarkdown(next)));
+    setDocumentJSON(next: string) {
+      view.updateState(stateFor(tickerSchema.nodeFromJSON(JSON.parse(next))));
       onUpdate?.();
+    },
+
+    getMarkdownProjection() {
+      return serializeMarkdown(view.state.doc);
     },
 
     appendMarkdown(fragment: string) {

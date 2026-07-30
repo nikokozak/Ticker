@@ -151,7 +151,7 @@ export function streamAIMarkdown(view: EditorView, range: { from: number; to: nu
 /**
  * Insert an image at the cursor as one step. The width is an attribute, so there is
  * no `{width=N}` text beside it for a cursor to land in — that token only ever
- * exists in the stored markdown.
+ * exists in the derived Markdown projection.
  */
 export function insertImage(
   view: EditorView,

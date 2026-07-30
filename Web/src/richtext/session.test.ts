@@ -2,6 +2,7 @@
 import { TextSelection } from 'prosemirror-state';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRichTextEditor, type RichTextEditor } from './editor';
+import { parseMarkdown } from './markdown';
 import { DocumentSession, type SaveState, type SessionTransport } from './session';
 import { addProvenanceSpans, hashProvenanceText, provenanceSpans, spanFromJSON, type ProvenanceSpan, type ProvenanceSpanJSON } from './provenance';
 import { fnv1a } from '../utils/fnv1a';
@@ -15,10 +16,18 @@ import type { PendingAppend } from './pendingAppends';
 let editor: RichTextEditor | null = null;
 let session: DocumentSession | null = null;
 
+const canonical = (markdown: string) => ({
+  docJSON: JSON.stringify(parseMarkdown(markdown).toJSON()),
+  docFormatVersion: 1 as const,
+  markdown,
+});
+
 interface Harness {
   ed: RichTextEditor;
   session: DocumentSession;
   saves: Array<{
+    docJSON: string;
+    docFormatVersion: number;
     markdown: string;
     baseRevision: number;
     spans: ProvenanceSpanJSON[];
@@ -49,6 +58,8 @@ function open(
   const transport: SessionTransport = {
     async save(request) {
       saves.push({
+        docJSON: request.docJSON,
+        docFormatVersion: request.docFormatVersion,
         markdown: request.markdown,
         baseRevision: request.baseRevision,
         spans: request.spans,
@@ -73,7 +84,7 @@ function open(
 
   editor = createRichTextEditor({
     parent,
-    markdown,
+    docJSON: canonical(markdown).docJSON,
     onChange: () => session?.documentChanged(),
   });
   session = new DocumentSession({
@@ -156,7 +167,7 @@ describe('autosave', () => {
     await h.session.saveNow();
     expect(h.session.saveState).toBe('error');
     expect(h.errors[0]).toMatch(/still in the editor/);
-    expect(h.ed.getMarkdown()).toBe('xstart'); // nothing was thrown away
+    expect(h.ed.getMarkdownProjection()).toBe('xstart'); // nothing was thrown away
   });
 
   it('sends the revision it holds, and adopts the one it gets back', async () => {
@@ -176,7 +187,7 @@ describe('autosave', () => {
     type(h.ed, 'y');
     await first;
     await h.session.saveNow();
-    expect(h.saves[h.saves.length - 1].markdown).toBe(h.ed.getMarkdown());
+    expect(h.saves[h.saves.length - 1].markdown).toBe(h.ed.getMarkdownProjection());
   });
 });
 
@@ -184,7 +195,7 @@ describe('an append from outside the editor', () => {
   it('adds the fragment and adopts the revision', () => {
     const h = open('first', 3);
     h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nfrom the quick panel', revision: 4 });
-    expect(h.ed.getMarkdown()).toBe('first\n\nfrom the quick panel');
+    expect(h.ed.getMarkdownProjection()).toBe('first\n\nfrom the quick panel');
     expect(h.session.currentRevision).toBe(4);
   });
 
@@ -209,14 +220,14 @@ describe('an append from outside the editor', () => {
     const h = open('first', 3);
     h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nlatest', revision: 9 });
     expect(h.reloads).toEqual(['stream-1']);
-    expect(h.ed.getMarkdown()).toBe('first'); // untouched
+    expect(h.ed.getMarkdownProjection()).toBe('first'); // untouched
     expect(h.session.currentRevision).toBe(3);
   });
 
   it('ignores an append meant for another stream', () => {
     const h = open('first', 3);
     h.session.documentAppended({ streamId: 'other', fragment: '\n\nnope', revision: 4 });
-    expect(h.ed.getMarkdown()).toBe('first');
+    expect(h.ed.getMarkdownProjection()).toBe('first');
   });
 });
 
@@ -369,7 +380,11 @@ describe('a save that finishes after the document moved on', () => {
     let held = true;
     let failNext = false;
 
-    editor = createRichTextEditor({ parent, markdown, onChange: () => session?.documentChanged() });
+    editor = createRichTextEditor({
+      parent,
+      docJSON: canonical(markdown).docJSON,
+      onChange: () => session?.documentChanged(),
+    });
     session = new DocumentSession({
       streamId: 'stream-1',
       editor,
@@ -422,7 +437,7 @@ describe('a save that finishes after the document moved on', () => {
     await inFlight;
 
     expect(h.session.currentRevision).toBe(5);
-    expect(h.ed.getMarkdown()).toBe('xstart\n\nfrom four\n\nfrom five');
+    expect(h.ed.getMarkdownProjection()).toBe('xstart\n\nfrom four\n\nfrom five');
   });
 
   it('does not mark the superseded document as the saved one', async () => {
@@ -467,16 +482,35 @@ describe('a save that finishes after the document moved on', () => {
     h.release(4);
 
     expect(await flush).toBe(false);
-    expect(h.ed.getMarkdown()).toBe('bastart'); // still there to recover
+    expect(h.ed.getMarkdownProjection()).toBe('bastart'); // still there to recover
   });
 });
 
 describe('a conflict', () => {
   it('does not immediately write the document it was just given', async () => {
     const h = open('mine', 3);
-    h.session.documentConflict({ streamId: 'stream-1', markdown: 'theirs', revision: 11 });
+    h.session.documentConflict({
+      streamId: 'stream-1',
+      ...canonical('theirs'),
+      revision: 11,
+    });
     await h.session.saveNow();
     expect(h.saves).toHaveLength(0);
+    expect(h.ed.getMarkdownProjection()).toBe('theirs');
+  });
+
+  it.each([
+    ['an unsupported version', { ...canonical('theirs'), docFormatVersion: 2 }],
+    ['malformed JSON', { ...canonical('theirs'), docJSON: '{not json' }],
+  ])('keeps the live document when a reload carries %s', (_label, payload) => {
+    const h = open('mine', 3);
+
+    h.session.documentLoaded({ ...payload, revision: 11 });
+
+    expect(h.ed.getMarkdownProjection()).toBe('mine');
+    expect(h.session.currentRevision).toBe(3);
+    expect(h.session.saveState).toBe('error');
+    expect(h.errors[0]).toMatch(/left untouched/);
   });
 });
 
@@ -505,9 +539,41 @@ describe('provenance travels with the document', () => {
     expect(h.saves[0].spans).toHaveLength(1);
   });
 
-  it('is saved with positions that match the SAVED markdown', async () => {
-    // The bug this ordering exists to prevent: spans recorded against the live
-    // document while a different document is what gets stored.
+  it('treats a blank paragraph as a document change even when markdown cannot', async () => {
+    const h = open('One.');
+    const end = h.ed.view.state.doc.content.size - 1;
+    h.ed.view.dispatch(h.ed.view.state.tr.insert(
+      end,
+      h.ed.view.state.schema.nodes.paragraph.create(),
+    ));
+
+    await h.session.saveNow();
+
+    expect(h.saves).toHaveLength(1);
+    const saved = h.ed.view.state.schema.nodeFromJSON(JSON.parse(h.saves[0].docJSON));
+    expect(saved.childCount).toBe(2);
+  });
+
+  it('saves a blank paragraph and its positions in canonical document JSON', async () => {
+    const h = open('One.');
+    const end = h.ed.view.state.doc.content.size - 1;
+    h.ed.view.dispatch(h.ed.view.state.tr.insert(end, [
+      h.ed.view.state.schema.nodes.paragraph.create(),
+      h.ed.view.state.schema.nodes.paragraph.create(null, h.ed.view.state.schema.text('The AI wrote this.')),
+    ]));
+    h.ed.view.dispatch(addProvenanceSpans(h.ed.view.state.tr, [spanFor(h.ed, 'The AI wrote this.')]));
+
+    await h.session.saveNow();
+
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0].docFormatVersion).toBe(1);
+    const saved = h.ed.view.state.schema.nodeFromJSON(JSON.parse(h.saves[0].docJSON));
+    const [savedSpan] = h.saves[0].spans;
+    expect(saved.childCount).toBe(3);
+    expect(saved.textBetween(savedSpan.start, savedSpan.end)).toBe('The AI wrote this.');
+  });
+
+  it('is saved with positions that match the saved document', async () => {
     const h = open('One.');
     const end = h.ed.view.state.doc.content.size - 1;
     h.ed.view.dispatch(h.ed.view.state.tr.insert(end, [
@@ -518,7 +584,15 @@ describe('provenance travels with the document', () => {
     await h.session.saveNow();
 
     const [saved] = h.saves[0].spans;
-    const reloaded = open(h.saves[0].markdown, 2, [spanFromJSON(saved)]);
+    const reloaded = open('placeholder', 2, [spanFromJSON(saved)]);
+    reloaded.ed.setDocumentJSON(h.saves[0].docJSON);
+    reloaded.session.documentLoaded({
+      docJSON: h.saves[0].docJSON,
+      docFormatVersion: 1,
+      markdown: h.saves[0].markdown,
+      revision: 2,
+      spans: [spanFromJSON(saved)],
+    });
     expect(provenanceSpans(reloaded.ed.view.state)).toHaveLength(1);
     const [restored] = provenanceSpans(reloaded.ed.view.state);
     expect(reloaded.ed.view.state.doc.textBetween(restored.from, restored.to)).toBe('The AI wrote this.');
@@ -528,7 +602,10 @@ describe('provenance travels with the document', () => {
     const h = open('One. The AI wrote this. Three.');
     const stale = { ...spanFor(h.ed, 'The AI wrote this.'), textHash: 'not-the-hash' };
     h.session.documentConflict({
-      streamId: 'stream-1', markdown: 'One. The AI wrote this. Three.', revision: 5, spans: [stale],
+      streamId: 'stream-1',
+      ...canonical('One. The AI wrote this. Three.'),
+      revision: 5,
+      spans: [stale],
     });
     expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
   });
@@ -537,9 +614,32 @@ describe('provenance travels with the document', () => {
     const h = open('One. The AI wrote this. Three.');
     const span = spanFor(h.ed, 'The AI wrote this.');
     h.session.documentConflict({
-      streamId: 'stream-1', markdown: 'One. The AI wrote this. Three.', revision: 5, spans: [span],
+      streamId: 'stream-1',
+      ...canonical('One. The AI wrote this. Three.'),
+      revision: 5,
+      spans: [span],
     });
     expect(provenanceSpans(h.ed.view.state)).toHaveLength(1);
+  });
+
+  it('drops an out-of-bounds stored span without throwing during reload', () => {
+    const h = open('One.');
+    const outside: ProvenanceSpan = {
+      spanId: 'outside',
+      from: 1,
+      to: 999,
+      origin: 'ai',
+      meta: {},
+      textHash: 'irrelevant',
+      createdAt: 0,
+    };
+
+    expect(() => h.session.documentLoaded({
+      ...canonical('One.'),
+      revision: 5,
+      spans: [outside],
+    })).not.toThrow();
+    expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
   });
 });
 
@@ -573,7 +673,7 @@ describe('a conflict arriving on top of unsaved work', () => {
       pendingAppends: [pendingAppend(4, 'from the quick panel')],
     });
 
-    expect(h.ed.getMarkdown()).toBe('LOCAL base\n\nfrom the quick panel');
+    expect(h.ed.getMarkdownProjection()).toBe('LOCAL base\n\nfrom the quick panel');
     await h.session.saveNow();
     expect(h.saves[0].markdown).toBe('LOCAL base\n\nfrom the quick panel');
     expect(h.saves[0].baseRevision).toBe(4);
@@ -586,7 +686,7 @@ describe('a conflict arriving on top of unsaved work', () => {
     type(h.ed, 'LOCAL ');
     h.session.documentConflict({
       streamId: 'stream-1',
-      markdown: `base\n\n${fragment}`,
+      ...canonical(`base\n\n${fragment}`),
       revision: 4,
       pendingAppends: [pendingAppend(4, fragment, [wireSpan(fragment)])],
     });
@@ -607,7 +707,7 @@ describe('a conflict arriving on top of unsaved work', () => {
       pendingAppends: [pendingAppend(5, 'unexplained gap')],
     });
 
-    expect(h.ed.getMarkdown()).toBe('LOCAL base');
+    expect(h.ed.getMarkdownProjection()).toBe('LOCAL base');
     expect(h.session.currentRevision).toBe(3);
     expect(h.session.saveState).toBe('error');
     expect(h.errors[0]).toMatch(/still here/);
@@ -629,7 +729,7 @@ describe('a conflict arriving on top of unsaved work', () => {
       pendingAppends: [pendingAppend(4, 'claimed append')],
     });
 
-    expect(h.ed.getMarkdown()).toBe('LOCAL base');
+    expect(h.ed.getMarkdownProjection()).toBe('LOCAL base');
     expect(h.session.currentRevision).toBe(3);
     expect(h.session.saveState).toBe('error');
   });
@@ -639,7 +739,7 @@ describe('a conflict arriving on top of unsaved work', () => {
     const fragment = 'The **AI** appended this.';
     type(h.ed, 'LOCAL ');
     h.ed.view.dispatch(h.ed.view.state.tr.setSelection(TextSelection.create(h.ed.view.state.doc, 3)));
-    const before = h.ed.getMarkdown();
+    const before = h.ed.getMarkdownProjection();
     const cursor = h.ed.view.state.selection.from;
 
     h.session.documentConflict({
@@ -649,7 +749,7 @@ describe('a conflict arriving on top of unsaved work', () => {
       pendingAppends: [pendingAppend(4, fragment, [wireSpan(fragment, { textHash: 'drifted' })])],
     });
 
-    expect(h.ed.getMarkdown()).toBe(before);
+    expect(h.ed.getMarkdownProjection()).toBe(before);
     expect(h.ed.view.state.selection.from).toBe(cursor);
     expect(provenanceSpans(h.ed.view.state)).toHaveLength(0);
     expect(h.session.currentRevision).toBe(3);
@@ -663,7 +763,7 @@ describe('a conflict arriving on top of unsaved work', () => {
       streamId: 'stream-1', markdown: 'something else entirely', revision: 4,
     });
 
-    expect(h.ed.getMarkdown()).toBe('LOCAL base'); // nothing thrown away
+    expect(h.ed.getMarkdownProjection()).toBe('LOCAL base'); // nothing thrown away
     expect(h.session.saveState).toBe('error');
     expect(h.errors[0]).toMatch(/still here/);
   });
@@ -685,7 +785,7 @@ describe('a conflict arriving on top of unsaved work', () => {
     });
 
     // The merge itself is fine — the text arrives and the local edit survives.
-    expect(h.ed.getMarkdown()).toBe('LOCAL base\n\nunreplayable\n\nproven append');
+    expect(h.ed.getMarkdownProjection()).toBe('LOCAL base\n\nunreplayable\n\nproven append');
     await h.session.saveNow();
     // But nothing may be forgotten, because revision 4's row never was converted.
     expect(h.saves[0].resolvedPendingThrough).toBeUndefined();
@@ -696,11 +796,11 @@ describe('a conflict arriving on top of unsaved work', () => {
     const fragment = 'The **host** appended this.';
     h.session.documentConflict({
       streamId: 'stream-1',
-      markdown: `base\n\n${fragment}`,
+      ...canonical(`base\n\n${fragment}`),
       revision: 4,
       pendingAppends: [pendingAppend(4, fragment, [wireSpan(fragment)])],
     });
-    expect(h.ed.getMarkdown()).toBe(`base\n\n${fragment}`);
+    expect(h.ed.getMarkdownProjection()).toBe(`base\n\n${fragment}`);
     expect(h.session.currentRevision).toBe(4);
     expect(provenanceSpans(h.ed.view.state)).toHaveLength(1);
     await h.session.saveNow();
@@ -727,7 +827,11 @@ describe('an append that arrives while a save is in flight', () => {
     let held = true;
     let counter = revision;
 
-    editor = createRichTextEditor({ parent, markdown, onChange: () => session?.documentChanged() });
+    editor = createRichTextEditor({
+      parent,
+      docJSON: canonical(markdown).docJSON,
+      onChange: () => session?.documentChanged(),
+    });
     session = new DocumentSession({
       streamId: 'stream-1',
       editor,
@@ -758,7 +862,7 @@ describe('an append that arrives while a save is in flight', () => {
 
     h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nappended', revision: 5 });
     expect(h.reloads).toEqual(['stream-1']);
-    expect(h.ed.getMarkdown()).toBe('xstart'); // the fragment was NOT patched in
+    expect(h.ed.getMarkdownProjection()).toBe('xstart'); // the fragment was NOT patched in
 
     h.release(4);
     await inFlight;
@@ -767,9 +871,9 @@ describe('an append that arrives while a save is in flight', () => {
     // so it is adopted; the reload it asked for carries it the rest of the way.
     expect(h.session.currentRevision).toBe(4);
 
-    h.session.documentLoaded({ markdown: 'xstart\n\nappended', revision: 5 });
+    h.session.documentLoaded({ ...canonical('xstart\n\nappended'), revision: 5 });
     expect(h.session.currentRevision).toBe(5);
-    expect(h.ed.getMarkdown()).toBe('xstart\n\nappended'); // nothing lost
+    expect(h.ed.getMarkdownProjection()).toBe('xstart\n\nappended'); // nothing lost
   });
 
   it('does not regress the revision when the reload lands before the reply', async () => {
@@ -782,12 +886,12 @@ describe('an append that arrives while a save is in flight', () => {
     await h.started;
 
     h.session.documentAppended({ streamId: 'stream-1', fragment: '\n\nappended', revision: 5 });
-    h.session.documentLoaded({ markdown: 'xstart\n\nappended', revision: 5 });
+    h.session.documentLoaded({ ...canonical('xstart\n\nappended'), revision: 5 });
     h.release(4);
     await inFlight;
 
     expect(h.session.currentRevision).toBe(5);
-    expect(h.ed.getMarkdown()).toBe('xstart\n\nappended');
+    expect(h.ed.getMarkdownProjection()).toBe('xstart\n\nappended');
   });
 
   it('merges an append that is exactly the next revision', async () => {
@@ -803,7 +907,7 @@ describe('an append that arrives while a save is in flight', () => {
     h.release(4);
     await inFlight;
 
-    expect(h.ed.getMarkdown()).toBe('xstart\n\nappended'); // nothing lost
+    expect(h.ed.getMarkdownProjection()).toBe('xstart\n\nappended'); // nothing lost
   });
 });
 
@@ -834,6 +938,6 @@ describe('reporting whether the document is actually stored', () => {
     h.failNextSave();
     type(h.ed, 'x');
     expect(await h.session.destroy()).toBe(false);
-    expect(h.ed.getMarkdown()).toBe('xstart'); // still there to recover
+    expect(h.ed.getMarkdownProjection()).toBe('xstart'); // still there to recover
   });
 });
