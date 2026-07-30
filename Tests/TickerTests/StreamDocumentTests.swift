@@ -2788,6 +2788,102 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_v26MigrationAddsCanonicalDocumentAndAppendInbox() throws {
+        try withTempPersistenceServiceAndURL { _, dbURL, _ in
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let documentColumns: [String] = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(stream_documents)").map { $0["name"] }
+            }
+            let inboxColumns: [String] = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(stream_append_inbox)").map { $0["name"] }
+            }
+            let indexes: [String] = try dbQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: "SELECT name FROM sqlite_master WHERE type = 'index'"
+                ).map { $0["name"] }
+            }
+
+            XCTAssertEqual(Array(documentColumns.suffix(2)), ["doc_json", "doc_format_version"])
+            XCTAssertEqual(
+                inboxColumns,
+                ["seq", "append_id", "stream_id", "fragment", "raw_spans_json", "created_at"]
+            )
+            XCTAssertTrue(indexes.contains("idx_append_inbox_stream"))
+        }
+    }
+
+    func test_v26MigrationRefusesHalfWrittenCanonicalDocument() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, _ in
+            let stream = Stream(title: "Canonical pair")
+            try service.saveStream(stream)
+            try service.saveStreamDocument(streamId: stream.id, markdown: "Before conversion")
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            try dbQueue.write { db in
+                XCTAssertThrowsError(try db.execute(
+                    sql: "UPDATE stream_documents SET doc_json = ? WHERE stream_id = ?",
+                    arguments: [#"{"type":"doc","content":[]}"#, stream.id.uuidString]
+                ))
+
+                XCTAssertNoThrow(try db.execute(
+                    sql: """
+                        UPDATE stream_documents
+                        SET doc_json = ?, doc_format_version = 1
+                        WHERE stream_id = ?
+                    """,
+                    arguments: [#"{"type":"doc","content":[]}"#, stream.id.uuidString]
+                ))
+
+                XCTAssertThrowsError(try db.execute(
+                    sql: "UPDATE stream_documents SET doc_format_version = NULL WHERE stream_id = ?",
+                    arguments: [stream.id.uuidString]
+                ))
+            }
+        }
+    }
+
+    func test_v26AppendInboxOrdersAppendsAndRejectsReusedIdentity() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, _ in
+            let first = Stream(title: "First")
+            let second = Stream(title: "Second")
+            try service.saveStream(first)
+            try service.saveStream(second)
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_append_inbox (append_id, stream_id, fragment, created_at)
+                        VALUES ('append-1', ?, 'one', 1000), ('append-2', ?, 'two', 1000)
+                    """,
+                    arguments: [first.id.uuidString, first.id.uuidString]
+                )
+
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: "SELECT seq, raw_spans_json FROM stream_append_inbox ORDER BY seq"
+                )
+                XCTAssertEqual(rows.map { $0["seq"] as Int }, [1, 2])
+                XCTAssertEqual(rows.map { $0["raw_spans_json"] as String }, ["[]", "[]"])
+
+                XCTAssertThrowsError(try db.execute(
+                    sql: """
+                        INSERT INTO stream_append_inbox (append_id, stream_id, fragment, created_at)
+                        VALUES ('append-1', ?, 'different', 1001)
+                    """,
+                    arguments: [second.id.uuidString]
+                ))
+
+                try db.execute(sql: "DELETE FROM streams WHERE id = ?", arguments: [first.id.uuidString])
+                XCTAssertEqual(
+                    try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM stream_append_inbox"),
+                    0
+                )
+            }
+        }
+    }
+
     func test_modelIdMismatchIsMissingEmbedding() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Model mismatch")

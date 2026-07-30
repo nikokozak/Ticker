@@ -566,6 +566,24 @@ final class PersistenceService {
             try db.execute(sql: "DELETE FROM provenance_spans")
         }
 
+        migrator.registerMigration("v26_canonical_stream_documents") { db in
+            try db.execute(sql: """
+                ALTER TABLE stream_documents ADD COLUMN doc_json TEXT;
+                ALTER TABLE stream_documents ADD COLUMN doc_format_version INTEGER
+                    CHECK ((doc_json IS NULL) = (doc_format_version IS NULL));
+
+                CREATE TABLE stream_append_inbox (
+                    seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    append_id      TEXT NOT NULL UNIQUE,
+                    stream_id      TEXT NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+                    fragment       TEXT NOT NULL,
+                    raw_spans_json TEXT NOT NULL DEFAULT '[]',
+                    created_at     REAL NOT NULL
+                );
+                CREATE INDEX idx_append_inbox_stream ON stream_append_inbox (stream_id, seq);
+            """)
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)

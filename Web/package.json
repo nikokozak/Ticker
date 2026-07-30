@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "convert-doc-json": "vite-node src/richtext/convertDatabase.cli.ts",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
