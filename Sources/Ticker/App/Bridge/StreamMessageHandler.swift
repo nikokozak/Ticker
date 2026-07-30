@@ -100,6 +100,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     "scrollOffset": AnyCodable(document.scrollOffset),
                     "spans": AnyCodable(StreamCodec.encodeSpans([])),
                     "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends([])),
+                    "appendInbox": AnyCodable(StreamCodec.encodeAppendInbox([])),
                     "marginNotes": AnyCodable([])
                 ]
                 await bridgeService.send(BridgeMessage(type: "streamLoaded", payload: payload))
@@ -187,7 +188,8 @@ final class StreamMessageHandler: BridgeMessageHandler {
                         markdown: markdown,
                         baseRevision: baseRevision,
                         spans: spans,
-                        resolvedPendingThrough: payload["resolvedPendingThrough"]?.intValue
+                        resolvedPendingThrough: payload["resolvedPendingThrough"]?.intValue,
+                        consumedInboxThrough: payload["consumedInboxThrough"]?.intValue
                     )
                 } else {
                     revision = try persistence.saveStreamDocument(
@@ -208,12 +210,14 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 }
             } catch let conflict as StreamDocumentRevisionConflict {
                 let pendingAppends = StreamCodec.encodePendingAppends(conflict.pendingAppends)
+                let appendInbox = StreamCodec.encodeAppendInbox(conflict.appendInbox)
                 var conflictPayload: [String: AnyCodable] = [
                     "streamId": AnyCodable(conflict.streamId.uuidString),
                     "markdown": AnyCodable(conflict.markdown),
                     "revision": AnyCodable(conflict.revision),
                     "spans": AnyCodable(StreamCodec.encodeSpans(conflict.spans)),
-                    "pendingAppends": AnyCodable(pendingAppends)
+                    "pendingAppends": AnyCodable(pendingAppends),
+                    "appendInbox": AnyCodable(appendInbox)
                 ]
                 if let docJSON = conflict.docJSON, let docFormatVersion = conflict.docFormatVersion {
                     conflictPayload["docJSON"] = AnyCodable(docJSON)
@@ -327,22 +331,16 @@ final class StreamMessageHandler: BridgeMessageHandler {
         }
         delegate?.setCurrentStreamIdForFileDrops(id)
         await delegate?.closePDFPaneIfShowingDifferentStream(id)
-        // The document, its spans and its pending appends TOGETHER, in one
-        // transaction. Read separately, an append can land in between, and the
-        // editor is then handed a state that never existed — a row past the
-        // document's revision, or a fragment on the end of the document with no row
-        // to explain it. Replaying is a proof about one consistent state, so either
-        // one can only be refused, and the provenance of every append is lost for
-        // nothing.
-        //
-        // Those appends were made while no editor was open. Their provenance is
-        // still in fragment coordinates, since only an editor can turn those into
-        // document positions, so they travel with the document and are cleared by
-        // the save that follows.
+        // The document, its spans and both append queues TOGETHER, in one
+        // transaction. A mixed-time snapshot can only be refused: consuming a row
+        // not in the document loses it, while missing a row duplicates it later.
+        // Their provenance stays in fragment coordinates until JavaScript places
+        // it, because Swift has no document parser.
         let snapshot = try persistence.loadEditorSnapshot(streamId: id)
         let document = snapshot.document
         let spans = snapshot.spans
         let pendingAppends = snapshot.pendingAppends
+        let appendInbox = snapshot.appendInbox
         let marginNotes = try persistence.loadMarginNotes(streamId: id)
         let streamPayload = StreamCodec.encodeStream(stream, document: document)
         var payload: [String: AnyCodable] = [
@@ -351,7 +349,8 @@ final class StreamMessageHandler: BridgeMessageHandler {
             "scrollOffset": AnyCodable(document.scrollOffset),
             "spans": AnyCodable(StreamCodec.encodeSpans(spans)),
             "marginNotes": AnyCodable(StreamCodec.encodeMarginNotes(marginNotes)),
-            "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends(pendingAppends))
+            "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends(pendingAppends)),
+            "appendInbox": AnyCodable(StreamCodec.encodeAppendInbox(appendInbox))
         ]
         if let requestId {
             payload["requestId"] = AnyCodable(requestId)

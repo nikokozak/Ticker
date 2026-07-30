@@ -7,6 +7,7 @@ import { DocumentSession, type SaveState, type SessionTransport } from './sessio
 import { addProvenanceSpans, hashProvenanceText, provenanceSpans, spanFromJSON, type ProvenanceSpan, type ProvenanceSpanJSON } from './provenance';
 import { fnv1a } from '../utils/fnv1a';
 import type { PendingAppend } from './pendingAppends';
+import type { InboxAppend } from './inbox';
 
 /**
  * These are the rules that corrupt a user's notes when they are wrong, so they are
@@ -32,6 +33,7 @@ interface Harness {
     baseRevision: number;
     spans: ProvenanceSpanJSON[];
     resolvedPendingThrough?: number;
+    consumedInboxThrough?: number;
   }>;
   reloads: string[];
   states: SaveState[];
@@ -44,6 +46,7 @@ function open(
   revision = 1,
   spans: ProvenanceSpan[] = [],
   pendingAppends: PendingAppend[] = [],
+  inboxAppends: InboxAppend[] = [],
 ): Harness {
   const parent = document.createElement('div');
   document.body.appendChild(parent);
@@ -64,6 +67,7 @@ function open(
         baseRevision: request.baseRevision,
         spans: request.spans,
         resolvedPendingThrough: request.resolvedPendingThrough,
+        consumedInboxThrough: request.consumedInboxThrough,
       });
       if (failure) {
         const reason = failure;
@@ -88,7 +92,14 @@ function open(
     onChange: () => session?.documentChanged(),
   });
   session = new DocumentSession({
-    streamId: 'stream-1', editor, transport, revision, spans, pendingAppends, autosaveDelay: 5,
+    streamId: 'stream-1',
+    editor,
+    transport,
+    revision,
+    spans,
+    pendingAppends,
+    inboxAppends,
+    autosaveDelay: 5,
   });
   return {
     ed: editor,
@@ -134,6 +145,86 @@ const pendingAppend = (
   rawSpans: ProvenanceSpanJSON[] = [],
   separator = '\n\n',
 ): PendingAppend => ({ revision, separator, fragment, rawSpans });
+
+const inboxAppend = (
+  seq: number,
+  fragment: string,
+  rawSpans: ProvenanceSpanJSON[] = [],
+): InboxAppend => ({
+  seq,
+  appendId: `append-${seq}`,
+  fragment,
+  rawSpansJSON: JSON.stringify(rawSpans),
+  createdAt: new Date(0).toISOString(),
+});
+
+describe('the durable append inbox', () => {
+  it('does not rebuild editor state when there are no inbox rows', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    editor = createRichTextEditor({ parent, docJSON: canonical('Base.').docJSON });
+    const before = editor.view.state;
+    session = new DocumentSession({
+      streamId: 'stream-1',
+      editor,
+      revision: 1,
+      transport: { save: async () => ({ revision: 2 }), reload: () => {} },
+    });
+
+    expect(editor.view.state).toBe(before);
+  });
+
+  it('reduces every row before saving the document and its placed provenance', async () => {
+    const fragment = '**Captured.**';
+    const h = open('Base.', 7, [], [], [
+      inboxAppend(9, fragment, [wireSpan(fragment)]),
+      inboxAppend(3, 'First.'),
+    ]);
+
+    expect(h.ed.getMarkdownProjection()).toBe('Base.\n\nFirst.\n\n**Captured.**');
+    const [span] = provenanceSpans(h.ed.view.state);
+    expect(h.ed.view.state.doc.textBetween(span.from, span.to)).toBe('Captured.');
+
+    await h.session.saveNow();
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0].consumedInboxThrough).toBe(9);
+  });
+
+  it('leaves the live document untouched when one row is malformed', () => {
+    const h = open('Base.', 7, [], [], [
+      inboxAppend(3, 'First.'),
+      { ...inboxAppend(9, 'Second.'), rawSpansJSON: '{"bad":true}' },
+    ]);
+
+    expect(h.ed.getMarkdownProjection()).toBe('Base.');
+    expect(h.session.saveState).toBe('error');
+    expect(h.saves).toHaveLength(0);
+    expect(h.errors[0]).toMatch(/additions/);
+  });
+
+  it('does not send an already-consumed watermark on the next save', async () => {
+    const h = open('Base.', 7, [], [], [inboxAppend(3, 'Captured.')]);
+
+    await h.session.saveNow();
+    type(h.ed, 'Local ');
+    await h.session.saveNow();
+
+    expect(h.saves.map((save) => save.consumedInboxThrough)).toEqual([3, undefined]);
+  });
+
+  it('reduces rows that arrive with a reloaded canonical document', async () => {
+    const h = open('Old.', 1);
+    h.session.documentLoaded({
+      ...canonical('Host.'),
+      revision: 2,
+      inboxAppends: [inboxAppend(12, 'Queued.')],
+    });
+
+    expect(h.ed.getMarkdownProjection()).toBe('Host.\n\nQueued.');
+    await h.session.saveNow();
+    expect(h.saves[0].consumedInboxThrough).toBe(12);
+  });
+});
 
 describe('autosave', () => {
   it('writes once after a burst of typing, not once per keystroke', async () => {
@@ -370,10 +461,15 @@ describe('a save that finishes after the document moved on', () => {
    * microtask, so anything dispatched immediately after saveNow() would otherwise
    * land before the write even began and the test would pass for the wrong reason.
    */
-  function openWithHeldSave(markdown: string, revision: number) {
+  function openWithHeldSave(
+    markdown: string,
+    revision: number,
+    inboxAppends: InboxAppend[] = [],
+  ) {
     const parent = document.createElement('div');
     document.body.appendChild(parent);
     const saves: string[] = [];
+    const inboxWatermarks: Array<number | undefined> = [];
     let announceStart: () => void = () => {};
     const started = new Promise<void>((resolve) => { announceStart = resolve; });
     let release: (value: { revision: number }) => void = () => {};
@@ -393,6 +489,7 @@ describe('a save that finishes after the document moved on', () => {
       transport: {
         save: (request) => {
           saves.push(request.markdown);
+          inboxWatermarks.push(request.consumedInboxThrough);
           if (!held) {
             if (failNext) { failNext = false; return Promise.reject(new Error('offline')); }
             return Promise.resolve({ revision: revision + saves.length });
@@ -403,17 +500,35 @@ describe('a save that finishes after the document moved on', () => {
         },
         reload: () => {},
       },
+      inboxAppends,
     });
 
     return {
       ed: editor,
       session,
       saves,
+      inboxWatermarks,
       started,
       release: (r: number) => release({ revision: r }),
       failNextSave: () => { failNext = true; },
     };
   }
+
+  it('does not clear a newer inbox watermark when an older save answers', async () => {
+    const h = openWithHeldSave('Base.', 7, [inboxAppend(3, 'First.')]);
+    const inFlight = h.session.saveNow();
+    await h.started;
+
+    h.session.documentLoaded({
+      ...canonical('Host.'),
+      revision: 8,
+      inboxAppends: [inboxAppend(9, 'Second.')],
+    });
+    h.release(8);
+    await inFlight;
+
+    expect(h.inboxWatermarks).toEqual([3, 9]);
+  });
 
   it('does not drag the revision backwards', async () => {
     // A save goes out at revision 3. While it is in flight a conflict replaces the

@@ -7,6 +7,7 @@ export interface Stream {
   document: StreamDocument;
   spans: ProvenanceSpanJSON[];
   pendingAppends?: PendingAppendJSON[];
+  appendInbox?: StreamAppendInboxJSON[];
   marginNotes: MarginNoteJSON[];
   createdAt: string;
   updatedAt: string;
@@ -36,6 +37,15 @@ export interface PendingAppendJSON {
   separator: string;
   fragment: string;
   rawSpansJSON: string;
+}
+
+/** A durable Markdown append waiting for the rich editor to reduce it. */
+export interface StreamAppendInboxJSON {
+  seq: number;
+  appendId: string;
+  fragment: string;
+  rawSpansJSON: string;
+  createdAt: string;
 }
 
 export interface ProvenanceSpanJSON {

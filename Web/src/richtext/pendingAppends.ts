@@ -39,16 +39,47 @@ export type ReplayPlan =
   | { ok: true; baseMarkdown: string; appends: Array<{ fragment: string; spans: RawFragmentSpan[] }> }
   | { ok: false; reason: ReplayFailure };
 
+const ORIGINS: ProvenanceSpan['origin'][] = ['ai', 'source', 'capture'];
+
+/** Strict at migration and inbox boundaries, where dropping one row loses history. */
+export function decodeRawSpansStrict(json: string): RawFragmentSpan[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error('Malformed raw span JSON');
+  }
+  if (!Array.isArray(parsed)) throw new Error('Malformed raw span JSON: expected an array');
+
+  return parsed.map((value, index) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`Malformed raw span ${index}: expected an object`);
+    }
+    const row = value as Record<string, unknown>;
+    if (typeof row.spanId !== 'string' || row.spanId.length === 0
+        || !Number.isInteger(row.start) || !Number.isInteger(row.end)
+        || typeof row.origin !== 'string' || !ORIGINS.includes(row.origin as ProvenanceSpan['origin'])
+        || typeof row.meta !== 'string'
+        || typeof row.textHash !== 'string'
+        || typeof row.createdAt !== 'string' || !Number.isFinite(Date.parse(row.createdAt))
+        || ('requestId' in row && typeof row.requestId !== 'string')
+        || ('sourceId' in row && typeof row.sourceId !== 'string')) {
+      throw new Error(`Malformed raw span ${index}`);
+    }
+    try {
+      const meta: unknown = JSON.parse(row.meta);
+      if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new Error();
+    } catch {
+      throw new Error(`Malformed raw span ${index} metadata`);
+    }
+    return row as unknown as RawFragmentSpan;
+  });
+}
+
 /** Decode the JSON the store carries, dropping anything malformed. */
 export function parseRawSpans(json: string): RawFragmentSpan[] {
   try {
-    const rows = JSON.parse(json || '[]');
-    if (!Array.isArray(rows)) return [];
-    return rows.filter((row): row is RawFragmentSpan => (
-      row && typeof row.spanId === 'string'
-      && Number.isInteger(row.start) && Number.isInteger(row.end)
-      && typeof row.textHash === 'string'
-    ));
+    return decodeRawSpansStrict(json || '[]');
   } catch {
     return [];
   }

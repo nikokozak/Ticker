@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { EditorView } from 'prosemirror-view';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -229,6 +229,7 @@ async function renderStreamLoaded(message: SwiftToWebBridgeMessage) {
     sourceScope: payload.sourceScope as Stream['sourceScope'],
     spans: payload.spans as unknown as Stream['spans'],
     pendingAppends: payload.pendingAppends as unknown as Stream['pendingAppends'],
+    appendInbox: payload.appendInbox as unknown as Stream['appendInbox'],
     marginNotes: payload.marginNotes as unknown as Stream['marginNotes'],
     document: {
       ...wireStream.document,
@@ -314,6 +315,66 @@ describe('an image save that lands after the editor is gone', () => {
     expect(saves).toHaveLength(0);
     expect(useToastStore.getState().toasts.map((toast) => toast.message).join(' '))
       .toMatch(/image/i);
+  });
+});
+
+describe('RichStreamEditor lifecycle', () => {
+  it('does not leave the old editor mounted while Strict Mode replays an async cleanup', async () => {
+    vi.mocked(bridge.sendAsync).mockResolvedValue({ revision: 3 });
+    const cleanups: VoidFunction[] = [];
+    const queued = vi.spyOn(globalThis, 'queueMicrotask').mockImplementation((cleanup) => {
+      cleanups.push(cleanup);
+    });
+    const markdown = 'Original paragraph.\n\nQueued append.';
+    const pending: Stream = {
+      ...stream,
+      id: 'pending-stream',
+      document: {
+        ...stream.document,
+        streamId: 'pending-stream',
+        docJSON: docJSON(markdown),
+        markdown,
+        revision: 2,
+      },
+      pendingAppends: [{
+        revision: 2,
+        separator: '\n\n',
+        fragment: 'Queued append.',
+        rawSpansJSON: '[]',
+      }],
+    };
+
+    await act(async () => {
+      root!.render(
+        <StrictMode>
+          <RichStreamEditor
+            key={pending.id}
+            stream={pending}
+            onBack={() => {}}
+            onDelete={() => {}}
+          />
+        </StrictMode>,
+      );
+      await Promise.resolve();
+    });
+
+    expect(document.querySelectorAll('.ProseMirror')).toHaveLength(1);
+    expect(vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'saveRichStreamDocument')).toHaveLength(0);
+
+    await act(async () => {
+      cleanups.splice(0).forEach((cleanup) => cleanup());
+      await Promise.resolve();
+    });
+    queued.mockRestore();
+    expect(vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'saveRichStreamDocument')).toHaveLength(0);
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 400));
+    });
+    expect(vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'saveRichStreamDocument')).toHaveLength(1);
   });
 });
 
@@ -1888,6 +1949,7 @@ describe('RichStreamEditor host wire gate', () => {
         scrollOffset: 23,
         spans: [],
         pendingAppends: [],
+        appendInbox: [],
         marginNotes: [],
       },
     };
@@ -1923,9 +1985,11 @@ describe('RichStreamEditor host wire gate', () => {
     // markdown offsets and re-hashed over document text, and a save has to carry
     // it back with the revision the store can accept — that is the path that only
     // real coordinates exercise.
-    await vi.waitFor(() => {
-      expect(vi.mocked(bridge.sendAsync).mock.calls
-        .some(([type]) => type === 'saveRichStreamDocument')).toBe(true);
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(vi.mocked(bridge.sendAsync).mock.calls
+          .some(([type]) => type === 'saveRichStreamDocument')).toBe(true);
+      });
     });
     const save = vi.mocked(bridge.sendAsync).mock.calls
       .filter(([type]) => type === 'saveRichStreamDocument')
@@ -1946,5 +2010,70 @@ describe('RichStreamEditor host wire gate', () => {
     expect(save!.spans[0].textHash).toBe(fnv1a('Appended by host.'));
     // And the row the append recorded may now be forgotten.
     expect(save!.resolvedPendingThrough).toBe(2);
+  });
+
+  it('reduces the host inbox and returns its sequence with the canonical save', async () => {
+    const fragment = '**Queued capture.**';
+    const loaded: SwiftToWebBridgeMessage = {
+      type: 'streamLoaded',
+      payload: {
+        stream: {
+          id: '00000000-0000-0000-0000-000000000001',
+          title: 'Host stream',
+          sourceScope: 'auto',
+          sources: [],
+          createdAt: '1970-01-01T00:00:00Z',
+          updatedAt: '1970-01-01T00:00:00Z',
+          document: {
+            streamId: '00000000-0000-0000-0000-000000000001',
+            docJSON: docJSON('Host paragraph.'),
+            docFormatVersion: 1,
+            markdown: 'Host paragraph.',
+            revision: 1,
+            scrollOffset: 0,
+            createdAt: '1970-01-01T00:00:00Z',
+            updatedAt: '1970-01-01T00:00:00Z',
+          },
+        },
+        sourceScope: 'auto',
+        scrollOffset: 0,
+        spans: [],
+        pendingAppends: [],
+        appendInbox: [{
+          seq: 12,
+          appendId: '00000000-0000-0000-0000-000000000012',
+          fragment,
+          rawSpansJSON: JSON.stringify([{
+            spanId: 'queued-span',
+            start: 0,
+            end: fragment.length,
+            origin: 'capture',
+            meta: '{}',
+            textHash: fnv1a(fragment),
+            createdAt: '1970-01-01T00:00:00Z',
+          }]),
+          createdAt: '1970-01-01T00:00:00Z',
+        }],
+        marginNotes: [],
+      },
+    };
+
+    await renderStreamLoaded(loaded);
+    expect([...editor().querySelectorAll('p')].map((node) => node.textContent))
+      .toEqual(['Host paragraph.', 'Queued capture.']);
+
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(vi.mocked(bridge.sendAsync).mock.calls
+          .some(([type]) => type === 'saveRichStreamDocument')).toBe(true);
+      });
+    });
+    const save = vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'saveRichStreamDocument')
+      .pop()?.[1] as Record<string, unknown>;
+    expect(save.consumedInboxThrough).toBe(12);
+    expect(save.spans).toEqual([
+      expect.objectContaining({ spanId: 'queued-span', textHash: fnv1a('Queued capture.') }),
+    ]);
   });
 });

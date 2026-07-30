@@ -1,5 +1,10 @@
 import { debugLog } from '../utils/debug';
-import type { AIExchangeJSON, PendingAppendJSON, ProvenanceSpanJSON } from './models';
+import type {
+  AIExchangeJSON,
+  PendingAppendJSON,
+  ProvenanceSpanJSON,
+  StreamAppendInboxJSON,
+} from './models';
 
 /** Message structure for Swift ↔ JS communication */
 export const SWIFT_TO_WEB_MESSAGE_TYPES = [
@@ -119,6 +124,7 @@ export interface StreamDocumentConflictPayload extends Record<string, unknown> {
   revision: number;
   spans: ProvenanceSpanJSON[];
   pendingAppends: PendingAppendJSON[];
+  appendInbox: StreamAppendInboxJSON[];
 }
 
 export type SwiftToWebBridgeMessage = Omit<BridgeMessage, 'type'> & { type: SwiftToWebMessageType };

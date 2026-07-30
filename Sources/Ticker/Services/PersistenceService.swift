@@ -10,6 +10,15 @@ struct PendingStreamAppend {
     let rawSpansJSON: String
 }
 
+/// A Markdown fragment waiting for the JavaScript document reducer.
+struct StreamAppendInboxEntry {
+    let seq: Int
+    let appendId: String
+    let fragment: String
+    let rawSpansJSON: String
+    let createdAt: Date
+}
+
 struct AppendResult {
     let fragment: String
     let isNewDocument: Bool
@@ -22,6 +31,7 @@ struct EditorSnapshot {
     let document: StreamDocument
     let spans: [ProvenanceSpan]
     let pendingAppends: [PendingStreamAppend]
+    let appendInbox: [StreamAppendInboxEntry]
 }
 
 struct StreamDocumentRevisionConflict: Error {
@@ -32,6 +42,7 @@ struct StreamDocumentRevisionConflict: Error {
     let revision: Int
     let spans: [ProvenanceSpan]
     let pendingAppends: [PendingStreamAppend]
+    let appendInbox: [StreamAppendInboxEntry]
 }
 
 enum PersistenceError: LocalizedError {
@@ -950,19 +961,18 @@ final class PersistenceService {
 
     /// Everything an editor needs to open a stream, read in ONE transaction.
     ///
-    /// Separate reads let an append land between them, and the editor then sees a
-    /// document and a set of pending rows that never existed together: a row past
-    /// the document's revision, or a fragment on the end of the document with no row
-    /// to explain it. Replaying is a proof about a single consistent state, so both
-    /// of those look like corruption and the whole replay is refused — losing the
-    /// provenance of every append, for nothing.
+    /// Separate reads let an append land between them, so the editor sees a
+    /// document and inbox that never coexisted. It can only refuse that state:
+    /// consuming a row it did not reduce loses a capture; saving without a row it
+    /// did reduce duplicates it on the next open.
     func loadEditorSnapshot(streamId: UUID) throws -> EditorSnapshot {
         // A write, not a read, because the document may have to be created.
         try dbQueue.write { db in
             EditorSnapshot(
                 document: try loadOrCreateStreamDocument(streamId: streamId, db: db),
                 spans: try fetchSpans(streamId: streamId, db: db),
-                pendingAppends: try fetchPendingAppends(streamId: streamId, db: db)
+                pendingAppends: try fetchPendingAppends(streamId: streamId, db: db),
+                appendInbox: try fetchAppendInbox(streamId: streamId, db: db)
             )
         }
     }
@@ -1067,7 +1077,8 @@ final class PersistenceService {
         markdown: String,
         baseRevision: Int,
         spans: [ProvenanceSpan],
-        resolvedPendingThrough: Int? = nil
+        resolvedPendingThrough: Int? = nil,
+        consumedInboxThrough: Int? = nil
     ) throws -> Int {
         guard docFormatVersion == 1,
               let data = docJSON.data(using: .utf8),
@@ -1080,6 +1091,7 @@ final class PersistenceService {
             baseRevision: baseRevision,
             spans: Optional(spans),
             resolvedPendingThrough: resolvedPendingThrough,
+            consumedInboxThrough: consumedInboxThrough,
             canonicalDocument: (docJSON, docFormatVersion)
         )
     }
@@ -1091,6 +1103,7 @@ final class PersistenceService {
         baseRevision: Int,
         spans: [ProvenanceSpan]?,
         resolvedPendingThrough: Int? = nil,
+        consumedInboxThrough: Int? = nil,
         canonicalDocument: (json: String, version: Int)? = nil
     ) throws -> Int {
         let now = Date().timeIntervalSince1970
@@ -1113,7 +1126,8 @@ final class PersistenceService {
                         markdown: currentMarkdown,
                         revision: currentRevision,
                         spans: try fetchSpans(streamId: streamId, db: db),
-                        pendingAppends: try fetchPendingAppends(streamId: streamId, db: db)
+                        pendingAppends: try fetchPendingAppends(streamId: streamId, db: db),
+                        appendInbox: try fetchAppendInbox(streamId: streamId, db: db)
                     )
                 }
 
@@ -1165,6 +1179,11 @@ final class PersistenceService {
                         baseRevision: baseRevision,
                         db: db
                     )
+                    try clearConsumedAppendInbox(
+                        streamId: streamId,
+                        through: consumedInboxThrough,
+                        db: db
+                    )
                     try deleteOrphanExchanges(streamId: streamId, db: db)
                 }
 
@@ -1179,7 +1198,8 @@ final class PersistenceService {
                     markdown: "",
                     revision: 0,
                     spans: [],
-                    pendingAppends: try fetchPendingAppends(streamId: streamId, db: db)
+                    pendingAppends: try fetchPendingAppends(streamId: streamId, db: db),
+                    appendInbox: try fetchAppendInbox(streamId: streamId, db: db)
                 )
             }
 
@@ -1225,6 +1245,11 @@ final class PersistenceService {
                     streamId: streamId,
                     through: resolvedPendingThrough,
                     baseRevision: baseRevision,
+                    db: db
+                )
+                try clearConsumedAppendInbox(
+                    streamId: streamId,
+                    through: consumedInboxThrough,
                     db: db
                 )
                 try deleteOrphanExchanges(streamId: streamId, db: db)
@@ -1581,6 +1606,55 @@ final class PersistenceService {
         try db.execute(
             sql: "DELETE FROM pending_stream_appends WHERE stream_id = ? AND revision <= ?",
             arguments: [streamId.uuidString, min(through, baseRevision)]
+        )
+    }
+
+    private func fetchAppendInbox(
+        streamId: UUID,
+        db: Database
+    ) throws -> [StreamAppendInboxEntry] {
+        try Row.fetchAll(
+            db,
+            sql: """
+                SELECT seq, append_id, fragment, raw_spans_json, created_at
+                FROM stream_append_inbox
+                WHERE stream_id = ?
+                ORDER BY seq ASC
+            """,
+            arguments: [streamId.uuidString]
+        ).map { row in
+            StreamAppendInboxEntry(
+                seq: row["seq"],
+                appendId: row["append_id"],
+                fragment: row["fragment"],
+                rawSpansJSON: row["raw_spans_json"],
+                createdAt: Date(timeIntervalSince1970: row["created_at"])
+            )
+        }
+    }
+
+    /**
+     * Delete only a watermark that belongs to this stream right now. Without the
+     * ownership proof, one typo can consume every older row while the document
+     * save succeeds, leaving those captures nowhere.
+     */
+    private func clearConsumedAppendInbox(
+        streamId: UUID,
+        through: Int?,
+        db: Database
+    ) throws {
+        guard let through else { return }
+        guard through > 0,
+              try Int.fetchOne(
+                db,
+                sql: "SELECT seq FROM stream_append_inbox WHERE stream_id = ? AND seq = ?",
+                arguments: [streamId.uuidString, through]
+              ) != nil else {
+            throw PersistenceError.encodingFailed("Invalid append inbox watermark")
+        }
+        try db.execute(
+            sql: "DELETE FROM stream_append_inbox WHERE stream_id = ? AND seq <= ?",
+            arguments: [streamId.uuidString, through]
         )
     }
 

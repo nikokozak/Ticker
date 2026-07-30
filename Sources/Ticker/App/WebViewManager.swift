@@ -266,19 +266,17 @@ final class WebViewManager: NSObject {
                 return
             }
 
-            let document = try persistence.loadOrCreateStreamDocument(streamId: createdStream.id)
-            let spans = try persistence.loadSpans(streamId: createdStream.id)
+            let snapshot = try persistence.loadEditorSnapshot(streamId: createdStream.id)
+            let document = snapshot.document
             let marginNotes = try persistence.loadMarginNotes(streamId: createdStream.id)
-            // Present on every streamLoaded, so the editor never has to guess
-            // whether provenance is still waiting to be placed.
-            let pendingAppends = try persistence.loadPendingAppends(streamId: createdStream.id)
             let streamPayload = StreamCodec.encodeStream(reloadedStream, document: document)
             let streamLoadedPayload: [String: AnyCodable] = [
                 "stream": AnyCodable(streamPayload),
                 "sourceScope": AnyCodable(reloadedStream.sourceScope.rawValue),
                 "scrollOffset": AnyCodable(document.scrollOffset),
-                "spans": AnyCodable(StreamCodec.encodeSpans(spans)),
-                "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends(pendingAppends)),
+                "spans": AnyCodable(StreamCodec.encodeSpans(snapshot.spans)),
+                "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends(snapshot.pendingAppends)),
+                "appendInbox": AnyCodable(StreamCodec.encodeAppendInbox(snapshot.appendInbox)),
                 "marginNotes": AnyCodable(StreamCodec.encodeMarginNotes(marginNotes))
             ]
             bridgeService.send(BridgeMessage(type: "streamLoaded", payload: streamLoadedPayload))

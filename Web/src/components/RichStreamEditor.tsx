@@ -161,6 +161,7 @@ export function RichStreamEditor({
   const host = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditor | null>(null);
   const sessionRef = useRef<DocumentSession | null>(null);
+  const editorMountGeneration = useRef(0);
   const aiRequestRef = useRef<ActiveDocumentAI | null>(null);
   const aiInFlightRef = useRef(false);
   const pendingPDFAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
@@ -373,6 +374,7 @@ export function RichStreamEditor({
       addToast('This stream’s rich-text document could not be read.', 'error');
       return undefined;
     }
+    const mountGeneration = ++editorMountGeneration.current;
 
     const session = new DocumentSession({
       streamId: stream.id,
@@ -380,6 +382,7 @@ export function RichStreamEditor({
       revision: stream.document?.revision ?? 0,
       spans: (stream.spans ?? []).map(spanFromJSON),
       pendingAppends: decodePendingAppends(stream.pendingAppends),
+      inboxAppends: stream.appendInbox ?? [],
       transport: {
         // Spelled out rather than spread: the contract checker verifies this
         // payload statically against bridge.v2.json, and can only do that for a
@@ -392,6 +395,7 @@ export function RichStreamEditor({
           baseRevision,
           spans,
           resolvedPendingThrough,
+          consumedInboxThrough,
         }) => bridge.sendAsync<{ revision: number }>(
           'saveRichStreamDocument',
           {
@@ -402,6 +406,7 @@ export function RichStreamEditor({
             baseRevision,
             spans,
             resolvedPendingThrough,
+            consumedInboxThrough,
           },
         ),
         reload: (streamId) => bridge.send({ type: 'loadStream', payload: { id: streamId } }),
@@ -447,19 +452,38 @@ export function RichStreamEditor({
       sessionRef.current = null;
       setEditor(null);
 
+      // Strict Mode mounts the replacement before this save can answer. Leaving
+      // both EditorViews in one host wedges WebKit's selection/event machinery.
+      // ponytail: keep the detached view alive for its state; snapshot the save
+      // before teardown if a host reply can remain pending long enough to matter.
+      created.view.dom.remove();
+
       // Saving a document the user just deleted writes a row for a stream that is
       // gone, and reports the failure as if their writing were at risk.
       if (deleting.current) {
+        session.discard();
         created.destroy();
         return;
       }
 
-      // The backstop, for unmounts that did not come through `leave` below —
-      // nothing may tear the editor down before what is pending has been written,
-      // because the write reads the document.
-      void session.destroy().then((saved) => {
-        if (!saved) addToast('Some changes could not be saved before leaving the stream.', 'error');
-        created.destroy();
+      queueMicrotask(() => {
+        if (editorMountGeneration.current !== mountGeneration) {
+          // React replays effects before paint in development. Saving that
+          // throwaway inbox reduction races the real view for the same watermark.
+          // ponytail: identify the replay by its immediate replacement; own the
+          // session above the effect if React ever replays after user input.
+          session.discard();
+          created.destroy();
+          return;
+        }
+
+        // The backstop, for unmounts that did not come through `leave` below —
+        // nothing may tear the editor down before what is pending has been written,
+        // because the write reads the document.
+        void session.destroy().then((saved) => {
+          if (!saved) addToast('Some changes could not be saved before leaving the stream.', 'error');
+          created.destroy();
+        });
       });
     };
   }, [addToast, onTransaction, onUpdate, openLink, stream.id]);
@@ -898,6 +922,7 @@ export function RichStreamEditor({
         pendingAppends: decodePendingAppends(
           Array.isArray(conflict?.pendingAppends) ? conflict.pendingAppends : [],
         ),
+        inboxAppends: Array.isArray(conflict?.appendInbox) ? conflict.appendInbox : [],
       });
       return;
     }
@@ -950,8 +975,15 @@ export function RichStreamEditor({
       // never let the store forget another one, and a row that outlives the
       // revision it was recorded at can never be replayed.
       pendingAppends: decodePendingAppends(stream.pendingAppends),
+      inboxAppends: stream.appendInbox ?? [],
     });
-  }, [cancelDocumentAI, stream.document, stream.pendingAppends, stream.spans]);
+  }, [
+    cancelDocumentAI,
+    stream.appendInbox,
+    stream.document,
+    stream.pendingAppends,
+    stream.spans,
+  ]);
 
   const saveTitle = useCallback(() => {
     const next = title.trim() || 'Untitled';

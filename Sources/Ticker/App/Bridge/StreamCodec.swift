@@ -182,4 +182,17 @@ enum StreamCodec {
             ]
         }
     }
+
+    static func encodeAppendInbox(_ appends: [StreamAppendInboxEntry]) -> [[String: AnyCodable]] {
+        let formatter = ISO8601DateFormatter()
+        return appends.map { append in
+            [
+                "seq": AnyCodable(append.seq),
+                "appendId": AnyCodable(append.appendId),
+                "fragment": AnyCodable(append.fragment),
+                "rawSpansJSON": AnyCodable(append.rawSpansJSON),
+                "createdAt": AnyCodable(formatter.string(from: append.createdAt))
+            ]
+        }
+    }
 }

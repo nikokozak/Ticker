@@ -4024,6 +4024,242 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_editorSnapshotCarriesAppendInboxInDatabaseOrder() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, _ in
+            let stream = Stream(title: "Inbox snapshot")
+            let other = Stream(title: "Other inbox")
+            try service.saveStream(stream)
+            try service.saveStream(other)
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_append_inbox
+                            (append_id, stream_id, fragment, raw_spans_json, created_at)
+                        VALUES
+                            ('append-1', ?, 'First', '[]', 1000),
+                            ('append-other', ?, 'Other', '[]', 1001),
+                            ('append-3', ?, 'Third', '[{"spanId":"span-3"}]', 1002)
+                    """,
+                    arguments: [stream.id.uuidString, other.id.uuidString, stream.id.uuidString]
+                )
+            }
+
+            let snapshot = try service.loadEditorSnapshot(streamId: stream.id)
+            XCTAssertEqual(snapshot.appendInbox.map(\.seq), [1, 3])
+            XCTAssertEqual(snapshot.appendInbox.map(\.appendId), ["append-1", "append-3"])
+            XCTAssertEqual(snapshot.appendInbox.map(\.fragment), ["First", "Third"])
+            XCTAssertEqual(snapshot.appendInbox.last?.rawSpansJSON, #"[{"spanId":"span-3"}]"#)
+            XCTAssertEqual(snapshot.appendInbox.last?.createdAt, Date(timeIntervalSince1970: 1002))
+
+            let wire = StreamCodec.encodeAppendInbox(snapshot.appendInbox)
+            XCTAssertEqual(wire.map { $0["seq"]?.intValue }, [1, 3])
+            XCTAssertEqual(wire.map { $0["appendId"]?.value as? String }, ["append-1", "append-3"])
+        }
+    }
+
+    func test_canonicalSaveAtomicallyConsumesOnlyTheInboxRowsItReduced() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, _ in
+            let stream = Stream(title: "Inbox consume")
+            let other = Stream(title: "Other inbox")
+            try service.saveStream(stream)
+            try service.saveStream(other)
+            let baseJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Base"}]}]}"#
+            let baseRevision = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: baseJSON,
+                docFormatVersion: 1,
+                markdown: "Base",
+                baseRevision: 0,
+                spans: []
+            )
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let consumedSeq = try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_append_inbox (append_id, stream_id, fragment, created_at)
+                        VALUES
+                            ('append-other', ?, 'Other', 999),
+                            ('append-consumed', ?, 'Consumed', 1000)
+                    """,
+                    arguments: [other.id.uuidString, stream.id.uuidString]
+                )
+                return Int(db.lastInsertedRowID)
+            }
+            XCTAssertEqual(
+                try service.loadEditorSnapshot(streamId: stream.id).appendInbox.map(\.seq),
+                [consumedSeq]
+            )
+
+            // This arrives after the editor's snapshot. Its watermark must not
+            // consume this later row or the older row belonging to another stream.
+            try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_append_inbox (append_id, stream_id, fragment, created_at)
+                        VALUES ('append-later', ?, 'Later', 1002)
+                    """,
+                    arguments: [stream.id.uuidString]
+                )
+            }
+
+            let span = ProvenanceSpan(
+                spanId: "span-consumed",
+                streamId: stream.id,
+                start: 7,
+                end: 15,
+                origin: "capture",
+                textHash: FNV1a.hash("Consumed"),
+                createdAt: Date(timeIntervalSince1970: 1000)
+            )
+            let combinedJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Base"}]},{"type":"paragraph","content":[{"type":"text","text":"Consumed"}]}]}"#
+            _ = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: combinedJSON,
+                docFormatVersion: 1,
+                markdown: "Base\n\nConsumed",
+                baseRevision: baseRevision,
+                spans: [span],
+                consumedInboxThrough: consumedSeq
+            )
+
+            XCTAssertEqual(try service.loadStreamDocument(streamId: stream.id)?.docJSON, combinedJSON)
+            XCTAssertEqual(try service.loadSpans(streamId: stream.id), [span])
+            let remaining = try dbQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: "SELECT append_id FROM stream_append_inbox ORDER BY seq"
+                ).map { $0["append_id"] as String }
+            }
+            XCTAssertEqual(remaining, ["append-other", "append-later"])
+        }
+    }
+
+    func test_foreignInboxWatermarkRollsBackTheWholeCanonicalSave() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, _ in
+            let stream = Stream(title: "Inbox rollback")
+            let other = Stream(title: "Foreign inbox")
+            try service.saveStream(stream)
+            try service.saveStream(other)
+            let originalJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Original"}]}]}"#
+            let originalSpan = ProvenanceSpan(
+                spanId: "span-original",
+                streamId: stream.id,
+                start: 1,
+                end: 9,
+                origin: "capture",
+                textHash: FNV1a.hash("Original"),
+                createdAt: Date(timeIntervalSince1970: 1000)
+            )
+            let revision = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: originalJSON,
+                docFormatVersion: 1,
+                markdown: "Original",
+                baseRevision: 0,
+                spans: [originalSpan]
+            )
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let foreignSeq = try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_append_inbox (append_id, stream_id, fragment, created_at)
+                        VALUES
+                            ('append-real', ?, 'Queued', 1001),
+                            ('append-foreign', ?, 'Foreign', 1002)
+                    """,
+                    arguments: [stream.id.uuidString, other.id.uuidString]
+                )
+                return Int(db.lastInsertedRowID)
+            }
+
+            XCTAssertThrowsError(try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Wrong"}]}]}"#,
+                docFormatVersion: 1,
+                markdown: "Wrong",
+                baseRevision: revision,
+                spans: [],
+                consumedInboxThrough: foreignSeq
+            ))
+
+            let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(document.docJSON, originalJSON)
+            XCTAssertEqual(document.revision, revision)
+            XCTAssertEqual(try service.loadSpans(streamId: stream.id), [originalSpan])
+            XCTAssertEqual(
+                try dbQueue.read { db in
+                    try String.fetchAll(
+                        db,
+                        sql: "SELECT append_id FROM stream_append_inbox ORDER BY seq"
+                    )
+                },
+                ["append-real", "append-foreign"]
+            )
+        }
+    }
+
+    func test_staleCanonicalSaveCannotConsumeInboxRows() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, _ in
+            let stream = Stream(title: "Stale inbox save")
+            try service.saveStream(stream)
+            let json = #"{"type":"doc","content":[{"type":"paragraph"}]}"#
+            let staleRevision = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: json,
+                docFormatVersion: 1,
+                markdown: "",
+                baseRevision: 0,
+                spans: []
+            )
+
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let seq = try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_append_inbox (append_id, stream_id, fragment, created_at)
+                        VALUES ('append-stale', ?, 'Queued', 1000)
+                    """,
+                    arguments: [stream.id.uuidString]
+                )
+                return Int(db.lastInsertedRowID)
+            }
+            _ = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: json,
+                docFormatVersion: 1,
+                markdown: "",
+                baseRevision: staleRevision,
+                spans: []
+            )
+
+            do {
+                _ = try service.saveStreamDocument(
+                    streamId: stream.id,
+                    docJSON: json,
+                    docFormatVersion: 1,
+                    markdown: "",
+                    baseRevision: staleRevision,
+                    spans: [],
+                    consumedInboxThrough: seq
+                )
+                XCTFail("Expected stale inbox save to throw")
+            } catch let conflict as StreamDocumentRevisionConflict {
+                XCTAssertEqual(conflict.appendInbox.map(\.seq), [seq])
+                XCTAssertEqual(conflict.appendInbox.first?.fragment, "Queued")
+            }
+            XCTAssertEqual(
+                try dbQueue.read { db in
+                    try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM stream_append_inbox")
+                },
+                1
+            )
+        }
+    }
+
     func test_legacyWritersInvalidateCanonicalDocumentInsteadOfLeavingItStale() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Canonical invalidation")

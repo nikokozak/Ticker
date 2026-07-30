@@ -106,11 +106,11 @@
         "requiredPayloadKeys": ["streamId", "fragment", "revision", "isNewStream", "source", "spans"]
       },
       "streamDocumentConflict": {
-        "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans", "pendingAppends"],
+        "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans", "pendingAppends", "appendInbox"],
         "optionalPayloadKeys": ["docJSON", "docFormatVersion"]
       },
       "streamLoaded": {
-        "requiredPayloadKeys": ["stream", "spans", "marginNotes"],
+        "requiredPayloadKeys": ["stream", "spans", "marginNotes", "appendInbox"],
         "optionalPayloadKeys": ["scrollOffset", "sourceScope", "requestId", "pendingAppends"]
       },
       "streamLoadFailed": {
@@ -238,7 +238,7 @@
       },
       "saveRichStreamDocument": {
         "requiredPayloadKeys": ["streamId", "docJSON", "docFormatVersion", "markdown", "baseRevision", "spans"],
-        "optionalPayloadKeys": ["resolvedPendingThrough"],
+        "optionalPayloadKeys": ["resolvedPendingThrough", "consumedInboxThrough"],
         "requiredCallbackId": true
       },
       "saveStreamDocument": {

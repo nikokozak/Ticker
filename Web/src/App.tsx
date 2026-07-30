@@ -301,6 +301,9 @@ export function App() {
             pendingAppends: (Array.isArray(message.payload?.pendingAppends)
               ? message.payload.pendingAppends
               : []) as Stream['pendingAppends'],
+            appendInbox: (Array.isArray(message.payload?.appendInbox)
+              ? message.payload.appendInbox
+              : []) as Stream['appendInbox'],
             marginNotes: (Array.isArray(message.payload?.marginNotes) ? message.payload.marginNotes : []) as Stream['marginNotes'],
             document: {
               ...payloadStream.document,

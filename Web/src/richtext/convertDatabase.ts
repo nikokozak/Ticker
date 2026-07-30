@@ -5,13 +5,15 @@ import type { Node as ProseNode } from 'prosemirror-model';
 import { fnv1a } from '../utils/fnv1a';
 import { parseMarkdown, serializeMarkdown } from './markdown';
 import {
+  decodeRawSpansStrict,
   placeFragmentSpan,
   planReplay,
   type PendingAppend,
-  type RawFragmentSpan,
 } from './pendingAppends';
 import type { ProvenanceSpan } from './provenance';
 import { tickerSchema } from './schema';
+
+export { decodeRawSpansStrict } from './pendingAppends';
 
 export interface ConversionReportRow {
   streamId: string;
@@ -94,35 +96,6 @@ function objectFromJSON(value: string, label: string): Record<string, unknown> {
     throw new Error(`${label} is not a JSON object`);
   }
   return parsed as Record<string, unknown>;
-}
-
-export function decodeRawSpansStrict(json: string): RawFragmentSpan[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    throw new Error('Malformed raw span JSON');
-  }
-  if (!Array.isArray(parsed)) throw new Error('Malformed raw span JSON: expected an array');
-
-  return parsed.map((value, index) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error(`Malformed raw span ${index}: expected an object`);
-    }
-    const row = value as Record<string, unknown>;
-    if (typeof row.spanId !== 'string' || row.spanId.length === 0
-        || !Number.isInteger(row.start) || !Number.isInteger(row.end)
-        || typeof row.origin !== 'string' || !ORIGINS.includes(row.origin as ProvenanceSpan['origin'])
-        || typeof row.meta !== 'string'
-        || typeof row.textHash !== 'string'
-        || typeof row.createdAt !== 'string' || !Number.isFinite(Date.parse(row.createdAt))
-        || ('requestId' in row && typeof row.requestId !== 'string')
-        || ('sourceId' in row && typeof row.sourceId !== 'string')) {
-      throw new Error(`Malformed raw span ${index}`);
-    }
-    objectFromJSON(row.meta, `Malformed raw span ${index} metadata`);
-    return row as unknown as RawFragmentSpan;
-  });
 }
 
 export function assertDocumentEqual(actual: ProseNode, expected: ProseNode, message: string): void {

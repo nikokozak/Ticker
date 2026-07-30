@@ -1,5 +1,6 @@
 import type { RichTextEditor } from './editor';
 import type { Node as ProseNode } from 'prosemirror-model';
+import { reduceAppendInbox, type InboxAppend } from './inbox';
 import { parseMarkdown } from './markdown';
 import { placeFragmentSpan, planReplay, type PendingAppend } from './pendingAppends';
 import {
@@ -46,6 +47,8 @@ export interface SessionTransport {
      * that does not understand pending appends must not be able to delete them.
      */
     resolvedPendingThrough?: number;
+    /** The highest inbox sequence included in this canonical save. */
+    consumedInboxThrough?: number;
   }): Promise<SaveResult>;
   /** Ask the host to send the document again, after a gap it cannot reconcile. */
   reload(streamId: string): void;
@@ -61,6 +64,8 @@ export interface SessionOptions {
   spans?: ProvenanceSpan[];
   /** Appends recorded while no editor was open, still in fragment coordinates. */
   pendingAppends?: PendingAppend[];
+  /** New append inbox rows, ordered by their database sequence. */
+  inboxAppends?: InboxAppend[];
   /** Milliseconds of quiet before an edit is written. */
   autosaveDelay?: number;
 }
@@ -114,6 +119,9 @@ export class DocumentSession {
    */
   private pendingSafeThrough: number | null = null;
 
+  /** Cleared only after the save that atomically consumes these rows succeeds. */
+  private inboxConsumedThrough: number | null = null;
+
   constructor(options: SessionOptions) {
     this.options = { autosaveDelay: DEFAULT_AUTOSAVE_DELAY, ...options };
     this.revision = options.revision;
@@ -122,6 +130,7 @@ export class DocumentSession {
     if (options.spans?.length) this.restoreSpans(options.spans);
     this.lastSavedSpans = this.spanFingerprint();
     this.adoptPendingAppends(options.pendingAppends ?? []);
+    this.adoptInboxAppends(options.inboxAppends ?? []);
   }
 
   get saveState(): SaveState {
@@ -260,6 +269,41 @@ export class DocumentSession {
   }
 
   /**
+   * Parse and place every queued append off-screen before replacing the live
+   * opening document. If one row is bad, consuming any earlier row would strand
+   * the rest behind a canonical document they were never applied to.
+   */
+  private adoptInboxAppends(inbox: InboxAppend[]): void {
+    this.inboxConsumedThrough = null;
+    if (!inbox.length) return;
+
+    const { editor, transport } = this.options;
+    const existing = provenanceSpans(editor.view.state);
+    const reduced = reduceAppendInbox(editor.view.state.doc, existing, inbox);
+    if (!reduced.ok) {
+      this.setState('error');
+      transport.onError?.(
+        'Some additions could not be restored; the stored document was left untouched.',
+        reduced.reason,
+      );
+      return;
+    }
+
+    editor.setDocumentJSON(JSON.stringify(reduced.doc.toJSON()));
+    // These were proved against the exact document just installed. Filtering them
+    // a second time could turn a future disagreement into silent history loss
+    // while the same save consumes the only rows that could recover it.
+    editor.view.dispatch(setProvenanceSpans(
+      editor.view.state.tr,
+      [...existing, ...reduced.spans],
+    ));
+    this.inboxConsumedThrough = reduced.consumedThrough;
+    // The stored fingerprints stay at the base document: this combined document
+    // and its inbox watermark must reach the store in the same transaction.
+    this.documentChanged();
+  }
+
+  /**
    * Dissolving a span changes no text at all. Comparing markdown alone made such a
    * save return early, so a span the user dismissed came back on reload.
    */
@@ -329,6 +373,7 @@ export class DocumentSession {
     const spans = this.spansForSave();
     const fingerprint = this.spanFingerprint();
     const generation = this.generation;
+    const consumedInboxThrough = this.inboxConsumedThrough ?? undefined;
 
     try {
       // Idempotent, so it is sent on every save rather than once: the store deletes
@@ -344,7 +389,14 @@ export class DocumentSession {
         baseRevision,
         spans: spans.map(spanToJSON),
         resolvedPendingThrough,
+        consumedInboxThrough,
       });
+
+      // A resolved request means the host committed the transaction and deleted
+      // this row. Sending its watermark again makes the next honest save fail.
+      if (this.inboxConsumedThrough === consumedInboxThrough) {
+        this.inboxConsumedThrough = null;
+      }
 
       /*
        * Something replaced or appended to the document while this was in flight, so
@@ -464,6 +516,7 @@ export class DocumentSession {
     revision: number;
     spans?: ProvenanceSpan[];
     pendingAppends?: PendingAppend[];
+    inboxAppends?: InboxAppend[];
   }): void {
     if (payload.streamId !== this.options.streamId || typeof payload.markdown !== 'string') return;
     if (!Number.isFinite(payload.revision)) return;
@@ -472,6 +525,7 @@ export class DocumentSession {
     if (!this.isDirty()) {
       if (!this.adoptHostDocument(payload)) return;
       this.adoptPendingAppends(payload.pendingAppends ?? []);
+      this.adoptInboxAppends(payload.inboxAppends ?? []);
       return;
     }
 
@@ -562,9 +616,11 @@ export class DocumentSession {
     revision: number;
     spans?: ProvenanceSpan[];
     pendingAppends?: PendingAppend[];
+    inboxAppends?: InboxAppend[];
   }): void {
     if (!this.adoptHostDocument(payload)) return;
     this.adoptPendingAppends(payload.pendingAppends ?? []);
+    this.adoptInboxAppends(payload.inboxAppends ?? []);
   }
 
   private adoptHostDocument(payload: {
@@ -595,6 +651,7 @@ export class DocumentSession {
     // The document it had proven things about is gone; a caller that knows the new
     // document's rows says so by calling adoptPendingAppends after this.
     this.pendingSafeThrough = null;
+    this.inboxConsumedThrough = null;
     this.setState('saved');
     return true;
   }
@@ -635,6 +692,12 @@ export class DocumentSession {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     return this.isDirty() ? this.saveNow() : Promise.resolve(true);
+  }
+
+  /** Cancel a throwaway mount's autosave; it otherwise races the live watermark. */
+  discard(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
   }
 
   private setState(next: SaveState): void {
