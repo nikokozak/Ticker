@@ -1,5 +1,5 @@
 import type { RichTextEditor } from './editor';
-import type { Node as ProseNode } from 'prosemirror-model';
+import { Slice, type Node as ProseNode } from 'prosemirror-model';
 import { reduceAppendInbox, type InboxAppend } from './inbox';
 import { parseMarkdown } from './markdown';
 import { placeFragmentSpan, planReplay, type PendingAppend } from './pendingAppends';
@@ -121,6 +121,9 @@ export class DocumentSession {
 
   /** Cleared only after the save that atomically consumes these rows succeeds. */
   private inboxConsumedThrough: number | null = null;
+
+  /** Never cleared: delayed snapshots must not append an already-reduced row twice. */
+  private inboxSeenThrough = 0;
 
   constructor(options: SessionOptions) {
     this.options = { autosaveDelay: DEFAULT_AUTOSAVE_DELAY, ...options };
@@ -298,8 +301,53 @@ export class DocumentSession {
       [...existing, ...reduced.spans],
     ));
     this.inboxConsumedThrough = reduced.consumedThrough;
+    this.inboxSeenThrough = reduced.consumedThrough ?? 0;
     // The stored fingerprints stay at the base document: this combined document
     // and its inbox watermark must reach the store in the same transaction.
+    this.documentChanged();
+  }
+
+  /**
+   * A producer committed another row while this document was open.
+   *
+   * The payload is the FULL outstanding snapshot from the producer's write
+   * transaction. Without that, receiving global sequence 9 before this stream's
+   * sequence 3 and then consuming through 9 would delete text the editor never saw.
+   */
+  documentInboxChanged(payload: {
+    streamId: string;
+    appendInbox: InboxAppend[];
+  }): void {
+    if (payload.streamId !== this.options.streamId) return;
+    const unseen = payload.appendInbox.filter((row) => row.seq > this.inboxSeenThrough);
+    if (!unseen.length) return;
+
+    const { editor, transport } = this.options;
+    const { view } = editor;
+    const reduced = reduceAppendInbox(view.state.doc, provenanceSpans(view.state), unseen);
+    if (!reduced.ok) {
+      this.setState('error');
+      transport.onError?.(
+        'Some additions could not be restored; the stored document was left untouched.',
+        reduced.reason,
+      );
+      return;
+    }
+
+    const insertedAt = view.state.doc.content.size;
+    const appended = reduced.doc.content.cut(insertedAt);
+    // Inbox text is an external fact, not a user edit. Putting it in history makes
+    // the next Undo remove a durable capture instead of the user's own last change.
+    const tr = addProvenanceSpans(
+      view.state.tr.replace(insertedAt, insertedAt, new Slice(appended, 0, 0)),
+      reduced.spans,
+    ).setMeta('addToHistory', false).scrollIntoView();
+    view.dispatch(tr);
+
+    this.inboxSeenThrough = reduced.consumedThrough ?? this.inboxSeenThrough;
+    this.inboxConsumedThrough = reduced.consumedThrough;
+    // The canonical revision did not move when the row was queued, so an in-flight
+    // save answer remains valid; this combined document is simply the next save.
     this.documentChanged();
   }
 

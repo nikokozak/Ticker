@@ -227,6 +227,9 @@ describe('copy-only document conversion', () => {
     `);
     expect(doc.textBetween(span.start, span.end, '\n', '\n')).toBe('The AI wrote this.');
     expect(span.textHash).toBe(fnv1a('The AI wrote this.'));
+    expect(query(output, `
+      SELECT revision FROM pending_stream_appends WHERE stream_id = 'stream-pending';
+    `)).toHaveLength(0);
   });
 
   it('keeps word_count derived from the rewritten Markdown', () => {

@@ -55,6 +55,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- Stream documents now open in the document-model rich-text editor, with Markdown retained as a derived projection for search, AI, and export.
 - The quick-window now uses a roomier, higher-contrast capture surface with larger type, clearer shortcuts, and confirmation attached to the action that was pressed.
 - PDF quote and point-anchor actions now say exactly what they do, clear completed PDF selections, and persist before drawing so failed saves cannot leave phantom annotations.
 - Editor font, size, and line-spacing defaults now use the same validation in app startup and Settings.

@@ -6,15 +6,13 @@ import { RichStreamEditor } from './components/RichStreamEditor';
 /**
  * Which editor the stream page uses.
  *
- * The ProseMirror editor reached message parity with the CodeMirror one, but stays
- * OFF until the doc_json cutover is complete. It now saves the document model
- * without normalising live edits, but external writers still append to Markdown;
- * enabling it before the durable inbox reducer exists would make two canonical
- * documents again.
+ * ProseMirror owns the canonical document. External writers queue Markdown
+ * commands for it to reduce; the Markdown sent back on save is a projection for
+ * search, AI, and export.
  *
  * docs/RICHTEXT_VERDICT.md has the full analysis and the options.
  */
-const USE_RICH_TEXT_EDITOR = false;
+const USE_RICH_TEXT_EDITOR = true;
 import { SearchModal } from './components/SearchModal';
 import { Settings } from './components/Settings';
 import { ToastStack } from './components/ToastStack';
@@ -344,7 +342,8 @@ export function App() {
           break;
         }
         case 'streamDocumentAppended':
-          // Quick Panel appended to a document - if it's a new stream, load it.
+        case 'streamAppendInboxChanged':
+          // A first Quick Panel capture creates its stream before any editor exists.
           if (message.payload?.isNewStream && message.payload?.streamId) {
             const streamId = message.payload.streamId as string;
             if (viewRef.current === 'stream' && currentStreamIdRef.current === streamId) {

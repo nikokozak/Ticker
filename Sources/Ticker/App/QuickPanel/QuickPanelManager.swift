@@ -704,12 +704,15 @@ final class QuickPanelManager: ObservableObject {
                 fragment: fragment,
                 streamId: streamId
             )
-            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment, spans: spans)
+            let result = try persistence.appendExternal(
+                appendId: UUID().uuidString,
+                streamId: streamId,
+                fragment: fragment,
+                spans: spans
+            )
             notifyFrontend(
                 streamId: streamId,
-                fragment: result.fragment,
-                revision: result.revision,
-                spans: result.spans,
+                result: result,
                 isNewStream: isNewStream
             )
 
@@ -810,12 +813,14 @@ final class QuickPanelManager: ObservableObject {
             }
 
             let (streamId, isNewStream) = try getTargetStreamId()
-            let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: fragment)
+            let result = try persistence.appendExternal(
+                appendId: UUID().uuidString,
+                streamId: streamId,
+                fragment: fragment
+            )
             notifyFrontend(
                 streamId: streamId,
-                fragment: result.fragment,
-                revision: result.revision,
-                spans: result.spans,
+                result: result,
                 isNewStream: isNewStream
             )
             announceSave(to: streamId)
@@ -1061,7 +1066,8 @@ final class QuickPanelManager: ObservableObject {
                     model: model
                 )
             }
-            let result = try persistence.appendToStreamDocument(
+            let result = try persistence.appendExternal(
+                appendId: requestId ?? UUID().uuidString,
                 streamId: streamId,
                 fragment: fragment,
                 spans: spans,
@@ -1069,9 +1075,7 @@ final class QuickPanelManager: ObservableObject {
             )
             notifyFrontend(
                 streamId: streamId,
-                fragment: result.fragment,
-                revision: result.revision,
-                spans: result.spans,
+                result: result,
                 source: "quickPanelAI"
             )
             return true
@@ -1093,24 +1097,17 @@ final class QuickPanelManager: ObservableObject {
     /// Notify the React frontend about document appends.
     private func notifyFrontend(
         streamId: UUID,
-        fragment: String,
-        revision: Int,
-        spans: [ProvenanceSpan] = [],
+        result: ExternalAppendResult,
         isNewStream: Bool = false,
         source: String = "quickPanel"
     ) {
         guard let bridgeService = bridgeService else { return }
-
-        let payload: [String: AnyCodable] = [
-            "streamId": AnyCodable(streamId.uuidString),
-            "fragment": AnyCodable(fragment),
-            "revision": AnyCodable(revision),
-            "isNewStream": AnyCodable(isNewStream),
-            "source": AnyCodable(source),
-            "spans": AnyCodable(StreamCodec.encodeSpans(spans))
-        ]
-
-        bridgeService.send(BridgeMessage(type: "streamDocumentAppended", payload: payload))
+        bridgeService.send(StreamCodec.externalAppendMessage(
+            streamId: streamId,
+            result: result,
+            isNewStream: isNewStream,
+            source: source
+        ))
     }
 
     // MARK: - Panel Creation

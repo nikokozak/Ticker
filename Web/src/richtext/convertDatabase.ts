@@ -249,6 +249,7 @@ function conversionSQL(converted: ConvertedStream[], migrateV26: boolean): strin
           doc_format_version = 1
       WHERE stream_id = ${sqlText(stream.streamId)};
       DELETE FROM provenance_spans WHERE stream_id = ${sqlText(stream.streamId)};
+      DELETE FROM pending_stream_appends WHERE stream_id = ${sqlText(stream.streamId)};
     `);
     for (const span of stream.spans) {
       statements.push(`

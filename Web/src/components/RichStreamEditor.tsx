@@ -8,7 +8,13 @@ import {
   type SourceTitlePayload,
   type StreamDocumentConflictPayload,
 } from '../types/bridge';
-import type { AIExchangeJSON, SourceReference, SourceScope, Stream } from '../types/models';
+import type {
+  AIExchangeJSON,
+  SourceReference,
+  SourceScope,
+  Stream,
+  StreamAppendInboxJSON,
+} from '../types/models';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { Modal } from './Modal';
 import { SourcesModal } from './SourcesModal';
@@ -906,6 +912,16 @@ export function RichStreamEditor({
       if (payload?.streamId === stream.id && payload.source === 'pdfSectionAI') {
         pdfAIInFlightRef.current = false;
       }
+      return;
+    }
+
+    if (message.type === 'streamAppendInboxChanged') {
+      session.documentInboxChanged({
+        streamId: String(payload?.streamId ?? ''),
+        appendInbox: Array.isArray(payload?.appendInbox)
+          ? payload.appendInbox as StreamAppendInboxJSON[]
+          : [],
+      });
       return;
     }
 

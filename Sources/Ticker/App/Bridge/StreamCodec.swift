@@ -195,4 +195,44 @@ enum StreamCodec {
             ]
         }
     }
+
+    static func appendInboxChangedMessage(
+        streamId: UUID,
+        appends: [StreamAppendInboxEntry],
+        isNewStream: Bool,
+        source: String
+    ) -> BridgeMessage {
+        BridgeMessage(type: "streamAppendInboxChanged", payload: [
+            "streamId": AnyCodable(streamId.uuidString),
+            "appendInbox": AnyCodable(encodeAppendInbox(appends)),
+            "isNewStream": AnyCodable(isNewStream),
+            "source": AnyCodable(source)
+        ])
+    }
+
+    static func externalAppendMessage(
+        streamId: UUID,
+        result: ExternalAppendResult,
+        isNewStream: Bool = false,
+        source: String
+    ) -> BridgeMessage {
+        switch result {
+        case .legacy(let append):
+            return BridgeMessage(type: "streamDocumentAppended", payload: [
+                "streamId": AnyCodable(streamId.uuidString),
+                "fragment": AnyCodable(append.fragment),
+                "revision": AnyCodable(append.revision),
+                "isNewStream": AnyCodable(isNewStream),
+                "source": AnyCodable(source),
+                "spans": AnyCodable(encodeSpans(append.spans))
+            ])
+        case .inbox(let appends):
+            return appendInboxChangedMessage(
+                streamId: streamId,
+                appends: appends,
+                isNewStream: isNewStream,
+                source: source
+            )
+        }
+    }
 }

@@ -105,6 +105,9 @@
       "streamDocumentAppended": {
         "requiredPayloadKeys": ["streamId", "fragment", "revision", "isNewStream", "source", "spans"]
       },
+      "streamAppendInboxChanged": {
+        "requiredPayloadKeys": ["streamId", "appendInbox", "isNewStream", "source"]
+      },
       "streamDocumentConflict": {
         "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans", "pendingAppends", "appendInbox"],
         "optionalPayloadKeys": ["docJSON", "docFormatVersion"]

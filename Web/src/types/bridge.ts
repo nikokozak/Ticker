@@ -37,6 +37,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'sourceRemoveError',
   'sourceRemoved',
   'streamDocumentAppended',
+  'streamAppendInboxChanged',
   'streamDocumentConflict',
   'streamLoaded',
   'streamLoadFailed',

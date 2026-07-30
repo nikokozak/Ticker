@@ -26,6 +26,11 @@ struct AppendResult {
     let spans: [ProvenanceSpan]
 }
 
+enum ExternalAppendResult {
+    case legacy(AppendResult)
+    case inbox([StreamAppendInboxEntry])
+}
+
 /// What an editor opens a stream with, read as one consistent state.
 struct EditorSnapshot {
     let document: StreamDocument
@@ -61,6 +66,7 @@ final class PersistenceService {
     private let dbQueue: DatabaseQueue
     private let databaseURL: URL
     private let didDatabaseExistOnInit: Bool
+    private let usesAppendInbox: Bool
 
     private static let databaseBackupRetentionCount = 5
     private static func debugLog(_ message: String) {
@@ -73,10 +79,19 @@ final class PersistenceService {
         markdown.split { $0.isWhitespace }.count
     }
 
-    init(databaseURL: URL? = nil, fileManager: FileManager = .default) throws {
+    /** Schema v1's only document Swift ever constructs: an empty new stream. */
+    private static let emptyDocumentJSON =
+        #"{"type":"doc","content":[{"type":"paragraph"}]}"#
+
+    init(
+        databaseURL: URL? = nil,
+        fileManager: FileManager = .default,
+        usesAppendInbox: Bool = false
+    ) throws {
         let databaseURL = databaseURL ?? Self.databaseURL(fileManager: fileManager)
         self.databaseURL = databaseURL
         self.didDatabaseExistOnInit = fileManager.fileExists(atPath: databaseURL.path)
+        self.usesAppendInbox = usesAppendInbox
 
         try fileManager.createDirectory(
             at: databaseURL.deletingLastPathComponent(),
@@ -88,6 +103,9 @@ final class PersistenceService {
 
         dbQueue = try DatabaseQueue(path: databaseURL.path, configuration: config)
         try migrate()
+        if usesAppendInbox {
+            try requireCanonicalDocuments()
+        }
     }
 
     private static func databaseURL(fileManager: FileManager) -> URL {
@@ -95,6 +113,32 @@ final class PersistenceService {
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         let tickerDir = appSupport.appendingPathComponent("Ticker-Next", isDirectory: true)
         return tickerDir.appendingPathComponent("ticker.db")
+    }
+
+    /**
+     * The cutover has no Markdown fallback. Starting one writer against even one
+     * unconverted stream would make captures work selectively and hide the missing
+     * document until that stream was opened.
+     */
+    private func requireCanonicalDocuments() throws {
+        let unavailable = try dbQueue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*)
+                    FROM streams s
+                    LEFT JOIN stream_documents d ON d.stream_id = s.id
+                    WHERE d.stream_id IS NULL
+                       OR d.doc_json IS NULL
+                       OR d.doc_format_version != 1
+                """
+            ) ?? 0
+        }
+        guard unavailable == 0 else {
+            throw PersistenceError.encodingFailed(
+                "\(unavailable) stream document(s) still require canonical conversion"
+            )
+        }
     }
 
     // MARK: - Migrations
@@ -597,6 +641,16 @@ final class PersistenceService {
             """)
         }
 
+        migrator.registerMigration("v27_append_inbox_receipts") { db in
+            // A consumed identity must outlive its pending row or a delayed retry
+            // inserts the same capture twice after the editor has already saved it.
+            // ponytail: retain the small receipt verbatim; compact it to hashes only
+            // if inbox history becomes measurable database growth.
+            try db.execute(sql: """
+                ALTER TABLE stream_append_inbox ADD COLUMN consumed_at REAL;
+            """)
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -777,18 +831,7 @@ final class PersistenceService {
 
     func createStream(title: String) throws -> Stream {
         let stream = Stream(title: title)
-        try dbQueue.write { db in
-            try db.execute(
-                sql: "INSERT INTO streams (id, title, source_scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                arguments: [
-                    stream.id.uuidString,
-                    stream.title,
-                    stream.sourceScope.rawValue,
-                    stream.createdAt.timeIntervalSince1970,
-                    stream.updatedAt.timeIntervalSince1970
-                ]
-            )
-        }
+        try saveStream(stream)
         return stream
     }
 
@@ -912,6 +955,24 @@ final class PersistenceService {
                 stream.createdAt.timeIntervalSince1970,
                 stream.updatedAt.timeIntervalSince1970
             ])
+            if usesAppendInbox {
+                // A quick-panel capture can be the stream's first write. Seeding the
+                // one fixed empty document here keeps Swift from parsing Markdown
+                // while still giving that capture a canonical base to queue against.
+                try db.execute(
+                    sql: """
+                        INSERT INTO stream_documents
+                            (stream_id, doc_json, doc_format_version, markdown, word_count, revision, created_at, updated_at)
+                        VALUES (?, ?, 1, '', 0, 0, ?, ?)
+                    """,
+                    arguments: [
+                        stream.id.uuidString,
+                        Self.emptyDocumentJSON,
+                        stream.createdAt.timeIntervalSince1970,
+                        stream.updatedAt.timeIntervalSince1970
+                    ]
+                )
+            }
         }
     }
 
@@ -1131,6 +1192,16 @@ final class PersistenceService {
                     )
                 }
 
+                if canonicalDocument != nil {
+                    try clearConsumedAppendInbox(
+                        streamId: streamId,
+                        through: consumedInboxThrough,
+                        db: db
+                    )
+                }
+                let storedMarkdown = canonicalDocument == nil
+                    ? markdown
+                    : try markdownProjectionIncludingInbox(markdown, streamId: streamId, db: db)
                 let newRevision = currentRevision + 1
                 if let canonicalDocument {
                     try db.execute(
@@ -1143,8 +1214,8 @@ final class PersistenceService {
                         arguments: [
                             canonicalDocument.json,
                             canonicalDocument.version,
-                            markdown,
-                            Self.wordCount(in: markdown),
+                            storedMarkdown,
+                            Self.wordCount(in: storedMarkdown),
                             newRevision,
                             now,
                             streamId.uuidString
@@ -1179,11 +1250,6 @@ final class PersistenceService {
                         baseRevision: baseRevision,
                         db: db
                     )
-                    try clearConsumedAppendInbox(
-                        streamId: streamId,
-                        through: consumedInboxThrough,
-                        db: db
-                    )
                     try deleteOrphanExchanges(streamId: streamId, db: db)
                 }
 
@@ -1203,6 +1269,16 @@ final class PersistenceService {
                 )
             }
 
+            if canonicalDocument != nil {
+                try clearConsumedAppendInbox(
+                    streamId: streamId,
+                    through: consumedInboxThrough,
+                    db: db
+                )
+            }
+            let storedMarkdown = canonicalDocument == nil
+                ? markdown
+                : try markdownProjectionIncludingInbox(markdown, streamId: streamId, db: db)
             let newRevision = 1
             if let canonicalDocument {
                 try db.execute(
@@ -1215,8 +1291,8 @@ final class PersistenceService {
                         streamId.uuidString,
                         canonicalDocument.json,
                         canonicalDocument.version,
-                        markdown,
-                        Self.wordCount(in: markdown),
+                        storedMarkdown,
+                        Self.wordCount(in: storedMarkdown),
                         newRevision,
                         now,
                         now
@@ -1245,11 +1321,6 @@ final class PersistenceService {
                     streamId: streamId,
                     through: resolvedPendingThrough,
                     baseRevision: baseRevision,
-                    db: db
-                )
-                try clearConsumedAppendInbox(
-                    streamId: streamId,
-                    through: consumedInboxThrough,
                     db: db
                 )
                 try deleteOrphanExchanges(streamId: streamId, db: db)
@@ -1339,6 +1410,123 @@ final class PersistenceService {
             }
 
             return AppendResult(fragment: fragment, isNewDocument: isNewDocument, revision: newRevision, spans: spans)
+        }
+    }
+
+    /**
+     * The one deployment gate for every external producer. Switching callers
+     * individually makes captures disappear depending on where they came from;
+     * the composition root opts the whole app into the inbox at once.
+     */
+    func appendExternal(
+        appendId: String,
+        streamId: UUID,
+        fragment: String,
+        spans: [ProvenanceSpan] = [],
+        exchange: AIExchange? = nil
+    ) throws -> ExternalAppendResult {
+        if usesAppendInbox {
+            return .inbox(try enqueueStreamAppend(
+                appendId: appendId,
+                streamId: streamId,
+                fragment: fragment,
+                spans: spans,
+                exchange: exchange
+            ))
+        }
+        return .legacy(try appendToStreamDocument(
+            streamId: streamId,
+            fragment: fragment,
+            spans: spans,
+            exchange: exchange
+        ))
+    }
+
+    /**
+     * Store a Markdown command for JavaScript and update only the derived projection.
+     *
+     * Returning the FULL outstanding snapshot from this same transaction is the
+     * ordering proof the live reducer needs. A single row can arrive out of order;
+     * consuming its global sequence would then delete an earlier row from this
+     * stream that the editor never saw.
+     */
+    func enqueueStreamAppend(
+        appendId: String,
+        streamId: UUID,
+        fragment: String,
+        spans: [ProvenanceSpan] = [],
+        exchange: AIExchange? = nil
+    ) throws -> [StreamAppendInboxEntry] {
+        let trimmedId = appendId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedId.isEmpty,
+              !fragment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw PersistenceError.encodingFailed("Invalid stream append")
+        }
+        let rawSpansJSON = Self.encodeRawSpans(spans)
+
+        return try dbQueue.write { db in
+            if let existing = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT stream_id, fragment, raw_spans_json
+                    FROM stream_append_inbox
+                    WHERE append_id = ?
+                """,
+                arguments: [trimmedId]
+            ) {
+                let same = existing["stream_id"] as String == streamId.uuidString
+                    && existing["fragment"] as String == fragment
+                    && existing["raw_spans_json"] as String == rawSpansJSON
+                guard same else {
+                    throw PersistenceError.encodingFailed("Append id was reused with different content")
+                }
+                return try fetchAppendInbox(streamId: streamId, db: db)
+            }
+
+            guard let document = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT doc_json, doc_format_version, markdown
+                    FROM stream_documents
+                    WHERE stream_id = ?
+                """,
+                arguments: [streamId.uuidString]
+            ) else {
+                throw PersistenceError.encodingFailed("Canonical stream document is unavailable")
+            }
+            let docJSON: String? = document["doc_json"]
+            let docFormatVersion: Int? = document["doc_format_version"]
+            guard docJSON != nil, docFormatVersion == 1 else {
+                throw PersistenceError.encodingFailed("Canonical stream document is unavailable")
+            }
+
+            let now = Date().timeIntervalSince1970
+            let markdown: String = document["markdown"]
+            let projection = markdown.isEmpty ? fragment : "\(markdown)\n\n\(fragment)"
+            try db.execute(
+                sql: """
+                    UPDATE stream_documents
+                    SET markdown = ?, word_count = ?, updated_at = ?
+                    WHERE stream_id = ?
+                """,
+                arguments: [projection, Self.wordCount(in: projection), now, streamId.uuidString]
+            )
+            try db.execute(
+                sql: "UPDATE streams SET updated_at = ? WHERE id = ?",
+                arguments: [now, streamId.uuidString]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO stream_append_inbox
+                        (append_id, stream_id, fragment, raw_spans_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """,
+                arguments: [trimmedId, streamId.uuidString, fragment, rawSpansJSON, now]
+            )
+            if let exchange {
+                try saveExchange(exchange, db: db)
+            }
+            return try fetchAppendInbox(streamId: streamId, db: db)
         }
     }
 
@@ -1555,7 +1743,7 @@ final class PersistenceService {
             if let sourceId = span.sourceId { row["sourceId"] = sourceId }
             return row
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: rows),
+        guard let data = try? JSONSerialization.data(withJSONObject: rows, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else {
             return "[]"
         }
@@ -1618,7 +1806,7 @@ final class PersistenceService {
             sql: """
                 SELECT seq, append_id, fragment, raw_spans_json, created_at
                 FROM stream_append_inbox
-                WHERE stream_id = ?
+                WHERE stream_id = ? AND consumed_at IS NULL
                 ORDER BY seq ASC
             """,
             arguments: [streamId.uuidString]
@@ -1631,6 +1819,21 @@ final class PersistenceService {
                 createdAt: Date(timeIntervalSince1970: row["created_at"])
             )
         }
+    }
+
+    /**
+     * A save may race a later producer row that its watermark does not include.
+     * Leaving that durable row out of the projection makes search and AI observe a
+     * document state that never existed until the editor next opens and reduces it.
+     */
+    private func markdownProjectionIncludingInbox(
+        _ markdown: String,
+        streamId: UUID,
+        db: Database
+    ) throws -> String {
+        ([markdown] + (try fetchAppendInbox(streamId: streamId, db: db)).map(\.fragment))
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
     }
 
     /**
@@ -1647,14 +1850,21 @@ final class PersistenceService {
         guard through > 0,
               try Int.fetchOne(
                 db,
-                sql: "SELECT seq FROM stream_append_inbox WHERE stream_id = ? AND seq = ?",
+                sql: """
+                    SELECT seq FROM stream_append_inbox
+                    WHERE stream_id = ? AND seq = ? AND consumed_at IS NULL
+                """,
                 arguments: [streamId.uuidString, through]
               ) != nil else {
             throw PersistenceError.encodingFailed("Invalid append inbox watermark")
         }
         try db.execute(
-            sql: "DELETE FROM stream_append_inbox WHERE stream_id = ? AND seq <= ?",
-            arguments: [streamId.uuidString, through]
+            sql: """
+                UPDATE stream_append_inbox
+                SET consumed_at = ?
+                WHERE stream_id = ? AND seq <= ? AND consumed_at IS NULL
+            """,
+            arguments: [Date().timeIntervalSince1970, streamId.uuidString, through]
         )
     }
 

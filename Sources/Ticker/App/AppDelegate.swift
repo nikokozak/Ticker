@@ -301,15 +301,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     meta: QuickPanelMarkdownFormatter.metadataJSON(["sourceApp": "ticker://"]),
                     textHash: FNV1a.hash(text)
                 )
-                let result = try persistence.appendToStreamDocument(streamId: streamId, fragment: text, spans: [span])
-                serviceContainer?.bridgeService.send(BridgeMessage(type: "streamDocumentAppended", payload: [
-                    "streamId": AnyCodable(streamId.uuidString),
-                    "fragment": AnyCodable(result.fragment),
-                    "revision": AnyCodable(result.revision),
-                    "isNewStream": AnyCodable(false),
-                    "source": AnyCodable("urlScheme"),
-                    "spans": AnyCodable(StreamCodec.encodeSpans(result.spans))
-                ]))
+                let result = try persistence.appendExternal(
+                    appendId: UUID().uuidString,
+                    streamId: streamId,
+                    fragment: text,
+                    spans: [span]
+                )
+                serviceContainer?.bridgeService.send(StreamCodec.externalAppendMessage(
+                    streamId: streamId,
+                    result: result,
+                    source: "urlScheme"
+                ))
             }
         } catch {
             DebugLog.log("[TickerURL] Failed to handle URL (\(DebugLog.errorSummary(error)))")

@@ -2076,4 +2076,79 @@ describe('RichStreamEditor host wire gate', () => {
       expect.objectContaining({ spanId: 'queued-span', textHash: fnv1a('Queued capture.') }),
     ]);
   });
+
+  it('reduces a live inbox notification through the real bridge shape', async () => {
+    await renderStream(stream);
+
+    await act(async () => {
+      bridge.receive({
+        type: 'streamAppendInboxChanged',
+        payload: {
+          streamId: stream.id,
+          isNewStream: false,
+          source: 'quickPanel',
+          appendInbox: [{
+            seq: 12,
+            appendId: '00000000-0000-0000-0000-000000000012',
+            fragment: 'Queued while open.',
+            rawSpansJSON: '[]',
+            createdAt: '1970-01-01T00:00:00Z',
+          }],
+        },
+      });
+    });
+
+    expect([...editor().querySelectorAll('p')].map((node) => node.textContent))
+      .toEqual(['Original paragraph.', 'Queued while open.']);
+    await act(async () => {
+      await vi.waitFor(() => {
+        const save = vi.mocked(bridge.sendAsync).mock.calls
+          .filter(([type]) => type === 'saveRichStreamDocument')
+          .pop()?.[1];
+        expect(save?.consumedInboxThrough).toBe(12);
+      });
+    });
+  });
+
+  it('ignores a malformed live inbox notification without disturbing the editor', async () => {
+    await renderStream(stream);
+    const before = editor().innerHTML;
+
+    expect(() => bridge.receive({
+      type: 'streamAppendInboxChanged',
+      payload: {
+        streamId: stream.id,
+        isNewStream: false,
+        source: 'quickPanel',
+        appendInbox: { not: 'an array' },
+      },
+    })).not.toThrow();
+    expect(editor().innerHTML).toBe(before);
+  });
+
+  it('formats exactly the text selected through the DOM', async () => {
+    await renderStream({
+      ...stream,
+      id: 'format-stream',
+      document: {
+        ...stream.document,
+        streamId: 'format-stream',
+        docJSON: docJSON('First sentence. Selected sentence. Third sentence.'),
+        markdown: 'First sentence. Selected sentence. Third sentence.',
+      },
+    });
+    await selectEditorText('Selected sentence.');
+    const bold = document.querySelector('button[title="Bold ⌘B"]') as HTMLButtonElement;
+    expect(bold, 'Expected Bold button').toBeDefined();
+
+    await act(async () => {
+      bold.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      bold.click();
+      await Promise.resolve();
+    });
+
+    expect([...editor().querySelectorAll('strong')].map((node) => node.textContent))
+      .toEqual(['Selected sentence.']);
+    expect(editor().textContent).toBe('First sentence. Selected sentence. Third sentence.');
+  });
 });

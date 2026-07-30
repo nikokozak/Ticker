@@ -36,7 +36,7 @@ struct ServiceContainer {
         self.orchestrator = orchestrator
 
         do {
-            let persistence = try PersistenceService()
+            let persistence = try PersistenceService(usesAppendInbox: true)
             self.persistence = persistence
 
             let sourceService = SourceService(persistence: persistence)

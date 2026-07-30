@@ -578,20 +578,18 @@ final class AIMessageHandler: BridgeMessageHandler {
                             responseRaw: responseRaw,
                             model: selectedModel
                         )
-                        let result = try persistence.appendToStreamDocument(
+                        let result = try persistence.appendExternal(
+                            appendId: requestId,
                             streamId: streamId,
                             fragment: fragment,
                             spans: [span],
                             exchange: exchange
                         )
-                        self.sendToWeb(BridgeMessage(type: "streamDocumentAppended", payload: [
-                            "streamId": AnyCodable(streamId.uuidString),
-                            "fragment": AnyCodable(result.fragment),
-                            "revision": AnyCodable(result.revision),
-                            "isNewStream": AnyCodable(false),
-                            "source": AnyCodable("pdfSectionAI"),
-                            "spans": AnyCodable(StreamCodec.encodeSpans(result.spans))
-                        ]))
+                        self.sendToWeb(StreamCodec.externalAppendMessage(
+                            streamId: streamId,
+                            result: result,
+                            source: "pdfSectionAI"
+                        ))
                         self.aiOperations.transition(requestId, to: .succeeded)
                     } catch {
                         DebugLog.log("[AIMessageHandler] Failed to append PDF section response (\(DebugLog.errorSummary(error)))")

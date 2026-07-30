@@ -36,20 +36,19 @@ flowchart LR
   Web <-->|"postMessage / bridge.receive<br/>(bridge.v2.json)"| BS
 ```
 
-The one data-flow rule that keeps this app correct — **all external writes append; the editor saves with a revision check**:
+The one data-flow rule that keeps this app correct — **JavaScript owns the document; external writers enqueue commands**:
 
 ```mermaid
 sequenceDiagram
   participant QP as QuickPanel / AI / future capture sources
   participant PS as PersistenceService
-  participant ED as StreamEditor (open stream)
-  QP->>PS: appendToStreamDocument(streamId, fragment)  [revision++]
-  QP->>ED: streamDocumentAppended {fragment, revision}
-  ED->>ED: dispatch CM transaction (append at doc end)
-  ED->>PS: saveStreamDocument(markdown, baseRevision)   [debounced 350ms]
-  alt baseRevision stale (missed an append)
-    PS-->>ED: streamDocumentConflict {markdown, revision} — save rejected, editor reloads
-  end
+  participant ED as RichStreamEditor (open stream)
+  QP->>PS: appendExternal(appendId, streamId, markdown fragment)
+  PS->>PS: durable inbox row + derived Markdown projection
+  QP->>ED: streamAppendInboxChanged {full outstanding inbox}
+  ED->>ED: parse and append every unseen row
+  ED->>PS: saveRichStreamDocument(doc_json, projection, watermark)
+  PS->>PS: canonical save + consume inbox atomically
 ```
 
 ## Key files
@@ -59,11 +58,11 @@ sequenceDiagram
 | `Sources/Ticker/App/WebViewManager.swift` | WKWebView ownership, drop coordination, router wiring (~725 lines; keep feature handling in `App/Bridge/`) |
 | `Sources/Ticker/App/Bridge/` | `BridgeRouter`, one `*MessageHandler` per feature, `StreamCodec` (bridge encoding) |
 | `Sources/Ticker/App/ServiceContainer.swift` | Composition root; the only place services are constructed |
-| `Sources/Ticker/Services/PersistenceService.swift` | GRDB migrations (v1–v23, frozen), `appendToStreamDocument`, revision-checked saves |
+| `Sources/Ticker/Services/PersistenceService.swift` | GRDB migrations (append-only), durable append inbox, revision-checked canonical saves |
 | `Sources/Ticker/App/QuickPanel/` | ⌘L capture panel (manager/view/window) |
 | `Sources/Ticker/App/PDFReader/PDFReaderPaneController.swift` | In-window PDF pane, highlight → stream linking |
-| `Web/src/components/StreamEditor.tsx` | The editor: CM setup, autosave/revision, document AI, selection menu |
-| `Web/src/extensions/` | CM extensions: `MarkdownConceal.ts` (static concealment), `MarkdownImageWidget.ts` |
+| `Web/src/components/RichStreamEditor.tsx` | ProseMirror editor wiring: autosave, bridge features, selection menu |
+| `Web/src/richtext/` | Canonical document schema/codec, session, operations, provenance, inbox reducer |
 | `Web/src/types/bridge.ts` | Message allow-list + send/sendAsync |
 | `Web/src/styles/index.css` | Design tokens on `:root` (colors/type/spacing/radius/shadow, light+dark) — use tokens, never raw values |
 | `tools/contracts/check_bridge_contract.mjs` | Statically validates BOTH bridge directions against `bridge.v2.json` — CI-enforced |
@@ -71,12 +70,12 @@ sequenceDiagram
 
 ## Invariants (violating these reintroduces fixed bugs)
 
-1. **One data model.** Stream content is `stream_documents.markdown` (+ `revision`). The `cells` table is frozen migration history — never write to it, never render from it.
-2. **One write primitive.** Anything outside the open editor writes via `appendToStreamDocument` and announces with `streamDocumentAppended`. Never UPSERT a whole document from outside the editor; never bypass the revision check.
-3. **A feature = CM extension (web) + BridgeMessageHandler (Swift) + contract entry.** Register the handler in WebViewManager's router setup, add the message to `bridge.v2.json` and `bridge.ts` — the contract checker fails CI otherwise. This is the plugin pattern; don't invent another.
-4. **Product guardrails:** no cell model, no native editor, no persistent split panes (PDF pane is the sanctioned on-demand exception), autosave always on, AI apply = one undo step, **static concealment** — conceal decorations depend only on document + viewport + explicit reveal (⌥-click line, footer "Show formatting" toggle), never on selection or mouse; selection-keyed reveal reintroduces a geometry feedback loop. Markdown is an invisible substrate (storage/AI/export) — users format via the selection menu, never by knowing syntax.
+1. **One data model.** Stream content is `stream_documents.doc_json` (+ `revision`). Markdown is a derived projection for search, AI, and export. The `cells` table is frozen migration history — never write to it, never render from it.
+2. **One write primitive.** Anything outside the open editor writes via `appendExternal`, which durably enqueues a Markdown fragment. Only JavaScript parses fragments into the canonical document; the canonical save and inbox consumption are one transaction.
+3. **A feature = rich-text operation/module (web) + BridgeMessageHandler (Swift) + contract entry.** Register the handler in WebViewManager's router setup, add the message to `bridge.v2.json` and `bridge.ts` — the contract checker fails CI otherwise.
+4. **Product guardrails:** no cell model, no native editor, no persistent split panes (PDF pane is the sanctioned on-demand exception), autosave always on, AI apply = one undo step. Markdown is never an editable substrate — users format the document model via editor controls.
 5. **Migrations are append-only.** New schema = new `vN` migration; never edit v1–v23. Backup-before-migrate must keep working.
-6. Editor perf: CM plugins must only walk `view.visibleRanges`; never scan the whole doc per update.
+6. Editor perf: map range metadata through ProseMirror transactions; do not serialize or reparse the whole document on ordinary typing.
 
 ## Build / test / verify
 

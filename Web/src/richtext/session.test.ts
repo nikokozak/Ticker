@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { TextSelection } from 'prosemirror-state';
+import { undo } from 'prosemirror-history';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import { parseMarkdown } from './markdown';
@@ -223,6 +224,118 @@ describe('the durable append inbox', () => {
     expect(h.ed.getMarkdownProjection()).toBe('Host.\n\nQueued.');
     await h.session.saveNow();
     expect(h.saves[0].consumedInboxThrough).toBe(12);
+  });
+
+  it('reduces a live snapshot into the dirty document and saves both together', async () => {
+    const h = open('Base.', 7);
+    const fragment = '**Captured.**';
+    type(h.ed, 'Local ');
+
+    h.session.documentInboxChanged({
+      streamId: 'stream-1',
+      appendInbox: [inboxAppend(9, fragment, [wireSpan(fragment)])],
+    });
+
+    expect(h.ed.getMarkdownProjection()).toBe('Local Base.\n\n**Captured.**');
+    const [span] = provenanceSpans(h.ed.view.state);
+    expect(h.ed.view.state.doc.textBetween(span.from, span.to)).toBe('Captured.');
+
+    await h.session.saveNow();
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0].baseRevision).toBe(7);
+    expect(h.saves[0].consumedInboxThrough).toBe(9);
+  });
+
+  it('keeps a live append outside the user undo history', () => {
+    const h = open('Base.', 7);
+    type(h.ed, 'Local ');
+    h.session.documentInboxChanged({
+      streamId: 'stream-1',
+      appendInbox: [inboxAppend(9, 'Captured.')],
+    });
+
+    expect(undo(h.ed.view.state, h.ed.view.dispatch)).toBe(true);
+    expect(h.ed.getMarkdownProjection()).toBe('Base.\n\nCaptured.');
+  });
+
+  it('takes a full snapshot once and ignores rows it already reduced', async () => {
+    const h = open('Base.', 7);
+    const first = inboxAppend(3, 'First.');
+    const second = inboxAppend(9, 'Second.');
+
+    h.session.documentInboxChanged({
+      streamId: 'stream-1',
+      appendInbox: [first],
+    });
+    h.session.documentInboxChanged({
+      streamId: 'stream-1',
+      appendInbox: [first, second],
+    });
+    expect(h.ed.getMarkdownProjection()).toBe('Base.\n\nFirst.\n\nSecond.');
+
+    const after = h.ed.view.state;
+    h.session.documentInboxChanged({
+      streamId: 'stream-1',
+      appendInbox: [first],
+    });
+    expect(h.ed.view.state).toBe(after);
+
+    await h.session.saveNow();
+    expect(h.saves[0].consumedInboxThrough).toBe(9);
+  });
+
+  it('does not replay a delayed consumed snapshot after a host reload', async () => {
+    const captured = inboxAppend(3, 'Captured.');
+    const h = open('Base.', 7, [], [], [captured]);
+    await h.session.saveNow();
+    h.session.documentLoaded({
+      ...canonical('Base.\n\nCaptured.'),
+      revision: 9,
+      inboxAppends: [],
+    });
+    const afterReload = h.ed.view.state;
+
+    h.session.documentInboxChanged({
+      streamId: 'stream-1',
+      appendInbox: [captured],
+    });
+
+    expect(h.ed.view.state).toBe(afterReload);
+    expect(h.ed.getMarkdownProjection()).toBe('Base.\n\nCaptured.');
+  });
+
+  it('ignores a live snapshot for another stream', () => {
+    const h = open('Base.', 7);
+    const before = h.ed.view.state;
+
+    h.session.documentInboxChanged({
+      streamId: 'stream-2',
+      appendInbox: [inboxAppend(9, 'Not ours.')],
+    });
+
+    expect(h.ed.view.state).toBe(before);
+    expect(h.ed.getMarkdownProjection()).toBe('Base.');
+  });
+
+  it('refuses a bad live snapshot without touching the document or cursor', () => {
+    const h = open('Base.', 7);
+    type(h.ed, 'Local ');
+    h.ed.view.dispatch(h.ed.view.state.tr.setSelection(TextSelection.create(h.ed.view.state.doc, 3)));
+    const before = h.ed.getDocumentJSON();
+    const cursor = h.ed.view.state.selection.from;
+
+    h.session.documentInboxChanged({
+      streamId: 'stream-1',
+      appendInbox: [
+        inboxAppend(3, 'First.'),
+        { ...inboxAppend(9, 'Second.'), rawSpansJSON: '{"bad":true}' },
+      ],
+    });
+
+    expect(h.ed.getDocumentJSON()).toBe(before);
+    expect(h.ed.view.state.selection.from).toBe(cursor);
+    expect(h.session.saveState).toBe('error');
+    expect(h.errors[0]).toMatch(/additions/);
   });
 });
 
@@ -514,15 +627,14 @@ describe('a save that finishes after the document moved on', () => {
     };
   }
 
-  it('does not clear a newer inbox watermark when an older save answers', async () => {
+  it('does not clear a newer live inbox watermark when an older save answers', async () => {
     const h = openWithHeldSave('Base.', 7, [inboxAppend(3, 'First.')]);
     const inFlight = h.session.saveNow();
     await h.started;
 
-    h.session.documentLoaded({
-      ...canonical('Host.'),
-      revision: 8,
-      inboxAppends: [inboxAppend(9, 'Second.')],
+    h.session.documentInboxChanged({
+      streamId: 'stream-1',
+      appendInbox: [inboxAppend(3, 'First.'), inboxAppend(9, 'Second.')],
     });
     h.release(8);
     await inFlight;

@@ -2788,7 +2788,7 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_v26MigrationAddsCanonicalDocumentAndAppendInbox() throws {
+    func test_v26AndV27MigrationsAddCanonicalDocumentAndDurableAppendReceipts() throws {
         try withTempPersistenceServiceAndURL { _, dbURL, _ in
             let dbQueue = try DatabaseQueue(path: dbURL.path)
             let documentColumns: [String] = try dbQueue.read { db in
@@ -2807,7 +2807,7 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(Array(documentColumns.suffix(2)), ["doc_json", "doc_format_version"])
             XCTAssertEqual(
                 inboxColumns,
-                ["seq", "append_id", "stream_id", "fragment", "raw_spans_json", "created_at"]
+                ["seq", "append_id", "stream_id", "fragment", "raw_spans_json", "created_at", "consumed_at"]
             )
             XCTAssertTrue(indexes.contains("idx_append_inbox_stream"))
         }
@@ -4126,11 +4126,19 @@ final class StreamDocumentTests: XCTestCase {
             )
 
             XCTAssertEqual(try service.loadStreamDocument(streamId: stream.id)?.docJSON, combinedJSON)
+            XCTAssertEqual(
+                try service.loadStreamDocument(streamId: stream.id)?.markdown,
+                "Base\n\nConsumed\n\nLater"
+            )
             XCTAssertEqual(try service.loadSpans(streamId: stream.id), [span])
             let remaining = try dbQueue.read { db in
                 try Row.fetchAll(
                     db,
-                    sql: "SELECT append_id FROM stream_append_inbox ORDER BY seq"
+                    sql: """
+                        SELECT append_id FROM stream_append_inbox
+                        WHERE consumed_at IS NULL
+                        ORDER BY seq
+                    """
                 ).map { $0["append_id"] as String }
             }
             XCTAssertEqual(remaining, ["append-other", "append-later"])
@@ -4257,6 +4265,308 @@ final class StreamDocumentTests: XCTestCase {
                 },
                 1
             )
+        }
+    }
+
+    func test_enqueueStreamAppendUpdatesOnlyTheProjectionAndReturnsTheFullInbox() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Canonical inbox")
+            try service.saveStream(stream)
+            let baseJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Base"}]}]}"#
+            let revision = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: baseJSON,
+                docFormatVersion: 1,
+                markdown: "Base",
+                baseRevision: 0,
+                spans: []
+            )
+            let fragment = "**Captured.**"
+            let span = ProvenanceSpan(
+                spanId: "queued-span",
+                streamId: stream.id,
+                start: 0,
+                end: UTF16Offsets.utf16Length(fragment),
+                origin: "capture",
+                textHash: FNV1a.hash(fragment),
+                createdAt: Date(timeIntervalSince1970: 1000)
+            )
+
+            let first = try service.enqueueStreamAppend(
+                appendId: "append-first",
+                streamId: stream.id,
+                fragment: fragment,
+                spans: [span]
+            )
+            let second = try service.enqueueStreamAppend(
+                appendId: "append-second",
+                streamId: stream.id,
+                fragment: "Second.",
+                spans: []
+            )
+
+            let document = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(document.docJSON, baseJSON)
+            XCTAssertEqual(document.docFormatVersion, 1)
+            XCTAssertEqual(document.revision, revision)
+            XCTAssertEqual(document.markdown, "Base\n\n**Captured.**\n\nSecond.")
+            XCTAssertEqual(first.map(\.appendId), ["append-first"])
+            XCTAssertEqual(second.map(\.appendId), ["append-first", "append-second"])
+            XCTAssertEqual(try service.loadEditorSnapshot(streamId: stream.id).appendInbox.map(\.appendId), second.map(\.appendId))
+            XCTAssertTrue(try service.loadPendingAppends(streamId: stream.id).isEmpty)
+
+            let rawData = try XCTUnwrap(first[0].rawSpansJSON.data(using: .utf8))
+            let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: rawData) as? [[String: Any]])
+            XCTAssertEqual(raw.first?["spanId"] as? String, "queued-span")
+            XCTAssertEqual(raw.first?["start"] as? Int, 0)
+            XCTAssertEqual(raw.first?["end"] as? Int, UTF16Offsets.utf16Length(fragment))
+        }
+    }
+
+    func test_enqueueStreamAppendIsIdempotentOnlyForIdenticalContent() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Idempotent inbox")
+            let other = Stream(title: "Other inbox")
+            try service.saveStream(stream)
+            try service.saveStream(other)
+            let baseJSON = #"{"type":"doc","content":[{"type":"paragraph"}]}"#
+            let baseRevision = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: baseJSON,
+                docFormatVersion: 1,
+                markdown: "",
+                baseRevision: 0,
+                spans: []
+            )
+            let span = ProvenanceSpan(
+                spanId: "same-span",
+                streamId: stream.id,
+                start: 0,
+                end: 8,
+                origin: "capture",
+                textHash: FNV1a.hash("Captured"),
+                createdAt: Date(timeIntervalSince1970: 1000)
+            )
+
+            let first = try service.enqueueStreamAppend(
+                appendId: "same-operation",
+                streamId: stream.id,
+                fragment: "Captured",
+                spans: [span]
+            )
+            let retry = try service.enqueueStreamAppend(
+                appendId: "same-operation",
+                streamId: stream.id,
+                fragment: "Captured",
+                spans: [span]
+            )
+
+            XCTAssertEqual(retry.map(\.seq), first.map(\.seq))
+            XCTAssertEqual(try service.loadStreamDocument(streamId: stream.id)?.markdown, "Captured")
+            XCTAssertEqual(try service.loadEditorSnapshot(streamId: stream.id).appendInbox.count, 1)
+
+            XCTAssertThrowsError(try service.enqueueStreamAppend(
+                appendId: "same-operation",
+                streamId: stream.id,
+                fragment: "Different",
+                spans: [span]
+            ))
+            XCTAssertThrowsError(try service.enqueueStreamAppend(
+                appendId: "same-operation",
+                streamId: other.id,
+                fragment: "Captured",
+                spans: [span]
+            ))
+            let changedSpan = ProvenanceSpan(
+                spanId: span.spanId,
+                streamId: span.streamId,
+                start: span.start,
+                end: span.end,
+                origin: span.origin,
+                textHash: FNV1a.hash("Different"),
+                createdAt: span.createdAt
+            )
+            XCTAssertThrowsError(try service.enqueueStreamAppend(
+                appendId: "same-operation",
+                streamId: stream.id,
+                fragment: "Captured",
+                spans: [changedSpan]
+            ))
+            XCTAssertEqual(try service.loadStreamDocument(streamId: stream.id)?.markdown, "Captured")
+            XCTAssertEqual(try service.loadEditorSnapshot(streamId: stream.id).appendInbox.count, 1)
+
+            let capturedJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Captured"}]}]}"#
+            _ = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: capturedJSON,
+                docFormatVersion: 1,
+                markdown: "Captured",
+                baseRevision: baseRevision,
+                spans: [span],
+                consumedInboxThrough: first[0].seq
+            )
+            let lateRetry = try service.enqueueStreamAppend(
+                appendId: "same-operation",
+                streamId: stream.id,
+                fragment: "Captured",
+                spans: [span]
+            )
+            XCTAssertTrue(lateRetry.isEmpty)
+            XCTAssertEqual(try service.loadStreamDocument(streamId: stream.id)?.markdown, "Captured")
+        }
+    }
+
+    func test_enqueueStreamAppendRollsBackProjectionAndRowWhenExchangeFails() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Atomic inbox")
+            try service.saveStream(stream)
+            let baseJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Before"}]}]}"#
+            _ = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: baseJSON,
+                docFormatVersion: 1,
+                markdown: "Before",
+                baseRevision: 0,
+                spans: []
+            )
+            let exchange = AIExchange(
+                requestId: "atomic-inbox",
+                streamId: UUID(),
+                verb: "develop",
+                userInput: "Prompt",
+                responseRaw: "Answer"
+            )
+
+            XCTAssertThrowsError(try service.enqueueStreamAppend(
+                appendId: "atomic-inbox",
+                streamId: stream.id,
+                fragment: "Answer",
+                spans: [],
+                exchange: exchange
+            ))
+            XCTAssertEqual(try service.loadStreamDocument(streamId: stream.id)?.markdown, "Before")
+            XCTAssertTrue(try service.loadEditorSnapshot(streamId: stream.id).appendInbox.isEmpty)
+            XCTAssertNil(try service.loadExchange(requestId: "atomic-inbox"))
+        }
+    }
+
+    func test_enqueueStreamAppendRefusesBlankOrUnconvertedDocuments() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Unconverted inbox")
+            try service.saveStream(stream)
+            _ = try service.loadOrCreateStreamDocument(streamId: stream.id)
+
+            XCTAssertThrowsError(try service.enqueueStreamAppend(
+                appendId: "unconverted",
+                streamId: stream.id,
+                fragment: "Captured",
+                spans: []
+            ))
+
+            let baseJSON = #"{"type":"doc","content":[{"type":"paragraph"}]}"#
+            _ = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: baseJSON,
+                docFormatVersion: 1,
+                markdown: "",
+                baseRevision: 0,
+                spans: []
+            )
+            XCTAssertThrowsError(try service.enqueueStreamAppend(
+                appendId: "blank",
+                streamId: stream.id,
+                fragment: " \n ",
+                spans: []
+            ))
+            XCTAssertTrue(try service.loadEditorSnapshot(streamId: stream.id).appendInbox.isEmpty)
+        }
+    }
+
+    func test_externalAppendGateKeepsLegacyUntilCutoverAndQueuesAfterIt() throws {
+        try withTempPersistenceService(usesAppendInbox: false) { service in
+            let stream = Stream(title: "Legacy gate")
+            try service.saveStream(stream)
+            let result = try service.appendExternal(
+                appendId: "legacy-operation",
+                streamId: stream.id,
+                fragment: "Legacy",
+                spans: []
+            )
+            guard case .legacy = result else {
+                return XCTFail("Expected legacy append before cutover")
+            }
+            XCTAssertEqual(try service.loadStreamDocument(streamId: stream.id)?.markdown, "Legacy")
+            XCTAssertTrue(try service.loadEditorSnapshot(streamId: stream.id).appendInbox.isEmpty)
+        }
+
+        try withTempPersistenceService(usesAppendInbox: true) { service in
+            let stream = Stream(title: "Canonical gate")
+            try service.saveStream(stream)
+            let result = try service.appendExternal(
+                appendId: "canonical-operation",
+                streamId: stream.id,
+                fragment: "Queued",
+                spans: []
+            )
+            guard case .inbox(let inbox) = result else {
+                return XCTFail("Expected inbox append after cutover")
+            }
+            XCTAssertEqual(inbox.map(\.appendId), ["canonical-operation"])
+            let second = try service.appendExternal(
+                appendId: "canonical-operation-2",
+                streamId: stream.id,
+                fragment: "Second",
+                spans: []
+            )
+            let message = StreamCodec.externalAppendMessage(
+                streamId: stream.id,
+                result: second,
+                isNewStream: true,
+                source: "quickPanel"
+            )
+            let wireInbox = try XCTUnwrap(
+                message.payload?["appendInbox"]?.value as? [[String: AnyCodable]]
+            )
+            XCTAssertEqual(message.type, "streamAppendInboxChanged")
+            XCTAssertEqual(message.payload?["isNewStream"]?.value as? Bool, true)
+            XCTAssertEqual(message.payload?["source"]?.value as? String, "quickPanel")
+            XCTAssertEqual(
+                wireInbox.map { $0["appendId"]?.value as? String },
+                ["canonical-operation", "canonical-operation-2"]
+            )
+            XCTAssertEqual(
+                try service.loadStreamDocument(streamId: stream.id)?.docJSON,
+                #"{"type":"doc","content":[{"type":"paragraph"}]}"#
+            )
+            XCTAssertTrue(try service.loadPendingAppends(streamId: stream.id).isEmpty)
+        }
+    }
+
+    func test_canonicalCutoverRefusesAnUnconvertedDocument() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, fileManager in
+            let stream = Stream(title: "Still Markdown")
+            try service.saveStream(stream)
+            _ = try service.loadOrCreateStreamDocument(streamId: stream.id)
+
+            XCTAssertThrowsError(try PersistenceService(
+                databaseURL: dbURL,
+                fileManager: fileManager,
+                usesAppendInbox: true
+            )) { error in
+                XCTAssertTrue(error.localizedDescription.contains("conversion"))
+            }
+        }
+    }
+
+    func test_canonicalCutoverRefusesAStreamWithNoDocumentRow() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, fileManager in
+            try service.saveStream(Stream(title: "Missing document"))
+
+            XCTAssertThrowsError(try PersistenceService(
+                databaseURL: dbURL,
+                fileManager: fileManager,
+                usesAppendInbox: true
+            ))
         }
     }
 
@@ -5237,13 +5547,20 @@ final class StreamDocumentTests: XCTestCase {
         XCTFail("Timed out waiting for condition", file: file, line: line)
     }
 
-    private func withTempPersistenceService(_ body: (PersistenceService) throws -> Void) throws {
+    private func withTempPersistenceService(
+        usesAppendInbox: Bool = false,
+        _ body: (PersistenceService) throws -> Void
+    ) throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let dbURL = tempDir.appendingPathComponent("ticker.db")
 
-        var service: PersistenceService? = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        var service: PersistenceService? = try PersistenceService(
+            databaseURL: dbURL,
+            fileManager: fileManager,
+            usesAppendInbox: usesAppendInbox
+        )
         defer {
             service = nil
             _ = try? fileManager.removeItem(at: tempDir)
