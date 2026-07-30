@@ -116,7 +116,6 @@ export function App() {
   const [streams, setStreams] = useState<StreamSummary[]>([]);
   const [currentStream, setCurrentStream] = useState<Stream | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingStream, setIsLoadingStream] = useState(false);
   const [streamListError, setStreamListError] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [aiOperations, setAIOperations] = useState<Map<string, AIOperationActivity>>(new Map());
@@ -124,12 +123,12 @@ export function App() {
   const viewRef = useRef(view);
   const currentStreamIdRef = useRef<string | null>(currentStream?.id ?? null);
   const streamLoadSequenceRef = useRef(0);
-  const pendingStreamLoadRequestIdRef = useRef<number | null>(null);
+  const pendingStreamLoadRef = useRef<{ streamId: string; requestId: number } | null>(null);
   const aiOperationDismissTimersRef = useRef<Map<string, number>>(new Map());
 
   const requestStreamLoad = (id: string) => {
     const requestId = ++streamLoadSequenceRef.current;
-    pendingStreamLoadRequestIdRef.current = requestId;
+    pendingStreamLoadRef.current = { streamId: id, requestId };
     bridge.send({ type: 'loadStream', payload: { id, requestId } });
   };
 
@@ -264,7 +263,6 @@ export function App() {
           setStorageState(state);
           if (state === 'unavailable') {
             setIsLoading(false);
-            setIsLoadingStream(false);
           }
           break;
         }
@@ -279,8 +277,8 @@ export function App() {
           break;
         case 'streamLoaded': {
           const requestId = message.payload?.requestId;
-          if (!shouldAcceptStreamLoaded(requestId, pendingStreamLoadRequestIdRef.current)) break;
-          pendingStreamLoadRequestIdRef.current = null;
+          if (!shouldAcceptStreamLoaded(requestId, pendingStreamLoadRef.current?.requestId ?? null)) break;
+          pendingStreamLoadRef.current = null;
           const payloadStream = message.payload?.stream as Stream | undefined;
           if (!payloadStream) break;
           const scrollOffset = Number(message.payload?.scrollOffset ?? payloadStream?.document?.scrollOffset ?? 0);
@@ -311,15 +309,13 @@ export function App() {
           currentStreamIdRef.current = loadedStream?.id ?? null;
           viewRef.current = 'stream';
           setCurrentStream(loadedStream);
-          setIsLoadingStream(false);
           setView('stream');
           break;
         }
         case 'streamLoadFailed': {
           const requestId = message.payload?.requestId;
-          if (!shouldAcceptStreamLoaded(requestId, pendingStreamLoadRequestIdRef.current)) break;
-          pendingStreamLoadRequestIdRef.current = null;
-          setIsLoadingStream(false);
+          if (!shouldAcceptStreamLoaded(requestId, pendingStreamLoadRef.current?.requestId ?? null)) break;
+          pendingStreamLoadRef.current = null;
           addToast(
             message.payload?.reason === 'notFound'
               ? 'That stream no longer exists.'
@@ -342,7 +338,6 @@ export function App() {
           break;
         }
         case 'streamDocumentAppended':
-        case 'streamAppendInboxChanged':
           // A first Quick Panel capture creates its stream before any editor exists.
           if (message.payload?.isNewStream && message.payload?.streamId) {
             const streamId = message.payload.streamId as string;
@@ -356,6 +351,28 @@ export function App() {
             requestStreamLoad(streamId);
           }
           break;
+        case 'streamAppendInboxChanged': {
+          const streamId = message.payload?.streamId;
+          const appendInbox = message.payload?.appendInbox;
+          if (typeof streamId !== 'string' || !Array.isArray(appendInbox)) break;
+
+          if (currentStreamIdRef.current === streamId) {
+            // The message can land after App accepts streamLoaded but before React
+            // mounts its editor listener. Keeping the snapshot in props lets that
+            // first mount reduce it instead of losing the only live notification.
+            setCurrentStream((current) => current?.id === streamId
+              ? { ...current, appendInbox: appendInbox as Stream['appendInbox'] }
+              : current);
+            break;
+          }
+
+          if (pendingStreamLoadRef.current?.streamId === streamId || message.payload?.isNewStream) {
+            // A snapshot read before this enqueue cannot contain the row. Supersede
+            // that load so the accepted response describes a state after the write.
+            requestStreamLoad(streamId);
+          }
+          break;
+        }
         case 'streamsChanged':
           // Quick Panel created a new stream - reload the list
           debugLog('[App] Streams changed, reloading list');
@@ -374,17 +391,16 @@ export function App() {
   }, [addToast]);
 
   const handleCreateStream = () => {
-    pendingStreamLoadRequestIdRef.current = null;
+    pendingStreamLoadRef.current = null;
     bridge.send({ type: 'createStream' });
   };
 
   const handleSelectStream = (id: string) => {
-    setIsLoadingStream(true);
     requestStreamLoad(id);
   };
 
   const handleBackToList = () => {
-    pendingStreamLoadRequestIdRef.current = null;
+    pendingStreamLoadRef.current = null;
     setCurrentStream(null);
     setView('list');
     bridge.send({ type: 'loadStreams' });
@@ -392,7 +408,7 @@ export function App() {
 
   const handleDeleteStream = () => {
     if (currentStream) {
-      pendingStreamLoadRequestIdRef.current = null;
+      pendingStreamLoadRef.current = null;
       bridge.send({ type: 'deleteStream', payload: { id: currentStream.id } });
       setCurrentStream(null);
       setView('list');
@@ -417,7 +433,6 @@ export function App() {
       return;
     }
 
-    setIsLoadingStream(true);
     requestStreamLoad(streamId);
   };
 
@@ -514,7 +529,6 @@ export function App() {
       <StreamListView
         streams={streams}
         isLoading={isLoading}
-        isLoadingStream={isLoadingStream}
         error={streamListError}
         onSelect={handleSelectStream}
         onCreate={handleCreateStream}
@@ -613,7 +627,6 @@ function AIActivityCapsule({ operations, streams, currentStream, onCancel }: AIA
 interface StreamListViewProps {
   streams: StreamSummary[];
   isLoading: boolean;
-  isLoadingStream: boolean;
   error: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
@@ -659,7 +672,7 @@ function formatStreamMetadata(stream: StreamSummary): string {
   return segments.join(' · ');
 }
 
-function StreamListView({ streams, isLoading, isLoadingStream, error, onSelect, onCreate, onSettings, onRetry }: StreamListViewProps) {
+function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSettings, onRetry }: StreamListViewProps) {
   // Sort streams by updatedAt (most recent first)
   const sortedStreams = [...streams].sort((a, b) =>
     new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -700,9 +713,8 @@ function StreamListView({ streams, isLoading, isLoadingStream, error, onSelect, 
           sortedStreams.map((stream) => (
             <button
               key={stream.id}
-              className={`stream-item ${isLoadingStream ? 'stream-item--loading' : ''}`}
+              className="stream-item"
               onClick={() => onSelect(stream.id)}
-              disabled={isLoadingStream}
             >
               <span className="stream-title-row">
                 <span className="stream-title">{stream.title}</span>

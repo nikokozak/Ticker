@@ -405,11 +405,6 @@ body {
   transform: translateY(0);
 }
 
-.stream-item--loading {
-  opacity: 0.5;
-  pointer-events: none;
-}
-
 /* ==================== Stream Editor ==================== */
 
 .stream-editor {
