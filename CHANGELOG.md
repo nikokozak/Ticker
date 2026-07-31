@@ -98,7 +98,7 @@ All notable user-facing changes to Ticker are documented here.
 - Quitting immediately after an edit now waits briefly for the open editor to roll back temporary AI state and flush its latest text, with one bounded save retry.
 - Queued editor saves now capture live text, provenance, and revision together instead of letting an older snapshot overwrite a newer external append.
 - In-editor AI no longer autosaves temporary deletions or partial output, and leaving a stream mid-request restores the original passage before saving.
-- Deleting a PDF link and autosaving no longer destroys its backing highlight, so Undo restores a working link.
+- Removing a PDF link now also removes its backing highlight, and the non-undoable editor update no longer offers a misleading local Undo.
 - The editor header, stream list, dialogs, and selection disclosures now remain usable at the 300 px minimum window width, including very long titles.
 - `ticker://append` now refuses ambiguous duplicate stream titles and directs reliable automation to the stream UUID instead of picking an arbitrary match.
 - Search now includes source passages from every stream, including locally searchable sources marked Private for AI.

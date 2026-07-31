@@ -4,6 +4,16 @@ Written 2026-07-29, after the editor was enabled for one real run and turned bac
 off. Branch `codex/richtext-spike`. Contains Claude's analysis and Codex's
 independent verdict; where they disagreed, both readings are kept.
 
+> **Status — 2026-07-31:** This is the historical failure analysis, not the
+> current editor state. The failures below were fixed forward on this branch.
+> A copy-only conversion rehearsal preserved the source database byte-for-byte,
+> retained every stream, source, document, and append-inbox row, and produced 26
+> valid canonical documents. In the Release WKWebView, a 1,999-line/14k-word
+> stream opened in 439 ms, scrolled end-to-end without a stall, saved selected
+> formatting, survived three reopen cycles (422–435 ms), and passed immediate
+> undo/redo with revision-checked saves. The branch remains unmerged pending
+> explicit user acceptance.
+
 ## What the user hit
 
 Pressing Enter snapped the cursor back to the previous line. Multiple blank lines

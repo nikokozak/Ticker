@@ -42,7 +42,7 @@ Those extra escapes are necessary so literal user text such as `<u>`, table-look
 
 ## B. Nodes
 
-Use the stock schema definitions unless overridden below. The stock reference is [schema.ts](/Users/niko/Developer/Ticker/Ticker-Next-richtext/spike/node_modules/prosemirror-markdown/src/schema.ts:4).
+Use the stock `prosemirror-markdown` 1.13.5 schema definitions unless overridden below.
 
 | Name | Schema | Markdown token | Serializer |
 |---|---|---|---|
