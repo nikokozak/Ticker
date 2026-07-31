@@ -15,6 +15,7 @@ protocol SourceMessageHandlerDelegate: AnyObject {
         quote: String?
     ) async
     func beginPDFAnchorPick(streamId: UUID) async
+    func deletePDFHighlight(streamId: UUID, highlightId: UUID) async
 }
 
 enum OpenPDFDestinationFailure: Equatable {
@@ -44,6 +45,7 @@ final class SourceMessageHandler: BridgeMessageHandler {
         "openSource",
         "openPdfDestination",
         "beginPdfAnchorPick",
+        "deletePdfHighlight",
         "saveImage",
     ]
 
@@ -301,6 +303,19 @@ final class SourceMessageHandler: BridgeMessageHandler {
             }
 
             await delegate?.beginPDFAnchorPick(streamId: streamId)
+
+        case "deletePdfHighlight":
+            guard let payload = message.payload,
+                  let streamIdValue = payload["streamId"]?.value as? String,
+                  let streamId = UUID(uuidString: streamIdValue),
+                  let highlightIdValue = payload["highlightId"]?.value as? String,
+                  let highlightId = UUID(uuidString: highlightIdValue) else {
+                DebugLog.log("[WebViewManager] Invalid deletePdfHighlight payload")
+                await bridgeService.sendBridgeError(type: message.type, reason: "Invalid deletePdfHighlight payload")
+                return
+            }
+
+            await delegate?.deletePDFHighlight(streamId: streamId, highlightId: highlightId)
 
         case "saveImage":
             // Save base64-encoded image data to stream's assets folder

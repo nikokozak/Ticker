@@ -19,6 +19,12 @@ export interface TickerPDFHighlightLinkMatch {
   rawURL: string;
 }
 
+export interface TickerPDFHighlightUnlinkChange {
+  from: number;
+  to: number;
+  insert: string;
+}
+
 export function parseTickerPDFURL(rawURL: string): TickerPDFDestination | null {
   if (!rawURL.startsWith('ticker-pdf://')) return null;
 
@@ -74,20 +80,21 @@ function openingLabelBracket(markdown: string, labelEnd: number): number | null 
   return null;
 }
 
-export function findTickerPDFHighlightLink(
+function tickerPDFHighlightLinks(
   markdown: string,
   highlightId: string,
   sourceId?: string
-): TickerPDFHighlightLinkMatch | null {
+): Array<TickerPDFHighlightLinkMatch & { linkFrom: number; linkTo: number }> {
   const linkStart = '](ticker-pdf://';
   const expectedHighlightId = highlightId.trim().toLowerCase();
   const expectedSourceId = sourceId?.trim().toLowerCase();
-  if (!expectedHighlightId) return null;
+  if (!expectedHighlightId) return [];
 
+  const matches: Array<TickerPDFHighlightLinkMatch & { linkFrom: number; linkTo: number }> = [];
   let searchFrom = 0;
   while (searchFrom < markdown.length) {
     const labelEnd = markdown.indexOf(linkStart, searchFrom);
-    if (labelEnd < 0) return null;
+    if (labelEnd < 0) break;
 
     const urlStart = labelEnd + 2;
     const urlEnd = markdown.indexOf(')', urlStart);
@@ -106,14 +113,38 @@ export function findTickerPDFHighlightLink(
       continue;
     }
 
-    return {
+    matches.push({
       from: labelStart + 1,
       to: labelEnd,
       rawURL,
-    };
+      linkFrom: labelStart,
+      linkTo: urlEnd + 1,
+    });
+    searchFrom = urlEnd + 1;
   }
 
-  return null;
+  return matches;
+}
+
+export function findTickerPDFHighlightLink(
+  markdown: string,
+  highlightId: string,
+  sourceId?: string
+): TickerPDFHighlightLinkMatch | null {
+  const match = tickerPDFHighlightLinks(markdown, highlightId, sourceId)[0];
+  return match ? { from: match.from, to: match.to, rawURL: match.rawURL } : null;
+}
+
+export function unlinkTickerPDFHighlightLinks(
+  markdown: string,
+  highlightId: string,
+  sourceId?: string,
+): TickerPDFHighlightUnlinkChange[] {
+  return tickerPDFHighlightLinks(markdown, highlightId, sourceId).map((match) => ({
+    from: match.linkFrom,
+    to: match.linkTo,
+    insert: markdown.slice(match.from, match.to),
+  }));
 }
 
 function urlForLinkNode(view: EditorView, linkNode: SyntaxNode): string | null {

@@ -25,6 +25,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'proxyAuthState',
   'pdfAnchorPickCancelled',
   'pdfAnchorPlaced',
+  'pdfHighlightDeleted',
   'pdfHighlightLinked',
   'pdfPaneStateChanged',
   'pdfSectionActionRequested',
@@ -53,6 +54,7 @@ export type AIOperationState = 'queued' | 'preparing' | 'generating' | 'saving' 
 export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'addSource',
   'beginPdfAnchorPick',
+  'deletePdfHighlight',
   'cancelDocumentAI',
   'cancelAIOperation',
   'clearProxyDeviceKey',

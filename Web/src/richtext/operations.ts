@@ -1,7 +1,7 @@
 import { Plugin, PluginKey, Selection, TextSelection, type EditorState, type Transaction } from 'prosemirror-state';
 import { closeHistory } from 'prosemirror-history';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
-import { Fragment, Slice, type Node as ProseNode } from 'prosemirror-model';
+import { Fragment, Slice, type Mark, type Node as ProseNode } from 'prosemirror-model';
 import { parseTickerPDFURL } from '../extensions/PDFHighlightLink';
 import { parseMarkdown } from './markdown';
 import { ASSET_URL_PREFIX, isValidImageWidth, tickerSchema } from './schema';
@@ -246,31 +246,92 @@ export function selectText(view: EditorView, needle: string): boolean {
   return true;
 }
 
+function pdfHighlightMark(
+  node: ProseNode,
+  highlightId: string,
+  sourceId?: string,
+): Mark | null {
+  const expectedHighlight = highlightId.trim().toLowerCase();
+  const expectedSource = sourceId?.trim().toLowerCase();
+  if (!node.isText || !expectedHighlight) return null;
+
+  const mark = tickerSchema.marks.link.isInSet(node.marks);
+  const href = mark?.attrs.href;
+  if (typeof href !== 'string' || !href.startsWith('ticker-pdf://')) return null;
+
+  const destination = parseTickerPDFURL(href);
+  if (
+    destination?.highlightId?.toLowerCase() !== expectedHighlight
+    || (
+      expectedSource
+      && destination.sourceId
+      && destination.sourceId.toLowerCase() !== expectedSource
+    )
+  ) return null;
+  return mark ?? null;
+}
+
+export interface SelectedPDFHighlight {
+  highlightId: string;
+  sourceId?: string;
+}
+
+/** The one persisted PDF highlight touched by the current selection, if any. */
+export function selectedPDFHighlight(state: EditorState): SelectedPDFHighlight | null {
+  const { from, to, empty } = state.selection;
+  if (empty) return null;
+
+  const found = new Map<string, SelectedPDFHighlight>();
+  state.doc.nodesBetween(from, to, (node) => {
+    if (!node.isText) return;
+    const mark = tickerSchema.marks.link.isInSet(node.marks);
+    const href = mark?.attrs.href;
+    if (typeof href !== 'string') return;
+    const destination = parseTickerPDFURL(href);
+    if (!destination?.highlightId) return;
+    const key = `${destination.sourceId?.toLowerCase() ?? ''}\u0000${destination.highlightId.toLowerCase()}`;
+    found.set(key, {
+      highlightId: destination.highlightId,
+      sourceId: destination.sourceId,
+    });
+  });
+
+  return found.size === 1 ? found.values().next().value ?? null : null;
+}
+
+/** Remove every document link to one deleted PDF highlight without removing text. */
+export function removePDFHighlightLink(
+  view: EditorView,
+  highlightId: string,
+  sourceId?: string,
+): boolean {
+  let found = false;
+  const tr = view.state.tr;
+  view.state.doc.descendants((node, pos) => {
+    const mark = pdfHighlightMark(node, highlightId, sourceId);
+    if (!mark) return true;
+    tr.removeMark(pos, pos + node.nodeSize, mark);
+    found = true;
+    return true;
+  });
+
+  if (!found) return false;
+  tr.setMeta('addToHistory', false);
+  view.dispatch(tr);
+  return true;
+}
+
 /** Select and scroll to the first rich-text link for a persisted PDF highlight. */
 export function revealPDFHighlight(
   view: EditorView,
   sourceId: string,
   highlightId: string,
 ): boolean {
-  const expectedSource = sourceId.trim().toLowerCase();
-  const expectedHighlight = highlightId.trim().toLowerCase();
   let from = -1;
   let to = -1;
 
   view.state.doc.descendants((node, pos) => {
-    if (from >= 0 || !node.isText) return from < 0;
-    const mark = tickerSchema.marks.link.isInSet(node.marks);
-    const href = mark?.attrs.href;
-    if (typeof href !== 'string' || !href.startsWith('ticker-pdf://')) return true;
-
-    const destination = parseTickerPDFURL(href);
-    if (
-      destination?.highlightId?.toLowerCase() !== expectedHighlight
-      || (
-        destination.sourceId
-        && destination.sourceId.toLowerCase() !== expectedSource
-      )
-    ) return true;
+    if (from >= 0 || !pdfHighlightMark(node, highlightId, sourceId)) return from < 0;
     from = pos;
     to = pos + node.nodeSize;
     return false;

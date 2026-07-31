@@ -196,6 +196,12 @@ final class WebViewManager: NSObject {
         pdfPaneController.onRevealHighlightInStream = { [weak self] payload in
             self?.sendRevealPDFHighlightInStream(payload)
         }
+        pdfPaneController.onDeleteHighlight = { [weak self] payload in
+            self?.removePDFHighlight(
+                streamId: payload.streamId,
+                highlightId: payload.highlightId
+            ) ?? false
+        }
         pdfPaneController.onPageChanged = { [weak self] sourceId, pageIndex in
             guard let self, let persistence = self.persistence else { return }
             do {
@@ -450,6 +456,31 @@ final class WebViewManager: NSObject {
                 "highlightId": AnyCodable(payload.highlightId.uuidString)
             ]
         ))
+    }
+
+    @MainActor
+    private func removePDFHighlight(streamId: UUID, highlightId: UUID) -> Bool {
+        guard let persistence else {
+            sendSourceError("Could not remove PDF link.")
+            return false
+        }
+
+        do {
+            try persistence.deletePDFHighlight(id: highlightId, streamId: streamId)
+            pdfPaneController.removeHighlight(id: highlightId, streamId: streamId)
+            bridgeService.send(BridgeMessage(
+                type: "pdfHighlightDeleted",
+                payload: [
+                    "streamId": AnyCodable(streamId.uuidString),
+                    "highlightId": AnyCodable(highlightId.uuidString)
+                ]
+            ))
+            return true
+        } catch {
+            DebugLog.log("[WebViewManager] Failed to remove PDF highlight (\(DebugLog.errorSummary(error)))")
+            sendSourceError("Could not remove PDF link.")
+            return false
+        }
     }
 
     private func openPDFSource(
@@ -778,6 +809,12 @@ extension WebViewManager: SourceMessageHandlerDelegate {
             pdfPaneController.setVisible(false)
             activePDFPaneStreamId = nil
             sendPDFPaneStateChanged(visible: false)
+        }
+    }
+
+    func deletePDFHighlight(streamId: UUID, highlightId: UUID) async {
+        await MainActor.run {
+            _ = removePDFHighlight(streamId: streamId, highlightId: highlightId)
         }
     }
 }

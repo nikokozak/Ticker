@@ -61,6 +61,9 @@
       "pdfHighlightLinked": {
         "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page", "quote"]
       },
+      "pdfHighlightDeleted": {
+        "requiredPayloadKeys": ["streamId", "highlightId"]
+      },
       "revealPdfHighlightInStream": {
         "requiredPayloadKeys": ["streamId", "sourceId", "highlightId"]
       },
@@ -141,6 +144,9 @@
       },
       "beginPdfAnchorPick": {
         "requiredPayloadKeys": ["streamId"]
+      },
+      "deletePdfHighlight": {
+        "requiredPayloadKeys": ["streamId", "highlightId"]
       },
       "cancelDocumentAI": {
         "requiredPayloadKeys": ["requestId"]

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { findTickerPDFHighlightLink, parseTickerPDFURL } from './PDFHighlightLink';
+import {
+  findTickerPDFHighlightLink,
+  parseTickerPDFURL,
+  unlinkTickerPDFHighlightLinks,
+} from './PDFHighlightLink';
 
 describe('parseTickerPDFURL', () => {
   it('extracts source, highlight, and page from ticker pdf links', () => {
@@ -87,5 +91,17 @@ describe('findTickerPDFHighlightLink', () => {
     ].join('\n');
 
     expect(findTickerPDFHighlightLink(markdown, highlightId, sourceId)).toBeNull();
+  });
+
+  it('builds non-overlapping edits for every copy while preserving label text', () => {
+    const url = `ticker-pdf://${sourceId}?highlight=${highlightId}&page=7`;
+    const markdown = `Before [One](${url}) and [Two \\[draft\\]](${url}).`;
+    const changes = unlinkTickerPDFHighlightLinks(markdown, highlightId, sourceId);
+    let unlinked = markdown;
+    for (const change of [...changes].reverse()) {
+      unlinked = unlinked.slice(0, change.from) + change.insert + unlinked.slice(change.to);
+    }
+
+    expect(unlinked).toBe('Before One and Two \\[draft\\].');
   });
 });

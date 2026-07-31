@@ -2177,6 +2177,21 @@ final class PersistenceService {
         }
     }
 
+    @discardableResult
+    func deletePDFHighlight(id: UUID, streamId: UUID) throws -> Bool {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    DELETE FROM pdf_highlights
+                    WHERE id = ?
+                      AND source_id IN (SELECT id FROM sources WHERE stream_id = ?)
+                """,
+                arguments: [id.uuidString, streamId.uuidString]
+            )
+            return db.changesCount > 0
+        }
+    }
+
     func loadPDFHighlights(sourceId: UUID) throws -> [PDFHighlightRecord] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(

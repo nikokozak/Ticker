@@ -3,7 +3,17 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { TextSelection } from 'prosemirror-state';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import { parseMarkdown } from './markdown';
-import { aiWritingRange, applyAIMarkdown, focusAtEnd, insertImage, selectText, setImageWidth, streamAIMarkdown } from './operations';
+import {
+  aiWritingRange,
+  applyAIMarkdown,
+  focusAtEnd,
+  insertImage,
+  removePDFHighlightLink,
+  selectedPDFHighlight,
+  selectText,
+  setImageWidth,
+  streamAIMarkdown,
+} from './operations';
 
 /**
  * ProseMirror measures the DOM to scroll a selection into view, and jsdom
@@ -202,6 +212,33 @@ describe('finding text', () => {
     ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(ed.view.state.doc, 3)));
     expect(selectText(ed.view, 'absent')).toBe(false);
     expect(ed.view.state.selection.from).toBe(3);
+  });
+});
+
+describe('PDF highlight links', () => {
+  const sourceId = '11111111-1111-1111-1111-111111111111';
+  const highlightId = '22222222-2222-2222-2222-222222222222';
+  const href = `ticker-pdf://${sourceId}?highlight=${highlightId}&page=4`;
+
+  it('finds the selected highlight and removes only its links without deleting text', () => {
+    const ed = open(`Before [linked **words**](${href}) after. Another [copy](${href}).`);
+    const range = find(ed, 'linked');
+    ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(ed.view.state.doc, range.from, range.to)));
+
+    expect(selectedPDFHighlight(ed.view.state)).toEqual({ sourceId, highlightId });
+    expect(removePDFHighlightLink(ed.view, highlightId)).toBe(true);
+    expect(ed.getMarkdownProjection()).toBe('Before linked **words** after. Another copy.');
+
+    undo(ed);
+    expect(ed.getMarkdownProjection()).toBe('Before linked **words** after. Another copy.');
+  });
+
+  it('does not offer removal for page citations without persisted highlights', () => {
+    const ed = open(`Read [the source](ticker-pdf://${sourceId}?page=4).`);
+    const range = find(ed, 'the source');
+    ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(ed.view.state.doc, range.from, range.to)));
+
+    expect(selectedPDFHighlight(ed.view.state)).toBeNull();
   });
 });
 

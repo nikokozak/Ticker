@@ -18,7 +18,11 @@ import { editorFindExtension } from '../extensions/EditorFindPanel';
 import { markdownConcealExtension, setShowRawFormattingEffect } from '../extensions/MarkdownConceal';
 import { buildMarkdownImageToken, extractMarkdownImageUrls, markdownImageWidgetExtension } from '../extensions/MarkdownImageWidget';
 import { buildLinkEditChange, linkInteractionExtension, type MarkdownLinkInfo } from '../extensions/LinkInteraction';
-import { findTickerPDFHighlightLink, tickerPDFLinkExtension } from '../extensions/PDFHighlightLink';
+import {
+  findTickerPDFHighlightLink,
+  tickerPDFLinkExtension,
+  unlinkTickerPDFHighlightLinks,
+} from '../extensions/PDFHighlightLink';
 import { addSpans, currentSpans, dissolveSpans, normalizeSpans, provenanceField, setSpans, type Span } from '../extensions/ProvenanceField';
 import { canRedevelopSpan, originLine, provenanceXrayExtension, setProvenanceXrayVisible, type ProvenanceXrayOptions } from '../extensions/ProvenanceXray';
 import { pendingAppendField, setPendingAppend } from '../extensions/PendingAppend';
@@ -1538,6 +1542,30 @@ export function StreamEditor({
         annotations: Transaction.addToHistory.of(false),
       });
       addToast('Showing linked highlight in stream.', 'success');
+    });
+
+    return () => unsubscribe();
+  }, [addToast, stream.id]);
+
+  useEffect(() => {
+    const unsubscribe = bridge.onMessage((message) => {
+      if (message.type !== 'pdfHighlightDeleted') return;
+
+      const payloadStreamId = message.payload?.streamId as string | undefined;
+      const highlightId = message.payload?.highlightId as string | undefined;
+      if (payloadStreamId !== stream.id || !highlightId) return;
+
+      const view = editorViewRef.current;
+      if (!view) return;
+      const markdown = view.state.doc.toString();
+      const changes = unlinkTickerPDFHighlightLinks(markdown, highlightId);
+      if (changes.length > 0) {
+        view.dispatch({
+          changes,
+          annotations: Transaction.addToHistory.of(false),
+        });
+      }
+      addToast('Removed PDF link.', 'success');
     });
 
     return () => unsubscribe();

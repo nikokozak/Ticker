@@ -336,6 +336,7 @@ final class PDFReaderPaneController: NSViewController {
     var onAnchorPickCancelled: ((UUID) -> Void)?
     var onSectionAction: (@MainActor (PDFSectionActionPayload) -> Void)?
     var onRevealHighlightInStream: (@MainActor (PDFHighlightRevealPayload) -> Void)?
+    var onDeleteHighlight: (@MainActor (PDFHighlightRevealPayload) -> Bool)?
     var onPageChanged: ((UUID, Int) -> Void)?
     var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
     var sectionProvider: ((UUID, UUID, Int) throws -> PDFSectionDescriptor)?
@@ -458,6 +459,13 @@ final class PDFReaderPaneController: NSViewController {
 
     func isPresenting(streamId: UUID) -> Bool {
         activePDFContext?.streamId == streamId && isPDFPaneVisible
+    }
+
+    func removeHighlight(id highlightId: UUID, streamId: UUID) {
+        guard activePDFContext?.streamId == streamId else { return }
+        for annotation in taggedAnnotations(highlightId: highlightId.uuidString) {
+            annotation.page?.removeAnnotation(annotation)
+        }
     }
 
     func currentSelectedText() -> String? {
@@ -1496,14 +1504,13 @@ final class PDFReaderPaneController: NSViewController {
 
     private func installPDFHighlightActivationMonitor() {
         guard pdfHighlightActivationMonitor == nil else { return }
-        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown]
         pdfHighlightActivationMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            self?.handlePDFHighlightActivationEvent(event)
-            return event
+            self?.handlePDFHighlightActivationEvent(event) ?? event
         }
     }
 
-    private func handlePDFHighlightActivationEvent(_ event: NSEvent) {
+    private func handlePDFHighlightActivationEvent(_ event: NSEvent) -> NSEvent? {
         let pointInPDFView = pdfPanePDFView.convert(event.locationInWindow, from: nil)
 
         switch event.type {
@@ -1513,7 +1520,7 @@ final class PDFReaderPaneController: NSViewController {
                   event.clickCount == 1,
                   event.window === view.window,
                   pdfPanePDFView.bounds.contains(pointInPDFView) else {
-                return
+                return event
             }
             pdfHighlightClickTracker = PDFHighlightClickTracker(mouseDownLocation: event.locationInWindow)
 
@@ -1521,20 +1528,67 @@ final class PDFReaderPaneController: NSViewController {
             pdfHighlightClickTracker?.observe(event.locationInWindow)
 
         case .leftMouseUp:
-            guard var tracker = pdfHighlightClickTracker else { return }
+            guard var tracker = pdfHighlightClickTracker else { return event }
             pdfHighlightClickTracker = nil
             tracker.observe(event.locationInWindow)
             guard !tracker.exceededSlop,
                   !isAnchorPickMode,
                   event.window === view.window,
                   pdfPanePDFView.bounds.contains(pointInPDFView) else {
-                return
+                return event
             }
             revealSavedHighlight(at: pointInPDFView)
+
+        case .rightMouseDown:
+            guard !isAnchorPickMode,
+                  event.window === view.window,
+                  pdfPanePDFView.bounds.contains(pointInPDFView),
+                  showPDFHighlightContextMenu(at: pointInPDFView) else {
+                return event
+            }
+            return nil
 
         default:
             break
         }
+
+        return event
+    }
+
+    private func showPDFHighlightContextMenu(at pointInPDFView: CGPoint) -> Bool {
+        guard let page = pdfPanePDFView.page(for: pointInPDFView, nearest: false) else { return false }
+        let pointOnPage = pdfPanePDFView.convert(pointInPDFView, to: page)
+        guard let annotation = page.annotation(at: pointOnPage),
+              let highlightId = PDFHighlightAnnotationTag.highlightId(from: annotation.contents) else {
+            return false
+        }
+
+        let menu = NSMenu()
+        let remove = NSMenuItem(
+            title: "Remove PDF link",
+            action: #selector(handlePDFHighlightDelete(_:)),
+            keyEquivalent: ""
+        )
+        remove.target = self
+        remove.representedObject = highlightId.uuidString
+        menu.addItem(remove)
+        menu.popUp(positioning: nil, at: pointInPDFView, in: pdfPanePDFView)
+        return true
+    }
+
+    @objc private func handlePDFHighlightDelete(_ sender: NSMenuItem) {
+        guard let context = activePDFContext,
+              let value = sender.representedObject as? String,
+              let highlightId = UUID(uuidString: value),
+              onDeleteHighlight?(PDFHighlightRevealPayload(
+                streamId: context.streamId,
+                sourceId: context.sourceId,
+                highlightId: highlightId
+              )) == true else {
+            return
+        }
+
+        showPDFPaneMessage("PDF link removed.")
     }
 
     private func revealSavedHighlight(at pointInPDFView: CGPoint) {

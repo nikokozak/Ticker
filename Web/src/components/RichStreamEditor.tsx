@@ -35,7 +35,9 @@ import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import {
   aiWritingRange,
   insertImage,
+  removePDFHighlightLink,
   revealPDFHighlight,
+  selectedPDFHighlight,
   selectText,
   setAIWritingRange,
   streamAIMarkdown,
@@ -906,6 +908,15 @@ export function RichStreamEditor({
       return;
     }
 
+    if (message.type === 'pdfHighlightDeleted') {
+      if (payload?.streamId !== stream.id) return;
+      const highlightId = payload.highlightId;
+      if (typeof highlightId !== 'string') return;
+      removePDFHighlightLink(editorRef.current!.view, highlightId);
+      addToast('Removed PDF link.', 'success');
+      return;
+    }
+
     if (message.type === 'revealPdfHighlightInStream') {
       if (payload?.streamId !== stream.id) return;
       const sourceId = payload.sourceId;
@@ -1194,6 +1205,7 @@ export function RichStreamEditor({
   };
 
   const formats = editor ? activeFormats(editor.view.state) : null;
+  const activePDFHighlight = editor ? selectedPDFHighlight(editor.view.state) : null;
   const sourceScopeLabel = sourceScope === 'all' ? 'All' : sourceScope === 'none' ? 'None' : 'Auto';
   const openPDFTitle = pdfPaneState.visible && pdfPaneState.streamId === stream.id
     ? pdfPaneState.shortTitle ?? pdfPaneState.sourceName ?? 'Open PDF'
@@ -1201,6 +1213,7 @@ export function RichStreamEditor({
   const canAnchorSelection = Boolean(
     editor
     && openPDFTitle
+    && !activePDFHighlight
     && editor.view.state.doc.textBetween(
       editor.view.state.selection.from,
       editor.view.state.selection.to,
@@ -1519,6 +1532,26 @@ export function RichStreamEditor({
                 }}
               >
                 Anchor PDF
+              </button>
+            )}
+            {activePDFHighlight && (
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                aria-label="Remove PDF link"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  hideSelectionMenu();
+                  bridge.send({
+                    type: 'deletePdfHighlight',
+                    payload: {
+                      streamId: stream.id,
+                      highlightId: activePDFHighlight.highlightId,
+                    },
+                  });
+                }}
+              >
+                Remove PDF
               </button>
             )}
           </div>

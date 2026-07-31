@@ -2025,6 +2025,48 @@ describe('RichStreamEditor PDF highlight links', () => {
     const { from, to } = liveView!.state.selection;
     expect(liveView!.state.doc.textBetween(from, to)).toBe('Paper p.4');
   });
+
+  it('requests removal from selected linked text and unlinks only after host confirmation', async () => {
+    const highlightId = '22222222-2222-3333-4444-555555555555';
+    const markdown = `Before [Paper p.4](ticker-pdf://source-1?highlight=${highlightId}&page=4) after.`;
+    await renderStream({
+      ...stream,
+      id: 'linked-stream',
+      document: {
+        ...stream.document,
+        streamId: 'linked-stream',
+        docJSON: docJSON(markdown),
+        markdown,
+      },
+    });
+
+    await selectEditorText('Paper p.4');
+    await click('Remove PDF link');
+    expect(sent).toContainEqual({
+      type: 'deletePdfHighlight',
+      payload: {
+        streamId: 'linked-stream',
+        highlightId,
+      },
+    });
+    expect(editor().querySelector('a')?.textContent).toBe('Paper p.4');
+
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfHighlightDeleted',
+        payload: { streamId: 'linked-stream', highlightId },
+      });
+    });
+
+    expect(editor().querySelector('a')).toBe(null);
+    expect(editor().textContent).toBe('Before Paper p.4 after.');
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editor().querySelector('a')).toBe(null);
+  });
 });
 
 describe('RichStreamEditor host wire gate', () => {

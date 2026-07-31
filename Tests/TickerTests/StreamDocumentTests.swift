@@ -3184,6 +3184,34 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_deletePDFHighlightIsLimitedToItsStream() throws {
+        try withTempPersistenceService { service in
+            let source = try savePDFSource(in: service)
+            let otherSource = try savePDFSource(in: service)
+            let highlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 1,
+                rects: [PDFHighlightRect(page: 1, x: 1, y: 2, w: 3, h: 4)],
+                quote: "Remove me",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+
+            try service.savePDFHighlight(highlight)
+
+            XCTAssertFalse(try service.deletePDFHighlight(
+                id: highlight.id,
+                streamId: otherSource.streamId
+            ))
+            XCTAssertEqual(try service.loadPDFHighlights(sourceId: source.id), [highlight])
+            XCTAssertTrue(try service.deletePDFHighlight(
+                id: highlight.id,
+                streamId: source.streamId
+            ))
+            XCTAssertEqual(try service.loadPDFHighlights(sourceId: source.id), [])
+        }
+    }
+
     func test_deleteSourceDeletesPDFHighlights() throws {
         try withTempPersistenceService { service in
             let source = try savePDFSource(in: service)
