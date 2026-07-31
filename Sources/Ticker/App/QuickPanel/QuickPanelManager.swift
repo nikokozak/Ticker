@@ -150,7 +150,13 @@ final class QuickPanelManager: ObservableObject {
 
     @Published private(set) var isVisible: Bool = false
     @Published private(set) var context: QuickPanelContext?
-    @Published var inputText: String = ""
+    @Published var inputText: String = "" {
+        didSet {
+            if !inputText.isEmpty {
+                cancelClipboardContextExpiry()
+            }
+        }
+    }
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var status: QuickPanelStatus?  // Temporary feedback and capture status.
@@ -189,7 +195,9 @@ final class QuickPanelManager: ObservableObject {
     private var currentAppearance: NSAppearance?  // Stored to apply when panel is created
     private var suppressedImageHash: Int?
     private var suppressedClipboardTextChangeCount: Int?
+    private var clipboardContextExpiryWorkItem: DispatchWorkItem?
     private var presentationGeneration: Int = 0
+    private static let clipboardContextLifetime: TimeInterval = 60
 
     // MARK: - Initialization
 
@@ -208,6 +216,7 @@ final class QuickPanelManager: ObservableObject {
     }
 
     deinit {
+        clipboardContextExpiryWorkItem?.cancel()
         streamingTask?.cancel()
         aiOperations.cancelAll()
     }
@@ -284,6 +293,7 @@ final class QuickPanelManager: ObservableObject {
                 // Update context in place, don't move the panel
                 self.context = capturedContext
                 resetState()
+                scheduleClipboardContextExpiry()
             } else {
                 // Same selection or no selection - toggle off
                 hide()
@@ -353,6 +363,7 @@ final class QuickPanelManager: ObservableObject {
 
         // Show panel without bringing main window forward
         isVisible = true
+        scheduleClipboardContextExpiry()
         panel.fadeIn()
         panel.makeKey()
         NotificationCenter.default.post(name: .quickPanelDidShow, object: nil)
@@ -364,6 +375,7 @@ final class QuickPanelManager: ObservableObject {
         let generation = presentationGeneration
         heightDebounceTimer?.invalidate()
         heightDebounceTimer = nil
+        cancelClipboardContextExpiry()
         // Cancel any in-flight streaming to avoid orphan AI calls
         cancelStreaming()
 
@@ -566,9 +578,8 @@ final class QuickPanelManager: ObservableObject {
 
         // Second: clear input/context
         if !inputText.isEmpty || context?.hasContent == true {
-            suppressDismissedClipboardContextIfNeeded()
             inputText = ""
-            context = nil
+            clearContext()
             return
         }
 
@@ -578,8 +589,50 @@ final class QuickPanelManager: ObservableObject {
 
     /// Clear attached context
     func clearContext() {
+        cancelClipboardContextExpiry()
         suppressDismissedClipboardContextIfNeeded()
         context = nil
+    }
+
+    private func scheduleClipboardContextExpiry() {
+        cancelClipboardContextExpiry()
+        guard context?.isClipboardTextContext == true else { return }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.clipboardContextExpiryWorkItem = nil
+            guard Self.shouldExpireClipboardTextContext(
+                self.context,
+                inputText: self.inputText,
+                isLoading: self.isLoading,
+                isStreaming: self.ephemeralConversation.isStreaming
+            ) else {
+                return
+            }
+            self.context = nil
+        }
+        clipboardContextExpiryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.clipboardContextLifetime,
+            execute: workItem
+        )
+    }
+
+    private func cancelClipboardContextExpiry() {
+        clipboardContextExpiryWorkItem?.cancel()
+        clipboardContextExpiryWorkItem = nil
+    }
+
+    static func shouldExpireClipboardTextContext(
+        _ context: QuickPanelContext?,
+        inputText: String,
+        isLoading: Bool,
+        isStreaming: Bool
+    ) -> Bool {
+        context?.isClipboardTextContext == true
+            && inputText.isEmpty
+            && !isLoading
+            && !isStreaming
     }
 
     func performStatusAction(_ action: QuickPanelStatusAction) {

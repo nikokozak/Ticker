@@ -254,6 +254,56 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
     }
 
     @MainActor
+    func test_clipboardTextContextExpiresOnlyWhileIdle() {
+        let clipboardContext = QuickPanelContext(
+            selectedText: nil,
+            activeApp: "Terminal",
+            windowTitle: nil,
+            panelPosition: CGPoint(x: 0, y: 0),
+            clipboardImage: nil,
+            clipboardText: "Copied text"
+        )
+        let selectionContext = QuickPanelContext(
+            selectedText: "Selected text",
+            activeApp: "Terminal",
+            windowTitle: nil,
+            panelPosition: CGPoint(x: 0, y: 0),
+            clipboardImage: nil
+        )
+
+        XCTAssertTrue(QuickPanelManager.shouldExpireClipboardTextContext(
+            clipboardContext,
+            inputText: "",
+            isLoading: false,
+            isStreaming: false
+        ))
+        XCTAssertFalse(QuickPanelManager.shouldExpireClipboardTextContext(
+            selectionContext,
+            inputText: "",
+            isLoading: false,
+            isStreaming: false
+        ))
+        XCTAssertFalse(QuickPanelManager.shouldExpireClipboardTextContext(
+            clipboardContext,
+            inputText: "Draft",
+            isLoading: false,
+            isStreaming: false
+        ))
+        XCTAssertFalse(QuickPanelManager.shouldExpireClipboardTextContext(
+            clipboardContext,
+            inputText: "",
+            isLoading: true,
+            isStreaming: false
+        ))
+        XCTAssertFalse(QuickPanelManager.shouldExpireClipboardTextContext(
+            clipboardContext,
+            inputText: "",
+            isLoading: false,
+            isStreaming: true
+        ))
+    }
+
+    @MainActor
     func test_localSelectionProviderPrefersPDFSelectionOverEditorSelection() async {
         var editorSelectionWasRequested = false
         let provider = QuickPanelLocalSelectionProvider(
