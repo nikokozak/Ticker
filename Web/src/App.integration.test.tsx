@@ -46,14 +46,18 @@ const inbox: StreamAppendInboxJSON[] = [{
   createdAt: now,
 }];
 
-function loaded(requestId: number, appendInbox: StreamAppendInboxJSON[] = []): SwiftToWebBridgeMessage {
+function loaded(
+  requestId: number,
+  appendInbox: StreamAppendInboxJSON[] = [],
+  streamId = 'stream-1',
+): SwiftToWebBridgeMessage {
   const stream: Stream = {
-    id: 'stream-1',
-    title: 'Stream 1',
+    id: streamId,
+    title: streamId === 'stream-1' ? 'Stream 1' : 'Stream 2',
     sourceScope: 'auto',
     sources: [],
     document: {
-      streamId: 'stream-1',
+      streamId,
       docJSON: JSON.stringify(parseMarkdown('Base').toJSON()),
       docFormatVersion: 1,
       markdown: appendInbox.length ? `Base\n\n${inbox[0].fragment}` : 'Base',
@@ -229,5 +233,126 @@ describe('App stream loading', () => {
 
     expect(document.querySelector('.ProseMirror')?.textContent)
       .toContain('I’ve been wondering about Cape Verde');
+  });
+
+  it('does not switch streams while a local thread note has a save conflict', async () => {
+    const storedThread = {
+      threadId: 'thread-1',
+      streamId: 'stream-1',
+      title: 'Power budget',
+      workingText: 'Stored elsewhere',
+      anchorText: 'Base',
+      revision: 8,
+      createdAt: now,
+      updatedAt: now,
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type: string) => {
+      if (type === 'loadProxyAuth') return { state: 'active' };
+      if (type === 'listStreamThreads') return { threads: [storedThread] };
+      if (type === 'loadStreamThread') return { thread: { ...storedThread, revision: 2 } };
+      if (type === 'saveStreamThread') return { conflict: true, thread: storedThread };
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    await boot();
+    await selectStream();
+    const requestId = Number(loads()[0].payload?.requestId);
+    await act(async () => {
+      bridge.receive(loaded(requestId));
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      (document.querySelector('[aria-label="Threads"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+    await act(async () => {
+      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="My note"]')).not.toBeNull());
+    const note = document.querySelector('[aria-label="My note"]') as HTMLTextAreaElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')
+        ?.set?.call(note, 'Unsaved local note');
+      note.dispatchEvent(new Event('input', { bubbles: true }));
+      bridge.receive({
+        type: 'streamDocumentAppended',
+        payload: {
+          streamId: 'stream-2',
+          fragment: 'Capture',
+          revision: 1,
+          isNewStream: true,
+          source: 'quickPanel',
+          spans: [],
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.thread-save-warning')).not.toBeNull());
+    expect(loads().map((message) => message.payload?.id)).toEqual(['stream-1']);
+    expect(note.value).toBe('Unsaved local note');
+    expect(document.querySelector('.ProseMirror')?.textContent).toBe('Base');
+  });
+
+  it('remounts the drawer with the next stream after a successful flush', async () => {
+    const firstThread = {
+      threadId: 'thread-1', streamId: 'stream-1', title: 'First thread', workingText: '',
+      anchorText: 'First anchor', revision: 0, createdAt: now, updatedAt: now,
+    };
+    const secondThread = {
+      ...firstThread,
+      threadId: 'thread-2',
+      streamId: 'stream-2',
+      title: 'Second thread',
+      anchorText: 'Second anchor',
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type: string, payload) => {
+      if (type === 'loadProxyAuth') return { state: 'active' };
+      if (type === 'listStreamThreads') {
+        return { threads: [payload?.streamId === 'stream-2' ? secondThread : firstThread] };
+      }
+      if (type === 'loadStreamThread') return { thread: firstThread };
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    await boot();
+    await selectStream();
+    await act(async () => {
+      bridge.receive(loaded(Number(loads()[0].payload?.requestId)));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      (document.querySelector('[aria-label="Threads"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')?.textContent)
+      .toContain('First thread'));
+    await act(async () => {
+      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      await Promise.resolve();
+      bridge.receive({
+        type: 'streamDocumentAppended',
+        payload: {
+          streamId: 'stream-2', fragment: 'Capture', revision: 1,
+          isNewStream: true, source: 'quickPanel', spans: [],
+        },
+      });
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(loads().some((message) => message.payload?.id === 'stream-2')).toBe(true));
+    const nextLoad = loads().find((message) => message.payload?.id === 'stream-2')!;
+    await act(async () => {
+      bridge.receive(loaded(Number(nextLoad.payload?.requestId), [], 'stream-2'));
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector('.thread-drawer')).toBeNull();
+    await act(async () => {
+      (document.querySelector('[aria-label="Threads"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')?.textContent)
+      .toContain('Second thread'));
   });
 });

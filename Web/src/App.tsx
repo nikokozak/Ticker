@@ -125,8 +125,16 @@ export function App() {
   const streamLoadSequenceRef = useRef(0);
   const pendingStreamLoadRef = useRef<{ streamId: string; requestId: number } | null>(null);
   const aiOperationDismissTimersRef = useRef<Map<string, number>>(new Map());
+  const editorFlushRef = useRef<(() => Promise<boolean>) | null>(null);
 
-  const requestStreamLoad = (id: string) => {
+  const requestStreamLoad = async (id: string) => {
+    if (viewRef.current === 'stream'
+        && currentStreamIdRef.current !== id
+        && editorFlushRef.current
+        && !await editorFlushRef.current()) {
+      addToast('Your changes could not be saved, so this stream stayed open.', 'error');
+      return;
+    }
     const requestId = ++streamLoadSequenceRef.current;
     pendingStreamLoadRef.current = { streamId: id, requestId };
     bridge.send({ type: 'loadStream', payload: { id, requestId } });
@@ -507,6 +515,7 @@ export function App() {
         stream={currentStream}
         onBack={handleBackToList}
         onDelete={handleDeleteStream}
+        onFlushAvailable={(flush) => { editorFlushRef.current = flush; }}
         pendingMatchText={pendingMatchText}
         pendingSourceId={pendingSourceId}
         onClearPendingMatch={() => setPendingMatchText(null)}

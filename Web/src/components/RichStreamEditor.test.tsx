@@ -215,14 +215,15 @@ async function renderStream(next: Stream, options: {
   onClearPendingMatch?: () => void;
   onClearPendingSource?: () => void;
   onDelete?: () => void;
+  onBack?: () => void;
 } = {}) {
-  const { onDelete = () => {}, ...rest } = options;
+  const { onDelete = () => {}, onBack = () => {}, ...rest } = options;
   await act(async () => {
     root!.render(
       <RichStreamEditor
         key={next.id}
         stream={next}
-        onBack={() => {}}
+        onBack={onBack}
         onDelete={onDelete}
         {...rest}
       />,
@@ -388,6 +389,20 @@ describe('an image save that lands after the editor is gone', () => {
 });
 
 describe('RichStreamEditor lifecycle', () => {
+  it('destroys the document session before leaving the editor', async () => {
+    const onBack = vi.fn();
+    const destroy = vi.spyOn(DocumentSession.prototype, 'destroy').mockResolvedValue(true);
+    await renderStream(stream, { onBack });
+
+    await act(async () => {
+      (document.querySelector('.back-button') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    expect(destroy).toHaveBeenCalled();
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
   it('does not leave the old editor mounted while Strict Mode replays an async cleanup', async () => {
     vi.mocked(bridge.sendAsync).mockResolvedValue({ revision: 3 });
     const cleanups: VoidFunction[] = [];
@@ -444,6 +459,51 @@ describe('RichStreamEditor lifecycle', () => {
     });
     expect(vi.mocked(bridge.sendAsync).mock.calls
       .filter(([type]) => type === 'saveRichStreamDocument')).toHaveLength(1);
+  });
+
+  it('reports a thread-note conflict to the host without losing the local note', async () => {
+    const savedThread: import('../types/models').StreamThreadJSON = {
+      threadId: 'thread-1',
+      streamId: stream.id,
+      title: 'Power budget',
+      workingText: 'Stored elsewhere',
+      anchorText: 'Original paragraph.',
+      anchorSpanId: 'span-1',
+      revision: 8,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'listStreamThreads') return { threads: [savedThread] };
+      if (type === 'loadStreamThread') return { thread: { ...savedThread, revision: 2 } };
+      if (type === 'saveStreamThread') return { conflict: true, thread: savedThread };
+      if (type === 'saveRichStreamDocument') return { revision: 2 };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+
+    await click('Threads');
+    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+    await act(async () => {
+      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="My note"]')).not.toBeNull());
+    const note = document.querySelector('[aria-label="My note"]') as HTMLTextAreaElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')
+        ?.set?.call(note, 'Local work survives');
+      note.dispatchEvent(new Event('input', { bubbles: true }));
+      bridge.receive({ type: 'flushEditor', payload: { requestId: 'quit-1' } });
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(sent).toContainEqual({
+      type: 'editorFlushed',
+      payload: { requestId: 'quit-1', saved: false },
+    }));
+    expect(note.value).toBe('Local work survives');
+    expect(document.querySelector('.thread-save-warning')?.textContent)
+      .toContain('changed elsewhere');
   });
 });
 

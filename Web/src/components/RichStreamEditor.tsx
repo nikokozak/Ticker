@@ -26,6 +26,7 @@ import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { EyeIcon, XIcon } from './icons';
 import { Modal } from './Modal';
 import { SourcesModal } from './SourcesModal';
+import { ThreadDrawer, type ThreadDrawerHandle } from './ThreadDrawer';
 import {
   nextSourceScope,
   parsePDFSectionActionRequest,
@@ -92,6 +93,7 @@ interface RichStreamEditorProps {
   stream: Stream;
   onBack: () => void;
   onDelete: () => void;
+  onFlushAvailable?: (flush: (() => Promise<boolean>) | null) => void;
   pendingMatchText?: string | null;
   pendingSourceId?: string | null;
   onClearPendingMatch?: () => void;
@@ -180,6 +182,7 @@ export function RichStreamEditor({
   stream,
   onBack,
   onDelete,
+  onFlushAvailable,
   pendingMatchText,
   pendingSourceId,
   onClearPendingMatch,
@@ -196,6 +199,8 @@ export function RichStreamEditor({
   const editorShellRef = useRef<HTMLDivElement>(null);
   const streamOverflowMenuRef = useRef<HTMLDetailsElement>(null);
   const selectionActionMenuRef = useRef<HTMLDivElement>(null);
+  const threadDrawerRef = useRef<ThreadDrawerHandle>(null);
+  const threadButtonRef = useRef<HTMLButtonElement>(null);
   // ponytail: one stream-wide PDF AI lock; track host operation ids if concurrent
   // PDF jobs ever become a supported workflow.
   const pdfAIInFlightRef = useRef(false);
@@ -216,6 +221,7 @@ export function RichStreamEditor({
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
+  const [showThreads, setShowThreads] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
   const [pdfPaneState, setPDFPaneState] = useState<PDFPaneState>({ visible: false });
@@ -259,6 +265,20 @@ export function RichStreamEditor({
     setAIDetail(null);
     setSourceIndexNotice(null);
   }, []);
+
+  const flushAll = useCallback(async () => {
+    cancelDocumentAI();
+    const [documentSaved, threadSaved] = await Promise.all([
+      sessionRef.current?.saveNow() ?? Promise.resolve(true),
+      threadDrawerRef.current?.flush() ?? Promise.resolve(true),
+    ]);
+    return documentSaved && threadSaved;
+  }, [cancelDocumentAI]);
+
+  useEffect(() => {
+    onFlushAvailable?.(flushAll);
+    return () => onFlushAvailable?.(null);
+  }, [flushAll, onFlushAvailable]);
 
   const canStartAI = useCallback(() => {
     if (!aiInFlightRef.current && !pdfAIInFlightRef.current) return true;
@@ -847,10 +867,12 @@ export function RichStreamEditor({
    */
   const leave = useCallback(async () => {
     cancelDocumentAI();
-    const session = sessionRef.current;
-    if (!session) return onBack();
     setLeaving(true);
-    if (await session.destroy()) return onBack();
+    const [documentSaved, threadSaved] = await Promise.all([
+      sessionRef.current?.destroy() ?? Promise.resolve(true),
+      threadDrawerRef.current?.flush() ?? Promise.resolve(true),
+    ]);
+    if (documentSaved && threadSaved) return onBack();
     setLeaving(false);
     addToast('Your changes could not be saved, so this stream stayed open.', 'error');
   }, [addToast, cancelDocumentAI, onBack]);
@@ -1116,17 +1138,20 @@ export function RichStreamEditor({
       // it can see — but a failure still shows as an error and raises a toast.
       const requestId = payload?.requestId;
       if (typeof requestId !== 'string') return;
-      cancelDocumentAI();
-      void session.saveNow().then((saved) => {
+      void flushAll().then((saved) => {
         // Reported truthfully: the host cancels quitting on a false, because
         // closing over an editor that could not save discards the only copy.
-        bridge.send({ type: 'editorFlushed', payload: { requestId, saved } });
+        bridge.send({
+          type: 'editorFlushed',
+          payload: { requestId, saved },
+        });
       });
     }
   }), [
     addToast,
     canStartAI,
     cancelDocumentAI,
+    flushAll,
     startPDFSectionAI,
     stream.id,
   ]);
@@ -1340,6 +1365,20 @@ export function RichStreamEditor({
             aria-pressed={xray}
           >
             <EyeIcon size={16} />
+          </button>
+          <button
+            ref={threadButtonRef}
+            type="button"
+            className={`stream-threads-button ${showThreads ? 'stream-threads-button--active' : ''}`}
+            aria-label="Threads"
+            aria-pressed={showThreads}
+            title="Threads"
+            onClick={() => {
+              if (showThreads) void threadDrawerRef.current?.close();
+              else setShowThreads(true);
+            }}
+          >
+            Threads
           </button>
           <button
             type="button"
@@ -1634,6 +1673,13 @@ export function RichStreamEditor({
             )}
           </div>
         </div>
+        <ThreadDrawer
+          ref={threadDrawerRef}
+          streamId={stream.id}
+          isOpen={showThreads}
+          onRequestClose={() => setShowThreads(false)}
+          onAfterClose={() => threadButtonRef.current?.focus()}
+        />
       </div>
 
       <SourcesModal
