@@ -51,6 +51,17 @@ enum CitationMarkerSwap {
         return output
     }
 
+    /// Citation numbers are scoped to one retrieval. Replaying them in a later
+    /// turn would make the new receipt point at the old claim's wrong source.
+    static func removingMarkers(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: markerPattern) else { return text }
+        return regex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..<text.endIndex, in: text),
+            withTemplate: ""
+        )
+    }
+
     private static func renderedCitation(
         _ entry: DocumentAICitationManifestEntry,
         quote: String?,

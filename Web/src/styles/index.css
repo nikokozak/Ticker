@@ -1066,6 +1066,206 @@ body {
   font-weight: 600;
 }
 
+.thread-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.thread-exchange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.thread-user-turn,
+.thread-assistant-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-md);
+  border-radius: var(--radius-sm);
+}
+
+.thread-user-turn {
+  margin-left: var(--spacing-lg);
+  background: var(--color-surface);
+}
+
+.thread-assistant-turn {
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg);
+}
+
+.thread-user-turn > span,
+.thread-assistant-turn > span {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.thread-user-turn p,
+.thread-ai-response {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.thread-ai-response > * + * {
+  margin-top: var(--spacing-sm);
+}
+
+.thread-ai-response ul,
+.thread-ai-response ol {
+  padding-left: var(--spacing-lg);
+}
+
+.thread-ai-response pre,
+.thread-ai-response code {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.thread-ai-response a {
+  color: var(--color-accent);
+}
+
+.thread-ai-waiting {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.thread-sent-context {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.thread-sent-context summary {
+  width: max-content;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.thread-sent-context > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-md);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.thread-sent-context h4 {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+}
+
+.thread-sent-context blockquote {
+  padding-left: var(--spacing-sm);
+  border-left: 1px solid var(--color-border);
+  white-space: pre-wrap;
+}
+
+.thread-sent-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+
+.thread-sent-sources button,
+.thread-ai-error button,
+.thread-prompt-actions button {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.thread-sent-sources button,
+.thread-ai-error button {
+  padding: var(--spacing-xs) var(--spacing-sm);
+}
+
+.thread-ai-error {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.thread-ai-error button {
+  margin-top: var(--spacing-sm);
+  margin-right: var(--spacing-sm);
+}
+
+.thread-prompt {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding-top: var(--spacing-md);
+  background: var(--color-surface-elevated);
+}
+
+.thread-prompt label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.thread-prompt textarea {
+  min-height: var(--space-8);
+  resize: vertical;
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.thread-prompt textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+  outline: none;
+}
+
+.thread-prompt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+
+.thread-prompt-actions button {
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-accent);
+  color: var(--on-accent);
+}
+
+.thread-prompt-actions button:disabled {
+  background: var(--color-surface-active);
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+.thread-prompt-actions span {
+  color: var(--color-error);
+  font-size: var(--font-size-xs);
+}
+
 @media (max-width: 760px) {
   .thread-drawer {
     position: absolute;

@@ -3,21 +3,31 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from 'react';
+import MarkdownIt from 'markdown-it';
 import {
+  bridge,
   listStreamThreads,
   loadStreamThread,
   saveStreamThread,
 } from '../types/bridge';
-import type { StreamThreadJSON } from '../types/models';
+import type { AIExchangeJSON, SourceScope, StreamThreadJSON } from '../types/models';
 import { ThreadDraftSession, type ThreadSaveState } from '../threads/session';
+import {
+  manifestCitations,
+  parseThreadAISentFacts,
+  type ThreadAISentFacts,
+} from '../threads/context';
 import { useToastStore } from '../store/toastStore';
+import { buildCitationURL, swapCitationMarkers } from '../utils/citationMarkers';
 import { XIcon } from './icons';
 
 export interface ThreadDrawerHandle {
   flush: () => Promise<boolean>;
+  cancelAI: () => void;
   close: () => Promise<boolean>;
   openThread: (threadId: string) => Promise<boolean>;
   showThread: (thread: StreamThreadJSON) => Promise<boolean>;
@@ -29,7 +39,30 @@ interface ThreadDrawerProps {
   onRequestClose: () => void;
   onAfterClose?: () => void;
   onLocateAnchor?: (thread: StreamThreadJSON) => boolean;
+  sourceScope?: SourceScope;
+  onBeginAI?: () => boolean;
+  onEndAI?: () => void;
+  onOpenPDFDestination?: (url: string) => void;
 }
+
+interface PendingThreadAI {
+  requestId: string;
+  prompt: string;
+  response: string;
+  model?: string;
+  sentContext?: ThreadAISentFacts;
+  error?: string;
+}
+
+const threadMarkdown = MarkdownIt('commonmark', {
+  html: false,
+  breaks: false,
+  linkify: false,
+  typographer: false,
+});
+threadMarkdown.renderer.rules.image = (tokens, index) => (
+  threadMarkdown.utils.escapeHtml(tokens[index].content || 'Image')
+);
 
 const SAVE_LABEL: Record<ThreadSaveState, string> = {
   saved: 'Saved',
@@ -48,18 +81,142 @@ function sourceLabel(thread: StreamThreadJSON): string | null {
   return thread.sourcePage ? `${source} · page ${thread.sourcePage}` : source;
 }
 
+function sourceURL(source: ThreadAISentFacts['sources'][number]): string {
+  if (source.page && source.chunkId) {
+    return buildCitationURL({
+      sourceId: source.sourceId,
+      chunkId: source.chunkId,
+      page: source.page,
+    });
+  }
+  return `ticker-pdf://${source.sourceId}`;
+}
+
+function SentContext({
+  facts,
+  onOpenPDFDestination,
+}: {
+  facts: ThreadAISentFacts;
+  onOpenPDFDestination?: (url: string) => void;
+}) {
+  const included = facts.turns.includedRequestIds.length;
+  return (
+    <details className="thread-sent-context">
+      <summary>Sent with this prompt</summary>
+      <div>
+        <h4>Started from</h4>
+        <blockquote>{facts.anchor.text || 'No starting passage.'}</blockquote>
+        <h4>My note</h4>
+        {facts.note.sent ? <p>{facts.note.text}</p> : <p>Not sent (empty).</p>}
+        <p>Previous turns: {included} of {facts.turns.totalAtSend}</p>
+        <h4>Sources</h4>
+        {facts.sources.length > 0 ? (
+          <div className="thread-sent-sources">
+            {facts.sources.map((source) => (
+              <button
+                key={`${source.sourceId}:${source.chunkId ?? 'whole'}:${source.page ?? 0}`}
+                type="button"
+                onClick={() => onOpenPDFDestination?.(sourceURL(source))}
+              >
+                {source.shortTitle}{source.page ? ` · page ${source.page}` : ' · whole source'}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p>{facts.sourceContextMode === 'unavailable'
+            ? 'Source retrieval was unavailable.'
+            : 'No source passage was sent.'}</p>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function AIResponse({
+  markdown,
+  sourceManifest,
+  onOpenPDFDestination,
+}: {
+  markdown: string;
+  sourceManifest: string;
+  onOpenPDFDestination?: (url: string) => void;
+}) {
+  const html = useMemo(() => {
+    const swapped = swapCitationMarkers(markdown, manifestCitations(sourceManifest));
+    return threadMarkdown.render(swapped);
+  }, [markdown, sourceManifest]);
+
+  return (
+    <div
+      className="thread-ai-response"
+      onClick={(event) => {
+        const link = (event.target as HTMLElement).closest('a');
+        if (!link) return;
+        event.preventDefault();
+        const href = link.getAttribute('href') ?? '';
+        if (href.startsWith('ticker-pdf://')) {
+          onOpenPDFDestination?.(href);
+        } else if (/^https?:\/\//i.test(href)) {
+          bridge.send({ type: 'openExternalURL', payload: { url: href } });
+        }
+      }}
+      // markdown-it runs with HTML and images disabled above.
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+function ThreadExchange({
+  exchange,
+  onOpenPDFDestination,
+}: {
+  exchange: AIExchangeJSON;
+  onOpenPDFDestination?: (url: string) => void;
+}) {
+  const facts = parseThreadAISentFacts(exchange.sourceManifest);
+  return (
+    <article className="thread-exchange">
+      <div className="thread-user-turn">
+        <span>You</span>
+        <p>{exchange.userInput}</p>
+      </div>
+      <div className="thread-assistant-turn">
+        <span>AI{exchange.model ? ` · ${exchange.model}` : ''}</span>
+        <AIResponse
+          markdown={exchange.responseRaw}
+          sourceManifest={exchange.sourceManifest}
+          onOpenPDFDestination={onOpenPDFDestination}
+        />
+      </div>
+      {facts && <SentContext facts={facts} onOpenPDFDestination={onOpenPDFDestination} />}
+    </article>
+  );
+}
+
 export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(function ThreadDrawer({
   streamId,
   isOpen,
   onRequestClose,
   onAfterClose,
   onLocateAnchor,
+  sourceScope = 'auto',
+  onBeginAI,
+  onEndAI,
+  onOpenPDFDestination,
 }, ref) {
   const sessionRef = useRef<ThreadDraftSession | null>(null);
+  const aiStartGenerationRef = useRef(0);
+  const activeRequestIdRef = useRef<string | null>(null);
+  const activePromptRef = useRef<string | null>(null);
+  const aiClaimedRef = useRef(false);
   const [threads, setThreads] = useState<StreamThreadJSON[]>([]);
   const [activeThread, setActiveThread] = useState<StreamThreadJSON | null>(null);
   const [title, setTitle] = useState('');
   const [workingText, setWorkingText] = useState('');
+  const [exchanges, setExchanges] = useState<AIExchangeJSON[]>([]);
+  const [prompt, setPrompt] = useState('');
+  const [pendingAI, setPendingAI] = useState<PendingThreadAI | null>(null);
+  const [preparingAI, setPreparingAI] = useState(false);
   const [saveState, setSaveState] = useState<ThreadSaveState>('saved');
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -71,6 +228,10 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
     setActiveThread(thread);
     setTitle(thread.title);
     setWorkingText(thread.workingText);
+    setExchanges(thread.exchanges ?? []);
+    setPrompt('');
+    setPendingAI(null);
+    activePromptRef.current = null;
     setSaveState('saved');
     setAnchorChanged(Boolean(thread.anchorSpanId && onLocateAnchor && !onLocateAnchor(thread)));
     sessionRef.current = new ThreadDraftSession({
@@ -95,7 +256,27 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
 
   const flush = useCallback(() => sessionRef.current?.saveNow() ?? Promise.resolve(true), []);
 
+  const releaseAI = useCallback(() => {
+    if (!aiClaimedRef.current) return;
+    aiClaimedRef.current = false;
+    onEndAI?.();
+  }, [onEndAI]);
+
+  const cancelAI = useCallback(() => {
+    aiStartGenerationRef.current += 1;
+    const requestId = activeRequestIdRef.current;
+    activeRequestIdRef.current = null;
+    const activePrompt = activePromptRef.current;
+    activePromptRef.current = null;
+    if (requestId) bridge.send({ type: 'cancelDocumentAI', payload: { requestId } });
+    if (activePrompt) setPrompt(activePrompt);
+    setPreparingAI(false);
+    setPendingAI(null);
+    releaseAI();
+  }, [releaseAI]);
+
   const close = useCallback(async () => {
+    cancelAI();
     if (!await flush()) {
       addToast('Your thread note could not be saved, so the drawer stayed open.', 'error');
       return false;
@@ -107,10 +288,11 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
     onRequestClose();
     window.setTimeout(() => onAfterClose?.(), 0);
     return true;
-  }, [addToast, flush, onAfterClose, onRequestClose]);
+  }, [addToast, cancelAI, flush, onAfterClose, onRequestClose]);
 
   const openThread = useCallback(async (threadId: string) => {
     if (activeThread?.threadId === threadId) return true;
+    cancelAI();
     if (!await flush()) return false;
     setLoading(true);
     setLoadError(false);
@@ -124,27 +306,88 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
     } finally {
       setLoading(false);
     }
-  }, [activeThread?.threadId, addToast, flush, installThread, streamId]);
+  }, [activeThread?.threadId, addToast, cancelAI, flush, installThread, streamId]);
 
   const showThread = useCallback(async (thread: StreamThreadJSON) => {
     if (activeThread?.threadId === thread.threadId) return true;
+    cancelAI();
     if (!await flush()) return false;
     installThread(thread);
     return true;
-  }, [activeThread?.threadId, flush, installThread]);
+  }, [activeThread?.threadId, cancelAI, flush, installThread]);
 
   useImperativeHandle(ref, () => ({
     flush,
+    cancelAI,
     close,
     openThread,
     showThread,
-  }), [close, flush, openThread, showThread]);
+  }), [cancelAI, close, flush, openThread, showThread]);
 
   useEffect(() => {
     if (isOpen && !activeThread) void refreshList();
   }, [activeThread, isOpen, refreshList]);
 
-  useEffect(() => () => sessionRef.current?.discard(), []);
+  useEffect(() => () => {
+    sessionRef.current?.discard();
+    aiStartGenerationRef.current += 1;
+    const requestId = activeRequestIdRef.current;
+    if (requestId) bridge.send({ type: 'cancelDocumentAI', payload: { requestId } });
+    if (aiClaimedRef.current) onEndAI?.();
+  }, [onEndAI]);
+
+  useEffect(() => bridge.onMessage((message) => {
+    const payload = message.payload as Record<string, unknown> | undefined;
+    const requestId = activeRequestIdRef.current;
+    if (!requestId || payload?.requestId !== requestId) return;
+
+    if (message.type === 'threadAIContext') {
+      const sentContext = parseThreadAISentFacts(payload.sentContext);
+      if (sentContext) setPendingAI((pending) => (
+        pending?.requestId === requestId ? { ...pending, sentContext } : pending
+      ));
+      return;
+    }
+    if (message.type === 'documentModelSelected' && typeof payload.modelId === 'string') {
+      setPendingAI((pending) => (
+        pending?.requestId === requestId ? { ...pending, model: payload.modelId as string } : pending
+      ));
+      return;
+    }
+    if (message.type === 'documentAIChunk' && typeof payload.chunk === 'string') {
+      setPendingAI((pending) => (
+        pending?.requestId === requestId
+          ? { ...pending, response: pending.response + (payload.chunk as string) }
+          : pending
+      ));
+      return;
+    }
+    if (message.type === 'documentAIComplete') {
+      const exchange = payload.exchange as AIExchangeJSON | undefined;
+      activeRequestIdRef.current = null;
+      activePromptRef.current = null;
+      releaseAI();
+      if (!exchange || exchange.requestId !== requestId || exchange.threadId !== activeThread?.threadId) {
+        setPendingAI((pending) => pending && {
+          ...pending,
+          error: 'The reply finished, but its saved receipt was invalid.',
+        });
+        return;
+      }
+      setExchanges((current) => current.some((item) => item.requestId === exchange.requestId)
+        ? current
+        : [...current, exchange]);
+      setPendingAI(null);
+      return;
+    }
+    if (message.type === 'documentAIError') {
+      activeRequestIdRef.current = null;
+      activePromptRef.current = null;
+      releaseAI();
+      const error = typeof payload.error === 'string' ? payload.error : 'AI request failed.';
+      setPendingAI((pending) => pending && { ...pending, error });
+    }
+  }), [activeThread?.threadId, releaseAI]);
 
   const updateDraft = (nextTitle: string, nextWorkingText: string) => {
     setTitle(nextTitle);
@@ -153,12 +396,55 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
   };
 
   const showList = async () => {
+    cancelAI();
     if (!await flush()) return;
     sessionRef.current?.discard();
     sessionRef.current = null;
     setActiveThread(null);
     setSaveState('saved');
     await refreshList();
+  };
+
+  const sendPrompt = async () => {
+    const thread = activeThread;
+    const query = prompt.trim();
+    if (!thread || !query || pendingAI || preparingAI) return;
+    if (saveState !== 'saved') {
+      addToast('Wait until your note is saved before sending.', 'info');
+      return;
+    }
+    if (onBeginAI && !onBeginAI()) return;
+
+    aiClaimedRef.current = true;
+    const generation = ++aiStartGenerationRef.current;
+    setPreparingAI(true);
+    if (!await flush()) {
+      if (generation === aiStartGenerationRef.current) {
+        setPreparingAI(false);
+        releaseAI();
+        addToast('Your note must be saved before it can be sent.', 'error');
+      }
+      return;
+    }
+    if (generation !== aiStartGenerationRef.current || activeThread?.threadId !== thread.threadId) return;
+
+    const requestId = crypto.randomUUID();
+    activeRequestIdRef.current = requestId;
+    activePromptRef.current = query;
+    setPendingAI({ requestId, prompt: query, response: '' });
+    setPrompt('');
+    setPreparingAI(false);
+    bridge.send({
+      type: 'thinkDocument',
+      payload: {
+        requestId,
+        streamId,
+        threadId: thread.threadId,
+        query,
+        sourceScope,
+        imageURLs: [],
+      },
+    });
   };
 
   const reloadStored = () => {
@@ -254,6 +540,93 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
               </div>
             )}
           </section>
+
+          <section className="thread-conversation" aria-label="Thread conversation">
+            {exchanges.map((exchange) => (
+              <ThreadExchange
+                key={exchange.requestId}
+                exchange={exchange}
+                onOpenPDFDestination={onOpenPDFDestination}
+              />
+            ))}
+            {pendingAI && (
+              <article className="thread-exchange thread-exchange--pending" aria-live="polite">
+                <div className="thread-user-turn">
+                  <span>You</span>
+                  <p>{pendingAI.prompt}</p>
+                </div>
+                <div className="thread-assistant-turn">
+                  <span>AI{pendingAI.model ? ` · ${pendingAI.model}` : ''}</span>
+                  {pendingAI.response ? (
+                    <AIResponse
+                      markdown={pendingAI.response}
+                      sourceManifest={pendingAI.sentContext ? JSON.stringify(pendingAI.sentContext) : '{}'}
+                      onOpenPDFDestination={onOpenPDFDestination}
+                    />
+                  ) : !pendingAI.error ? (
+                    <p className="thread-ai-waiting">Thinking…</p>
+                  ) : null}
+                </div>
+                {pendingAI.sentContext && (
+                  <SentContext
+                    facts={pendingAI.sentContext}
+                    onOpenPDFDestination={onOpenPDFDestination}
+                  />
+                )}
+                {pendingAI.error && (
+                  <div className="thread-ai-error" role="alert">
+                    <p>{pendingAI.error}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPrompt(pendingAI.prompt);
+                        setPendingAI(null);
+                      }}
+                    >
+                      Edit and try again
+                    </button>
+                    <button type="button" onClick={() => setPendingAI(null)}>Dismiss</button>
+                  </div>
+                )}
+              </article>
+            )}
+          </section>
+
+          <form
+            className="thread-prompt"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendPrompt();
+            }}
+          >
+            <label htmlFor="thread-ai-prompt">Ask in this thread</label>
+            <textarea
+              id="thread-ai-prompt"
+              aria-label="Ask in this thread"
+              value={prompt}
+              disabled={Boolean(pendingAI) || preparingAI}
+              placeholder="Ask a question or continue the thought…"
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey)) return;
+                event.preventDefault();
+                void sendPrompt();
+              }}
+            />
+            <div className="thread-prompt-actions">
+              {pendingAI && !pendingAI.error ? (
+                <button type="button" onClick={cancelAI}>Stop</button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!prompt.trim() || saveState !== 'saved' || Boolean(pendingAI) || preparingAI}
+                >
+                  {preparingAI ? 'Preparing…' : 'Send'}
+                </button>
+              )}
+              {saveState !== 'saved' && <span>Save the note before sending.</span>}
+            </div>
+          </form>
         </div>
       ) : (
         <div className="thread-list">

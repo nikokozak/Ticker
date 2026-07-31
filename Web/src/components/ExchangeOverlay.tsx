@@ -1,4 +1,5 @@
 import type { AIExchangeJSON } from '../types';
+import { manifestCitations } from '../threads/context';
 import { XIcon } from './icons';
 import { Modal } from './Modal';
 
@@ -16,32 +17,13 @@ interface ExchangeOverlayProps {
   onOpenManifestEntry: (entry: ExchangeManifestEntry) => void;
 }
 
-function manifestEntries(sourceManifest: string): ExchangeManifestEntry[] {
-  try {
-    const parsed = JSON.parse(sourceManifest) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item): ExchangeManifestEntry[] => {
-      if (!item || typeof item !== 'object') return [];
-      const candidate = item as Record<string, unknown>;
-      const sourceId = typeof candidate.sourceId === 'string' ? candidate.sourceId : '';
-      const chunkId = typeof candidate.chunkId === 'string' ? candidate.chunkId : '';
-      const shortTitle = typeof candidate.shortTitle === 'string' ? candidate.shortTitle : '';
-      const page = Number(candidate.page);
-      if (!sourceId || !chunkId || !shortTitle || !Number.isFinite(page)) return [];
-      return [{ sourceId, chunkId, shortTitle, page: Math.max(1, Math.round(page)) }];
-    });
-  } catch {
-    return [];
-  }
-}
-
 export function ExchangeOverlay({
   exchange,
   onClose,
   onRedevelop,
   onOpenManifestEntry,
 }: ExchangeOverlayProps) {
-  const entries = manifestEntries(exchange.sourceManifest);
+  const entries = manifestCitations(exchange.sourceManifest);
 
   const copyRaw = () => {
     void navigator.clipboard?.writeText(exchange.responseRaw);

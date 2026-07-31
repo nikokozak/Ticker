@@ -214,11 +214,13 @@ export function RichStreamEditor({
   // ponytail: one stream-wide PDF AI lock; track host operation ids if concurrent
   // PDF jobs ever become a supported workflow.
   const pdfAIInFlightRef = useRef(false);
+  const threadAIInFlightRef = useRef(false);
   const consumedPendingSourceRef = useRef<string | null>(null);
 
   const [editor, setEditor] = useState<RichTextEditor | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [aiRunning, setAIRunning] = useState(false);
+  const [threadAIRunning, setThreadAIRunning] = useState(false);
   const [aiDetail, setAIDetail] = useState<string | null>(null);
   const [sourceIndexNotice, setSourceIndexNotice] = useState<string | null>(null);
   const [promptIntent, setPromptIntent] = useState<PromptIntent | null>(null);
@@ -279,6 +281,7 @@ export function RichStreamEditor({
 
   const flushAll = useCallback(async () => {
     cancelDocumentAI();
+    threadDrawerRef.current?.cancelAI();
     const [documentSaved, threadSaved] = await Promise.all([
       sessionRef.current?.saveNow() ?? Promise.resolve(true),
       threadDrawerRef.current?.flush() ?? Promise.resolve(true),
@@ -292,10 +295,22 @@ export function RichStreamEditor({
   }, [flushAll, onFlushAvailable]);
 
   const canStartAI = useCallback(() => {
-    if (!aiInFlightRef.current && !pdfAIInFlightRef.current) return true;
+    if (!aiInFlightRef.current && !pdfAIInFlightRef.current && !threadAIInFlightRef.current) return true;
     addToast('Wait for the current AI operation to finish, or stop it first.', 'info');
     return false;
   }, [addToast]);
+
+  const beginThreadAI = useCallback(() => {
+    if (!canStartAI()) return false;
+    threadAIInFlightRef.current = true;
+    setThreadAIRunning(true);
+    return true;
+  }, [canStartAI]);
+
+  const endThreadAI = useCallback(() => {
+    threadAIInFlightRef.current = false;
+    setThreadAIRunning(false);
+  }, []);
 
   const startPDFSectionAI = useCallback((
     request: PDFSectionActionRequest,
@@ -910,6 +925,7 @@ export function RichStreamEditor({
    */
   const leave = useCallback(async () => {
     cancelDocumentAI();
+    threadDrawerRef.current?.cancelAI();
     setLeaving(true);
     const [documentSaved, threadSaved] = await Promise.all([
       sessionRef.current?.destroy() ?? Promise.resolve(true),
@@ -1295,35 +1311,35 @@ export function RichStreamEditor({
       label: 'Develop',
       ariaLabel: 'Develop with AI',
       title: 'Develop the selection with AI',
-      disabled: aiRunning,
+      disabled: aiRunning || threadAIRunning,
       action: () => { void startDocumentAI(); },
     },
     {
       key: 'prompt',
       label: 'Ask about…',
       ariaLabel: 'Ask about selection with AI',
-      disabled: aiRunning,
+      disabled: aiRunning || threadAIRunning,
       action: () => openDocumentAIPrompt('ask'),
     },
     {
       key: 'ask',
       label: 'Ask',
       ariaLabel: 'Ask with AI',
-      disabled: aiRunning,
+      disabled: aiRunning || threadAIRunning,
       action: () => { void startDocumentAI('ask'); },
     },
     {
       key: 'define',
       label: 'Define',
       ariaLabel: 'Define with AI',
-      disabled: aiRunning,
+      disabled: aiRunning || threadAIRunning,
       action: () => { void startDocumentAI('define'); },
     },
     {
       key: 'rewrite',
       label: 'Rewrite…',
       ariaLabel: 'Rewrite with AI',
-      disabled: aiRunning,
+      disabled: aiRunning || threadAIRunning,
       action: () => openDocumentAIPrompt('rewrite'),
     },
   ];
@@ -1640,7 +1656,7 @@ export function RichStreamEditor({
                 title="AI actions"
                 aria-label="AI actions"
                 aria-expanded={selectionMenuPanel === 'ai'}
-                disabled={aiRunning}
+                disabled={aiRunning || threadAIRunning}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setSelectionMenuPanel((panel) => panel === 'ai' ? null : 'ai')}
               >
@@ -1791,6 +1807,10 @@ export function RichStreamEditor({
           onRequestClose={() => setShowThreads(false)}
           onAfterClose={() => threadButtonRef.current?.focus()}
           onLocateAnchor={locateThreadAnchor}
+          sourceScope={sourceScope}
+          onBeginAI={beginThreadAI}
+          onEndAI={endThreadAI}
+          onOpenPDFDestination={openLink}
         />
       </div>
 

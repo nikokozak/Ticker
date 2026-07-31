@@ -52,6 +52,75 @@ enum DocumentAICitationManifest {
     }
 }
 
+struct ThreadAISentFacts: Codable, Equatable {
+    struct Anchor: Codable, Equatable {
+        let kind: String
+        let text: String
+        let sourceId: String?
+        let sourceName: String?
+        let highlightId: String?
+        let page: Int?
+    }
+
+    struct Note: Codable, Equatable {
+        let sent: Bool
+        let text: String?
+    }
+
+    struct Turns: Codable, Equatable {
+        let includedRequestIds: [String]
+        let totalAtSend: Int
+    }
+
+    struct Source: Codable, Equatable {
+        let kind: String
+        let n: Int?
+        let sourceId: String
+        let chunkId: String?
+        let page: Int?
+        let shortTitle: String
+    }
+
+    let version: Int
+    let kind: String
+    let requestId: String
+    let anchor: Anchor
+    let note: Note
+    let turns: Turns
+    let sourceContextMode: String
+    let sources: [Source]
+
+    var jsonString: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(self) else { return "{}" }
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    var bridgePayload: [String: Any] {
+        guard let data = jsonString.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        return payload
+    }
+}
+
+typealias ThreadAIRoute = (
+    _ query: String,
+    _ retrievalQuery: String,
+    _ streamId: UUID,
+    _ sourceScope: SourceScope,
+    _ anchorText: String,
+    _ workingText: String,
+    _ priorTurns: [ThreadAIConversationTurn],
+    _ onPrepared: @escaping (ThreadAIRequestReceipt) -> Void,
+    _ onChunk: @escaping (String) -> Void,
+    _ onComplete: @escaping (ThreadAIRequestReceipt) -> Void,
+    _ onError: @escaping (Error) -> Void,
+    _ onModelSelected: ((String) -> Void)?
+) async -> Void
+
 private enum DocumentAIVerb: String {
     case develop
     case ask
@@ -147,6 +216,7 @@ final class AIMessageHandler: BridgeMessageHandler {
         _ onError: @escaping (Error) -> Void,
         _ onModelSelected: ((String) -> Void)?
     ) async -> Void
+    private let routeThreadAI: ThreadAIRoute
     private var inFlightRequests: [String: Task<Void, Never>] = [:]
 
     init?(container: ServiceContainer) {
@@ -180,6 +250,22 @@ final class AIMessageHandler: BridgeMessageHandler {
                 onModelSelected: onModelSelected
             )
         }
+        self.routeThreadAI = { [orchestrator = container.orchestrator] query, retrievalQuery, streamId, sourceScope, anchorText, workingText, priorTurns, onPrepared, onChunk, onComplete, onError, onModelSelected in
+            await orchestrator.routeThread(
+                query: query,
+                retrievalQuery: retrievalQuery,
+                streamId: streamId,
+                sourceScope: sourceScope,
+                anchorText: anchorText,
+                workingText: workingText,
+                priorTurns: priorTurns,
+                onPrepared: onPrepared,
+                onChunk: onChunk,
+                onComplete: onComplete,
+                onError: onError,
+                onModelSelected: onModelSelected
+            )
+        }
     }
 
     init(
@@ -202,7 +288,10 @@ final class AIMessageHandler: BridgeMessageHandler {
             _ onComplete: @escaping (SourceContext?) -> Void,
             _ onError: @escaping (Error) -> Void,
             _ onModelSelected: ((String) -> Void)?
-        ) async -> Void
+        ) async -> Void,
+        routeThreadAI: @escaping ThreadAIRoute = { _, _, _, _, _, _, _, _, _, _, onError, _ in
+            onError(OrchestratorError.noProviderAvailable)
+        }
     ) {
         self.assetService = assetService
         self.persistence = persistence
@@ -212,6 +301,7 @@ final class AIMessageHandler: BridgeMessageHandler {
         self.sendBridgeErrorMessage = sendBridgeErrorMessage
         self.isProxyUsable = isProxyUsable
         self.routeDocumentAI = routeDocumentAI
+        self.routeThreadAI = routeThreadAI
     }
 
     func handle(_ message: BridgeMessage) async {
@@ -222,6 +312,11 @@ final class AIMessageHandler: BridgeMessageHandler {
                   let query = payload["query"]?.value as? String else {
                 DebugLog.log("[WebViewManager] Invalid thinkDocument payload")
                 await sendBridgeErrorMessage(message.type, "Invalid thinkDocument payload")
+                return
+            }
+
+            if payload["threadId"] != nil {
+                await handleThreadAI(payload: payload, requestId: requestId, query: query)
                 return
             }
 
@@ -246,19 +341,24 @@ final class AIMessageHandler: BridgeMessageHandler {
             }
             let hasStreamSources = streamHasSources(streamIdForRAG)
 
-            var resolvedQuery = query
-            let cleanedContext = (payload["context"]?.value as? String).flatMap(Self.cleanedDocumentContext)
+            let outboundQuery = TickerInternalURLSanitizer.sanitize(query)
+            var resolvedQuery = outboundQuery
+            let storedContext = (payload["context"]?.value as? String).flatMap(Self.cleanedDocumentContext)
+            let cleanedContext = storedContext.map(TickerInternalURLSanitizer.sanitize)
             if let cleanContext = cleanedContext {
                 if verb == .rewrite {
                     // Instruction-primary framing: the passage is material, the
                     // user's prompt is the task. The Ask-style "Regarding this
                     // context" wrapper demotes the instruction to a footnote.
-                    resolvedQuery = "Passage:\n\"\"\"\n\(cleanContext)\n\"\"\"\n\nInstruction: \(resolvedQuery)"
+                    resolvedQuery = "Passage:\n\"\"\"\n\(cleanContext)\n\"\"\"\n\nInstruction: \(outboundQuery)"
                 } else {
-                    resolvedQuery = "Regarding this context:\n\"\"\"\n\(cleanContext)\n\"\"\"\n\n\(resolvedQuery)"
+                    resolvedQuery = "Regarding this context:\n\"\"\"\n\(cleanContext)\n\"\"\"\n\n\(outboundQuery)"
                 }
             }
-            let userInput = Self.userInput(selection: cleanedContext ?? query, prompt: cleanedContext == nil ? "" : query)
+            let userInput = Self.userInput(
+                selection: storedContext ?? query,
+                prompt: storedContext == nil ? "" : query
+            )
 
             var responseRaw = ""
             var selectedModel: String?
@@ -306,34 +406,28 @@ final class AIMessageHandler: BridgeMessageHandler {
             }
             let onError: (Error) -> Void = { [weak self] error in
                 guard !Task.isCancelled else { return }
-                var payload: [String: AnyCodable] = [
+                var errorPayload: [String: AnyCodable] = [
                     "requestId": AnyCodable(requestId),
                     "error": AnyCodable(error.localizedDescription)
                 ]
-
                 if let proxyError = error as? ProxyLLMError {
-                    payload["errorCode"] = AnyCodable(proxyError.errorCode)
+                    errorPayload["errorCode"] = AnyCodable(proxyError.errorCode)
                     if let proxyRequestId = proxyError.requestId {
-                        payload["proxyRequestId"] = AnyCodable(proxyRequestId)
+                        errorPayload["proxyRequestId"] = AnyCodable(proxyRequestId)
                     }
-
                     if case .quotaExceeded(let details) = proxyError {
-                        payload["quotaScope"] = AnyCodable(details.scope)
-                        payload["quotaLimit"] = AnyCodable(details.limit)
-                        payload["quotaUsed"] = AnyCodable(details.used)
-                        payload["quotaResetAt"] = AnyCodable(details.resetAt)
+                        errorPayload["quotaScope"] = AnyCodable(details.scope)
+                        errorPayload["quotaLimit"] = AnyCodable(details.limit)
+                        errorPayload["quotaUsed"] = AnyCodable(details.used)
+                        errorPayload["quotaResetAt"] = AnyCodable(details.resetAt)
                     }
-
-                    if case .rateLimited(let retryAfter) = proxyError {
-                        if let seconds = retryAfter {
-                            payload["retryAfter"] = AnyCodable(seconds)
-                        }
+                    if case .rateLimited(let retryAfter) = proxyError, let retryAfter {
+                        errorPayload["retryAfter"] = AnyCodable(retryAfter)
                     }
                 }
-
                 self?.sendToWeb(BridgeMessage(
                     type: "documentAIError",
-                    payload: payload
+                    payload: errorPayload
                 ))
             }
 
@@ -360,7 +454,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                     resolvedQuery,
                     // Retrieval sees only the user's words; resolvedQuery's
                     // "Regarding this context:" wrapper poisons BM25 scoring.
-                    cleanedContext.map { "\(query)\n\($0)" } ?? query,
+                    cleanedContext.map { "\(outboundQuery)\n\($0)" } ?? outboundQuery,
                     imageDataURLs,
                     streamIdForRAG,
                     sourceScope,
@@ -412,6 +506,298 @@ final class AIMessageHandler: BridgeMessageHandler {
 
         default:
             DebugLog.log("[AIMessageHandler] Unknown message type: \(message.type)")
+        }
+    }
+
+    private func handleThreadAI(
+        payload: [String: AnyCodable],
+        requestId: String,
+        query: String
+    ) async {
+        guard let streamIdRaw = payload["streamId"]?.value as? String,
+              let streamId = UUID(uuidString: streamIdRaw),
+              let threadIdRaw = payload["threadId"]?.value as? String,
+              let threadId = UUID(uuidString: threadIdRaw),
+              !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let persistence else {
+            sendToWeb(BridgeMessage(
+                type: "documentAIError",
+                payload: [
+                    "requestId": AnyCodable(requestId),
+                    "error": AnyCodable("This thread request is invalid."),
+                    "errorCode": AnyCodable("invalid_thread_request")
+                ]
+            ))
+            return
+        }
+
+        let thread: StreamThread
+        let exchanges: [AIExchange]
+        do {
+            guard let storedThread = try persistence.loadStreamThread(
+                threadId: threadId,
+                streamId: streamId
+            ) else {
+                throw StreamThreadPersistenceError.threadNotFound
+            }
+            thread = storedThread
+            exchanges = try persistence.loadThreadExchanges(threadId: threadId, streamId: streamId)
+        } catch {
+            sendToWeb(BridgeMessage(
+                type: "documentAIError",
+                payload: [
+                    "requestId": AnyCodable(requestId),
+                    "error": AnyCodable("This thread is no longer available in this Stream."),
+                    "errorCode": AnyCodable("thread_unavailable")
+                ]
+            ))
+            return
+        }
+
+        let sourceScopeRaw = payload["sourceScope"]?.value as? String
+        let sourceScope = SourceScope(rawValue: sourceScopeRaw ?? "") ?? .auto
+        let priorTurns = exchanges.map {
+            ThreadAIConversationTurn(
+                requestId: $0.requestId,
+                userInput: $0.userInput,
+                responseRaw: $0.responseRaw
+            )
+        }
+        let outboundQuery = TickerInternalURLSanitizer.sanitize(query)
+        let retrievalQuery = [outboundQuery, thread.anchorText, thread.workingText]
+            .map(TickerInternalURLSanitizer.sanitize)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: "\n")
+
+        var responseRaw = ""
+        var selectedModel: String?
+        var sentFacts: ThreadAISentFacts?
+        let onPrepared: (ThreadAIRequestReceipt) -> Void = { [weak self] receipt in
+            guard let self, !Task.isCancelled else { return }
+            let facts = self.threadSentFacts(
+                requestId: requestId,
+                thread: thread,
+                receipt: receipt
+            )
+            sentFacts = facts
+            self.sendToWeb(BridgeMessage(
+                type: "threadAIContext",
+                payload: [
+                    "requestId": AnyCodable(requestId),
+                    "sentContext": AnyCodable(facts.bridgePayload)
+                ]
+            ))
+        }
+        let onChunk: (String) -> Void = { [weak self] chunk in
+            guard !Task.isCancelled else { return }
+            responseRaw += chunk
+            self?.sendToWeb(BridgeMessage(
+                type: "documentAIChunk",
+                payload: ["requestId": AnyCodable(requestId), "chunk": AnyCodable(chunk)]
+            ))
+        }
+        let onComplete: (ThreadAIRequestReceipt) -> Void = { [weak self] receipt in
+            guard let self, !Task.isCancelled else { return }
+            let facts = sentFacts ?? self.threadSentFacts(
+                requestId: requestId,
+                thread: thread,
+                receipt: receipt
+            )
+            guard !responseRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                self.sendToWeb(BridgeMessage(
+                    type: "documentAIError",
+                    payload: [
+                        "requestId": AnyCodable(requestId),
+                        "error": AnyCodable("AI returned an empty response."),
+                        "errorCode": AnyCodable("empty_response")
+                    ]
+                ))
+                return
+            }
+
+            let exchange = AIExchange(
+                requestId: requestId,
+                streamId: streamId,
+                threadId: threadId,
+                verb: "thread",
+                userInput: query,
+                sourceManifest: facts.jsonString,
+                responseRaw: responseRaw,
+                model: selectedModel
+            )
+            do {
+                try persistence.saveExchange(exchange)
+                self.sendToWeb(BridgeMessage(
+                    type: "documentAIComplete",
+                    payload: [
+                        "requestId": AnyCodable(requestId),
+                        "exchange": AnyCodable(StreamCodec.encodeExchange(exchange)),
+                        "sentContext": AnyCodable(facts.bridgePayload)
+                    ]
+                ))
+            } catch {
+                DebugLog.log("[AIMessageHandler] Failed to save thread exchange (\(DebugLog.errorSummary(error)))")
+                self.sendToWeb(BridgeMessage(
+                    type: "documentAIError",
+                    payload: [
+                        "requestId": AnyCodable(requestId),
+                        "error": AnyCodable("The reply could not be saved, so it was not added to the thread."),
+                        "errorCode": AnyCodable("thread_save_failed")
+                    ]
+                ))
+            }
+        }
+        let onError: (Error) -> Void = { [weak self] error in
+            guard !Task.isCancelled else { return }
+            var errorPayload: [String: AnyCodable] = [
+                "requestId": AnyCodable(requestId),
+                "error": AnyCodable(error.localizedDescription)
+            ]
+            if let threadError = error as? ThreadAIRequestError,
+               case let .contextTooLarge(
+                   largestBlock,
+                   protectedTokens,
+                   sourceTokens,
+                   tokenBudget
+               ) = threadError {
+                errorPayload["errorCode"] = AnyCodable("thread_context_too_large")
+                errorPayload["largestBlock"] = AnyCodable(largestBlock)
+                errorPayload["protectedTokens"] = AnyCodable(protectedTokens)
+                errorPayload["sourceTokens"] = AnyCodable(sourceTokens)
+                errorPayload["tokenBudget"] = AnyCodable(tokenBudget)
+            } else if let proxyError = error as? ProxyLLMError {
+                errorPayload["errorCode"] = AnyCodable(proxyError.errorCode)
+                if let proxyRequestId = proxyError.requestId {
+                    errorPayload["proxyRequestId"] = AnyCodable(proxyRequestId)
+                }
+                if case .quotaExceeded(let details) = proxyError {
+                    errorPayload["quotaScope"] = AnyCodable(details.scope)
+                    errorPayload["quotaLimit"] = AnyCodable(details.limit)
+                    errorPayload["quotaUsed"] = AnyCodable(details.used)
+                    errorPayload["quotaResetAt"] = AnyCodable(details.resetAt)
+                }
+                if case .rateLimited(let retryAfter) = proxyError, let retryAfter {
+                    errorPayload["retryAfter"] = AnyCodable(retryAfter)
+                }
+            }
+            self?.sendToWeb(BridgeMessage(
+                type: "documentAIError",
+                payload: errorPayload
+            ))
+        }
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { self.inFlightRequests[requestId] = nil }
+            guard await self.isProxyUsable() else {
+                onError(OrchestratorError.noProviderAvailable)
+                return
+            }
+            guard !Task.isCancelled else { return }
+
+            await self.routeThreadAI(
+                outboundQuery,
+                retrievalQuery,
+                streamId,
+                sourceScope,
+                thread.anchorText,
+                thread.workingText,
+                priorTurns,
+                onPrepared,
+                onChunk,
+                onComplete,
+                onError,
+                { [weak self] modelId in
+                    guard !Task.isCancelled else { return }
+                    selectedModel = modelId
+                    self?.sendToWeb(BridgeMessage(
+                        type: "documentModelSelected",
+                        payload: ["requestId": AnyCodable(requestId), "modelId": AnyCodable(modelId)]
+                    ))
+                }
+            )
+        }
+        inFlightRequests[requestId] = task
+    }
+
+    private func threadSentFacts(
+        requestId: String,
+        thread: StreamThread,
+        receipt: ThreadAIRequestReceipt
+    ) -> ThreadAISentFacts {
+        var source: SourceReference?
+        var highlight: PDFHighlightRecord?
+        if let persistence, let sourceId = thread.sourceId {
+            source = try? persistence.loadSource(id: sourceId)
+            if let highlightId = thread.highlightId {
+                highlight = try? persistence.loadPDFHighlight(id: highlightId, sourceId: sourceId)
+            }
+        }
+        let cleanNote = TickerInternalURLSanitizer.sanitize(thread.workingText)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let sources: [ThreadAISentFacts.Source]
+        if receipt.sourceContext?.mode == .retrieved {
+            sources = (DocumentAICitationManifest.entries(from: receipt.sourceContext) ?? []).map {
+                ThreadAISentFacts.Source(
+                    kind: "passage",
+                    n: $0.n,
+                    sourceId: $0.sourceId.uuidString,
+                    chunkId: $0.chunkId.uuidString,
+                    page: $0.page,
+                    shortTitle: $0.shortTitle
+                )
+            }
+        } else if receipt.sourceContext?.mode == .passthrough {
+            sources = (receipt.sourceContext?.sourceIds ?? []).map { sourceId in
+                var shortTitle = "Source"
+                if let persistence, let source = try? persistence.loadSource(id: sourceId) {
+                    shortTitle = source.shortTitle
+                }
+                return ThreadAISentFacts.Source(
+                    kind: "wholeSource",
+                    n: nil,
+                    sourceId: sourceId.uuidString,
+                    chunkId: nil,
+                    page: nil,
+                    shortTitle: shortTitle
+                )
+            }
+        } else {
+            sources = []
+        }
+
+        return ThreadAISentFacts(
+            version: 1,
+            kind: "threadAI",
+            requestId: requestId,
+            anchor: ThreadAISentFacts.Anchor(
+                kind: thread.sourceId == nil ? "stream" : "pdf",
+                text: TickerInternalURLSanitizer.sanitize(thread.anchorText),
+                sourceId: thread.sourceId?.uuidString,
+                sourceName: source?.shortTitle,
+                highlightId: thread.highlightId?.uuidString,
+                page: highlight?.page
+            ),
+            note: ThreadAISentFacts.Note(
+                sent: !cleanNote.isEmpty,
+                text: cleanNote.isEmpty ? nil : cleanNote
+            ),
+            turns: ThreadAISentFacts.Turns(
+                includedRequestIds: receipt.includedPriorRequestIds,
+                totalAtSend: receipt.totalPriorExchangeCount
+            ),
+            sourceContextMode: Self.sourceContextMode(receipt.sourceContext),
+            sources: sources
+        )
+    }
+
+    private static func sourceContextMode(_ context: SourceContext?) -> String {
+        guard let context else { return "none" }
+        switch context.mode {
+        case .passthrough: return "passthrough"
+        case .retrieved: return "retrieved"
+        case .unavailable: return "unavailable"
         }
     }
 

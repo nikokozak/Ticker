@@ -1181,6 +1181,143 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(merged?.mode, .retrieved)
     }
 
+    func test_threadAIRequestFitsAtBoundaryDropsOnlyWholeOldTurnsAndNeverTruncates() throws {
+        let old = ThreadAIConversationTurn(
+            requestId: "old",
+            userInput: String(repeating: "old question ", count: 80),
+            responseRaw: String(repeating: "old answer ", count: 80)
+        )
+        let recent = ThreadAIConversationTurn(
+            requestId: "recent",
+            userInput: "Recent question",
+            responseRaw: "Recent answer"
+        )
+        let withoutHistory = try AIOrchestrator.prepareThreadRequest(
+            query: "What follows?",
+            anchorText: "A fixed starting passage.",
+            workingText: "My current note.",
+            priorTurns: [],
+            sourceContext: nil
+        )
+        let recentTokens = [
+            LLMMessage(role: "user", content: recent.userInput),
+            LLMMessage(role: "assistant", content: recent.responseRaw)
+        ].reduce(0) { $0 + LLMRequest.estimateTokens($1) }
+        let boundary = withoutHistory.request.estimatedTokenCount
+            + (withoutHistory.request.maxTokens ?? 2048)
+            + recentTokens
+
+        let prepared = try AIOrchestrator.prepareThreadRequest(
+            query: "What follows?",
+            anchorText: "A fixed starting passage.",
+            workingText: "My current note.",
+            priorTurns: [old, recent],
+            sourceContext: nil,
+            tokenBudget: boundary
+        )
+
+        XCTAssertEqual(prepared.receipt.includedPriorRequestIds, ["recent"])
+        XCTAssertEqual(prepared.receipt.totalPriorExchangeCount, 2)
+        XCTAssertTrue(prepared.request.fits(withinTokenBudget: boundary))
+        let truncated = prepared.request.truncated(toTokenBudget: boundary)
+        XCTAssertEqual(truncated.messages.map(\.role), prepared.request.messages.map(\.role))
+        XCTAssertEqual(truncated.messages.map(\.content), prepared.request.messages.map(\.content))
+    }
+
+    func test_threadAIRequestRefusesOneTokenPastProtectedBoundary() throws {
+        let fitted = try AIOrchestrator.prepareThreadRequest(
+            query: "Question",
+            anchorText: "Starting passage",
+            workingText: "Working note",
+            priorTurns: [],
+            sourceContext: nil
+        )
+        let exactBudget = fitted.request.estimatedTokenCount + (fitted.request.maxTokens ?? 2048)
+
+        XCTAssertThrowsError(try AIOrchestrator.prepareThreadRequest(
+            query: "Question",
+            anchorText: "Starting passage",
+            workingText: "Working note",
+            priorTurns: [],
+            sourceContext: nil,
+            tokenBudget: exactBudget - 1
+        )) { error in
+            guard case let ThreadAIRequestError.contextTooLarge(
+                _, protectedTokens, sourceTokens, tokenBudget
+            ) = error else {
+                return XCTFail("Expected a typed thread context refusal")
+            }
+            XCTAssertEqual(sourceTokens, 0)
+            XCTAssertEqual(tokenBudget, exactBudget - 1)
+            XCTAssertEqual(protectedTokens, fitted.request.estimatedTokenCount)
+        }
+    }
+
+    func test_threadAIRequestRefusesRatherThanDroppingSelectedSourceContext() throws {
+        let protected = try AIOrchestrator.prepareThreadRequest(
+            query: "Question",
+            anchorText: "Starting passage",
+            workingText: "Working note",
+            priorTurns: [],
+            sourceContext: nil
+        )
+        let protectedBudget = protected.request.estimatedTokenCount
+            + (protected.request.maxTokens ?? 2048)
+        let sourceContext = SourceContext(
+            text: String(repeating: "source passage ", count: 200),
+            chunks: [],
+            mode: .passthrough,
+            sourceIds: [UUID()]
+        )
+
+        XCTAssertThrowsError(try AIOrchestrator.prepareThreadRequest(
+            query: "Question",
+            anchorText: "Starting passage",
+            workingText: "Working note",
+            priorTurns: [],
+            sourceContext: sourceContext,
+            tokenBudget: protectedBudget
+        )) { error in
+            guard case let ThreadAIRequestError.contextTooLarge(
+                largestBlock, _, sourceTokens, tokenBudget
+            ) = error else {
+                return XCTFail("Expected a typed source-context refusal")
+            }
+            XCTAssertEqual(largestBlock, "The source context")
+            XCTAssertGreaterThan(sourceTokens, 0)
+            XCTAssertEqual(tokenBudget, protectedBudget)
+        }
+    }
+
+    func test_internalURLSanitizerKeepsLabelsAndRemovesEveryTickerScheme() {
+        XCTAssertEqual(
+            TickerInternalURLSanitizer.sanitize(
+                "[Thread](ticker-thread://secret) [PDF](ticker-pdf://source?page=2) "
+                    + "![Image](ticker-asset://stream/file.png) ticker://open/item"
+            ),
+            "Thread PDF Image Ticker link"
+        )
+    }
+
+    func test_threadAIReplayRemovesRequestScopedCitationNumbers() throws {
+        let prepared = try AIOrchestrator.prepareThreadRequest(
+            query: "Follow up",
+            anchorText: "Starting passage",
+            workingText: "",
+            priorTurns: [ThreadAIConversationTurn(
+                requestId: "earlier",
+                userInput: "How many controllers?",
+                responseRaw: #"There are two. 【3|"two CAN-FD controllers"】"#
+            )],
+            sourceContext: nil
+        )
+
+        let replayed = prepared.request.messages
+            .first { $0.role == "assistant" && $0.content.contains("There are two") }
+        XCTAssertEqual(replayed?.content.trimmingCharacters(in: .whitespaces), "There are two.")
+        XCTAssertFalse(replayed?.content.contains("【3") == true)
+    }
+
     func test_orchestratorPreservesCapturedContextWhenRetrievalIsAbsentOrUnavailable() {
         let captured = SourceContext(text: "captured verbatim", chunks: [], mode: .passthrough)
         let unavailable = SourceContext(text: "", chunks: [], mode: .unavailable)
@@ -1289,10 +1426,12 @@ final class StreamDocumentTests: XCTestCase {
             let requestId = "request-doc-ai"
             let chunkId = UUID()
             let sourceId = UUID()
+            var routedQuery: String?
             let handler = AIMessageHandler(
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
-                routeDocumentAI: { _, _, _, _, _, _, _, onChunk, onComplete, _, onModelSelected in
+                routeDocumentAI: { query, _, _, _, _, _, _, onChunk, onComplete, _, onModelSelected in
+                    routedQuery = query
                     onModelSelected?("provider/model")
                     onChunk("Raw [1]")
                     onComplete(SourceContext(
@@ -1319,7 +1458,7 @@ final class StreamDocumentTests: XCTestCase {
                 "requestId": AnyCodable(requestId),
                 "streamId": AnyCodable(stream.id.uuidString),
                 "query": AnyCodable("Explain this"),
-                "context": AnyCodable(" Selected text "),
+                "context": AnyCodable(" Selected [text](ticker-thread://private-thread) "),
                 "imageURLs": AnyCodable([]),
                 "verb": AnyCodable("ask")
             ]))
@@ -1331,7 +1470,14 @@ final class StreamDocumentTests: XCTestCase {
             let exchange = try XCTUnwrap(try service.loadExchange(requestId: requestId))
             XCTAssertEqual(exchange.streamId, stream.id)
             XCTAssertEqual(exchange.verb, "ask")
-            XCTAssertEqual(exchange.userInput, "Selection:\nSelected text\n\nPrompt:\nExplain this")
+            XCTAssertEqual(
+                exchange.userInput,
+                "Selection:\nSelected [text](ticker-thread://private-thread)\n\nPrompt:\nExplain this"
+            )
+            XCTAssertEqual(
+                routedQuery,
+                "Regarding this context:\n\"\"\"\nSelected text\n\"\"\"\n\nExplain this"
+            )
             XCTAssertEqual(exchange.responseRaw, "Raw [1]")
             XCTAssertEqual(exchange.model, "provider/model")
 
@@ -1342,6 +1488,166 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(manifest[0]["sourceId"] as? String, sourceId.uuidString)
             XCTAssertEqual(manifest[0]["shortTitle"] as? String, "Source PDF")
             XCTAssertFalse(recorder.messages(ofType: "documentAIComplete").isEmpty)
+        }
+    }
+
+    @MainActor
+    func test_threadAIStoresRawPromptAndExactSentReceiptWithoutChangingStream() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Thread AI")
+            try service.saveStream(stream)
+            _ = try service.saveStreamDocument(streamId: stream.id, markdown: "Stream stays unchanged.")
+            let beforeDocument = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            let sentSource = SourceReference(
+                streamId: stream.id,
+                displayName: "Sent.txt",
+                fileType: .text,
+                bookmarkData: Data("sent".utf8),
+                status: .ready,
+                extractedText: "Sent source text"
+            )
+            let otherSource = SourceReference(
+                streamId: stream.id,
+                displayName: "Not Sent.txt",
+                fileType: .text,
+                bookmarkData: Data("other".utf8),
+                status: .ready,
+                extractedText: "Other source text"
+            )
+            try service.saveSource(sentSource)
+            try service.saveSource(otherSource)
+            let thread = StreamThread(
+                streamId: stream.id,
+                title: "Power",
+                workingText: "Check [saved link](ticker-thread://private-note).",
+                anchorText: "Read [the source](ticker-pdf://private-source?page=2)."
+            )
+            try service.createStreamThread(thread)
+            let prior = AIExchange(
+                requestId: "prior-request",
+                streamId: stream.id,
+                threadId: thread.threadId,
+                verb: "thread",
+                userInput: "Earlier question",
+                responseRaw: "Earlier answer"
+            )
+            try service.saveExchange(prior)
+
+            let recorder = BridgeMessageRecorder()
+            let requestId = "thread-request"
+            var routedQuery: String?
+            var routedRetrievalQuery: String?
+            let handler = AIMessageHandler(
+                persistence: service,
+                sendToWeb: { recorder.send($0) },
+                routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
+                routeThreadAI: { query, retrievalQuery, _, _, _, _, turns, onPrepared, onChunk, onComplete, _, onModelSelected in
+                    routedQuery = query
+                    routedRetrievalQuery = retrievalQuery
+                    XCTAssertEqual(turns.map(\.requestId), [prior.requestId])
+                    let receipt = ThreadAIRequestReceipt(
+                        sourceContext: SourceContext(
+                            text: sentSource.extractedText ?? "",
+                            chunks: [],
+                            mode: .passthrough,
+                            sourceIds: [sentSource.id]
+                        ),
+                        includedPriorRequestIds: [prior.requestId],
+                        totalPriorExchangeCount: 1
+                    )
+                    onPrepared(receipt)
+                    onModelSelected?("provider/model")
+                    onChunk("A grounded reply.")
+                    onComplete(receipt)
+                }
+            )
+            let rawPrompt = "Use [this thread](ticker-thread://private-prompt)."
+
+            await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
+                "requestId": AnyCodable(requestId),
+                "streamId": AnyCodable(stream.id.uuidString),
+                "threadId": AnyCodable(thread.threadId.uuidString),
+                "query": AnyCodable(rawPrompt),
+                "sourceScope": AnyCodable("auto"),
+                "imageURLs": AnyCodable([])
+            ]))
+
+            try await waitUntil { (try? service.loadExchange(requestId: requestId)) != nil }
+            XCTAssertEqual(routedQuery, "Use this thread.")
+            XCTAssertFalse(routedRetrievalQuery?.contains("ticker-") == true)
+
+            let exchange = try XCTUnwrap(try service.loadExchange(requestId: requestId))
+            XCTAssertEqual(exchange.threadId, thread.threadId)
+            XCTAssertEqual(exchange.userInput, rawPrompt)
+            XCTAssertEqual(exchange.responseRaw, "A grounded reply.")
+            XCTAssertEqual(exchange.model, "provider/model")
+
+            let data = try XCTUnwrap(exchange.sourceManifest.data(using: .utf8))
+            let receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(receipt["version"] as? Int, 1)
+            XCTAssertEqual(receipt["kind"] as? String, "threadAI")
+            let anchor = try XCTUnwrap(receipt["anchor"] as? [String: Any])
+            XCTAssertEqual(anchor["text"] as? String, "Read the source.")
+            let note = try XCTUnwrap(receipt["note"] as? [String: Any])
+            XCTAssertEqual(note["text"] as? String, "Check saved link.")
+            let turns = try XCTUnwrap(receipt["turns"] as? [String: Any])
+            XCTAssertEqual(turns["includedRequestIds"] as? [String], [prior.requestId])
+            XCTAssertEqual(turns["totalAtSend"] as? Int, 1)
+            let sources = try XCTUnwrap(receipt["sources"] as? [[String: Any]])
+            XCTAssertEqual(sources.map { $0["sourceId"] as? String }, [sentSource.id.uuidString])
+            XCTAssertFalse(sources.contains { $0["sourceId"] as? String == otherSource.id.uuidString })
+
+            let afterDocument = try XCTUnwrap(service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(afterDocument.markdown, beforeDocument.markdown)
+            XCTAssertEqual(afterDocument.revision, beforeDocument.revision)
+            XCTAssertEqual(recorder.messages(ofType: "threadAIContext").count, 1)
+            XCTAssertEqual(recorder.messages(ofType: "documentAIComplete").count, 1)
+        }
+    }
+
+    @MainActor
+    func test_threadAIContextRefusalHasTypedWireOutcomeAndSavesNothing() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Thread refusal")
+            try service.saveStream(stream)
+            let thread = StreamThread(streamId: stream.id, anchorText: "Large passage")
+            try service.createStreamThread(thread)
+            let recorder = BridgeMessageRecorder()
+            let requestId = "refused-thread-request"
+            let handler = AIMessageHandler(
+                persistence: service,
+                sendToWeb: { recorder.send($0) },
+                routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
+                routeThreadAI: { _, _, _, _, _, _, _, _, _, _, onError, _ in
+                    onError(ThreadAIRequestError.contextTooLarge(
+                        largestBlock: "Your note",
+                        protectedTokens: 98_000,
+                        sourceTokens: 4_000,
+                        tokenBudget: 100_000
+                    ))
+                }
+            )
+
+            await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
+                "requestId": AnyCodable(requestId),
+                "streamId": AnyCodable(stream.id.uuidString),
+                "threadId": AnyCodable(thread.threadId.uuidString),
+                "query": AnyCodable("Question"),
+                "imageURLs": AnyCodable([])
+            ]))
+
+            try await waitUntil {
+                recorder.messages(ofType: "documentAIError").contains {
+                    $0.payload?["requestId"]?.value as? String == requestId
+                }
+            }
+            let error = try XCTUnwrap(recorder.messages(ofType: "documentAIError").last)
+            XCTAssertEqual(error.payload?["errorCode"]?.value as? String, "thread_context_too_large")
+            XCTAssertEqual(error.payload?["largestBlock"]?.value as? String, "Your note")
+            XCTAssertEqual(error.payload?["protectedTokens"]?.intValue, 98_000)
+            XCTAssertEqual(error.payload?["sourceTokens"]?.intValue, 4_000)
+            XCTAssertEqual(error.payload?["tokenBudget"]?.intValue, 100_000)
+            XCTAssertNil(try service.loadExchange(requestId: requestId))
         }
     }
 
@@ -3028,7 +3334,7 @@ final class StreamDocumentTests: XCTestCase {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Small Sources")
             try service.saveStream(stream)
-            _ = try saveRetrievalSource(
+            let first = try saveRetrievalSource(
                 in: service,
                 streamId: stream.id,
                 displayName: "One.txt",
@@ -3036,7 +3342,7 @@ final class StreamDocumentTests: XCTestCase {
                 indexStatus: .pending,
                 addedAt: Date(timeIntervalSince1970: 1)
             )
-            _ = try saveRetrievalSource(
+            let second = try saveRetrievalSource(
                 in: service,
                 streamId: stream.id,
                 displayName: "Two.txt",
@@ -3052,6 +3358,7 @@ final class StreamDocumentTests: XCTestCase {
 
             XCTAssertEqual(context.mode, .passthrough)
             XCTAssertEqual(context.text, "First source text\n\n---\n\nSecond source text")
+            XCTAssertEqual(context.sourceIds, [first.id, second.id])
         }
     }
 
@@ -3059,7 +3366,7 @@ final class StreamDocumentTests: XCTestCase {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Private Small Sources")
             try service.saveStream(stream)
-            _ = try saveRetrievalSource(
+            let privateSource = try saveRetrievalSource(
                 in: service,
                 streamId: stream.id,
                 displayName: "Private.txt",
@@ -3067,7 +3374,7 @@ final class StreamDocumentTests: XCTestCase {
                 aiExcluded: true,
                 addedAt: Date(timeIntervalSince1970: 1)
             )
-            _ = try saveRetrievalSource(
+            let publicSource = try saveRetrievalSource(
                 in: service,
                 streamId: stream.id,
                 displayName: "Public.txt",
@@ -3083,6 +3390,8 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(context.mode, .passthrough)
             XCTAssertEqual(context.text, "Public source text")
             XCTAssertFalse(context.text.contains("Private source text"))
+            XCTAssertEqual(context.sourceIds, [publicSource.id])
+            XCTAssertFalse(context.sourceIds.contains(privateSource.id))
         }
     }
 

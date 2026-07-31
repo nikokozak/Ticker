@@ -149,7 +149,9 @@ final class RetrievalService {
 
         let nonPrivateSources = stream.sources
             .filter { !$0.aiExcluded }
-        let extractedTexts = nonPrivateSources
+        let passthroughSources = nonPrivateSources
+            .filter { $0.extractedText?.isEmpty == false }
+        let extractedTexts = passthroughSources
             .compactMap(\.extractedText)
         let combinedText = extractedTexts.joined(separator: "\n\n---\n\n")
         let totalTokens = extractedTexts.reduce(0) { $0 + estimatedTokenCount($1) }
@@ -158,7 +160,12 @@ final class RetrievalService {
         // pending/indexing sources while their chunks are unavailable: their extracted
         // text is still explicit local context if the whole stream fits the budget.
         if totalTokens < Self.passthroughTokenBudget && !combinedText.isEmpty {
-            return SourceContext(text: combinedText, chunks: [], mode: .passthrough)
+            return SourceContext(
+                text: combinedText,
+                chunks: [],
+                mode: .passthrough,
+                sourceIds: passthroughSources.map(\.id)
+            )
         }
 
         if scope == .all {
@@ -442,6 +449,19 @@ struct SourceContext {
     let text: String
     let chunks: [RetrievedChunk]
     let mode: SourceContextMode
+    let sourceIds: [UUID]
+
+    init(
+        text: String,
+        chunks: [RetrievedChunk],
+        mode: SourceContextMode,
+        sourceIds: [UUID] = []
+    ) {
+        self.text = text
+        self.chunks = chunks
+        self.mode = mode
+        self.sourceIds = sourceIds
+    }
 }
 
 enum SourceContextMode: Equatable {

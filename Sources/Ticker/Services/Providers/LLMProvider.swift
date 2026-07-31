@@ -92,6 +92,11 @@ struct LLMRequest {
         return total
     }
 
+    /// Uses the same estimate and response reserve as `truncated`.
+    func fits(withinTokenBudget budget: Int = LLMRequest.defaultTokenBudget) -> Bool {
+        estimatedTokenCount + (maxTokens ?? 2048) <= budget
+    }
+
     /// Truncate request to fit within a token budget by removing oldest messages
     /// Keeps system prompt, first context message (if any), and most recent messages
     /// - Parameter budget: Maximum token count (default 100,000 for GPT-4o-mini safety margin)

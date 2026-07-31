@@ -508,6 +508,31 @@ describe('RichStreamEditor lifecycle', () => {
 });
 
 describe('RichStreamEditor Stream threads', () => {
+  it('keeps thread AI events out of document AI state', async () => {
+    await act(async () => {
+      bridge.receive({
+        type: 'threadAIContext',
+        payload: { requestId: 'thread-request', sentContext: {} },
+      });
+      bridge.receive({
+        type: 'documentAIChunk',
+        payload: { requestId: 'thread-request', chunk: 'Thread-only reply.' },
+      });
+      bridge.receive({
+        type: 'documentAIError',
+        payload: {
+          requestId: 'thread-request',
+          error: 'Thread request was refused.',
+          errorCode: 'thread_context_too_large',
+        },
+      });
+    });
+
+    expect(editor().textContent).toBe('Original paragraph.');
+    expect(document.querySelector('.document-ai-status-pill')).toBeNull();
+    expect(useToastStore.getState().toasts).toEqual([]);
+  });
+
   it('starts a thread from selected text without changing the Stream document', async () => {
     const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
     vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {

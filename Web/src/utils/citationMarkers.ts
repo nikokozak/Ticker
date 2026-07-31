@@ -88,12 +88,18 @@ export function buildCitationLink(
   citation: DocumentAICitation,
   options: { pageOnlyLabel?: boolean; quote?: string | null } = {}
 ): string {
-  const page = Number.isFinite(citation.page) ? Math.max(1, Math.round(citation.page)) : 1;
   const label = escapeMarkdownLabel(markdownLinkLabel(citation, options.pageOnlyLabel === true));
-  const quote = options.quote?.slice(0, MAX_QUOTE_QUERY_LENGTH);
-  const quoteQuery = quote ? `&q=${encodeURIComponent(quote)}` : '';
-  const url = `ticker-pdf://${citation.sourceId}?page=${page}&chunk=${encodeURIComponent(citation.chunkId)}${quoteQuery}`;
-  return `[${label}](${url})`;
+  return `[${label}](${buildCitationURL(citation, options.quote)})`;
+}
+
+export function buildCitationURL(
+  citation: Pick<DocumentAICitation, 'sourceId' | 'chunkId' | 'page'>,
+  quote?: string | null,
+): string {
+  const page = Number.isFinite(citation.page) ? Math.max(1, Math.round(citation.page)) : 1;
+  const quoteValue = quote?.slice(0, MAX_QUOTE_QUERY_LENGTH);
+  const quoteQuery = quoteValue ? `&q=${encodeURIComponent(quoteValue)}` : '';
+  return `ticker-pdf://${citation.sourceId}?page=${page}&chunk=${encodeURIComponent(citation.chunkId)}${quoteQuery}`;
 }
 
 export function swapCitationMarkersWithMetadata(

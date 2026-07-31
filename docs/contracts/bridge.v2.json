@@ -19,7 +19,7 @@
       },
       "documentAIComplete": {
         "requiredPayloadKeys": ["requestId"],
-        "optionalPayloadKeys": ["citations", "sourceContextMode"]
+        "optionalPayloadKeys": ["citations", "sourceContextMode", "exchange", "sentContext"]
       },
       "documentAIError": {
         "requiredPayloadKeys": ["requestId"],
@@ -31,8 +31,15 @@
           "quotaLimit",
           "quotaUsed",
           "quotaResetAt",
-          "retryAfter"
+          "retryAfter",
+          "largestBlock",
+          "protectedTokens",
+          "sourceTokens",
+          "tokenBudget"
         ]
+      },
+      "threadAIContext": {
+        "requiredPayloadKeys": ["requestId", "sentContext"]
       },
       "documentModelSelected": {
         "requiredPayloadKeys": ["requestId", "modelId"]
@@ -292,7 +299,7 @@
       },
       "thinkDocument": {
         "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
-        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId"]
+        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId", "threadId"]
       },
       "updateMarginNote": {
         "requiredPayloadKeys": ["noteId", "status"]

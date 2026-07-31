@@ -14,6 +14,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'documentAIComplete',
   'documentAIError',
   'documentModelSelected',
+  'threadAIContext',
   'bridgeError',
   'callback',
   'fileDropError',
@@ -111,6 +112,7 @@ export interface ThinkDocumentPayload extends Record<string, unknown> {
   sourceScope?: DocumentAISourceScope;
   verb?: DocumentAIVerb;
   parentRequestId?: string;
+  threadId?: string;
 }
 
 export interface UpdateMarginNotePayload extends Record<string, unknown> {
