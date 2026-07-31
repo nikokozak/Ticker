@@ -88,7 +88,7 @@ enum StreamCodec {
     }
 
     static func encodeExchange(_ exchange: AIExchange) -> [String: Any] {
-        [
+        var payload: [String: Any] = [
             "requestId": exchange.requestId,
             "streamId": exchange.streamId.uuidString,
             "verb": exchange.verb,
@@ -98,6 +98,45 @@ enum StreamCodec {
             "model": exchange.model as Any,
             "createdAt": ISO8601DateFormatter().string(from: exchange.createdAt)
         ]
+        if let threadId = exchange.threadId {
+            payload["threadId"] = threadId.uuidString
+        }
+        return payload
+    }
+
+    static func encodeThread(
+        _ thread: StreamThread,
+        source: SourceReference?,
+        highlight: PDFHighlightRecord?,
+        exchanges: [AIExchange]?
+    ) -> [String: Any] {
+        let formatter = ISO8601DateFormatter()
+        var payload: [String: Any] = [
+            "threadId": thread.threadId.uuidString,
+            "streamId": thread.streamId.uuidString,
+            "title": thread.title,
+            "workingText": thread.workingText,
+            "anchorText": thread.anchorText,
+            "revision": thread.revision,
+            "createdAt": formatter.string(from: thread.createdAt),
+            "updatedAt": formatter.string(from: thread.updatedAt)
+        ]
+        if let exchanges {
+            payload["exchanges"] = exchanges.map(encodeExchange)
+        }
+        if let anchorSpanId = thread.anchorSpanId {
+            payload["anchorSpanId"] = anchorSpanId
+        }
+        if let source {
+            payload["sourceId"] = source.id.uuidString
+            payload["sourceName"] = source.displayName
+            payload["sourceShortTitle"] = source.shortTitle
+        }
+        if let highlight {
+            payload["highlightId"] = highlight.id.uuidString
+            payload["sourcePage"] = highlight.page
+        }
+        return payload
     }
 
     static func encodeSource(_ source: SourceReference) -> [String: Any] {

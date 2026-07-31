@@ -61,6 +61,9 @@ final class WebViewManager: NSObject {
         if let sourceHandler = SourceMessageHandler(container: container, delegate: self) {
             bridgeRouter.register(sourceHandler)
         }
+        if let threadHandler = ThreadMessageHandler(container: container) {
+            bridgeRouter.register(threadHandler)
+        }
         if let aiHandler = AIMessageHandler(container: container) {
             bridgeRouter.register(aiHandler)
         }

@@ -1693,6 +1693,228 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func test_threadBridgeCreatesListsLoadsAndRevisionChecksWithinStream() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Bridge threads")
+            let otherStream = Stream(title: "Other bridge stream")
+            try service.saveStream(stream)
+            try service.saveStream(otherStream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Power Guide.pdf",
+                fileType: .pdf,
+                bookmarkData: Data("power".utf8),
+                status: .ready
+            )
+            try service.saveSource(source)
+            let highlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 7,
+                rects: [PDFHighlightRect(page: 7, x: 1, y: 2, w: 3, h: 4)],
+                quote: "Sleep current is 12 uA.",
+                createdAt: Date(timeIntervalSince1970: 6_000)
+            )
+            try service.savePDFHighlight(highlight)
+
+            let recorder = BridgeMessageRecorder()
+            let handler = ThreadMessageHandler(
+                persistence: service,
+                sendToWeb: recorder.send,
+                sendBridgeError: { originalType, reason in
+                    recorder.send(BridgeMessage(type: "bridgeError", payload: [
+                        "originalType": AnyCodable(originalType),
+                        "reason": AnyCodable(reason)
+                    ]))
+                }
+            )
+            await handler.handle(BridgeMessage(
+                type: "createStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "title": AnyCodable("Sleep current"),
+                    "anchorText": AnyCodable(highlight.quote),
+                    "anchorSpanId": AnyCodable(""),
+                    "sourceId": AnyCodable(source.id.uuidString),
+                    "highlightId": AnyCodable(highlight.id.uuidString)
+                ],
+                callbackId: "create"
+            ))
+
+            let createResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "create" }
+            )
+            let createdPayload = try XCTUnwrap(createResponse.payload?["thread"]?.value as? [String: Any])
+            let threadIdRaw = try XCTUnwrap(createdPayload["threadId"] as? String)
+            let threadId = try XCTUnwrap(UUID(uuidString: threadIdRaw))
+            XCTAssertEqual(createdPayload["sourceName"] as? String, source.displayName)
+            XCTAssertEqual(createdPayload["sourcePage"] as? Int, highlight.page)
+            XCTAssertTrue((createdPayload["exchanges"] as? [[String: Any]])?.isEmpty == true)
+
+            await handler.handle(BridgeMessage(
+                type: "listStreamThreads",
+                payload: ["streamId": AnyCodable(stream.id.uuidString)],
+                callbackId: "list"
+            ))
+            let listResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "list" }
+            )
+            let listed = try XCTUnwrap(listResponse.payload?["threads"]?.value as? [[String: Any]])
+            XCTAssertEqual(listed.map { $0["threadId"] as? String }, [threadIdRaw])
+            XCTAssertNil(listed.first?["exchanges"])
+
+            await handler.handle(BridgeMessage(
+                type: "saveStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(threadIdRaw),
+                    "title": AnyCodable("Power budget"),
+                    "workingText": AnyCodable("Compare stop modes."),
+                    "baseRevision": AnyCodable(0)
+                ],
+                callbackId: "save"
+            ))
+            let saveResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "save" }
+            )
+            XCTAssertEqual(saveResponse.payload?["conflict"]?.value as? Bool, false)
+            let savedPayload = try XCTUnwrap(saveResponse.payload?["thread"]?.value as? [String: Any])
+            XCTAssertEqual(savedPayload["workingText"] as? String, "Compare stop modes.")
+            XCTAssertEqual(savedPayload["revision"] as? Int, 1)
+
+            await handler.handle(BridgeMessage(
+                type: "saveStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(threadIdRaw),
+                    "title": AnyCodable("Stale"),
+                    "workingText": AnyCodable("Must not win."),
+                    "baseRevision": AnyCodable(0)
+                ],
+                callbackId: "conflict"
+            ))
+            let conflictResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "conflict" }
+            )
+            XCTAssertEqual(conflictResponse.payload?["conflict"]?.value as? Bool, true)
+            let conflictPayload = try XCTUnwrap(conflictResponse.payload?["thread"]?.value as? [String: Any])
+            XCTAssertEqual(conflictPayload["workingText"] as? String, "Compare stop modes.")
+
+            let exchange = AIExchange(
+                requestId: "thread-bridge-ai",
+                streamId: stream.id,
+                threadId: threadId,
+                verb: "ask",
+                userInput: "Which mode?",
+                responseRaw: "Use stop 2.",
+                createdAt: Date(timeIntervalSince1970: 6_001)
+            )
+            try service.saveExchange(exchange)
+            await handler.handle(BridgeMessage(
+                type: "loadStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(threadIdRaw)
+                ],
+                callbackId: "load"
+            ))
+            let loadResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "load" }
+            )
+            let loadedPayload = try XCTUnwrap(loadResponse.payload?["thread"]?.value as? [String: Any])
+            let exchanges = try XCTUnwrap(loadedPayload["exchanges"] as? [[String: Any]])
+            XCTAssertEqual(exchanges.first?["threadId"] as? String, threadIdRaw)
+            XCTAssertEqual(exchanges.first?["responseRaw"] as? String, exchange.responseRaw)
+
+            await handler.handle(BridgeMessage(
+                type: "createStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "title": AnyCodable("Stream claim"),
+                    "anchorText": AnyCodable("A claim in the Stream"),
+                    "anchorSpanId": AnyCodable("thread-anchor-stream"),
+                    "sourceId": AnyCodable(""),
+                    "highlightId": AnyCodable("")
+                ],
+                callbackId: "create-stream-anchor"
+            ))
+            let anchorResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "create-stream-anchor" }
+            )
+            let anchorPayload = try XCTUnwrap(anchorResponse.payload?["thread"]?.value as? [String: Any])
+            XCTAssertEqual(anchorPayload["anchorSpanId"] as? String, "thread-anchor-stream")
+            XCTAssertNil(anchorPayload["sourceId"])
+            XCTAssertNil(anchorPayload["highlightId"])
+
+            await handler.handle(BridgeMessage(
+                type: "loadStreamThread",
+                payload: [
+                    "streamId": AnyCodable(otherStream.id.uuidString),
+                    "threadId": AnyCodable(threadIdRaw)
+                ],
+                callbackId: "foreign"
+            ))
+            let foreignResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "foreign" }
+            )
+            XCTAssertNotNil(foreignResponse.payload?["error"]?.value as? String)
+
+            await handler.handle(BridgeMessage(
+                type: "saveStreamThread",
+                payload: [
+                    "streamId": AnyCodable(otherStream.id.uuidString),
+                    "threadId": AnyCodable(threadIdRaw),
+                    "title": AnyCodable("Foreign"),
+                    "workingText": AnyCodable("Must not save."),
+                    "baseRevision": AnyCodable(1)
+                ],
+                callbackId: "foreign-save"
+            ))
+            let foreignSaveResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "foreign-save" }
+            )
+            XCTAssertNotNil(foreignSaveResponse.payload?["error"]?.value as? String)
+
+            await handler.handle(BridgeMessage(
+                type: "listStreamThreads",
+                payload: ["streamId": AnyCodable(UUID().uuidString)],
+                callbackId: "missing-stream"
+            ))
+            let missingStreamResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "missing-stream" }
+            )
+            XCTAssertNotNil(missingStreamResponse.payload?["error"]?.value as? String)
+
+            await handler.handle(BridgeMessage(
+                type: "listStreamThreads",
+                payload: ["streamId": AnyCodable(stream.id.uuidString)]
+            ))
+            XCTAssertEqual(
+                recorder.messages(ofType: "bridgeError").last?.payload?["originalType"]?.value as? String,
+                "listStreamThreads"
+            )
+
+            await handler.handle(BridgeMessage(
+                type: "createStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "title": AnyCodable("Broken"),
+                    "anchorText": AnyCodable("Broken"),
+                    "anchorSpanId": AnyCodable(""),
+                    "sourceId": AnyCodable("not-a-uuid"),
+                    "highlightId": AnyCodable("")
+                ],
+                callbackId: "malformed"
+            ))
+            let malformedResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "malformed" }
+            )
+            XCTAssertNotNil(malformedResponse.payload?["error"]?.value as? String)
+            XCTAssertEqual(try service.loadStreamThreads(streamId: stream.id).count, 2)
+        }
+    }
+
     func test_v21MigrationAddsMarginTablesToFreshDatabase() throws {
         try withTempPersistenceServiceAndURL { _, dbURL, _ in
             let dbQueue = try DatabaseQueue(path: dbURL.path)

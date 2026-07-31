@@ -4,6 +4,7 @@ import type {
   PendingAppendJSON,
   ProvenanceSpanJSON,
   StreamAppendInboxJSON,
+  StreamThreadJSON,
 } from './models';
 
 /** Message structure for Swift ↔ JS communication */
@@ -69,6 +70,9 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'loadStorageState',
   'loadStream',
   'loadStreams',
+  'listStreamThreads',
+  'createStreamThread',
+  'loadStreamThread',
   'getExchange',
   'openExternalURL',
   'openPdfDestination',
@@ -83,6 +87,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'saveScrollPosition',
   'saveRichStreamDocument',
   'saveStreamDocument',
+  'saveStreamThread',
   'setFileDropContext',
   'setSourceAIExclusion',
   'setSourceScope',
@@ -234,6 +239,53 @@ export function updateMarginNote(payload: UpdateMarginNotePayload): void {
       noteId: payload.noteId,
       status: payload.status,
     },
+  });
+}
+
+export interface CreateStreamThreadInput {
+  streamId: string;
+  title?: string;
+  anchorText: string;
+  anchorSpanId?: string;
+  sourceId?: string;
+  highlightId?: string;
+}
+
+export function listStreamThreads(streamId: string): Promise<{ threads: StreamThreadJSON[] }> {
+  return bridge.sendAsync('listStreamThreads', { streamId });
+}
+
+export function createStreamThread(input: CreateStreamThreadInput): Promise<{ thread: StreamThreadJSON }> {
+  return bridge.sendAsync('createStreamThread', {
+    streamId: input.streamId,
+    title: input.title ?? '',
+    anchorText: input.anchorText,
+    anchorSpanId: input.anchorSpanId ?? '',
+    sourceId: input.sourceId ?? '',
+    highlightId: input.highlightId ?? '',
+  });
+}
+
+export function loadStreamThread(
+  streamId: string,
+  threadId: string,
+): Promise<{ thread: StreamThreadJSON }> {
+  return bridge.sendAsync('loadStreamThread', { streamId, threadId });
+}
+
+export function saveStreamThread(input: {
+  streamId: string;
+  threadId: string;
+  title: string;
+  workingText: string;
+  baseRevision: number;
+}): Promise<{ conflict: boolean; thread: StreamThreadJSON }> {
+  return bridge.sendAsync('saveStreamThread', {
+    streamId: input.streamId,
+    threadId: input.threadId,
+    title: input.title,
+    workingText: input.workingText,
+    baseRevision: input.baseRevision,
   });
 }
 

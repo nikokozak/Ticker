@@ -77,12 +77,31 @@ export interface MarginNoteJSON {
 export interface AIExchangeJSON {
   requestId: string;
   streamId: string;
+  threadId?: string;
   verb: string;
   userInput: string;
   sourceManifest: string;
   responseRaw: string;
   model?: string | null;
   createdAt: string;
+}
+
+export interface StreamThreadJSON {
+  threadId: string;
+  streamId: string;
+  title: string;
+  workingText: string;
+  anchorText: string;
+  anchorSpanId?: string;
+  sourceId?: string;
+  sourceName?: string;
+  sourceShortTitle?: string;
+  highlightId?: string;
+  sourcePage?: number;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  exchanges?: AIExchangeJSON[];
 }
 
 /** Lightweight summary for list views */

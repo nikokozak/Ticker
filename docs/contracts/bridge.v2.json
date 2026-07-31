@@ -197,6 +197,18 @@
       "loadStreams": {
         "requiredPayloadKeys": []
       },
+      "listStreamThreads": {
+        "requiredPayloadKeys": ["streamId"],
+        "requiredCallbackId": true
+      },
+      "createStreamThread": {
+        "requiredPayloadKeys": ["streamId", "title", "anchorText", "anchorSpanId", "sourceId", "highlightId"],
+        "requiredCallbackId": true
+      },
+      "loadStreamThread": {
+        "requiredPayloadKeys": ["streamId", "threadId"],
+        "requiredCallbackId": true
+      },
       "getExchange": {
         "requiredPayloadKeys": ["requestId"],
         "requiredCallbackId": true
@@ -253,6 +265,10 @@
       "saveStreamDocument": {
         "requiredPayloadKeys": ["streamId", "markdown", "baseRevision", "spans"],
         "optionalPayloadKeys": ["resolvedPendingThrough"],
+        "requiredCallbackId": true
+      },
+      "saveStreamThread": {
+        "requiredPayloadKeys": ["streamId", "threadId", "title", "workingText", "baseRevision"],
         "requiredCallbackId": true
       },
       "saveScrollPosition": {

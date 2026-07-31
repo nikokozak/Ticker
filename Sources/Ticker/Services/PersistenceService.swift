@@ -2461,6 +2461,20 @@ final class PersistenceService {
         }
     }
 
+    func loadPDFHighlight(id: UUID, sourceId: UUID) throws -> PDFHighlightRecord? {
+        try dbQueue.read { db in
+            try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id, source_id, page, rects_json, quote, created_at
+                    FROM pdf_highlights
+                    WHERE id = ? AND source_id = ?
+                """,
+                arguments: [id.uuidString, sourceId.uuidString]
+            ).map { try decodePDFHighlight($0) }
+        }
+    }
+
     private func decodePDFHighlight(_ row: Row) throws -> PDFHighlightRecord {
         let rectsJSON: String = row["rects_json"]
         guard let rectsData = rectsJSON.data(using: .utf8) else {
