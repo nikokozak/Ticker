@@ -4056,6 +4056,10 @@ final class StreamDocumentTests: XCTestCase {
             let wire = StreamCodec.encodeAppendInbox(snapshot.appendInbox)
             XCTAssertEqual(wire.map { $0["seq"]?.intValue }, [1, 3])
             XCTAssertEqual(wire.map { $0["appendId"]?.value as? String }, ["append-1", "append-3"])
+            XCTAssertNoThrow(try JSONEncoder().encode(BridgeMessage(
+                type: "streamLoaded",
+                payload: ["appendInbox": AnyCodable(wire)]
+            )))
         }
     }
 

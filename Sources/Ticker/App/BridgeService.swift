@@ -83,6 +83,8 @@ struct AnyCodable: Codable {
         }
 
         switch value {
+        case let wrapped as AnyCodable:
+            try wrapped.encode(to: encoder)
         case is NSNull:
             try container.encodeNil()
         case let bool as Bool:
