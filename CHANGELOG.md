@@ -4,6 +4,8 @@ All notable user-facing changes to Ticker are documented here.
 
 ## Unreleased
 
+## 2026.7.31
+
 ### Added
 - The rich-text editor now supports source controls, PDF section AI and anchor links, provenance exchange inspection, Send, Send & Prompt, Ask, Define, Rewrite, and one-shot search-result jumps while keeping browser-copied images local.
 - The rich-text editor now pastes, drops, and resizes saved images and restores each stream's scroll position.
