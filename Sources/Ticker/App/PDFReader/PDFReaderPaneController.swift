@@ -1179,6 +1179,8 @@ final class PDFReaderPaneController: NSViewController {
         pdfOutlineScrollView.isHidden = !shouldShow
         pdfOutlineWidthConstraint?.constant = shouldShow ? 220 : 0
         pdfPaneOutlineButton.state = shouldShow ? .on : .off
+        pdfPaneOutlineButton.showsBorderOnlyWhileMouseInside = !shouldShow
+        pdfPaneOutlineButton.contentTintColor = shouldShow ? NativePalette.accent : NativePalette.textMuted
         pdfPaneOutlineButton.toolTip = shouldShow ? "Hide outline" : "Show outline"
         view.layoutSubtreeIfNeeded()
     }

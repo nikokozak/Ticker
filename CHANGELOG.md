@@ -55,6 +55,7 @@ All notable user-facing changes to Ticker are documented here.
 - Revision-aware stream document saves to protect external appends from stale autosaves.
 
 ### Changed
+- The PDF outline button now stays visibly active while the outline is open.
 - Quick Panel copied-text context now expires after a minute of inactivity without interrupting a draft or active request.
 - The rich-text editor now uses the established quiet title, provenance, overflow, delete-confirmation, and contextual formatting chrome.
 - Stream documents now open in the document-model rich-text editor, with Markdown retained as a derived projection for search, AI, and export.
