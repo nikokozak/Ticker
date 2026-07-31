@@ -6,6 +6,7 @@ Package.resolved
 # Web
 Web/node_modules/
 tools/contracts/node_modules/
+spike/node_modules/
 Web/dist/
 
 # Build output
