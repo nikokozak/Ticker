@@ -2,6 +2,7 @@ import { Plugin, PluginKey, Selection, TextSelection, type EditorState, type Tra
 import { closeHistory } from 'prosemirror-history';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import { Fragment, Slice, type Node as ProseNode } from 'prosemirror-model';
+import { parseTickerPDFURL } from '../extensions/PDFHighlightLink';
 import { parseMarkdown } from './markdown';
 import { ASSET_URL_PREFIX, isValidImageWidth, tickerSchema } from './schema';
 
@@ -241,6 +242,47 @@ export function selectText(view: EditorView, needle: string): boolean {
   const to = ends[Math.min(index + needle.length - 1, ends.length - 1)];
   const selection = TextSelection.create(view.state.doc, from, to);
   view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
+  view.focus();
+  return true;
+}
+
+/** Select and scroll to the first rich-text link for a persisted PDF highlight. */
+export function revealPDFHighlight(
+  view: EditorView,
+  sourceId: string,
+  highlightId: string,
+): boolean {
+  const expectedSource = sourceId.trim().toLowerCase();
+  const expectedHighlight = highlightId.trim().toLowerCase();
+  let from = -1;
+  let to = -1;
+
+  view.state.doc.descendants((node, pos) => {
+    if (from >= 0 || !node.isText) return from < 0;
+    const mark = tickerSchema.marks.link.isInSet(node.marks);
+    const href = mark?.attrs.href;
+    if (typeof href !== 'string' || !href.startsWith('ticker-pdf://')) return true;
+
+    const destination = parseTickerPDFURL(href);
+    if (
+      destination?.highlightId?.toLowerCase() !== expectedHighlight
+      || (
+        destination.sourceId
+        && destination.sourceId.toLowerCase() !== expectedSource
+      )
+    ) return true;
+    from = pos;
+    to = pos + node.nodeSize;
+    return false;
+  });
+
+  if (from < 0) return false;
+  view.dispatch(
+    view.state.tr
+      .setSelection(TextSelection.create(view.state.doc, from, to))
+      .setMeta('addToHistory', false)
+      .scrollIntoView(),
+  );
   view.focus();
   return true;
 }

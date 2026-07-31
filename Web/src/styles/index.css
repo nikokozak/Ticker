@@ -1009,6 +1009,13 @@ body {
   border-top: 1px solid var(--border-subtle);
 }
 
+.selection-action-group-label {
+  flex-basis: 100%;
+  color: var(--color-text-tertiary);
+  font-size: var(--type-ui-small);
+  text-align: center;
+}
+
 .selection-action-source-scope {
   color: var(--color-text-tertiary);
 }

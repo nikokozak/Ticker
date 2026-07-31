@@ -23,7 +23,7 @@ import type {
   StreamAppendInboxJSON,
 } from '../types/models';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
-import { EyeIcon } from './icons';
+import { EyeIcon, XIcon } from './icons';
 import { Modal } from './Modal';
 import { SourcesModal } from './SourcesModal';
 import {
@@ -35,6 +35,7 @@ import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import {
   aiWritingRange,
   insertImage,
+  revealPDFHighlight,
   selectText,
   setAIWritingRange,
   streamAIMarkdown,
@@ -57,6 +58,7 @@ import {
 } from '../utils/citationMarkers';
 import {
   beginPDFAnchorPick,
+  buildPDFQuoteSnippet,
   buildTickerPDFLinkURL,
   mapPendingPDFAnchorSelection,
   type PendingPDFAnchorSelection,
@@ -201,6 +203,7 @@ export function RichStreamEditor({
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [aiRunning, setAIRunning] = useState(false);
   const [aiDetail, setAIDetail] = useState<string | null>(null);
+  const [sourceIndexNotice, setSourceIndexNotice] = useState<string | null>(null);
   const [promptIntent, setPromptIntent] = useState<PromptIntent | null>(null);
   const [promptValue, setPromptValue] = useState('');
   const [leaving, setLeaving] = useState(false);
@@ -252,6 +255,7 @@ export function RichStreamEditor({
     aiInFlightRef.current = false;
     setAIRunning(false);
     setAIDetail(null);
+    setSourceIndexNotice(null);
   }, []);
 
   const canStartAI = useCallback(() => {
@@ -776,6 +780,12 @@ export function RichStreamEditor({
     };
     setAIRunning(true);
     setAIDetail('AI is writing');
+    const indexingSource = sources.find((source) => (
+      source.indexStatus === 'indexing' || source.indexStatus === 'pending'
+    ));
+    setSourceIndexNotice(indexingSource
+      ? `Still indexing ${indexingSource.shortTitle || indexingSource.displayName} — answers may not cover it yet.`
+      : null);
     // ponytail: text-only first slice; collect selected image nodes when this
     // page exposes multimodal document-AI actions.
     bridge.send({
@@ -790,7 +800,7 @@ export function RichStreamEditor({
         imageURLs: [],
       },
     });
-  }, [addToast, canStartAI, sourceScope, stream.id]);
+  }, [addToast, canStartAI, sourceScope, sources, stream.id]);
 
   const openDocumentAIPrompt = useCallback((verb: 'ask' | 'rewrite') => {
     const currentEditor = editorRef.current;
@@ -872,6 +882,40 @@ export function RichStreamEditor({
         sourceName: (payload as SourceTitlePayload | undefined)?.sourceName,
         shortTitle: (payload as SourceTitlePayload | undefined)?.shortTitle,
       });
+      return;
+    }
+
+    if (message.type === 'pdfHighlightLinked') {
+      if (payload?.streamId !== stream.id) return;
+      const sourceId = payload.sourceId;
+      const highlightId = payload.highlightId;
+      if (typeof sourceId !== 'string' || typeof highlightId !== 'string') return;
+
+      const rawPage = Number(payload.page);
+      const page = Number.isFinite(rawPage) ? Math.max(1, Math.round(rawPage)) : 1;
+      const sourcePayload = payload as SourceTitlePayload;
+      const linkURL = buildTickerPDFLinkURL({ sourceId, highlightId, page });
+      const linkLabel = `${sourcePayload.shortTitle || sourcePayload.sourceName || 'PDF'} p.${page}`;
+      editorRef.current!.insertMarkdown(buildPDFQuoteSnippet({
+        quote: typeof payload.quote === 'string' ? payload.quote : '',
+        linkLabel,
+        linkURL,
+      }));
+      editorRef.current!.view.focus();
+      addToast('Added PDF quote to stream.', 'success');
+      return;
+    }
+
+    if (message.type === 'revealPdfHighlightInStream') {
+      if (payload?.streamId !== stream.id) return;
+      const sourceId = payload.sourceId;
+      const highlightId = payload.highlightId;
+      if (typeof sourceId !== 'string' || typeof highlightId !== 'string') return;
+      if (!revealPDFHighlight(editorRef.current!.view, sourceId, highlightId)) {
+        addToast('This highlight is no longer linked in the stream.', 'warning');
+        return;
+      }
+      addToast('Showing linked highlight in stream.', 'success');
       return;
     }
 
@@ -1005,6 +1049,7 @@ export function RichStreamEditor({
       aiInFlightRef.current = false;
       setAIRunning(false);
       setAIDetail(null);
+      setSourceIndexNotice(null);
       session.documentChanged();
       return;
     }
@@ -1165,17 +1210,17 @@ export function RichStreamEditor({
   );
   const documentAIActions = [
     {
-      key: 'send',
-      label: aiRunning ? 'Stop AI' : 'Send',
-      ariaLabel: aiRunning ? 'Stop document AI' : 'Send to AI',
-      title: aiDetail ?? 'Send the selection or current paragraph to AI',
-      disabled: false,
-      action: () => { if (aiRunning) cancelDocumentAI(); else void startDocumentAI(); },
+      key: 'develop',
+      label: 'Develop',
+      ariaLabel: 'Develop with AI',
+      title: 'Develop the selection with AI',
+      disabled: aiRunning,
+      action: () => { void startDocumentAI(); },
     },
     {
       key: 'prompt',
-      label: 'Send & Prompt…',
-      ariaLabel: 'Send and prompt AI',
+      label: 'Ask about…',
+      ariaLabel: 'Ask about selection with AI',
       disabled: aiRunning,
       action: () => openDocumentAIPrompt('ask'),
     },
@@ -1290,7 +1335,7 @@ export function RichStreamEditor({
             title="Sources"
             onClick={() => setShowSourcesModal(true)}
           >
-            Sources · {sources.length}{openPDFTitle ? ` · PDF · ${openPDFTitle}` : ''}
+            Sources · {sources.length}
           </button>
           <details
             ref={streamOverflowMenuRef}
@@ -1311,34 +1356,6 @@ export function RichStreamEditor({
               <span aria-hidden="true">•••</span>
             </summary>
             <div className="stream-overflow-panel">
-              {documentAIActions.map((action) => (
-                <button
-                  key={action.key}
-                  type="button"
-                  className="stream-overflow-action"
-                  aria-label={action.ariaLabel}
-                  title={action.title}
-                  disabled={action.disabled}
-                  onClick={() => {
-                    streamOverflowMenuRef.current!.open = false;
-                    action.action();
-                  }}
-                >
-                  {action.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                className="stream-overflow-action"
-                aria-label="Cycle source scope"
-                title="Cycle source scope"
-                onClick={() => {
-                  streamOverflowMenuRef.current!.open = false;
-                  cycleSourceScope();
-                }}
-              >
-                Sources: {sourceScopeLabel}
-              </button>
               <button
                 type="button"
                 className="stream-overflow-delete"
@@ -1391,7 +1408,7 @@ export function RichStreamEditor({
           <h2 id="richtext-ai-prompt-title">
             {promptIntent.kind === 'pdfSection'
               ? 'Ask this section'
-              : promptIntent.verb === 'rewrite' ? 'Rewrite' : 'Send & Prompt'}
+              : promptIntent.verb === 'rewrite' ? 'Rewrite' : 'Ask about selection'}
           </h2>
           <p>
             {promptIntent.kind === 'pdfSection'
@@ -1431,11 +1448,15 @@ export function RichStreamEditor({
             <button
               className="ai-prompt-send"
               type="button"
-              aria-label="Send prompt to AI"
+              aria-label={promptIntent.kind === 'pdfSection'
+                ? 'Ask PDF section'
+                : promptIntent.verb === 'rewrite' ? 'Rewrite with prompt' : 'Ask AI'}
               onClick={sendDocumentAIPrompt}
               disabled={!promptValue.trim()}
             >
-              {promptIntent.kind === 'pdfSection' ? 'Ask section' : 'Send'}
+              {promptIntent.kind === 'pdfSection'
+                ? 'Ask section'
+                : promptIntent.verb === 'rewrite' ? 'Rewrite' : 'Ask'}
             </button>
           </div>
         </Modal>
@@ -1466,6 +1487,7 @@ export function RichStreamEditor({
                 title="AI actions"
                 aria-label="AI actions"
                 aria-expanded={selectionMenuPanel === 'ai'}
+                disabled={aiRunning}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setSelectionMenuPanel((panel) => panel === 'ai' ? null : 'ai')}
               >
@@ -1524,6 +1546,7 @@ export function RichStreamEditor({
           {selectionMenuPanel === 'more' && (
             <div className="selection-action-submenu-panel" aria-label="More formatting and context actions">
               {formatButton('Code', formats.code, toggleCode, 'Code')}
+              <span className="selection-action-group-label">Paragraph</span>
               {formatButton('H1', formats.heading === 1, toggleHeading(1), 'Heading 1')}
               {formatButton('H2', formats.heading === 2, toggleHeading(2), 'Heading 2')}
               {formatButton('H3', formats.heading === 3, toggleHeading(3), 'Heading 3')}
@@ -1552,6 +1575,30 @@ export function RichStreamEditor({
             className={`document-editor-shell ${xray ? 'richtext-xray' : ''}`}
           >
             <div ref={host} />
+            {aiRunning && (
+              <div
+                className="document-ai-status-pill"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="document-ai-status-dot" aria-hidden="true" />
+                <span>{aiDetail ?? 'AI is writing'}</span>
+                <button
+                  type="button"
+                  className="document-ai-stop-button"
+                  aria-label="Stop document AI"
+                  title={aiDetail ?? 'Stop document AI'}
+                  onClick={() => cancelDocumentAI()}
+                >
+                  <XIcon size={12} /> Stop
+                </button>
+              </div>
+            )}
+            {aiRunning && sourceIndexNotice && (
+              <div className="document-ai-indexing-notice" role="status" aria-live="polite">
+                {sourceIndexNotice}
+              </div>
+            )}
           </div>
         </div>
       </div>

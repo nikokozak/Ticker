@@ -90,6 +90,15 @@ async function selectEditorText(text: string) {
   });
 }
 
+async function clickAI(label: string, selection = 'Original paragraph.') {
+  if (!document.querySelector('.selection-action-menu')) {
+    await selectEditorText(selection);
+  }
+  const toggle = document.querySelector('[aria-label="AI actions"]') as HTMLButtonElement;
+  if (toggle.getAttribute('aria-expanded') !== 'true') await click('AI actions');
+  await click(label);
+}
+
 async function toggleXray() {
   const button = document.querySelector('.stream-xray-button') as HTMLButtonElement;
   expect(button, 'Expected Xray button').toBeDefined();
@@ -298,6 +307,8 @@ describe('RichStreamEditor chrome parity', () => {
     expect(document.querySelector('.stream-title-input')).toBe(null);
     expect(document.querySelector('.stream-xray-button')?.textContent).toBe('');
     expect(document.querySelector('.stream-overflow-menu')).not.toBe(null);
+    expect([...document.querySelectorAll('.stream-overflow-panel button')]
+      .map((button) => button.textContent?.trim())).toEqual(['Delete stream…']);
     expect(document.querySelector('.delete-button')).toBe(null);
     expect(document.querySelector('.stream-format-bar')).toBe(null);
     expect(document.querySelector('.selection-action-menu')).toBe(null);
@@ -306,6 +317,8 @@ describe('RichStreamEditor chrome parity', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('.selection-action-menu')).not.toBe(null);
     });
+    await click('More actions');
+    expect(document.querySelector('.selection-action-group-label')?.textContent).toBe('Paragraph');
   });
 
   it('edits the title on demand and confirms deletion', async () => {
@@ -437,9 +450,9 @@ describe('RichStreamEditor lifecycle', () => {
 describe('RichStreamEditor document AI', () => {
   it('sends a prompt as the query and the selected text as context', async () => {
     await selectEditorText('Original');
-    await click('Send and prompt AI');
+    await clickAI('Ask about selection with AI');
     await enterPrompt('Make it concrete.');
-    await click('Send prompt to AI');
+    await click('Ask AI');
 
     const requestId = activeRequestId();
     expect(lastSent()).toMatchObject({
@@ -470,7 +483,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('does not send a blank prompt', async () => {
-    await click('Send and prompt AI');
+    await clickAI('Ask about selection with AI');
     await enterPrompt(' \n ');
     const input = document.querySelector('.ai-prompt-input') as HTMLTextAreaElement;
     await act(async () => {
@@ -484,7 +497,7 @@ describe('RichStreamEditor document AI', () => {
     expect(document.querySelector('.ai-prompt-input')).not.toBe(null);
   });
 
-  it('does not open a prompt without text to attach', async () => {
+  it('does not offer contextual AI without text to attach', async () => {
     await renderStream({
       ...stream,
       id: 'empty-stream',
@@ -495,18 +508,15 @@ describe('RichStreamEditor document AI', () => {
         markdown: '',
       },
     });
-    await click('Send and prompt AI');
-
+    expect(document.querySelector('[aria-label="AI actions"]')).toBe(null);
     expect(document.querySelector('.ai-prompt-input')).toBe(null);
-    expect(useToastStore.getState().toasts.map((toast) => toast.message))
-      .toEqual(['Select text or place the cursor in a paragraph to use as context.']);
   });
 
   it.each([
     ['Ask with AI', 'ask'],
     ['Define with AI', 'define'],
   ] as const)('supports %s without replacing the passage', async (label, verb) => {
-    await click(label);
+    await clickAI(label);
     const requestId = activeRequestId();
     expect(lastSent()).toMatchObject({
       type: 'thinkDocument',
@@ -532,7 +542,7 @@ describe('RichStreamEditor document AI', () => {
         key: 'a', ctrlKey: true, bubbles: true, cancelable: true,
       }));
     });
-    await click('Ask with AI');
+    await clickAI('Ask with AI');
 
     expect(lastSent()).toMatchObject({
       type: 'thinkDocument',
@@ -542,7 +552,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it.each(['cancel', 'error'] as const)('restores an appended reply on %s', async (exit) => {
-    await click('Ask with AI');
+    await clickAI('Ask with AI');
     const requestId = activeRequestId();
     await act(async () => {
       bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Partial.' } });
@@ -566,9 +576,9 @@ describe('RichStreamEditor document AI', () => {
 
   it('rewrites from a prompt and does not expose challenge', async () => {
     expect(document.querySelector('[aria-label="Challenge with AI"]')).toBe(null);
-    await click('Rewrite with AI');
+    await clickAI('Rewrite with AI');
     await enterPrompt('Make it shorter.');
-    await click('Send prompt to AI');
+    await click('Rewrite with prompt');
 
     const requestId = activeRequestId();
     expect(lastSent()).toMatchObject({
@@ -587,9 +597,11 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('keeps a reply streamed in several chunks to one undo step', async () => {
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const requestId = activeRequestId();
     expect(editor().getAttribute('contenteditable')).toBe('false');
+    expect(document.querySelector('.document-ai-status-pill')?.textContent)
+      .toContain('AI is writing');
     expect((document.querySelector('[aria-label="Stop document AI"]') as HTMLButtonElement).disabled)
       .toBe(false);
     expect(lastSent()).toMatchObject({
@@ -615,6 +627,7 @@ describe('RichStreamEditor document AI', () => {
 
     expect(editor().textContent).toBe('A streamed reply.');
     expect(editor().getAttribute('contenteditable')).toBe('true');
+    expect(document.querySelector('.document-ai-status-pill')).toBe(null);
     await act(async () => {
       editor().dispatchEvent(new KeyboardEvent('keydown', {
         key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
@@ -627,7 +640,7 @@ describe('RichStreamEditor document AI', () => {
     // The AI answering with nothing usable must not cost the user the paragraph it
     // was asked about. Every chunk replaces the target range, so by the time the
     // reply turns out to be empty the original is already gone from the document.
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const requestId = activeRequestId();
 
     await act(async () => {
@@ -642,7 +655,7 @@ describe('RichStreamEditor document AI', () => {
 
   it('stops highlighting once the reply has landed', async () => {
     // The highlight says "the AI is writing here". Left behind, it says it forever.
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const requestId = activeRequestId();
 
     await act(async () => {
@@ -656,7 +669,7 @@ describe('RichStreamEditor document AI', () => {
   it('saves provenance over the reply text rather than its markdown', async () => {
     vi.useFakeTimers();
     try {
-      await click('Send to AI');
+      await clickAI('Develop with AI');
       const requestId = activeRequestId();
 
       await act(async () => {
@@ -696,7 +709,7 @@ describe('RichStreamEditor document AI', () => {
   it('swaps citation markers inside the streamed reply undo', async () => {
     vi.useFakeTimers();
     try {
-      await click('Send to AI');
+      await clickAI('Develop with AI');
       const requestId = activeRequestId();
 
       await act(async () => {
@@ -738,7 +751,7 @@ describe('RichStreamEditor document AI', () => {
     ['none', 'From model knowledge.'],
     ['unavailable', 'Source retrieval unavailable — answered from model knowledge.'],
   ] as const)('records %s source context below the reply', async (sourceContextMode, line) => {
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const requestId = activeRequestId();
 
     await act(async () => {
@@ -760,7 +773,7 @@ describe('RichStreamEditor document AI', () => {
     // The lock is released by the stream's own done(). A path that cancels from
     // somewhere else and forgets it leaves the user unable to type at all, in the
     // one situation where they most need to — their work is unsaved.
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const requestId = activeRequestId();
     await act(async () => {
       bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Half a re' } });
@@ -780,7 +793,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('ignores a chunk for a stale request', async () => {
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const requestId = activeRequestId();
 
     await act(async () => {
@@ -812,7 +825,7 @@ describe('RichStreamEditor document AI', () => {
       payload: { requestId: 'selection-1', text: 'Original' },
     });
 
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const messages = sent.filter((candidate) => candidate.type === 'thinkDocument');
     const message = messages[messages.length - 1];
     expect(message?.payload?.query).toBe('Original');
@@ -820,7 +833,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('cancels the host request and restores the original text', async () => {
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const requestId = activeRequestId();
     expect(editor().getAttribute('contenteditable')).toBe('false');
     await act(async () => {
@@ -845,7 +858,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('reports a real error, while cancellation stays silent', async () => {
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     let requestId = activeRequestId();
     expect(editor().getAttribute('contenteditable')).toBe('false');
     await act(async () => {
@@ -861,7 +874,7 @@ describe('RichStreamEditor document AI', () => {
     expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual(['Provider broke.']);
 
     useToastStore.getState().clearToasts();
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     requestId = activeRequestId();
     expect(editor().getAttribute('contenteditable')).toBe('false');
     await act(async () => {
@@ -880,7 +893,7 @@ describe('RichStreamEditor document AI', () => {
   it('does not save a half-written stream', async () => {
     vi.useFakeTimers();
     try {
-      await click('Send to AI');
+      await clickAI('Develop with AI');
       const requestId = activeRequestId();
       await act(async () => {
         bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Half ' } });
@@ -907,7 +920,7 @@ describe('RichStreamEditor document AI', () => {
     vi.spyOn(DocumentSession.prototype, 'saveNow').mockReturnValue(draining);
     vi.spyOn(DocumentSession.prototype, 'destroy').mockResolvedValue(true);
 
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     await act(async () => {
       (document.querySelector('.back-button') as HTMLButtonElement).click();
       release(true);
@@ -919,7 +932,7 @@ describe('RichStreamEditor document AI', () => {
   });
 
   it('reflects model and operation updates for only the active request', async () => {
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const requestId = activeRequestId();
     await act(async () => {
       bridge.receive({
@@ -1131,7 +1144,7 @@ describe('RichStreamEditor images', () => {
     expect(editor().querySelector('img')).not.toBe(null);
     expect(editor().querySelector('img')?.hasAttribute('width')).toBe(false);
 
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     await act(async () => {
       handle.dispatchEvent(new MouseEvent('mousedown', {
         clientX: 100, bubbles: true, cancelable: true,
@@ -1313,6 +1326,8 @@ describe('RichStreamEditor sources', () => {
 
   it('uses a changed source scope for the very next AI request', async () => {
     await renderStream(sourceStream);
+    await selectEditorText('Original paragraph.');
+    await click('More actions');
     await click('Cycle source scope');
 
     expect(lastSent()).toEqual({
@@ -1320,11 +1335,26 @@ describe('RichStreamEditor sources', () => {
       payload: { streamId: 'source-stream', scope: 'all' },
     });
 
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     expect(lastSent()).toMatchObject({
       type: 'thinkDocument',
       payload: { streamId: 'source-stream', sourceScope: 'all' },
     });
+    await click('Stop document AI');
+  });
+
+  it('warns when a source is still indexing before an AI request', async () => {
+    await renderStream(sourceStream);
+    await act(async () => {
+      bridge.receive({
+        type: 'sourceIndexStatusChanged',
+        payload: { sourceId: 'source-1', status: 'indexing', progress: 0.5 },
+      });
+    });
+
+    await clickAI('Develop with AI');
+    expect(document.querySelector('.document-ai-indexing-notice')?.textContent)
+      .toBe('Still indexing Paper — answers may not cover it yet.');
     await click('Stop document AI');
   });
 
@@ -1566,7 +1596,7 @@ describe('RichStreamEditor PDF section AI', () => {
     expect(document.querySelector('.ai-prompt-dialog')?.textContent)
       .toContain('“Methods” from Paper');
     await enterPrompt('Compare the two approaches.');
-    await click('Send prompt to AI');
+    await click('Ask PDF section');
 
     expect(lastSent()).toEqual({
       type: 'runPdfSectionAI',
@@ -1580,21 +1610,10 @@ describe('RichStreamEditor PDF section AI', () => {
     });
   });
 
-  it('keeps a PDF ask prompt available when document AI wins the start race', async () => {
-    await act(async () => { bridge.receive(sectionRequest('ask')); });
-    await click('Send to AI');
-    await enterPrompt('Compare the two approaches.');
-    await click('Send prompt to AI');
-
-    expect(sent.filter((message) => message.type === 'runPdfSectionAI')).toHaveLength(0);
-    expect(document.querySelector('.ai-prompt-dialog')).not.toBe(null);
-    await click('Stop document AI');
-  });
-
   it.each(['summarize', 'ask'] as const)(
     'refuses a PDF %s request while document AI is writing and leaves Stop available',
     async (action) => {
-      await click('Send to AI');
+      await clickAI('Develop with AI');
       await act(async () => { bridge.receive(sectionRequest(action)); });
 
       expect(sent.filter((message) => message.type === 'runPdfSectionAI')).toHaveLength(0);
@@ -1615,7 +1634,7 @@ describe('RichStreamEditor PDF section AI', () => {
     );
     await act(async () => { bridge.receive(sectionRequest('summarize')); });
 
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(0);
 
     await act(async () => {
@@ -1642,7 +1661,7 @@ describe('RichStreamEditor PDF section AI', () => {
         },
       });
     });
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(0);
 
     await act(async () => {
@@ -1658,7 +1677,7 @@ describe('RichStreamEditor PDF section AI', () => {
         },
       });
     });
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(1);
     await click('Stop document AI');
   });
@@ -1680,7 +1699,7 @@ describe('RichStreamEditor PDF section AI', () => {
         });
       });
 
-      await click('Send to AI');
+      await clickAI('Develop with AI');
       expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(1);
       await click('Stop document AI');
     },
@@ -1721,7 +1740,7 @@ describe('RichStreamEditor PDF section AI', () => {
       });
     });
 
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     expect(sent.filter((message) => message.type === 'thinkDocument')).toHaveLength(0);
   });
 
@@ -1750,7 +1769,9 @@ describe('RichStreamEditor PDF section AI', () => {
       });
     });
 
-    expect(document.querySelector('.stream-header')?.textContent).toContain('PDF · Paper');
+    expect(document.querySelector('.stream-sources-button')?.textContent).toBe('Sources · 0');
+    expect(document.querySelector('.stream-header')?.textContent).not.toContain('paper.pdf');
+    expect(document.querySelector('.stream-header')?.textContent).not.toContain('PDF · Paper');
     expect(editor().textContent).toBe('Original paragraph.');
 
     await act(async () => {
@@ -1898,7 +1919,7 @@ describe('RichStreamEditor PDF anchor placement', () => {
     await click('Anchor selection in PDF');
 
     await selectEditorText('Rewrite this.');
-    await click('Send to AI');
+    await clickAI('Develop with AI');
     const requestId = activeRequestId();
     await act(async () => {
       bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Short.' } });
@@ -1929,6 +1950,80 @@ describe('RichStreamEditor PDF anchor placement', () => {
 
     expect(editor().querySelector('a')).toBe(null);
     expect(editor().textContent).toBe('Original paragraph.');
+  });
+});
+
+describe('RichStreamEditor PDF highlight links', () => {
+  it('inserts a linked PDF quote as one undo step', async () => {
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfHighlightLinked',
+        payload: {
+          streamId: stream.id,
+          sourceId: 'source-1',
+          sourceName: 'paper.pdf',
+          shortTitle: 'Paper',
+          highlightId: 'highlight-1',
+          page: 4,
+          quote: 'A selected quote.',
+        },
+      });
+    });
+
+    expect(editor().querySelector('blockquote')?.textContent).toContain('A selected quote.');
+    expect(editor().querySelector('a')?.textContent).toBe('Paper p.4');
+    expect(editor().querySelector('a')?.getAttribute('href'))
+      .toBe('ticker-pdf://source-1?highlight=highlight-1&page=4');
+    expect(useToastStore.getState().toasts.map((toast) => toast.message))
+      .toContain('Added PDF quote to stream.');
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editor().textContent).toBe('Original paragraph.');
+    expect(editor().querySelector('a')).toBe(null);
+  });
+
+  it('reveals an existing linked highlight in the rich document', async () => {
+    const markdown = 'Before [Paper p.4](ticker-pdf://source-1?highlight=highlight-1&page=4) after.';
+    await renderStream({
+      ...stream,
+      id: 'linked-stream',
+      document: {
+        ...stream.document,
+        streamId: 'linked-stream',
+        docJSON: docJSON(markdown),
+        markdown,
+      },
+    });
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      updateState.call(this, state);
+    });
+
+    await act(async () => {
+      bridge.receive({
+        type: 'revealPdfHighlightInStream',
+        payload: {
+          streamId: 'linked-stream',
+          sourceId: 'source-1',
+          highlightId: 'highlight-1',
+        },
+      });
+    });
+
+    expect(useToastStore.getState().toasts.map((toast) => toast.message))
+      .toContain('Showing linked highlight in stream.');
+    expect(liveView).not.toBe(null);
+    const { from, to } = liveView!.state.selection;
+    expect(liveView!.state.doc.textBetween(from, to)).toBe('Paper p.4');
   });
 });
 

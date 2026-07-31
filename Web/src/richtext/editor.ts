@@ -72,6 +72,8 @@ export interface RichTextEditor {
   setDocumentJSON(docJSON: string): void;
   /** A derived markdown projection. Reading it must never rewrite the live document. */
   getMarkdownProjection(): string;
+  /** Insert a markdown fragment at the current selection as one undo step. */
+  insertMarkdown(markdown: string): void;
   /**
    * Append a fragment at the end of the document, as an external write does, and
    * report where it landed so metadata can be placed inside it.
@@ -260,6 +262,13 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
 
     getMarkdownProjection() {
       return serializeMarkdown(view.state.doc);
+    },
+
+    insertMarkdown(markdown: string) {
+      const parsed = parseMarkdown(markdown);
+      if (parsed.childCount === 0) return;
+      const slice = new Slice(Fragment.from(parsed.content), 0, 0);
+      view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
     },
 
     appendMarkdown(fragment: string) {
