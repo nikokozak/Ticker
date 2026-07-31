@@ -356,6 +356,43 @@ describe('copy-only document conversion', () => {
     expect(() => convertDatabase(source, output)).toThrow(/only half present/i);
     expect(() => readFileSync(output)).toThrow();
   });
+
+  it('refuses to rebuild canonical truth from its Markdown projection', () => {
+    const { source, output } = sourceDatabase([{ id: 'stream-1', markdown: 'Canonical' }]);
+    const docJSON = JSON.stringify(parseMarkdown('Canonical').toJSON());
+    sqlite(source, `
+      ALTER TABLE stream_documents ADD COLUMN doc_json TEXT;
+      ALTER TABLE stream_documents ADD COLUMN doc_format_version INTEGER;
+      UPDATE stream_documents
+      SET doc_json = ${sqlText(docJSON)}, doc_format_version = 1;
+    `);
+
+    expect(() => convertDatabase(source, output)).toThrow(/already contains canonical documents/i);
+    expect(() => readFileSync(output)).toThrow();
+  });
+
+  it('refuses an unconverted database with unresolved canonical inbox rows', () => {
+    const { source, output } = sourceDatabase([{ id: 'stream-1', markdown: 'Base\n\nQueued' }]);
+    sqlite(source, `
+      ALTER TABLE stream_documents ADD COLUMN doc_json TEXT;
+      ALTER TABLE stream_documents ADD COLUMN doc_format_version INTEGER;
+      CREATE TABLE stream_append_inbox (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        append_id TEXT NOT NULL UNIQUE,
+        stream_id TEXT NOT NULL,
+        fragment TEXT NOT NULL,
+        raw_spans_json TEXT NOT NULL DEFAULT '[]',
+        created_at REAL NOT NULL,
+        consumed_at REAL
+      );
+      INSERT INTO stream_append_inbox
+        (append_id, stream_id, fragment, created_at)
+      VALUES ('append-1', 'stream-1', 'Queued', 1000);
+    `);
+
+    expect(() => convertDatabase(source, output)).toThrow(/unresolved append inbox rows/i);
+    expect(() => readFileSync(output)).toThrow();
+  });
 });
 
 describe('strict conversion proofs', () => {

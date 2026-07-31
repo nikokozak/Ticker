@@ -293,6 +293,30 @@ export function convertDatabase(source: string, output: string): ConversionRepor
     if (hasJSON !== hasVersion) throw new Error('Canonical document columns are only half present');
     const migrateV26 = !hasJSON;
 
+    if (hasJSON) {
+      const canonicalDocuments = query<{ count: number }>(outputPath, `
+        SELECT COUNT(*) AS count
+        FROM stream_documents
+        WHERE doc_json IS NOT NULL OR doc_format_version IS NOT NULL;
+      `)[0]?.count ?? 0;
+      if (canonicalDocuments) {
+        throw new Error('Source already contains canonical documents');
+      }
+
+      const inboxColumns = query<{ name: string }>(outputPath, 'PRAGMA table_info(stream_append_inbox);')
+        .map((column) => column.name);
+      if (inboxColumns.length) {
+        const unresolvedInbox = query<{ count: number }>(outputPath, `
+          SELECT COUNT(*) AS count
+          FROM stream_append_inbox
+          ${inboxColumns.includes('consumed_at') ? 'WHERE consumed_at IS NULL' : ''};
+        `)[0]?.count ?? 0;
+        if (unresolvedInbox) {
+          throw new Error('Source contains unresolved append inbox rows');
+        }
+      }
+    }
+
     const documents = query<DocumentRow>(outputPath, `
       SELECT stream_id AS streamId, markdown, revision
       FROM stream_documents

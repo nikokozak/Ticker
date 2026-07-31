@@ -83,6 +83,7 @@ All notable user-facing changes to Ticker are documented here.
 - Bridge v2 is the live bidirectional document-model contract, routed through feature handlers with surfaced errors.
 
 ### Fixed
+- Copy-only rich-text conversion now refuses already-canonical databases and unresolved inbox rows instead of rebuilding canonical truth or duplicating queued content.
 - Rich-text PDF quotes now insert and reveal correctly; local AI shows stoppable progress and source-index warnings, while Sources and overflow chrome stay concise.
 - Streams with pending Quick Panel appends now open reliably instead of failing while encoding the editor snapshot.
 - Quick Panel captures can no longer miss an editor opening in progress, and stream loading can no longer leave the list disabled.
