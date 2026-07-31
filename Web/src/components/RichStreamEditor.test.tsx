@@ -8,7 +8,7 @@ import {
   type SwiftToWebBridgeMessage,
   type WebToSwiftBridgeMessage,
 } from '../types/bridge';
-import type { AIExchangeJSON, SourceReference, Stream } from '../types/models';
+import type { AIExchangeJSON, SourceReference, Stream, StreamThreadJSON } from '../types/models';
 import { DocumentSession } from '../richtext/session';
 import { parseMarkdown } from '../richtext/markdown';
 import { useToastStore } from '../store/toastStore';
@@ -504,6 +504,167 @@ describe('RichStreamEditor lifecycle', () => {
     expect(note.value).toBe('Local work survives');
     expect(document.querySelector('.thread-save-warning')?.textContent)
       .toContain('changed elsewhere');
+  });
+});
+
+describe('RichStreamEditor Stream threads', () => {
+  it('starts a thread from selected text without changing the Stream document', async () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'createStreamThread') {
+        return {
+          thread: {
+            threadId: 'thread-1',
+            streamId: stream.id,
+            title: 'Original paragraph.',
+            workingText: '',
+            anchorText: 'Original paragraph.',
+            anchorSpanId: String(payload?.anchorSpanId),
+            revision: 0,
+            createdAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+          },
+        };
+      }
+      if (type === 'saveRichStreamDocument') return { revision: 2 };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+
+    await selectEditorText('Original paragraph.');
+    scrollIntoView.mockClear();
+    await click('Start thread');
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+
+    const create = vi.mocked(bridge.sendAsync).mock.calls
+      .find(([type]) => type === 'createStreamThread');
+    expect(create?.[1]).toMatchObject({
+      streamId: stream.id,
+      title: 'Original paragraph.',
+      anchorText: 'Original paragraph.',
+      sourceId: '',
+      highlightId: '',
+    });
+    expect(editor().textContent).toBe('Original paragraph.');
+    expect(editor().querySelector('.richtext-provenance-thread')).toBeNull();
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(document.querySelector('.thread-anchor-warning')).toBeNull();
+    await toggleXray();
+    await act(async () => {
+      editor().querySelector('p')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'getExchange')).toBe(false);
+
+    await vi.waitFor(() => expect(vi.mocked(bridge.sendAsync).mock.calls
+      .some(([type]) => type === 'saveRichStreamDocument')).toBe(true));
+    const save = vi.mocked(bridge.sendAsync).mock.calls
+      .filter(([type]) => type === 'saveRichStreamDocument')
+      .pop()?.[1] as Record<string, unknown>;
+    expect(save.docJSON).toBe(stream.document?.docJSON);
+    expect(save.markdown).toBe('Original paragraph.');
+    expect(save.spans).toEqual([
+      expect.objectContaining({
+        spanId: create?.[1]?.anchorSpanId,
+        origin: 'thread',
+        textHash: fnv1a('Original paragraph.'),
+      }),
+    ]);
+  });
+
+  it('keeps the thread but warns when its selected passage changes during creation', async () => {
+    let finishCreate!: (value: { thread: StreamThreadJSON }) => void;
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      updateState.call(this, state);
+    });
+    const pendingCreate = new Promise<{ thread: StreamThreadJSON }>((resolve) => {
+      finishCreate = resolve;
+    });
+    vi.mocked(bridge.sendAsync).mockImplementation(((type) => {
+      if (type === 'createStreamThread') return pendingCreate;
+      if (type === 'saveRichStreamDocument') return Promise.resolve({ revision: 2 });
+      return Promise.reject(new Error(`Unexpected ${type}`));
+    }) as typeof bridge.sendAsync);
+
+    await selectEditorText('paragraph');
+    await click('Start thread');
+    expect(liveView).not.toBeNull();
+    const create = vi.mocked(bridge.sendAsync).mock.calls
+      .find(([type]) => type === 'createStreamThread');
+    await act(async () => {
+      liveView!.dispatch(liveView!.state.tr.insertText('changed ', 10, 19));
+      finishCreate({
+        thread: {
+          threadId: 'thread-2',
+          streamId: stream.id,
+          title: 'paragraph',
+          workingText: '',
+          anchorText: 'paragraph',
+          anchorSpanId: String(create?.[1]?.anchorSpanId),
+          revision: 0,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.thread-anchor-warning')?.textContent)
+      .toBe('The original passage changed.'));
+    expect(editor().textContent).toBe('Original changed .');
+  });
+
+  it('reopens and locates a persisted live anchor after reload', async () => {
+    const anchorText = 'Original paragraph.';
+    const anchoredThread: StreamThreadJSON = {
+      threadId: 'thread-restored',
+      streamId: 'stream-restored',
+      title: 'Restored thread',
+      workingText: '',
+      anchorText,
+      anchorSpanId: 'anchor-restored',
+      revision: 0,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'listStreamThreads') return { threads: [anchoredThread] };
+      if (type === 'loadStreamThread') return { thread: anchoredThread };
+      if (type === 'saveRichStreamDocument') return { revision: 2 };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+    await renderStream({
+      ...stream,
+      id: 'stream-restored',
+      document: { ...stream.document!, streamId: 'stream-restored' },
+      spans: [{
+        spanId: 'anchor-restored',
+        start: 1,
+        end: 1 + anchorText.length,
+        origin: 'thread',
+        meta: JSON.stringify({ threadId: 'thread-restored' }),
+        textHash: fnv1a(anchorText),
+        createdAt: new Date(0).toISOString(),
+      }],
+    });
+
+    await click('Threads');
+    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    await act(async () => {
+      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(document.querySelector('.thread-anchor-warning')).toBeNull();
+    expect(editor().querySelector('.richtext-provenance-thread')).toBeNull();
   });
 });
 

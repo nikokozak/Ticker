@@ -1024,6 +1024,16 @@ body {
   font-size: var(--font-size-xs);
 }
 
+.thread-origin .thread-anchor-warning {
+  color: var(--color-warning);
+}
+
+.thread-anchor-reveal {
+  background: var(--color-accent-soft);
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-base) ease;
+}
+
 .thread-note-heading-row {
   display: flex;
   align-items: center;

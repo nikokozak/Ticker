@@ -28,6 +28,7 @@ interface ThreadDrawerProps {
   isOpen: boolean;
   onRequestClose: () => void;
   onAfterClose?: () => void;
+  onLocateAnchor?: (thread: StreamThreadJSON) => boolean;
 }
 
 const SAVE_LABEL: Record<ThreadSaveState, string> = {
@@ -52,6 +53,7 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
   isOpen,
   onRequestClose,
   onAfterClose,
+  onLocateAnchor,
 }, ref) {
   const sessionRef = useRef<ThreadDraftSession | null>(null);
   const [threads, setThreads] = useState<StreamThreadJSON[]>([]);
@@ -61,6 +63,7 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
   const [saveState, setSaveState] = useState<ThreadSaveState>('saved');
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [anchorChanged, setAnchorChanged] = useState(false);
   const addToast = useToastStore((state) => state.addToast);
 
   const installThread = useCallback((thread: StreamThreadJSON) => {
@@ -69,12 +72,13 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
     setTitle(thread.title);
     setWorkingText(thread.workingText);
     setSaveState('saved');
+    setAnchorChanged(Boolean(thread.anchorSpanId && onLocateAnchor && !onLocateAnchor(thread)));
     sessionRef.current = new ThreadDraftSession({
       thread,
       save: saveStreamThread,
       onSaveStateChange: setSaveState,
     });
-  }, []);
+  }, [onLocateAnchor]);
 
   const refreshList = useCallback(async () => {
     setLoading(true);
@@ -218,6 +222,9 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
             <h3 id="thread-origin-heading">Started from</h3>
             <blockquote>{activeThread.anchorText || 'No starting passage.'}</blockquote>
             {sourceLabel(activeThread) && <p>{sourceLabel(activeThread)}</p>}
+            {anchorChanged && (
+              <p className="thread-anchor-warning" role="status">The original passage changed.</p>
+            )}
           </section>
 
           <section className="thread-note" aria-labelledby="thread-note-heading">

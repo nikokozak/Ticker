@@ -10,6 +10,7 @@ import type { Slice } from 'prosemirror-model';
 import { TextSelection, type Command, type Transaction } from 'prosemirror-state';
 import {
   bridge,
+  createStreamThread,
   getExchange,
   type DocumentAIVerb,
   type SourceTitlePayload,
@@ -21,6 +22,7 @@ import type {
   SourceScope,
   Stream,
   StreamAppendInboxJSON,
+  StreamThreadJSON,
 } from '../types/models';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { EyeIcon, XIcon } from './icons';
@@ -48,6 +50,7 @@ import {
   addProvenanceSpans,
   hashProvenanceText,
   provenanceSpanAt,
+  provenanceSpans,
   spanFromJSON,
   type ProvenanceSpanJSON,
 } from '../richtext/provenance';
@@ -155,6 +158,11 @@ function documentAITarget(editor: RichTextEditor): { from: number; to: number; t
   return text ? { from, to, text } : null;
 }
 
+function defaultThreadTitle(text: string): string {
+  const oneLine = text.trim().replace(/\s+/g, ' ');
+  return oneLine.length <= 64 ? oneLine : `${oneLine.slice(0, 61)}…`;
+}
+
 function restoreDocumentAI(editor: RichTextEditor, active: ActiveDocumentAI): void {
   const { view } = editor;
   const written = active.stream.done();
@@ -195,6 +203,8 @@ export function RichStreamEditor({
   const aiRequestRef = useRef<ActiveDocumentAI | null>(null);
   const aiInFlightRef = useRef(false);
   const pendingPDFAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
+  const pendingThreadAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
+  const threadCreateInFlightRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const streamOverflowMenuRef = useRef<HTMLDetailsElement>(null);
@@ -222,6 +232,7 @@ export function RichStreamEditor({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [showThreads, setShowThreads] = useState(false);
+  const [threadCreating, setThreadCreating] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
   const [pdfPaneState, setPDFPaneState] = useState<PDFPaneState>({ visible: false });
@@ -437,11 +448,43 @@ export function RichStreamEditor({
     selectionMenuPanel,
   ]);
   const onTransaction = useCallback((transaction: Transaction) => {
-    const pending = pendingPDFAnchorSelectionRef.current;
-    if (!pending) return;
-    pendingPDFAnchorSelectionRef.current = mapPendingPDFAnchorSelection(pending, {
-      mapPos: (pos, assoc) => transaction.mapping.map(pos, assoc),
-    });
+    const mapper = {
+      mapPos: (pos: number, assoc?: number) => transaction.mapping.map(pos, assoc),
+    };
+    const pendingPDF = pendingPDFAnchorSelectionRef.current;
+    if (pendingPDF) {
+      pendingPDFAnchorSelectionRef.current = mapPendingPDFAnchorSelection(pendingPDF, mapper);
+    }
+    const pendingThread = pendingThreadAnchorSelectionRef.current;
+    if (pendingThread) {
+      pendingThreadAnchorSelectionRef.current = mapPendingPDFAnchorSelection(pendingThread, mapper);
+    }
+  }, []);
+
+  const locateThreadAnchor = useCallback((thread: StreamThreadJSON) => {
+    if (!thread.anchorSpanId) return true;
+    const view = editorRef.current?.view;
+    if (!view) return false;
+    const span = provenanceSpans(view.state)
+      .find((candidate) => candidate.spanId === thread.anchorSpanId);
+    if (!span) return false;
+
+    const $from = view.state.doc.resolve(span.from);
+    let depth = $from.depth;
+    while (depth > 0 && !$from.node(depth).isBlock) depth -= 1;
+    const blockDOM = view.nodeDOM(depth > 0 ? $from.before(depth) : span.from);
+    const direct = (blockDOM instanceof Element ? blockDOM : blockDOM?.parentElement)
+      ?.closest('p, h1, h2, h3, li, blockquote');
+    const element = direct ?? [...view.dom.querySelectorAll('p, h1, h2, h3, li, blockquote')]
+      .find((candidate) => {
+        const from = view.posAtDOM(candidate, 0);
+        const to = view.posAtDOM(candidate, candidate.childNodes.length);
+        return span.from <= to && span.to >= from;
+      });
+    element?.scrollIntoView({ block: 'center' });
+    element?.classList.add('thread-anchor-reveal');
+    window.setTimeout(() => element?.classList.remove('thread-anchor-reveal'), 1_600);
+    return true;
   }, []);
 
   /**
@@ -1285,6 +1328,64 @@ export function RichStreamEditor({
     },
   ];
 
+  const startStreamThread = async () => {
+    const requestEditor = editorRef.current;
+    if (!requestEditor || threadCreateInFlightRef.current) return;
+    if (!await (threadDrawerRef.current?.flush() ?? Promise.resolve(true))) {
+      setShowThreads(true);
+      addToast('Resolve the open thread note before starting another thread.', 'error');
+      return;
+    }
+
+    const { from, to } = requestEditor.view.state.selection;
+    const anchorText = requestEditor.view.state.doc.textBetween(from, to, '\n', '');
+    if (!anchorText.trim()) return;
+
+    const anchorSpanId = crypto.randomUUID();
+    pendingThreadAnchorSelectionRef.current = { from, to };
+    threadCreateInFlightRef.current = true;
+    setThreadCreating(true);
+    hideSelectionMenu();
+
+    try {
+      const { thread } = await createStreamThread({
+        streamId: stream.id,
+        title: defaultThreadTitle(anchorText),
+        anchorText,
+        anchorSpanId,
+      });
+      const pending = pendingThreadAnchorSelectionRef.current;
+      pendingThreadAnchorSelectionRef.current = null;
+      if (editorRef.current !== requestEditor) return;
+
+      if (pending
+          && requestEditor.view.state.doc.textBetween(pending.from, pending.to, '\n', '') === anchorText) {
+        const span = {
+          spanId: anchorSpanId,
+          from: pending.from,
+          to: pending.to,
+          origin: 'thread' as const,
+          meta: { threadId: thread.threadId },
+          textHash: hashProvenanceText(requestEditor.view.state.doc, pending),
+          createdAt: Date.now(),
+        };
+        requestEditor.view.dispatch(addProvenanceSpans(requestEditor.view.state.tr, [span]));
+        sessionRef.current?.documentChanged();
+      }
+
+      setShowThreads(true);
+      if (!await threadDrawerRef.current?.showThread(thread)) {
+        addToast('The thread was created, but another note needs attention before it can open.', 'error');
+      }
+    } catch {
+      pendingThreadAnchorSelectionRef.current = null;
+      addToast('The thread could not be created.', 'error');
+    } finally {
+      threadCreateInFlightRef.current = false;
+      setThreadCreating(false);
+    }
+  };
+
   const startPDFAnchorPick = () => {
     const { from, to } = editor!.view.state.selection;
     pendingPDFAnchorSelectionRef.current = { from, to };
@@ -1559,6 +1660,16 @@ export function RichStreamEditor({
                 More ▾
               </button>
             </div>
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--text"
+              aria-label="Start thread"
+              disabled={threadCreating}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => { void startStreamThread(); }}
+            >
+              Start thread
+            </button>
             {canAnchorSelection && (
               <button
                 type="button"
@@ -1679,6 +1790,7 @@ export function RichStreamEditor({
           isOpen={showThreads}
           onRequestClose={() => setShowThreads(false)}
           onAfterClose={() => threadButtonRef.current?.focus()}
+          onLocateAnchor={locateThreadAnchor}
         />
       </div>
 

@@ -22,7 +22,7 @@ export interface ProvenanceSpan {
   spanId: string;
   from: number;
   to: number;
-  origin: 'ai' | 'source' | 'capture';
+  origin: 'ai' | 'source' | 'capture' | 'thread';
   requestId?: string;
   sourceId?: string;
   meta: Record<string, unknown>;
@@ -138,7 +138,7 @@ export function provenance(): Plugin<ProvenanceSpan[]> {
     props: {
       decorations: (state) => DecorationSet.create(
         state.doc,
-        provenanceSpans(state).map((span) => Decoration.inline(span.from, span.to, {
+        provenanceSpans(state).filter((span) => span.origin !== 'thread').map((span) => Decoration.inline(span.from, span.to, {
           class: `richtext-provenance richtext-provenance-${span.origin}`,
           'data-span-id': span.spanId,
         })),
@@ -165,7 +165,7 @@ export interface ProvenanceSpanJSON {
   createdAt: string;
 }
 
-const ORIGINS: ProvenanceSpan['origin'][] = ['ai', 'source', 'capture'];
+const ORIGINS: ProvenanceSpan['origin'][] = ['ai', 'source', 'capture', 'thread'];
 
 export function spanFromJSON(json: ProvenanceSpanJSON): ProvenanceSpan {
   let meta: Record<string, unknown> = {};

@@ -12,6 +12,7 @@ import {
   provenanceSpans,
   provenanceText,
   setProvenanceSpans,
+  spanFromJSON,
   type ProvenanceSpan,
 } from './provenance';
 
@@ -249,6 +250,23 @@ describe('spans never reach the document', () => {
     record(ed, span(ed, 'The AI wrote this.'));
     expect(ed.view.dom.querySelector('.richtext-provenance-ai')).not.toBe(null);
     expect(ed.view.state.doc.textContent).toBe('One. The AI wrote this. Three.');
+  });
+
+  it('restores a thread anchor without painting permanent provenance', () => {
+    const ed = open('One. Thread starting point. Three.');
+    const anchor = spanFromJSON({
+      spanId: 'thread-anchor',
+      start: find(ed, 'Thread starting point.').from,
+      end: find(ed, 'Thread starting point.').to,
+      origin: 'thread',
+      meta: '{}',
+      textHash: hashProvenanceText(ed.view.state.doc, find(ed, 'Thread starting point.')),
+      createdAt: new Date(0).toISOString(),
+    });
+    record(ed, anchor);
+
+    expect(provenanceSpans(ed.view.state)[0]?.origin).toBe('thread');
+    expect(ed.view.dom.querySelector('.richtext-provenance-thread')).toBe(null);
   });
 });
 
