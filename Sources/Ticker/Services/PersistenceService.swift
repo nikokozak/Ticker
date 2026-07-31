@@ -651,6 +651,31 @@ final class PersistenceService {
             """)
         }
 
+        migrator.registerMigration("v28_stream_threads") { db in
+            try db.execute(sql: """
+                CREATE TABLE stream_threads (
+                    thread_id      TEXT PRIMARY KEY,
+                    stream_id      TEXT NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+                    title          TEXT NOT NULL DEFAULT '',
+                    working_text   TEXT NOT NULL DEFAULT '',
+                    anchor_text    TEXT NOT NULL DEFAULT '',
+                    anchor_span_id TEXT,
+                    source_id      TEXT REFERENCES sources(id) ON DELETE SET NULL,
+                    highlight_id   TEXT REFERENCES pdf_highlights(id) ON DELETE SET NULL,
+                    revision       INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+                    created_at     DOUBLE NOT NULL,
+                    updated_at     DOUBLE NOT NULL
+                );
+                CREATE INDEX idx_stream_threads_stream_updated
+                    ON stream_threads(stream_id, updated_at DESC);
+
+                ALTER TABLE ai_exchanges ADD COLUMN thread_id TEXT
+                    REFERENCES stream_threads(thread_id) ON DELETE SET NULL;
+                CREATE INDEX idx_ai_exchanges_thread
+                    ON ai_exchanges(thread_id, created_at);
+            """)
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -1530,6 +1555,198 @@ final class PersistenceService {
         }
     }
 
+    // MARK: - Thread Operations
+
+    @discardableResult
+    func createStreamThread(_ thread: StreamThread) throws -> StreamThread {
+        try dbQueue.write { db in
+            guard try Row.fetchOne(
+                db,
+                sql: "SELECT id FROM streams WHERE id = ?",
+                arguments: [thread.streamId.uuidString]
+            ) != nil else {
+                throw StreamThreadPersistenceError.streamNotFound
+            }
+            try validateThreadReferences(thread, db: db)
+
+            try db.execute(
+                sql: """
+                    INSERT INTO stream_threads
+                        (thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
+                         source_id, highlight_id, revision, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    thread.threadId.uuidString,
+                    thread.streamId.uuidString,
+                    thread.title,
+                    thread.workingText,
+                    thread.anchorText,
+                    thread.anchorSpanId,
+                    thread.sourceId?.uuidString,
+                    thread.highlightId?.uuidString,
+                    thread.revision,
+                    thread.createdAt.timeIntervalSince1970,
+                    thread.updatedAt.timeIntervalSince1970
+                ]
+            )
+            try db.execute(
+                // Thread work is Stream activity, so it may move the Stream up in
+                // the list, but a restored/imported timestamp must never move it back.
+                sql: "UPDATE streams SET updated_at = MAX(updated_at, ?) WHERE id = ?",
+                arguments: [thread.updatedAt.timeIntervalSince1970, thread.streamId.uuidString]
+            )
+            return thread
+        }
+    }
+
+    func loadStreamThreads(streamId: UUID) throws -> [StreamThread] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
+                           source_id, highlight_id, revision, created_at, updated_at
+                    FROM stream_threads
+                    WHERE stream_id = ?
+                    ORDER BY updated_at DESC, thread_id
+                """,
+                arguments: [streamId.uuidString]
+            ).compactMap(Self.decodeStreamThread)
+        }
+    }
+
+    func loadStreamThread(threadId: UUID, streamId: UUID) throws -> StreamThread? {
+        try dbQueue.read { db in
+            try fetchStreamThread(threadId: threadId, streamId: streamId, db: db)
+        }
+    }
+
+    @discardableResult
+    func saveStreamThread(
+        threadId: UUID,
+        streamId: UUID,
+        title: String,
+        workingText: String,
+        baseRevision: Int
+    ) throws -> StreamThread {
+        try dbQueue.write { db in
+            let updatedAt = Date()
+            try db.execute(
+                sql: """
+                    UPDATE stream_threads
+                    SET title = ?, working_text = ?, revision = revision + 1, updated_at = ?
+                    WHERE thread_id = ? AND stream_id = ? AND revision = ?
+                """,
+                arguments: [
+                    title,
+                    workingText,
+                    updatedAt.timeIntervalSince1970,
+                    threadId.uuidString,
+                    streamId.uuidString,
+                    baseRevision
+                ]
+            )
+
+            guard db.changesCount == 1 else {
+                guard let current = try fetchStreamThread(threadId: threadId, streamId: streamId, db: db) else {
+                    throw StreamThreadPersistenceError.threadNotFound
+                }
+                throw StreamThreadRevisionConflict(current: current)
+            }
+
+            try db.execute(
+                sql: "UPDATE streams SET updated_at = MAX(updated_at, ?) WHERE id = ?",
+                arguments: [updatedAt.timeIntervalSince1970, streamId.uuidString]
+            )
+            guard let saved = try fetchStreamThread(threadId: threadId, streamId: streamId, db: db) else {
+                throw StreamThreadPersistenceError.threadNotFound
+            }
+            return saved
+        }
+    }
+
+    func loadThreadExchanges(threadId: UUID, streamId: UUID) throws -> [AIExchange] {
+        try dbQueue.read { db in
+            guard try fetchStreamThread(threadId: threadId, streamId: streamId, db: db) != nil else {
+                throw StreamThreadPersistenceError.threadNotFound
+            }
+            return try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT request_id, stream_id, thread_id, verb, user_input,
+                           source_manifest, response_raw, model, created_at
+                    FROM ai_exchanges
+                    WHERE thread_id = ? AND stream_id = ?
+                    ORDER BY created_at, request_id
+                """,
+                arguments: [threadId.uuidString, streamId.uuidString]
+            ).compactMap(Self.decodeExchange)
+        }
+    }
+
+    private func validateThreadReferences(_ thread: StreamThread, db: Database) throws {
+        if let sourceId = thread.sourceId {
+            let sourceStreamId = try String.fetchOne(
+                db,
+                sql: "SELECT stream_id FROM sources WHERE id = ?",
+                arguments: [sourceId.uuidString]
+            )
+            guard sourceStreamId == thread.streamId.uuidString else {
+                throw StreamThreadPersistenceError.sourceOutsideStream
+            }
+        }
+
+        if let highlightId = thread.highlightId {
+            guard let sourceId = thread.sourceId else {
+                throw StreamThreadPersistenceError.highlightOutsideSource
+            }
+            let highlightSourceId = try String.fetchOne(
+                db,
+                sql: "SELECT source_id FROM pdf_highlights WHERE id = ?",
+                arguments: [highlightId.uuidString]
+            )
+            guard highlightSourceId == sourceId.uuidString else {
+                throw StreamThreadPersistenceError.highlightOutsideSource
+            }
+        }
+    }
+
+    private func fetchStreamThread(threadId: UUID, streamId: UUID, db: Database) throws -> StreamThread? {
+        try Row.fetchOne(
+            db,
+            sql: """
+                SELECT thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
+                       source_id, highlight_id, revision, created_at, updated_at
+                FROM stream_threads
+                WHERE thread_id = ? AND stream_id = ?
+            """,
+            arguments: [threadId.uuidString, streamId.uuidString]
+        ).flatMap(Self.decodeStreamThread)
+    }
+
+    private static func decodeStreamThread(_ row: Row) -> StreamThread? {
+        guard let threadId = UUID(uuidString: row["thread_id"]),
+              let streamId = UUID(uuidString: row["stream_id"]) else {
+            return nil
+        }
+        let sourceIdRaw: String? = row["source_id"]
+        let highlightIdRaw: String? = row["highlight_id"]
+        return StreamThread(
+            threadId: threadId,
+            streamId: streamId,
+            title: row["title"],
+            workingText: row["working_text"],
+            anchorText: row["anchor_text"],
+            anchorSpanId: row["anchor_span_id"],
+            sourceId: sourceIdRaw.flatMap(UUID.init(uuidString:)),
+            highlightId: highlightIdRaw.flatMap(UUID.init(uuidString:)),
+            revision: row["revision"],
+            createdAt: Date(timeIntervalSince1970: row["created_at"]),
+            updatedAt: Date(timeIntervalSince1970: row["updated_at"])
+        )
+    }
+
     // MARK: - Provenance Operations
 
     func loadSpans(streamId: UUID) throws -> [ProvenanceSpan] {
@@ -1549,23 +1766,13 @@ final class PersistenceService {
             try Row.fetchOne(
                 db,
                 sql: """
-                    SELECT request_id, stream_id, verb, user_input, source_manifest, response_raw, model, created_at
+                    SELECT request_id, stream_id, thread_id, verb, user_input,
+                           source_manifest, response_raw, model, created_at
                     FROM ai_exchanges
                     WHERE request_id = ?
                 """,
                 arguments: [requestId]
-            ).map { row in
-                AIExchange(
-                    requestId: row["request_id"],
-                    streamId: UUID(uuidString: row["stream_id"]) ?? UUID(),
-                    verb: row["verb"],
-                    userInput: row["user_input"],
-                    sourceManifest: row["source_manifest"],
-                    responseRaw: row["response_raw"],
-                    model: row["model"],
-                    createdAt: Date(timeIntervalSince1970: row["created_at"])
-                )
-            }
+            ).flatMap(Self.decodeExchange)
         }
     }
 
@@ -1576,13 +1783,24 @@ final class PersistenceService {
     }
 
     private func saveExchange(_ exchange: AIExchange, db: Database) throws {
+        if let threadId = exchange.threadId {
+            guard try Row.fetchOne(
+                db,
+                sql: "SELECT thread_id FROM stream_threads WHERE thread_id = ? AND stream_id = ?",
+                arguments: [threadId.uuidString, exchange.streamId.uuidString]
+            ) != nil else {
+                throw StreamThreadPersistenceError.threadNotFound
+            }
+        }
+
         try db.execute(
             sql: """
                 INSERT INTO ai_exchanges
-                    (request_id, stream_id, verb, user_input, source_manifest, response_raw, model, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (request_id, stream_id, thread_id, verb, user_input, source_manifest, response_raw, model, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(request_id) DO UPDATE SET
                     stream_id = excluded.stream_id,
+                    thread_id = excluded.thread_id,
                     verb = excluded.verb,
                     user_input = excluded.user_input,
                     source_manifest = excluded.source_manifest,
@@ -1593,6 +1811,7 @@ final class PersistenceService {
             arguments: [
                 exchange.requestId,
                 exchange.streamId.uuidString,
+                exchange.threadId?.uuidString,
                 exchange.verb,
                 exchange.userInput,
                 exchange.sourceManifest,
@@ -1600,6 +1819,36 @@ final class PersistenceService {
                 exchange.model,
                 exchange.createdAt.timeIntervalSince1970
             ]
+        )
+
+        if let threadId = exchange.threadId {
+            let updatedAt = exchange.createdAt.timeIntervalSince1970
+            try db.execute(
+                sql: "UPDATE stream_threads SET updated_at = MAX(updated_at, ?) WHERE thread_id = ?",
+                arguments: [updatedAt, threadId.uuidString]
+            )
+            try db.execute(
+                sql: "UPDATE streams SET updated_at = MAX(updated_at, ?) WHERE id = ?",
+                arguments: [updatedAt, exchange.streamId.uuidString]
+            )
+        }
+    }
+
+    private static func decodeExchange(_ row: Row) -> AIExchange? {
+        guard let streamId = UUID(uuidString: row["stream_id"]) else {
+            return nil
+        }
+        let threadIdRaw: String? = row["thread_id"]
+        return AIExchange(
+            requestId: row["request_id"],
+            streamId: streamId,
+            threadId: threadIdRaw.flatMap(UUID.init(uuidString:)),
+            verb: row["verb"],
+            userInput: row["user_input"],
+            sourceManifest: row["source_manifest"],
+            responseRaw: row["response_raw"],
+            model: row["model"],
+            createdAt: Date(timeIntervalSince1970: row["created_at"])
         )
     }
 
@@ -1619,6 +1868,7 @@ final class PersistenceService {
                 DELETE FROM ai_exchanges
                 WHERE stream_id = ?
                   AND created_at < ?
+                  AND thread_id IS NULL
                   AND NOT EXISTS (
                     SELECT 1
                     FROM provenance_spans

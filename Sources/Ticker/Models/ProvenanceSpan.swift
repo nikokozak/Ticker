@@ -40,6 +40,7 @@ struct ProvenanceSpan: Codable, Equatable {
 struct AIExchange: Codable, Equatable {
     let requestId: String
     let streamId: UUID
+    let threadId: UUID?
     let verb: String
     let userInput: String
     let sourceManifest: String
@@ -50,6 +51,7 @@ struct AIExchange: Codable, Equatable {
     init(
         requestId: String,
         streamId: UUID,
+        threadId: UUID? = nil,
         verb: String,
         userInput: String,
         sourceManifest: String = "[]",
@@ -59,6 +61,7 @@ struct AIExchange: Codable, Equatable {
     ) {
         self.requestId = requestId
         self.streamId = streamId
+        self.threadId = threadId
         self.verb = verb
         self.userInput = userInput
         self.sourceManifest = sourceManifest

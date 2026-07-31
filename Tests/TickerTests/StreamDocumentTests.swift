@@ -1399,8 +1399,297 @@ final class StreamDocumentTests: XCTestCase {
             )
             XCTAssertEqual(
                 exchangeColumns,
-                ["request_id", "stream_id", "verb", "user_input", "source_manifest", "response_raw", "model", "created_at"]
+                ["request_id", "stream_id", "verb", "user_input", "source_manifest", "response_raw", "model", "created_at", "thread_id"]
             )
+        }
+    }
+
+    func test_v28MigrationCreatesStreamThreadSchema() throws {
+        try withTempPersistenceServiceAndURL { _, dbURL, _ in
+            let dbQueue = try DatabaseQueue(path: dbURL.path)
+            let columns = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(stream_threads)").map { row -> String in
+                    row["name"]
+                }
+            }
+            let indexes = try dbQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: "SELECT name FROM sqlite_master WHERE type = 'index'"
+                ).map { row -> String in row["name"] }
+            }
+            let threadForeignKey = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA foreign_key_list(ai_exchanges)")
+                    .first { (row: Row) -> Bool in row["from"] as String == "thread_id" }
+            }
+
+            XCTAssertEqual(
+                columns,
+                [
+                    "thread_id", "stream_id", "title", "working_text", "anchor_text",
+                    "anchor_span_id", "source_id", "highlight_id", "revision", "created_at", "updated_at"
+                ]
+            )
+            XCTAssertTrue(indexes.contains("idx_stream_threads_stream_updated"))
+            XCTAssertTrue(indexes.contains("idx_ai_exchanges_thread"))
+            XCTAssertEqual(threadForeignKey?["table"] as String?, "stream_threads")
+            XCTAssertEqual(threadForeignKey?["on_delete"] as String?, "SET NULL")
+        }
+    }
+
+    func test_streamThreadsRoundTripInUpdatedOrderAndRejectStaleSave() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(
+                title: "Threads",
+                createdAt: Date(timeIntervalSince1970: 500),
+                updatedAt: Date(timeIntervalSince1970: 1_500)
+            )
+            let otherStream = Stream(title: "Other")
+            try service.saveStream(stream)
+            try service.saveStream(otherStream)
+            let first = StreamThread(
+                streamId: stream.id,
+                title: "First",
+                anchorText: "An earlier passage",
+                anchorSpanId: "thread-anchor-1",
+                createdAt: Date(timeIntervalSince1970: 1_000),
+                updatedAt: Date(timeIntervalSince1970: 1_000)
+            )
+            let second = StreamThread(
+                streamId: stream.id,
+                title: "Second",
+                anchorText: "A later passage",
+                anchorSpanId: "thread-anchor-2",
+                createdAt: Date(timeIntervalSince1970: 2_000),
+                updatedAt: Date(timeIntervalSince1970: 2_000)
+            )
+
+            try service.createStreamThread(first)
+            XCTAssertEqual(
+                try service.loadStream(id: stream.id)?.updatedAt,
+                stream.updatedAt,
+                "An imported thread timestamp must not move a Stream backwards"
+            )
+            try service.createStreamThread(second)
+            XCTAssertEqual(
+                try service.loadStream(id: stream.id)?.updatedAt,
+                second.updatedAt,
+                "Thread work is deliberate Stream activity"
+            )
+            XCTAssertEqual(try service.loadStreamThreads(streamId: stream.id), [second, first])
+            XCTAssertEqual(
+                try service.loadStreamThread(threadId: first.threadId, streamId: stream.id),
+                first
+            )
+
+            let saved = try service.saveStreamThread(
+                threadId: first.threadId,
+                streamId: stream.id,
+                title: "Power budget",
+                workingText: "Check sleep current.",
+                baseRevision: 0
+            )
+            XCTAssertEqual(saved.revision, 1)
+            XCTAssertEqual(saved.title, "Power budget")
+            XCTAssertEqual(saved.workingText, "Check sleep current.")
+            XCTAssertEqual(try service.loadStreamThreads(streamId: stream.id).first?.threadId, first.threadId)
+
+            XCTAssertThrowsError(try service.saveStreamThread(
+                threadId: first.threadId,
+                streamId: stream.id,
+                title: "Stale",
+                workingText: "This must not win.",
+                baseRevision: 0
+            )) { error in
+                let conflict = error as? StreamThreadRevisionConflict
+                XCTAssertEqual(conflict?.current, saved)
+            }
+            XCTAssertEqual(
+                try service.loadStreamThread(threadId: first.threadId, streamId: stream.id),
+                saved
+            )
+
+            XCTAssertThrowsError(try service.saveStreamThread(
+                threadId: first.threadId,
+                streamId: otherStream.id,
+                title: "Foreign",
+                workingText: "Must not save.",
+                baseRevision: saved.revision
+            )) { error in
+                XCTAssertEqual(error as? StreamThreadPersistenceError, .threadNotFound)
+            }
+            XCTAssertThrowsError(try service.loadThreadExchanges(
+                threadId: first.threadId,
+                streamId: otherStream.id
+            )) { error in
+                XCTAssertEqual(error as? StreamThreadPersistenceError, .threadNotFound)
+            }
+            XCTAssertThrowsError(try service.saveExchange(AIExchange(
+                requestId: "foreign-thread",
+                streamId: otherStream.id,
+                threadId: first.threadId,
+                verb: "ask",
+                userInput: "Must not attach.",
+                responseRaw: "No"
+            ))) { error in
+                XCTAssertEqual(error as? StreamThreadPersistenceError, .threadNotFound)
+            }
+            XCTAssertNil(try service.loadExchange(requestId: "foreign-thread"))
+        }
+    }
+
+    func test_streamThreadRejectsSourceAndHighlightOutsideItsStream() throws {
+        try withTempPersistenceService { service in
+            let firstStream = Stream(title: "First")
+            let secondStream = Stream(title: "Second")
+            try service.saveStream(firstStream)
+            try service.saveStream(secondStream)
+            let firstSource = SourceReference(
+                streamId: firstStream.id,
+                displayName: "First.pdf",
+                fileType: .pdf,
+                bookmarkData: Data("first".utf8),
+                status: .ready
+            )
+            let secondSource = SourceReference(
+                streamId: secondStream.id,
+                displayName: "Second.pdf",
+                fileType: .pdf,
+                bookmarkData: Data("second".utf8),
+                status: .ready
+            )
+            try service.saveSource(firstSource)
+            try service.saveSource(secondSource)
+            let highlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: firstSource.id,
+                page: 3,
+                rects: [PDFHighlightRect(page: 3, x: 1, y: 2, w: 3, h: 4)],
+                quote: "Power requirements",
+                createdAt: Date(timeIntervalSince1970: 3_000)
+            )
+            try service.savePDFHighlight(highlight)
+
+            XCTAssertThrowsError(try service.createStreamThread(StreamThread(
+                streamId: secondStream.id,
+                anchorText: highlight.quote,
+                sourceId: firstSource.id,
+                highlightId: highlight.id
+            ))) { error in
+                XCTAssertEqual(error as? StreamThreadPersistenceError, .sourceOutsideStream)
+            }
+            XCTAssertThrowsError(try service.createStreamThread(StreamThread(
+                streamId: secondStream.id,
+                anchorText: highlight.quote,
+                sourceId: secondSource.id,
+                highlightId: highlight.id
+            ))) { error in
+                XCTAssertEqual(error as? StreamThreadPersistenceError, .highlightOutsideSource)
+            }
+        }
+    }
+
+    func test_threadExchangesSurviveOrphanCleanupAndCascadeWithTheirStream() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Thread exchange")
+            try service.saveStream(stream)
+            let thread = StreamThread(streamId: stream.id, anchorText: "A claim")
+            try service.createStreamThread(thread)
+            let exchange = AIExchange(
+                requestId: "thread-request",
+                streamId: stream.id,
+                threadId: thread.threadId,
+                verb: "ask",
+                userInput: "What supports this?",
+                responseRaw: "The source does.",
+                createdAt: Date(timeIntervalSince1970: 1)
+            )
+            try service.saveExchange(exchange)
+
+            try service.deleteOrphanExchanges(streamId: stream.id)
+            XCTAssertEqual(try service.loadExchange(requestId: exchange.requestId), exchange)
+            XCTAssertEqual(
+                try service.loadThreadExchanges(threadId: thread.threadId, streamId: stream.id),
+                [exchange]
+            )
+
+            try service.deleteStream(id: stream.id)
+            XCTAssertTrue(try service.loadStreamThreads(streamId: stream.id).isEmpty)
+            XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
+        }
+    }
+
+    func test_deletingSourceClearsThreadSourceAndHighlight() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Source deletion")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Part.pdf",
+                fileType: .pdf,
+                bookmarkData: Data("part".utf8),
+                status: .ready
+            )
+            try service.saveSource(source)
+            let highlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 1,
+                rects: [PDFHighlightRect(page: 1, x: 1, y: 2, w: 3, h: 4)],
+                quote: "A source passage",
+                createdAt: Date(timeIntervalSince1970: 4_000)
+            )
+            try service.savePDFHighlight(highlight)
+            let thread = StreamThread(
+                streamId: stream.id,
+                anchorText: highlight.quote,
+                sourceId: source.id,
+                highlightId: highlight.id
+            )
+            try service.createStreamThread(thread)
+
+            try service.deleteSource(id: source.id)
+
+            let loaded = try XCTUnwrap(service.loadStreamThread(
+                threadId: thread.threadId,
+                streamId: stream.id
+            ))
+            XCTAssertNil(loaded.sourceId)
+            XCTAssertNil(loaded.highlightId)
+            XCTAssertEqual(loaded.anchorText, highlight.quote)
+        }
+    }
+
+    func test_deletingThreadRowKeepsExchangeAndClearsItsThreadId() throws {
+        try withTempPersistenceServiceAndURL { service, dbURL, _ in
+            let stream = Stream(title: "Deleted thread")
+            try service.saveStream(stream)
+            let thread = StreamThread(streamId: stream.id, anchorText: "Claim")
+            try service.createStreamThread(thread)
+            let exchange = AIExchange(
+                requestId: "kept-exchange",
+                streamId: stream.id,
+                threadId: thread.threadId,
+                verb: "ask",
+                userInput: "Question",
+                responseRaw: "Answer",
+                createdAt: Date(timeIntervalSince1970: 5_000)
+            )
+            try service.saveExchange(exchange)
+
+            var configuration = Configuration()
+            configuration.foreignKeysEnabled = true
+            let dbQueue = try DatabaseQueue(path: dbURL.path, configuration: configuration)
+            try dbQueue.write { db in
+                try db.execute(
+                    sql: "DELETE FROM stream_threads WHERE thread_id = ?",
+                    arguments: [thread.threadId.uuidString]
+                )
+            }
+
+            let kept = try XCTUnwrap(service.loadExchange(requestId: exchange.requestId))
+            XCTAssertNil(kept.threadId)
+            XCTAssertEqual(kept.responseRaw, exchange.responseRaw)
         }
     }
 
@@ -5414,6 +5703,96 @@ final class StreamDocumentTests: XCTestCase {
                 try preMigrationBackups(nextTo: dbURL, fileManager: fileManager).count,
                 1
             )
+        }
+    }
+
+    func test_v28MigrationBacksUpAndPreservesProductionShapedDatabase() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+        defer { _ = try? fileManager.removeItem(at: tempDir) }
+
+        let stream = Stream(title: "Existing project")
+        let source = SourceReference(
+            streamId: stream.id,
+            displayName: "Existing.pdf",
+            fileType: .pdf,
+            bookmarkData: Data("bookmark".utf8),
+            status: .ready
+        )
+        let highlight = PDFHighlightRecord(
+            id: UUID(),
+            sourceId: source.id,
+            page: 5,
+            rects: [PDFHighlightRect(page: 5, x: 1, y: 2, w: 3, h: 4)],
+            quote: "Existing evidence",
+            createdAt: Date(timeIntervalSince1970: 5_000)
+        )
+        let exchange = AIExchange(
+            requestId: "existing-exchange",
+            streamId: stream.id,
+            verb: "ask",
+            userInput: "Existing prompt",
+            responseRaw: "Existing answer",
+            createdAt: Date(timeIntervalSince1970: 5_001)
+        )
+
+        var service: PersistenceService? = try PersistenceService(
+            databaseURL: dbURL,
+            fileManager: fileManager,
+            usesAppendInbox: true
+        )
+        try service?.saveStream(stream)
+        try service?.saveSource(source)
+        try service?.savePDFHighlight(highlight)
+        try service?.saveExchange(exchange)
+        service = nil
+
+        // Turn the fresh database into the exact pre-v28 shape while preserving
+        // representative released data. Reopening it must exercise only v28.
+        var dbQueue: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
+        try dbQueue?.write { db in
+            try db.execute(sql: "DROP INDEX idx_ai_exchanges_thread")
+            try db.execute(sql: "ALTER TABLE ai_exchanges DROP COLUMN thread_id")
+            try db.execute(sql: "DROP TABLE stream_threads")
+            try db.execute(
+                sql: "DELETE FROM grdb_migrations WHERE identifier = 'v28_stream_threads'"
+            )
+        }
+        dbQueue = nil
+
+        service = try PersistenceService(
+            databaseURL: dbURL,
+            fileManager: fileManager,
+            usesAppendInbox: true
+        )
+        XCTAssertEqual(try preMigrationBackups(nextTo: dbURL, fileManager: fileManager).count, 1)
+        XCTAssertEqual(try service?.loadStream(id: stream.id)?.title, stream.title)
+        XCTAssertEqual(try service?.loadSource(id: source.id)?.displayName, source.displayName)
+        XCTAssertEqual(try service?.loadPDFHighlights(sourceId: source.id), [highlight])
+        XCTAssertEqual(try service?.loadExchange(requestId: exchange.requestId), exchange)
+        XCTAssertTrue(try service?.loadStreamThreads(streamId: stream.id).isEmpty == true)
+        service = nil
+
+        let backupURL = try XCTUnwrap(preMigrationBackups(nextTo: dbURL, fileManager: fileManager).first)
+        let backupQueue = try DatabaseQueue(path: backupURL.path)
+        try backupQueue.read { db in
+            let tables = try String.fetchAll(
+                db,
+                sql: "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+            let exchangeColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(ai_exchanges)")
+                .map { (row: Row) -> String in row["name"] }
+            let storedAnswer = try String.fetchOne(
+                db,
+                sql: "SELECT response_raw FROM ai_exchanges WHERE request_id = ?",
+                arguments: [exchange.requestId]
+            )
+
+            XCTAssertFalse(tables.contains("stream_threads"))
+            XCTAssertFalse(exchangeColumns.contains("thread_id"))
+            XCTAssertEqual(storedAnswer, exchange.responseRaw)
         }
     }
 

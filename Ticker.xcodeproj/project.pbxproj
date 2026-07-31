@@ -42,6 +42,7 @@
 		A1000001000000000012 /* Stream.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000012 /* Stream.swift */; };
 		A100000100000000003B /* PDFHighlightRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000003B /* PDFHighlightRecord.swift */; };
 		A100000100000000003F /* ProvenanceSpan.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000100000000003F /* ProvenanceSpan.swift */; };
+		A1000001000000000046 /* StreamThread.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000046 /* StreamThread.swift */; };
 		A1000001000000000042 /* MarginNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000042 /* MarginNote.swift */; };
 		A1000001000000000043 /* NormalizedTextSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000043 /* NormalizedTextSearch.swift */; };
 		A1000001000000000013 /* AIOrchestrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000013 /* AIOrchestrator.swift */; };
@@ -115,6 +116,7 @@
 		B1000001000000000012 /* Stream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stream.swift; sourceTree = "<group>"; };
 		B100000100000000003B /* PDFHighlightRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFHighlightRecord.swift; sourceTree = "<group>"; };
 		B100000100000000003F /* ProvenanceSpan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvenanceSpan.swift; sourceTree = "<group>"; };
+		B1000001000000000046 /* StreamThread.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamThread.swift; sourceTree = "<group>"; };
 		B1000001000000000042 /* MarginNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarginNote.swift; sourceTree = "<group>"; };
 		B1000001000000000043 /* NormalizedTextSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedTextSearch.swift; sourceTree = "<group>"; };
 		B1000001000000000013 /* AIOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIOrchestrator.swift; sourceTree = "<group>"; };
@@ -268,6 +270,7 @@
 				B1000001000000000012 /* Stream.swift */,
 				B100000100000000003B /* PDFHighlightRecord.swift */,
 				B100000100000000003F /* ProvenanceSpan.swift */,
+				B1000001000000000046 /* StreamThread.swift */,
 				B1000001000000000042 /* MarginNote.swift */,
 				B1000001000000000043 /* NormalizedTextSearch.swift */,
 			);
@@ -510,6 +513,7 @@
 				A1000001000000000012 /* Stream.swift in Sources */,
 				A100000100000000003B /* PDFHighlightRecord.swift in Sources */,
 				A100000100000000003F /* ProvenanceSpan.swift in Sources */,
+				A1000001000000000046 /* StreamThread.swift in Sources */,
 				A1000001000000000042 /* MarginNote.swift in Sources */,
 				A1000001000000000043 /* NormalizedTextSearch.swift in Sources */,
 				A1000001000000000044 /* AIOperationRegistry.swift in Sources */,
