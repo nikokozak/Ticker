@@ -577,6 +577,27 @@ body {
   outline: none;
 }
 
+.stream-overflow-panel .stream-overflow-action {
+  color: var(--color-text-secondary);
+}
+
+.stream-overflow-panel .stream-overflow-action:hover,
+.stream-overflow-panel .stream-overflow-action:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.stream-overflow-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.stream-overflow-panel .stream-overflow-delete {
+  margin-top: var(--space-1);
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 var(--radius-small) var(--radius-small);
+}
+
 /* Shared native modal behavior */
 .modal-dialog {
   color: inherit;
@@ -942,6 +963,11 @@ body {
 
 .selection-action-button--ai {
   color: var(--color-accent);
+}
+
+.selection-action-button--active {
+  color: var(--color-accent);
+  background: var(--accent-soft);
 }
 
 .selection-action-button svg {

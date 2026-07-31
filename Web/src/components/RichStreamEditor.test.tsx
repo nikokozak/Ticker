@@ -205,15 +205,17 @@ async function renderStream(next: Stream, options: {
   pendingSourceId?: string | null;
   onClearPendingMatch?: () => void;
   onClearPendingSource?: () => void;
+  onDelete?: () => void;
 } = {}) {
+  const { onDelete = () => {}, ...rest } = options;
   await act(async () => {
     root!.render(
       <RichStreamEditor
         key={next.id}
         stream={next}
         onBack={() => {}}
-        onDelete={() => {}}
-        {...options}
+        onDelete={onDelete}
+        {...rest}
       />,
     );
     await Promise.resolve();
@@ -288,6 +290,60 @@ afterEach(async () => {
   useToastStore.getState().clearToasts();
   vi.restoreAllMocks();
   document.body.innerHTML = '';
+});
+
+describe('RichStreamEditor chrome parity', () => {
+  it('uses the quiet header and a contextual formatting menu', async () => {
+    expect(document.querySelector('.stream-title-editable')?.textContent).toBe('Test');
+    expect(document.querySelector('.stream-title-input')).toBe(null);
+    expect(document.querySelector('.stream-xray-button')?.textContent).toBe('');
+    expect(document.querySelector('.stream-overflow-menu')).not.toBe(null);
+    expect(document.querySelector('.delete-button')).toBe(null);
+    expect(document.querySelector('.stream-format-bar')).toBe(null);
+    expect(document.querySelector('.selection-action-menu')).toBe(null);
+
+    await selectEditorText('Original');
+    await vi.waitFor(() => {
+      expect(document.querySelector('.selection-action-menu')).not.toBe(null);
+    });
+  });
+
+  it('edits the title on demand and confirms deletion', async () => {
+    const onDelete = vi.fn();
+    await renderStream(stream, { onDelete });
+
+    await act(async () => {
+      (document.querySelector('.stream-title-editable') as HTMLElement).click();
+      await Promise.resolve();
+    });
+    const title = document.querySelector('.stream-title-input') as HTMLInputElement;
+    expect(title.value).toBe('Test');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(title, 'Renamed');
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+      title.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(lastSent()).toMatchObject({
+      type: 'updateStreamTitle',
+      payload: { id: stream.id, title: 'Renamed' },
+    });
+
+    const deleteAction = [...document.querySelectorAll('.stream-overflow-panel button')]
+      .find((button) => button.textContent?.trim() === 'Delete stream…') as HTMLButtonElement;
+    await act(async () => {
+      deleteAction.click();
+      await Promise.resolve();
+    });
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(document.querySelector('.delete-confirm-dialog')).not.toBe(null);
+
+    await act(async () => {
+      (document.querySelector('.delete-confirm-delete') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(onDelete).toHaveBeenCalledOnce();
+  });
 });
 
 describe('an image save that lands after the editor is gone', () => {
@@ -2138,6 +2194,21 @@ describe('RichStreamEditor host wire gate', () => {
       },
     });
     await selectEditorText('Selected sentence.');
+    const scroller = document.querySelector('.stream-content') as HTMLElement;
+    scroller.scrollTop = 137;
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function preserveScroll(this: EditorView, state) {
+      scroller.scrollTop = 0;
+      updateState.call(this, state);
+    });
+    const refocus = vi.spyOn(editor(), 'focus').mockImplementation(() => {
+      scroller.scrollTop = 0;
+    });
     const bold = document.querySelector('button[title="Bold ⌘B"]') as HTMLButtonElement;
     expect(bold, 'Expected Bold button').toBeDefined();
 
@@ -2146,9 +2217,13 @@ describe('RichStreamEditor host wire gate', () => {
       bold.click();
       await Promise.resolve();
     });
+    scroller.scrollTop = 0;
+    frames.forEach((frame) => frame(0));
 
     expect([...editor().querySelectorAll('strong')].map((node) => node.textContent))
       .toEqual(['Selected sentence.']);
     expect(editor().textContent).toBe('First sentence. Selected sentence. Third sentence.');
+    expect(refocus).toHaveBeenCalledOnce();
+    expect(scroller.scrollTop).toBe(137);
   });
 });

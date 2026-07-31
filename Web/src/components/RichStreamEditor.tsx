@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import type { Slice } from 'prosemirror-model';
 import { TextSelection, type Command, type Transaction } from 'prosemirror-state';
 import {
@@ -16,6 +23,7 @@ import type {
   StreamAppendInboxJSON,
 } from '../types/models';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
+import { EyeIcon } from './icons';
 import { Modal } from './Modal';
 import { SourcesModal } from './SourcesModal';
 import {
@@ -53,6 +61,7 @@ import {
   mapPendingPDFAnchorSelection,
   type PendingPDFAnchorSelection,
 } from '../utils/pdfAnchorSelection';
+import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 import {
   activeFormats,
   toggleBlockquote,
@@ -124,6 +133,14 @@ interface PDFPaneState {
   shortTitle?: string;
 }
 
+interface SelectionMenuState {
+  visible: boolean;
+  left: number;
+  top: number;
+  from: number;
+  to: number;
+}
+
 function documentAITarget(editor: RichTextEditor): { from: number; to: number; text: string } | null {
   const { doc, selection } = editor.view.state;
   const from = selection.empty ? selection.$head.start() : selection.from;
@@ -171,6 +188,10 @@ export function RichStreamEditor({
   const aiRequestRef = useRef<ActiveDocumentAI | null>(null);
   const aiInFlightRef = useRef(false);
   const pendingPDFAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const editorShellRef = useRef<HTMLDivElement>(null);
+  const streamOverflowMenuRef = useRef<HTMLDetailsElement>(null);
+  const selectionActionMenuRef = useRef<HTMLDivElement>(null);
   // ponytail: one stream-wide PDF AI lock; track host operation ids if concurrent
   // PDF jobs ever become a supported workflow.
   const pdfAIInFlightRef = useRef(false);
@@ -187,10 +208,20 @@ export function RichStreamEditor({
   const [xray, setXray] = useState(false);
   const [exchangeOverlay, setExchangeOverlay] = useState<AIExchangeJSON | null>(null);
   const [title, setTitle] = useState(stream.title);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
   const [pdfPaneState, setPDFPaneState] = useState<PDFPaneState>({ visible: false });
+  const [selectionMenuPanel, setSelectionMenuPanel] = useState<'ai' | 'more' | null>(null);
+  const [selectionMenu, setSelectionMenu] = useState<SelectionMenuState>({
+    visible: false,
+    left: 0,
+    top: 0,
+    from: 0,
+    to: 0,
+  });
   const [, redraw] = useState(0);
   const addToast = useToastStore((state) => state.addToast);
   const { sources, setSources } = useBridgeMessages({
@@ -297,9 +328,88 @@ export function RichStreamEditor({
     )));
   }, [setSources]);
 
+  const hideSelectionMenu = useCallback(() => {
+    setSelectionMenuPanel(null);
+    setSelectionMenu((previous) => (
+      previous.visible ? { ...previous, visible: false } : previous
+    ));
+  }, []);
+
+  const getSelectionMenuPlacement = useCallback((
+    measuredMenuSize?: { width: number; height: number },
+  ) => {
+    const view = editorRef.current?.view;
+    const shell = editorShellRef.current;
+    if (!view || !shell || view.state.selection.empty) return null;
+
+    const { from, to } = view.state.selection;
+    const fromCoords = view.coordsAtPos(from);
+    const toCoords = view.coordsAtPos(to);
+    return computeSelectionMenuPlacement({
+      coords: {
+        left: Math.min(fromCoords.left, toCoords.left),
+        right: Math.max(fromCoords.right, toCoords.right),
+        top: Math.min(fromCoords.top, toCoords.top),
+        bottom: Math.max(fromCoords.bottom, toCoords.bottom),
+      },
+      shellRect: shell.getBoundingClientRect(),
+      menuSize: measuredMenuSize,
+      viewportHeight: window.innerHeight,
+    });
+  }, []);
+
+  const updateSelectionMenu = useCallback(() => {
+    const view = editorRef.current?.view;
+    if (!view || view.state.selection.empty) {
+      hideSelectionMenu();
+      return;
+    }
+    const { from, to } = view.state.selection;
+    if (!view.state.doc.textBetween(from, to, '\n', '').trim()) {
+      hideSelectionMenu();
+      return;
+    }
+    const placement = getSelectionMenuPlacement();
+    if (!placement) {
+      hideSelectionMenu();
+      return;
+    }
+    setSelectionMenuPanel(null);
+    setSelectionMenu({ visible: true, ...placement, from, to });
+  }, [getSelectionMenuPlacement, hideSelectionMenu]);
+
   // Which formatting buttons are lit depends on the SELECTION, so the menu has to
   // redraw on every transaction and not only on edits.
-  const onUpdate = useCallback(() => redraw((n) => n + 1), []);
+  const onUpdate = useCallback(() => {
+    redraw((n) => n + 1);
+    updateSelectionMenu();
+  }, [updateSelectionMenu]);
+
+  useLayoutEffect(() => {
+    if (!selectionMenu.visible) return;
+    const menu = selectionActionMenuRef.current;
+    if (!menu || menu.offsetWidth <= 0 || menu.offsetHeight <= 0) return;
+    const placement = getSelectionMenuPlacement({
+      width: menu.offsetWidth,
+      height: menu.offsetHeight,
+    });
+    if (!placement) return;
+    setSelectionMenu((previous) => (
+      previous.visible
+      && Math.abs(previous.left - placement.left) < 0.5
+      && Math.abs(previous.top - placement.top) < 0.5
+        ? previous
+        : { ...previous, ...placement }
+    ));
+  }, [
+    getSelectionMenuPlacement,
+    pdfPaneState.streamId,
+    pdfPaneState.visible,
+    selectionMenu.from,
+    selectionMenu.to,
+    selectionMenu.visible,
+    selectionMenuPanel,
+  ]);
   const onTransaction = useCallback((transaction: Transaction) => {
     const pending = pendingPDFAnchorSelectionRef.current;
     if (!pending) return;
@@ -432,6 +542,7 @@ export function RichStreamEditor({
       payload: { streamId: stream.id, offset: Math.max(0, scroller.scrollTop) },
     });
     const saveScrollPosition = () => {
+      updateSelectionMenu();
       window.clearTimeout(scrollSaveTimer);
       scrollSaveTimer = window.setTimeout(() => {
         scrollSaveTimer = undefined;
@@ -492,7 +603,7 @@ export function RichStreamEditor({
         });
       });
     };
-  }, [addToast, onTransaction, onUpdate, openLink, stream.id]);
+  }, [addToast, onTransaction, onUpdate, openLink, stream.id, updateSelectionMenu]);
 
   useEffect(() => {
     if (!editor) return undefined;
@@ -1001,18 +1112,40 @@ export function RichStreamEditor({
     stream.spans,
   ]);
 
+  const startEditingTitle = useCallback(() => {
+    setIsEditingTitle(true);
+    setTimeout(() => titleInputRef.current?.select(), 0);
+  }, []);
+
   const saveTitle = useCallback(() => {
     const next = title.trim() || 'Untitled';
     setTitle(next);
+    setIsEditingTitle(false);
     if (next !== stream.title) {
       bridge.send({ type: 'updateStreamTitle', payload: { id: stream.id, title: next } });
     }
   }, [stream.id, stream.title, title]);
 
+  const handleTitleKeyDown = useCallback((event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      saveTitle();
+    } else if (event.key === 'Escape') {
+      setTitle(stream.title);
+      setIsEditingTitle(false);
+    }
+  }, [saveTitle, stream.title]);
+
   const run = (command: Command) => () => {
     if (!editor) return;
+    const scroller = editor.view.dom.closest('.stream-content');
+    const scrollTop = scroller?.scrollTop;
     command(editor.view.state, editor.view.dispatch, editor.view);
     editor.view.focus();
+    if (scroller && scrollTop !== undefined) {
+      scroller.scrollTop = scrollTop;
+      window.requestAnimationFrame(() => { scroller.scrollTop = scrollTop; });
+    }
   };
 
   const formats = editor ? activeFormats(editor.view.state) : null;
@@ -1030,6 +1163,44 @@ export function RichStreamEditor({
       '',
     ).trim(),
   );
+  const documentAIActions = [
+    {
+      key: 'send',
+      label: aiRunning ? 'Stop AI' : 'Send',
+      ariaLabel: aiRunning ? 'Stop document AI' : 'Send to AI',
+      title: aiDetail ?? 'Send the selection or current paragraph to AI',
+      disabled: false,
+      action: () => { if (aiRunning) cancelDocumentAI(); else void startDocumentAI(); },
+    },
+    {
+      key: 'prompt',
+      label: 'Send & Prompt…',
+      ariaLabel: 'Send and prompt AI',
+      disabled: aiRunning,
+      action: () => openDocumentAIPrompt('ask'),
+    },
+    {
+      key: 'ask',
+      label: 'Ask',
+      ariaLabel: 'Ask with AI',
+      disabled: aiRunning,
+      action: () => { void startDocumentAI('ask'); },
+    },
+    {
+      key: 'define',
+      label: 'Define',
+      ariaLabel: 'Define with AI',
+      disabled: aiRunning,
+      action: () => { void startDocumentAI('define'); },
+    },
+    {
+      key: 'rewrite',
+      label: 'Rewrite…',
+      ariaLabel: 'Rewrite with AI',
+      disabled: aiRunning,
+      action: () => openDocumentAIPrompt('rewrite'),
+    },
+  ];
 
   const startPDFAnchorPick = () => {
     const { from, to } = editor!.view.state.selection;
@@ -1041,8 +1212,17 @@ export function RichStreamEditor({
     <button
       key={label}
       type="button"
-      className={`selection-action-button ${active ? 'selection-action-button--active' : ''}`}
+      className={[
+        'selection-action-button',
+        'selection-action-button--format',
+        label === 'I' ? 'selection-action-button--italic' : '',
+        label === 'U' ? 'selection-action-button--underline' : '',
+        label === 'Code' ? 'selection-action-button--code selection-action-button--text' : '',
+        label.length > 2 && label !== 'Code' ? 'selection-action-button--text' : '',
+        active ? 'selection-action-button--active' : '',
+      ].filter(Boolean).join(' ')}
       title={hint}
+      aria-label={hint}
       // Keep the selection: the editor must not lose focus to the button.
       onMouseDown={(event) => event.preventDefault()}
       onClick={run(command)}
@@ -1052,17 +1232,36 @@ export function RichStreamEditor({
   );
 
   return (
-    <div className="stream-editor">
+    <div
+      className="stream-editor"
+      onPointerDownCapture={(event) => {
+        const menu = streamOverflowMenuRef.current;
+        if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+      }}
+      onKeyDownCapture={(event) => {
+        if (event.key === 'Escape' && streamOverflowMenuRef.current?.open) {
+          streamOverflowMenuRef.current.open = false;
+        }
+      }}
+    >
       <header className="stream-header">
         <button onClick={leave} disabled={leaving} className="back-button">← Back</button>
-        <input
-          type="text"
-          className="stream-title-input"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={saveTitle}
-          onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-        />
+        {isEditingTitle ? (
+          <input
+            ref={titleInputRef}
+            type="text"
+            className="stream-title-input"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            onBlur={saveTitle}
+            onKeyDown={handleTitleKeyDown}
+            autoFocus
+          />
+        ) : (
+          <h1 onClick={startEditingTitle} className="stream-title-editable" title={title}>
+            {title}
+          </h1>
+        )}
         <div className="stream-header-actions">
           <span
             className={`stream-save-status stream-save-status--${saveState}`}
@@ -1075,6 +1274,16 @@ export function RichStreamEditor({
             <span className="stream-save-status-label">{SAVE_LABEL[saveState]}</span>
           </span>
           <button
+            onClick={() => setXray((value) => !value)}
+            className={`stream-xray-button ${xray ? 'stream-xray-button--active' : ''}`}
+            title="Toggle provenance x-ray"
+            type="button"
+            aria-label="Toggle provenance x-ray"
+            aria-pressed={xray}
+          >
+            <EyeIcon size={16} />
+          </button>
+          <button
             type="button"
             className="stream-sources-button"
             aria-label={`Sources, ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
@@ -1083,16 +1292,95 @@ export function RichStreamEditor({
           >
             Sources · {sources.length}{openPDFTitle ? ` · PDF · ${openPDFTitle}` : ''}
           </button>
-          <button
-            onClick={() => setXray((value) => !value)}
-            className={`stream-xray-button ${xray ? 'stream-xray-button--active' : ''}`}
-            title="Toggle provenance x-ray"
+          <details
+            ref={streamOverflowMenuRef}
+            className="stream-overflow-menu"
+            onBlur={(event) => {
+              if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
+                event.currentTarget.open = false;
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector('summary')?.focus();
+            }}
           >
-            Xray
-          </button>
-          <button onClick={remove} className="delete-button" title="Delete stream">Delete</button>
+            <summary title="More stream actions" aria-label="More stream actions">
+              <span aria-hidden="true">•••</span>
+            </summary>
+            <div className="stream-overflow-panel">
+              {documentAIActions.map((action) => (
+                <button
+                  key={action.key}
+                  type="button"
+                  className="stream-overflow-action"
+                  aria-label={action.ariaLabel}
+                  title={action.title}
+                  disabled={action.disabled}
+                  onClick={() => {
+                    streamOverflowMenuRef.current!.open = false;
+                    action.action();
+                  }}
+                >
+                  {action.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="stream-overflow-action"
+                aria-label="Cycle source scope"
+                title="Cycle source scope"
+                onClick={() => {
+                  streamOverflowMenuRef.current!.open = false;
+                  cycleSourceScope();
+                }}
+              >
+                Sources: {sourceScopeLabel}
+              </button>
+              <button
+                type="button"
+                className="stream-overflow-delete"
+                onClick={() => {
+                  streamOverflowMenuRef.current!.open = false;
+                  setShowDeleteConfirm(true);
+                }}
+              >
+                Delete stream…
+              </button>
+            </div>
+          </details>
         </div>
       </header>
+
+      {showDeleteConfirm && (
+        <Modal
+          className="delete-confirm-dialog"
+          aria-labelledby="richtext-delete-confirm-title"
+          onRequestClose={() => setShowDeleteConfirm(false)}
+        >
+          <h2 id="richtext-delete-confirm-title">Delete this stream?</h2>
+          <p>This will permanently delete "{title}" and all its contents. This cannot be undone.</p>
+          <div className="delete-confirm-actions">
+            <button
+              className="delete-confirm-cancel"
+              onClick={() => setShowDeleteConfirm(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="delete-confirm-delete"
+              onClick={() => {
+                setShowDeleteConfirm(false);
+                remove();
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {promptIntent && (
         <Modal
@@ -1161,94 +1449,108 @@ export function RichStreamEditor({
         />
       )}
 
-      {formats && (
-        <div className="stream-format-bar">
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            aria-label={aiRunning ? 'Stop document AI' : 'Send to AI'}
-            title={aiDetail ?? 'Send the selection or current paragraph to AI'}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => { if (aiRunning) cancelDocumentAI(); else void startDocumentAI(); }}
-          >
-            {aiRunning ? 'Stop AI' : 'Send'}
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            aria-label="Send and prompt AI"
-            disabled={aiRunning}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => openDocumentAIPrompt('ask')}
-          >
-            Send &amp; Prompt
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            aria-label="Ask with AI"
-            disabled={aiRunning}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => { void startDocumentAI('ask'); }}
-          >
-            Ask
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            aria-label="Define with AI"
-            disabled={aiRunning}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => { void startDocumentAI('define'); }}
-          >
-            Define
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text selection-action-button--ai"
-            aria-label="Rewrite with AI"
-            disabled={aiRunning}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => openDocumentAIPrompt('rewrite')}
-          >
-            Rewrite…
-          </button>
-          <button
-            type="button"
-            className="selection-action-button selection-action-button--text"
-            aria-label="Cycle source scope"
-            title="Cycle source scope"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={cycleSourceScope}
-          >
-            Sources: {sourceScopeLabel}
-          </button>
-          {canAnchorSelection && (
-            <button
-              type="button"
-              className="selection-action-button selection-action-button--text"
-              aria-label="Anchor selection in PDF"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={startPDFAnchorPick}
-            >
-              Anchor in PDF
-            </button>
+      {formats && selectionMenu.visible && (
+        <div
+          ref={selectionActionMenuRef}
+          className="selection-action-menu"
+          style={{ left: `${selectionMenu.left}px`, top: `${selectionMenu.top}px` }}
+        >
+          <div className="selection-action-row">
+            {formatButton('B', formats.bold, toggleBold, 'Bold ⌘B')}
+            {formatButton('I', formats.italic, toggleItalic, 'Italic ⌘I')}
+            {formatButton('U', formats.underline, toggleUnderline, 'Underline ⌘U')}
+            <div className="selection-action-submenu">
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-button--ai"
+                title="AI actions"
+                aria-label="AI actions"
+                aria-expanded={selectionMenuPanel === 'ai'}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setSelectionMenuPanel((panel) => panel === 'ai' ? null : 'ai')}
+              >
+                AI ▾
+              </button>
+            </div>
+            <div className="selection-action-submenu">
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                title="More formatting and context actions"
+                aria-label="More actions"
+                aria-expanded={selectionMenuPanel === 'more'}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setSelectionMenuPanel((panel) => panel === 'more' ? null : 'more')}
+              >
+                More ▾
+              </button>
+            </div>
+            {canAnchorSelection && (
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text"
+                aria-label="Anchor selection in PDF"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  hideSelectionMenu();
+                  startPDFAnchorPick();
+                }}
+              >
+                Anchor PDF
+              </button>
+            )}
+          </div>
+          {selectionMenuPanel === 'ai' && (
+            <div className="selection-action-submenu-panel">
+              {documentAIActions.map((action) => (
+                <button
+                  key={action.key}
+                  type="button"
+                  className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-button--ai"
+                  aria-label={action.ariaLabel}
+                  title={action.title}
+                  disabled={action.disabled}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    hideSelectionMenu();
+                    action.action();
+                  }}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
           )}
-          {formatButton('B', formats.bold, toggleBold, 'Bold ⌘B')}
-          {formatButton('I', formats.italic, toggleItalic, 'Italic ⌘I')}
-          {formatButton('U', formats.underline, toggleUnderline, 'Underline ⌘U')}
-          {formatButton('Code', formats.code, toggleCode, 'Code')}
-          {formatButton('H2', formats.heading === 2, toggleHeading(2), 'Heading')}
-          {formatButton('H3', formats.heading === 3, toggleHeading(3), 'Subheading')}
-          {formatButton('List', formats.bulletList, toggleBulletList, 'Bullets')}
-          {formatButton('1.', formats.orderedList, toggleOrderedList, 'Numbers')}
-          {formatButton('Quote', formats.blockquote, toggleBlockquote, 'Quote')}
+          {selectionMenuPanel === 'more' && (
+            <div className="selection-action-submenu-panel" aria-label="More formatting and context actions">
+              {formatButton('Code', formats.code, toggleCode, 'Code')}
+              {formatButton('H1', formats.heading === 1, toggleHeading(1), 'Heading 1')}
+              {formatButton('H2', formats.heading === 2, toggleHeading(2), 'Heading 2')}
+              {formatButton('H3', formats.heading === 3, toggleHeading(3), 'Heading 3')}
+              {formatButton('List', formats.bulletList, toggleBulletList, 'Bullets')}
+              {formatButton('1.', formats.orderedList, toggleOrderedList, 'Numbers')}
+              {formatButton('Quote', formats.blockquote, toggleBlockquote, 'Quote')}
+              <button
+                type="button"
+                className="selection-action-button selection-action-button--text selection-action-button--wide selection-action-source-scope"
+                aria-label="Cycle source scope"
+                title="Cycle source scope"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={cycleSourceScope}
+              >
+                Sources: {sourceScopeLabel}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
       <div className="stream-body">
         <div className="stream-content">
-          <div className={`document-editor-shell ${xray ? 'richtext-xray' : ''}`}>
+          <div
+            ref={editorShellRef}
+            className={`document-editor-shell ${xray ? 'richtext-xray' : ''}`}
+          >
             <div ref={host} />
           </div>
         </div>
