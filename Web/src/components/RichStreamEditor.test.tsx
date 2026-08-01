@@ -559,6 +559,7 @@ describe('RichStreamEditor Stream threads', () => {
     scrollIntoView.mockClear();
     await click('Start thread');
     await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    expect(document.querySelector('.selection-action-menu')).toBeNull();
 
     const create = vi.mocked(bridge.sendAsync).mock.calls
       .find(([type]) => type === 'createStreamThread');

@@ -593,6 +593,7 @@ export function RichStreamEditor({
         return;
       }
       setShowThreads(true);
+      hideSelectionMenu();
       if (!await threadDrawerRef.current?.showThread(thread)) {
         addToast('Save the open thread note before switching threads.', 'error');
       }
@@ -1652,7 +1653,9 @@ export function RichStreamEditor({
           textHash: hashProvenanceText(requestEditor.view.state.doc, pending),
           createdAt: Date.now(),
         };
-        requestEditor.view.dispatch(addProvenanceSpans(requestEditor.view.state.tr, [span]));
+        const tr = addProvenanceSpans(requestEditor.view.state.tr, [span]);
+        tr.setSelection(TextSelection.near(tr.doc.resolve(pending.to)));
+        requestEditor.view.dispatch(tr);
         sessionRef.current?.documentChanged();
       }
 
