@@ -90,6 +90,15 @@ function sourceLabel(thread: StreamThreadJSON): string | null {
   return thread.sourcePage ? `${source} · page ${thread.sourcePage}` : source;
 }
 
+function threadSourceURL(thread: StreamThreadJSON): string | null {
+  if (!thread.sourceId) return null;
+  const params = new URLSearchParams();
+  if (thread.highlightId) params.set('highlight', thread.highlightId);
+  if (thread.sourcePage) params.set('page', String(thread.sourcePage));
+  const query = params.toString();
+  return `ticker-pdf://${thread.sourceId}${query ? `?${query}` : '?page=1'}`;
+}
+
 function sourceURL(source: ThreadAISentFacts['sources'][number]): string {
   if (source.page && source.chunkId) {
     return buildCitationURL({
@@ -551,7 +560,17 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
           <section className="thread-origin" aria-labelledby="thread-origin-heading">
             <h3 id="thread-origin-heading">Started from</h3>
             <blockquote>{activeThread.anchorText || 'No starting passage.'}</blockquote>
-            {sourceLabel(activeThread) && <p>{sourceLabel(activeThread)}</p>}
+            {sourceLabel(activeThread) && (
+              onOpenPDFDestination && threadSourceURL(activeThread) ? (
+                <button
+                  type="button"
+                  className="thread-origin-source"
+                  onClick={() => onOpenPDFDestination(threadSourceURL(activeThread)!)}
+                >
+                  {sourceLabel(activeThread)}
+                </button>
+              ) : <p>{sourceLabel(activeThread)}</p>
+            )}
             {anchorChanged && (
               <p className="thread-anchor-warning" role="status">The original passage changed.</p>
             )}

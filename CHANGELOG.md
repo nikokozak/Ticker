@@ -7,6 +7,7 @@ All notable user-facing changes to Ticker are documented here.
 ## 2026.7.31
 
 ### Added
+- Streams now support persistent Threads from Stream or PDF selections, with private notes and AI conversation, explicit Add to Stream placement, and links back to their source context.
 - The rich-text editor now supports source controls, PDF section AI and anchor links, provenance exchange inspection, Send, Send & Prompt, Ask, Define, Rewrite, and one-shot search-result jumps while keeping browser-copied images local.
 - The rich-text editor now pastes, drops, and resizes saved images and restores each stream's scroll position.
 - The rich-text editor now supports streamed document AI with one-step undo, provenance, citation links, read-only streaming, safe cancellation, and no half-written autosaves.

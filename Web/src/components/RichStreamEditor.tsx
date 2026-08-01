@@ -12,6 +12,7 @@ import {
   bridge,
   createStreamThread,
   getExchange,
+  listStreamThreads,
   type DocumentAIVerb,
   type SourceTitlePayload,
   type StreamDocumentConflictPayload,
@@ -151,6 +152,13 @@ interface PDFPaneState {
   streamId?: string;
   sourceName?: string;
   shortTitle?: string;
+}
+
+interface PDFThreadRequest {
+  streamId: string;
+  sourceId: string;
+  highlightId: string;
+  quote: string;
 }
 
 interface SelectionMenuState {
@@ -570,9 +578,77 @@ export function RichStreamEditor({
     setShowThreads(false);
   }, [addToast, hideSelectionMenu, threadInsertionSaveFailed]);
 
+  const openPDFHighlightThread = useCallback(async (sourceId: string, highlightId: string) => {
+    if (pendingThreadInsertionRef.current) {
+      addToast('Add the pending thread item, or cancel it first.', 'info');
+      return;
+    }
+    try {
+      const result = await listStreamThreads(stream.id);
+      const thread = result.threads.find((candidate) => (
+        candidate.sourceId === sourceId && candidate.highlightId === highlightId
+      ));
+      if (!thread) {
+        addToast('This highlight is no longer linked in the Stream.', 'warning');
+        return;
+      }
+      setShowThreads(true);
+      if (!await threadDrawerRef.current?.showThread(thread)) {
+        addToast('Save the open thread note before switching threads.', 'error');
+      }
+    } catch {
+      addToast('This highlight could not be opened.', 'error');
+    }
+  }, [addToast, stream.id]);
+
   const retryThreadInsertionSave = useCallback(async () => {
     if (await sessionRef.current?.saveNow()) setThreadInsertionSaveFailed(null);
   }, []);
+
+  const startPDFSelectionThread = useCallback(async (request: PDFThreadRequest) => {
+    const discardHighlight = () => bridge.send({
+      type: 'deletePdfHighlight',
+      payload: { streamId: request.streamId, highlightId: request.highlightId },
+    });
+    if (threadCreateInFlightRef.current
+        || pendingThreadInsertionRef.current
+        || aiInFlightRef.current
+        || pdfAIInFlightRef.current
+        || threadAIInFlightRef.current) {
+      discardHighlight();
+      addToast('Finish the current operation before starting a PDF thread.', 'info');
+      return;
+    }
+
+    threadCreateInFlightRef.current = true;
+    setThreadCreating(true);
+    let created = false;
+    try {
+      if (!await (threadDrawerRef.current?.flush() ?? Promise.resolve(true))) {
+        throw new Error('The open thread note is not saved.');
+      }
+      const result = await createStreamThread({
+        streamId: request.streamId,
+        title: defaultThreadTitle(request.quote),
+        anchorText: request.quote,
+        sourceId: request.sourceId,
+        highlightId: request.highlightId,
+      });
+      created = true;
+      setShowThreads(true);
+      if (!await threadDrawerRef.current?.showThread(result.thread)) {
+        addToast('The PDF thread was created. Open it from Threads.', 'info');
+        return;
+      }
+      addToast('Started a thread from the PDF selection.', 'success');
+    } catch {
+      if (!created) discardHighlight();
+      addToast('The PDF thread could not be created.', 'error');
+    } finally {
+      threadCreateInFlightRef.current = false;
+      setThreadCreating(false);
+    }
+  }, [addToast]);
 
   const saveImageToAssets = useCallback(async (blob: Blob): Promise<string> => {
     const requestId = crypto.randomUUID();
@@ -1149,6 +1225,35 @@ export function RichStreamEditor({
       return;
     }
 
+    if (message.type === 'pdfThreadRequested') {
+      if (payload?.streamId !== stream.id) return;
+      const sourceId = payload.sourceId;
+      const highlightId = payload.highlightId;
+      const quote = payload.quote;
+      if (typeof sourceId !== 'string'
+          || typeof highlightId !== 'string'
+          || typeof quote !== 'string'
+          || !sourceId
+          || !highlightId
+          || !quote.trim()) {
+        if (typeof highlightId === 'string' && highlightId) {
+          bridge.send({
+            type: 'deletePdfHighlight',
+            payload: { streamId: stream.id, highlightId },
+          });
+        }
+        addToast('That PDF selection could not start a thread.', 'error');
+        return;
+      }
+      void startPDFSelectionThread({
+        streamId: stream.id,
+        sourceId,
+        highlightId,
+        quote,
+      });
+      return;
+    }
+
     if (message.type === 'pdfHighlightDeleted') {
       if (payload?.streamId !== stream.id) return;
       const highlightId = payload.highlightId;
@@ -1164,7 +1269,7 @@ export function RichStreamEditor({
       const highlightId = payload.highlightId;
       if (typeof sourceId !== 'string' || typeof highlightId !== 'string') return;
       if (!revealPDFHighlight(editorRef.current!.view, sourceId, highlightId)) {
-        addToast('This highlight is no longer linked in the stream.', 'warning');
+        void openPDFHighlightThread(sourceId, highlightId);
         return;
       }
       addToast('Showing linked highlight in stream.', 'success');
@@ -1371,6 +1476,8 @@ export function RichStreamEditor({
     canStartAI,
     cancelDocumentAI,
     flushAll,
+    openPDFHighlightThread,
+    startPDFSelectionThread,
     startPDFSectionAI,
     stream.id,
   ]);

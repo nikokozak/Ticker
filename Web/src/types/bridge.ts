@@ -29,6 +29,7 @@ export const SWIFT_TO_WEB_MESSAGE_TYPES = [
   'pdfAnchorPlaced',
   'pdfHighlightDeleted',
   'pdfHighlightLinked',
+  'pdfThreadRequested',
   'pdfPaneStateChanged',
   'pdfSectionActionRequested',
   'revealPdfHighlightInStream',

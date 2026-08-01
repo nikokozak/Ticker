@@ -596,6 +596,86 @@ describe('RichStreamEditor Stream threads', () => {
     ]);
   });
 
+  it('starts a thread from a saved PDF selection without changing the Stream', async () => {
+    const pdfThread: StreamThreadJSON = {
+      threadId: 'pdf-thread-1',
+      streamId: stream.id,
+      title: 'The voltage must stay below 3.6 V.',
+      workingText: '',
+      anchorText: 'The voltage must stay below 3.6 V.',
+      sourceId: 'source-1',
+      sourceName: 'board-spec.pdf',
+      sourceShortTitle: 'Board spec',
+      highlightId: 'highlight-1',
+      sourcePage: 7,
+      revision: 0,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'createStreamThread') return { thread: pdfThread };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfThreadRequested',
+        payload: {
+          streamId: stream.id,
+          sourceId: 'source-1',
+          sourceName: 'board-spec.pdf',
+          shortTitle: 'Board spec',
+          highlightId: 'highlight-1',
+          page: 7,
+          quote: 'The voltage must stay below 3.6 V.',
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    expect(vi.mocked(bridge.sendAsync)).toHaveBeenCalledWith('createStreamThread', {
+      streamId: stream.id,
+      title: 'The voltage must stay below 3.6 V.',
+      anchorText: 'The voltage must stay below 3.6 V.',
+      anchorSpanId: '',
+      sourceId: 'source-1',
+      highlightId: 'highlight-1',
+    });
+    expect(document.querySelector('.thread-origin')?.textContent)
+      .toContain('Board spec · page 7');
+    expect(editor().textContent).toBe('Original paragraph.');
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'saveRichStreamDocument'))
+      .toBe(false);
+    expect(sent.some((message) => message.type === 'deletePdfHighlight')).toBe(false);
+  });
+
+  it('removes the saved PDF highlight when its thread cannot be created', async () => {
+    vi.mocked(bridge.sendAsync).mockRejectedValue(new Error('write failed'));
+
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfThreadRequested',
+        payload: {
+          streamId: stream.id,
+          sourceId: 'source-1',
+          sourceName: 'board-spec.pdf',
+          shortTitle: 'Board spec',
+          highlightId: 'highlight-rollback',
+          page: 7,
+          quote: 'A quote that could not become a thread.',
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(sent).toContainEqual({
+      type: 'deletePdfHighlight',
+      payload: { streamId: stream.id, highlightId: 'highlight-rollback' },
+    }));
+    expect(editor().textContent).toBe('Original paragraph.');
+  });
+
   it('keeps the thread but warns when its selected passage changes during creation', async () => {
     let finishCreate!: (value: { thread: StreamThreadJSON }) => void;
     let liveView: EditorView | null = null;
@@ -2501,6 +2581,45 @@ describe('RichStreamEditor PDF highlight links', () => {
     expect(liveView).not.toBe(null);
     const { from, to } = liveView!.state.selection;
     expect(liveView!.state.doc.textBetween(from, to)).toBe('Paper p.4');
+  });
+
+  it('opens the thread when a PDF highlight belongs to a thread instead of Stream text', async () => {
+    const pdfThread: StreamThreadJSON = {
+      threadId: 'pdf-thread-1',
+      streamId: stream.id,
+      title: 'PDF thread',
+      workingText: '',
+      anchorText: 'Selected evidence.',
+      sourceId: 'source-1',
+      sourceName: 'paper.pdf',
+      sourceShortTitle: 'Paper',
+      highlightId: 'thread-highlight',
+      sourcePage: 4,
+      revision: 0,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'listStreamThreads') return { threads: [pdfThread] };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+
+    await act(async () => {
+      bridge.receive({
+        type: 'revealPdfHighlightInStream',
+        payload: {
+          streamId: stream.id,
+          sourceId: 'source-1',
+          highlightId: 'thread-highlight',
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    expect(document.querySelector('.thread-origin')?.textContent).toContain('Selected evidence.');
+    expect(useToastStore.getState().toasts.map((toast) => toast.message))
+      .not.toContain('This highlight is no longer linked in the Stream.');
   });
 
   it('requests removal from selected linked text and unlinks only after host confirmation', async () => {

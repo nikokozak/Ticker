@@ -332,6 +332,7 @@ private struct PDFOutlineSidebarEntry {
 
 final class PDFReaderPaneController: NSViewController {
     var onLinkSelection: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
+    var onDiscussSelection: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
     var onAnchorPlaced: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
     var onAnchorPickCancelled: ((UUID) -> Void)?
     var onSectionAction: (@MainActor (PDFSectionActionPayload) -> Void)?
@@ -351,6 +352,7 @@ final class PDFReaderPaneController: NSViewController {
     private let pdfPaneStatusField = NSTextField(labelWithString: "")
     private let pdfPaneHintIconView = NSImageView(frame: .zero)
     private let pdfPaneOutlineButton = NSButton(title: "", target: nil, action: nil)
+    private let pdfPaneDiscussButton = NSButton(title: "", target: nil, action: nil)
     private let pdfPaneLinkButton = NSButton(title: "", target: nil, action: nil)
     private let pdfPaneCloseButton = NSButton(title: "", target: nil, action: nil)
     private let pdfFindBarView = NSView(frame: .zero)
@@ -438,7 +440,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.document = document
         configurePDFOutline(document: document)
         setPDFPaneHeader(displayName: displayName)
-        setPDFPaneLinkButtonEnabled(false)
+        setPDFSelectionActionsEnabled(false)
         updatePDFPaneStatus()
         activePDFContext = (
             streamId: streamId,
@@ -500,7 +502,7 @@ final class PDFReaderPaneController: NSViewController {
         exitAnchorPickMode(notifyCancelled: false)
 
         isAnchorPickMode = true
-        setPDFPaneLinkButtonEnabled(false)
+        setPDFSelectionActionsEnabled(false)
         updatePDFPaneStatus()
         pdfPanePDFView.enclosingScrollView?.documentCursor = .crosshair
 
@@ -703,6 +705,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneStatusField.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneHintIconView.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneOutlineButton.translatesAutoresizingMaskIntoConstraints = false
+        pdfPaneDiscussButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneLinkButton.translatesAutoresizingMaskIntoConstraints = false
         pdfPaneCloseButton.translatesAutoresizingMaskIntoConstraints = false
         pdfFindBarView.translatesAutoresizingMaskIntoConstraints = false
@@ -775,7 +778,22 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneLinkButton.setAccessibilityLabel("Add selected quote to stream")
         pdfPaneLinkButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         pdfPaneLinkButton.setContentHuggingPriority(.required, for: .horizontal)
-        setPDFPaneLinkButtonEnabled(false)
+
+        pdfPaneDiscussButton.target = self
+        pdfPaneDiscussButton.action = #selector(handlePDFPaneDiscussSelection)
+        pdfPaneDiscussButton.bezelStyle = .texturedRounded
+        pdfPaneDiscussButton.controlSize = .small
+        pdfPaneDiscussButton.image = NSImage(systemSymbolName: "bubble.left", accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "text.bubble", accessibilityDescription: nil)
+        pdfPaneDiscussButton.imagePosition = .imageOnly
+        pdfPaneDiscussButton.imageScaling = .scaleProportionallyDown
+        pdfPaneDiscussButton.isBordered = true
+        pdfPaneDiscussButton.showsBorderOnlyWhileMouseInside = true
+        pdfPaneDiscussButton.toolTip = "Start a thread from selected text"
+        pdfPaneDiscussButton.setAccessibilityLabel("Discuss selected PDF text")
+        pdfPaneDiscussButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        pdfPaneDiscussButton.setContentHuggingPriority(.required, for: .horizontal)
+        setPDFSelectionActionsEnabled(false)
 
         pdfPaneCloseButton.target = self
         pdfPaneCloseButton.action = #selector(handlePDFPaneClose)
@@ -873,6 +891,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneHeaderView.addSubview(pdfPaneHintIconView)
         pdfPaneHeaderView.addSubview(pdfPaneStatusField)
         pdfPaneHeaderView.addSubview(pdfPaneOutlineButton)
+        pdfPaneHeaderView.addSubview(pdfPaneDiscussButton)
         pdfPaneHeaderView.addSubview(pdfPaneLinkButton)
         pdfPaneHeaderView.addSubview(pdfPaneCloseButton)
         pdfPaneHeaderView.addSubview(headerSeparator)
@@ -933,7 +952,12 @@ final class PDFReaderPaneController: NSViewController {
             pdfPaneLinkButton.widthAnchor.constraint(equalToConstant: 28),
             pdfPaneLinkButton.heightAnchor.constraint(equalToConstant: 28),
 
-            pdfPaneOutlineButton.trailingAnchor.constraint(equalTo: pdfPaneLinkButton.leadingAnchor, constant: -8),
+            pdfPaneDiscussButton.trailingAnchor.constraint(equalTo: pdfPaneLinkButton.leadingAnchor, constant: -8),
+            pdfPaneDiscussButton.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
+            pdfPaneDiscussButton.widthAnchor.constraint(equalToConstant: 28),
+            pdfPaneDiscussButton.heightAnchor.constraint(equalToConstant: 28),
+
+            pdfPaneOutlineButton.trailingAnchor.constraint(equalTo: pdfPaneDiscussButton.leadingAnchor, constant: -8),
             pdfPaneOutlineButton.centerYAnchor.constraint(equalTo: pdfPaneHeaderView.centerYAnchor),
             pdfPaneOutlineButton.heightAnchor.constraint(equalToConstant: 28),
 
@@ -1479,7 +1503,7 @@ final class PDFReaderPaneController: NSViewController {
         pdfPanePDFView.document = nil
         configurePDFOutline(document: nil)
         setPDFPaneHeader(displayName: nil)
-        setPDFPaneLinkButtonEnabled(false)
+        setPDFSelectionActionsEnabled(false)
         updatePDFPaneStatus()
     }
 
@@ -1490,11 +1514,11 @@ final class PDFReaderPaneController: NSViewController {
 
     @objc private func handlePDFPaneSelectionChanged() {
         guard !isAnchorPickMode else {
-            setPDFPaneLinkButtonEnabled(false)
+            setPDFSelectionActionsEnabled(false)
             return
         }
         let selectedText = pdfPanePDFView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        setPDFPaneLinkButtonEnabled(!selectedText.isEmpty)
+        setPDFSelectionActionsEnabled(!selectedText.isEmpty)
     }
 
     @objc private func handlePDFPanePageChanged() {
@@ -1629,26 +1653,49 @@ final class PDFReaderPaneController: NSViewController {
     }
 
     @objc private func handlePDFPaneLinkSelection() {
+        handlePDFPaneSelection(
+            missingPDFMessage: "Open a PDF before linking.",
+            missingSelectionMessage: "Nothing is selected to link.",
+            invalidSelectionMessage: "That selection cannot be linked.",
+            action: onLinkSelection
+        )
+    }
+
+    @objc private func handlePDFPaneDiscussSelection() {
+        handlePDFPaneSelection(
+            missingPDFMessage: "Open a PDF before starting a thread.",
+            missingSelectionMessage: "Nothing is selected to discuss.",
+            invalidSelectionMessage: "That selection cannot start a thread.",
+            action: onDiscussSelection
+        )
+    }
+
+    private func handlePDFPaneSelection(
+        missingPDFMessage: String,
+        missingSelectionMessage: String,
+        invalidSelectionMessage: String,
+        action: (@MainActor (PDFHighlightLinkPayload) -> Bool)?
+    ) {
         exitAnchorPickMode(notifyCancelled: true)
 
         guard let context = activePDFContext else {
-            showPDFPaneMessage("Open a PDF before linking.")
+            showPDFPaneMessage(missingPDFMessage)
             return
         }
         guard let selection = pdfPanePDFView.currentSelection else {
-            showPDFPaneMessage("Nothing is selected to link.")
+            showPDFPaneMessage(missingSelectionMessage)
             return
         }
 
         let quote = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !quote.isEmpty else {
-            showPDFPaneMessage("Nothing is selected to link.")
+            showPDFPaneMessage(missingSelectionMessage)
             return
         }
 
         let rects = highlightRects(for: selection)
         guard let firstRect = rects.first else {
-            showPDFPaneMessage("That selection cannot be linked.")
+            showPDFPaneMessage(invalidSelectionMessage)
             return
         }
 
@@ -1665,7 +1712,7 @@ final class PDFReaderPaneController: NSViewController {
             sourceName: context.sourceName,
             highlight: highlight
         )
-        guard onLinkSelection?(payload) == true else { return }
+        guard action?(payload) == true else { return }
 
         applyHighlight(highlight)
         pdfPanePDFView.clearSelection()
@@ -2042,7 +2089,9 @@ final class PDFReaderPaneController: NSViewController {
         }
     }
 
-    private func setPDFPaneLinkButtonEnabled(_ enabled: Bool) {
+    private func setPDFSelectionActionsEnabled(_ enabled: Bool) {
+        pdfPaneDiscussButton.isEnabled = enabled
+        pdfPaneDiscussButton.contentTintColor = enabled ? NativePalette.accent : NativePalette.textMuted
         pdfPaneLinkButton.isEnabled = enabled
         pdfPaneLinkButton.contentTintColor = enabled ? NativePalette.accent : NativePalette.textMuted
     }

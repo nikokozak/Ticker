@@ -389,4 +389,29 @@ describe('ThreadDrawer', () => {
     });
     expect(openPDF).toHaveBeenCalledWith('ticker-pdf://source-1?page=1');
   });
+
+  it('reopens the exact PDF highlight that started the thread', async () => {
+    const openPDF = vi.fn();
+    const pdfThread = thread({
+      sourceId: 'source-1',
+      sourceName: 'board-spec.pdf',
+      sourceShortTitle: 'Board spec',
+      highlightId: 'highlight-1',
+      sourcePage: 7,
+    });
+    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
+      if (type === 'listStreamThreads') return { threads: [pdfThread] };
+      if (type === 'loadStreamThread') return { thread: pdfThread };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+
+    await renderDrawer({ onOpenPDFDestination: openPDF });
+    await openListedThread();
+    await act(async () => {
+      (document.querySelector('.thread-origin-source') as HTMLButtonElement).click();
+    });
+    expect(openPDF).toHaveBeenCalledWith(
+      'ticker-pdf://source-1?highlight=highlight-1&page=7',
+    );
+  });
 });

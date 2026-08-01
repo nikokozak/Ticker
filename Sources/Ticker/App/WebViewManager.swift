@@ -172,6 +172,22 @@ final class WebViewManager: NSObject {
                 return false
             }
         }
+        pdfPaneController.onDiscussSelection = { [weak self] payload in
+            guard let self else { return false }
+            guard let persistence = self.persistence else {
+                self.sendSourceError("Could not start a thread from that PDF selection.")
+                return false
+            }
+            do {
+                try persistence.savePDFHighlight(payload.highlight)
+                self.sendPDFThreadRequested(payload)
+                return true
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save PDF thread highlight (\(DebugLog.errorSummary(error)))")
+                self.sendSourceError("Could not start a thread from that PDF selection.")
+                return false
+            }
+        }
         pdfPaneController.onAnchorPlaced = { [weak self] payload in
             guard let self else { return false }
             guard let persistence = self.persistence else {
@@ -378,6 +394,22 @@ final class WebViewManager: NSObject {
     private func sendPDFHighlightLinked(_ payload: PDFHighlightLinkPayload) {
         bridgeService.send(BridgeMessage(
             type: "pdfHighlightLinked",
+            payload: [
+                "streamId": AnyCodable(payload.streamId.uuidString),
+                "sourceId": AnyCodable(payload.highlight.sourceId.uuidString),
+                "sourceName": AnyCodable(payload.sourceName),
+                "shortTitle": AnyCodable(SourceShortTitle.derive(displayName: payload.sourceName)),
+                "highlightId": AnyCodable(payload.highlight.id.uuidString),
+                "page": AnyCodable(payload.highlight.page),
+                "quote": AnyCodable(payload.highlight.quote)
+            ]
+        ))
+    }
+
+    @MainActor
+    private func sendPDFThreadRequested(_ payload: PDFHighlightLinkPayload) {
+        bridgeService.send(BridgeMessage(
+            type: "pdfThreadRequested",
             payload: [
                 "streamId": AnyCodable(payload.streamId.uuidString),
                 "sourceId": AnyCodable(payload.highlight.sourceId.uuidString),

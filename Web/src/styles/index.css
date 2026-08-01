@@ -1019,9 +1019,22 @@ body {
   white-space: pre-wrap;
 }
 
-.thread-origin p {
+.thread-origin p,
+.thread-origin-source {
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
+}
+
+.thread-origin-source {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-origin-source:hover {
+  color: var(--color-accent);
 }
 
 .thread-origin .thread-anchor-warning {
