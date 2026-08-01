@@ -32,6 +32,7 @@ import {
   type PDFSectionActionRequest,
 } from './StreamEditor';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
+import { refreshConversationViewport } from '../richtext/conversationAnchors';
 import {
   aiWritingRange,
   insertImage,
@@ -415,6 +416,7 @@ export function RichStreamEditor({
   const onUpdate = useCallback(() => {
     redraw((n) => n + 1);
     updateSelectionMenu();
+    if (editorRef.current) refreshConversationViewport(editorRef.current.view);
   }, [updateSelectionMenu]);
 
   useLayoutEffect(() => {
@@ -577,6 +579,7 @@ export function RichStreamEditor({
     });
     const saveScrollPosition = () => {
       updateSelectionMenu();
+      refreshConversationViewport(created.view);
       window.clearTimeout(scrollSaveTimer);
       scrollSaveTimer = window.setTimeout(() => {
         scrollSaveTimer = undefined;
@@ -585,6 +588,7 @@ export function RichStreamEditor({
     };
     scroller.scrollTop = Math.max(0, stream.document?.scrollOffset ?? 0);
     scroller.addEventListener('scroll', saveScrollPosition, { passive: true });
+    refreshConversationViewport(created.view);
 
     return () => {
       scroller.removeEventListener('scroll', saveScrollPosition);

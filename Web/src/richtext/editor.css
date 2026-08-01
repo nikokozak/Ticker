@@ -59,6 +59,33 @@
   margin-bottom: 0;
 }
 
+.richtext-editor .ProseMirror .conversation-block-active,
+.richtext-editor .ProseMirror .conversation-block-anchored {
+  position: relative;
+}
+
+.richtext-editor .ProseMirror .conversation-block-active::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 -18px;
+  width: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.richtext-editor .ProseMirror .conversation-block-anchored::after {
+  content: '◆';
+  position: absolute;
+  top: 50%;
+  right: -24px;
+  color: var(--accent);
+  font-size: 8px;
+  line-height: 1;
+  opacity: 0.55;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
 .richtext-editor .ProseMirror h1,
 .richtext-editor .ProseMirror h2,
 .richtext-editor .ProseMirror h3,
