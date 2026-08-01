@@ -116,6 +116,9 @@ export interface ThinkDocumentPayload extends Record<string, unknown> {
   verb?: DocumentAIVerb;
   parentRequestId?: string;
   threadId?: string;
+  anchorStart?: number;
+  anchorEnd?: number;
+  streamMarkdown?: string;
 }
 
 export interface UpdateMarginNotePayload extends Record<string, unknown> {

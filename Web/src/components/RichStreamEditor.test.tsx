@@ -462,7 +462,7 @@ describe('RichStreamEditor inline conversations', () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(editor()));
   });
 
-  it('creates on first send, streams the AI turn, and keeps the widget out of the document save', async () => {
+  it('round-trips the v2 receipt from send through completion and disclosure rendering', async () => {
     const createdAt = new Date(0).toISOString();
     vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
       if (type === 'createStreamThread') {
@@ -510,7 +510,29 @@ describe('RichStreamEditor inline conversations', () => {
     expect(document.querySelector('.conversation-stop')).not.toBe(null);
 
     const requestId = String(sent.find((message) => message.type === 'thinkDocument')?.payload?.requestId);
+    const request = sent.find((message) => message.type === 'thinkDocument');
+    expect(request?.payload).toMatchObject({
+      context: 'Original paragraph.',
+      streamMarkdown: 'Original paragraph.',
+      anchorStart: 1,
+      anchorEnd: 20,
+    });
+    const sentContext = {
+      version: 2,
+      kind: 'threadAI',
+      requestId,
+      anchor: { kind: 'stream', text: 'Original paragraph.', from: 1, to: 20 },
+      note: { sent: false },
+      turns: { includedRequestIds: [], totalAtSend: 0 },
+      sourceContextMode: 'retrieved',
+      sources: [{
+        kind: 'passage', n: 1, sourceId: 'source-1', chunkId: 'chunk-1',
+        page: 4, shortTitle: 'Manual',
+      }],
+      pinned: [{ kind: 'stream_quote', quote: 'Pinned constraint.', from: 1, to: 8 }],
+    };
     await act(async () => {
+      bridge.receive({ type: 'threadAIContext', payload: { requestId, sentContext } });
       bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'It streams.' } });
       bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: ' Live.' } });
     });
@@ -536,7 +558,7 @@ describe('RichStreamEditor inline conversations', () => {
             threadId: 'thread-created',
             verb: 'thread',
             userInput: 'Does this hold?',
-            sourceManifest: '[]',
+            sourceManifest: JSON.stringify(sentContext),
             responseRaw: 'It streams. Live.',
             createdAt,
           },
@@ -545,6 +567,13 @@ describe('RichStreamEditor inline conversations', () => {
     });
     expect(document.querySelector('.conversation-stop')).toBe(null);
     expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams. Live.');
+    const disclosure = document.querySelector('.conversation-receipt') as HTMLDetailsElement;
+    expect(disclosure.open).toBe(false);
+    await act(async () => { (disclosure.querySelector('summary') as HTMLElement).click(); });
+    expect(disclosure.textContent).toContain('Primary passage Original paragraph.');
+    expect(disclosure.textContent).toContain('Pinned Stream Pinned constraint.');
+    expect(disclosure.textContent).toContain('Retrieved passages · Manual p.4');
+    expect(disclosure.textContent).toContain('Prior turns 0 of 0');
 
     await vi.waitFor(() => {
       const save = vi.mocked(bridge.sendAsync).mock.calls

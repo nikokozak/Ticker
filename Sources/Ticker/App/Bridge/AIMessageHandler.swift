@@ -56,6 +56,8 @@ struct ThreadAISentFacts: Codable, Equatable {
     struct Anchor: Codable, Equatable {
         let kind: String
         let text: String
+        let from: Int?
+        let to: Int?
         let sourceId: String?
         let sourceName: String?
         let highlightId: String?
@@ -81,6 +83,17 @@ struct ThreadAISentFacts: Codable, Equatable {
         let shortTitle: String
     }
 
+    struct Pinned: Codable, Equatable {
+        let kind: String
+        let quote: String
+        let from: Int?
+        let to: Int?
+        let sourceId: String?
+        let sourceName: String?
+        let highlightId: String?
+        let page: Int?
+    }
+
     let version: Int
     let kind: String
     let requestId: String
@@ -89,6 +102,7 @@ struct ThreadAISentFacts: Codable, Equatable {
     let turns: Turns
     let sourceContextMode: String
     let sources: [Source]
+    let pinned: [Pinned]
 
     var jsonString: String {
         let encoder = JSONEncoder()
@@ -112,7 +126,8 @@ typealias ThreadAIRoute = (
     _ streamId: UUID,
     _ sourceScope: SourceScope,
     _ anchorText: String,
-    _ workingText: String,
+    _ streamMarkdown: String,
+    _ pinnedContext: [ThreadAIPinnedContext],
     _ priorTurns: [ThreadAIConversationTurn],
     _ onPrepared: @escaping (ThreadAIRequestReceipt) -> Void,
     _ onChunk: @escaping (String) -> Void,
@@ -250,14 +265,15 @@ final class AIMessageHandler: BridgeMessageHandler {
                 onModelSelected: onModelSelected
             )
         }
-        self.routeThreadAI = { [orchestrator = container.orchestrator] query, retrievalQuery, streamId, sourceScope, anchorText, workingText, priorTurns, onPrepared, onChunk, onComplete, onError, onModelSelected in
+        self.routeThreadAI = { [orchestrator = container.orchestrator] query, retrievalQuery, streamId, sourceScope, anchorText, streamMarkdown, pinnedContext, priorTurns, onPrepared, onChunk, onComplete, onError, onModelSelected in
             await orchestrator.routeThread(
                 query: query,
                 retrievalQuery: retrievalQuery,
                 streamId: streamId,
                 sourceScope: sourceScope,
                 anchorText: anchorText,
-                workingText: workingText,
+                streamMarkdown: streamMarkdown,
+                pinnedContext: pinnedContext,
                 priorTurns: priorTurns,
                 onPrepared: onPrepared,
                 onChunk: onChunk,
@@ -289,7 +305,7 @@ final class AIMessageHandler: BridgeMessageHandler {
             _ onError: @escaping (Error) -> Void,
             _ onModelSelected: ((String) -> Void)?
         ) async -> Void,
-        routeThreadAI: @escaping ThreadAIRoute = { _, _, _, _, _, _, _, _, _, _, onError, _ in
+        routeThreadAI: @escaping ThreadAIRoute = { _, _, _, _, _, _, _, _, _, _, _, onError, _ in
             onError(OrchestratorError.noProviderAvailable)
         }
     ) {
@@ -533,6 +549,8 @@ final class AIMessageHandler: BridgeMessageHandler {
 
         let thread: StreamThread
         let anchors: [StreamThreadAnchor]
+        let storedStreamMarkdown: String
+        let priorTurns: [ThreadAIConversationTurn]
         do {
             guard let storedThread = try persistence.loadStreamThread(
                 threadId: threadId,
@@ -542,6 +560,14 @@ final class AIMessageHandler: BridgeMessageHandler {
             }
             thread = storedThread
             anchors = try persistence.loadStreamThreadAnchors(threadId: threadId, streamId: streamId)
+            storedStreamMarkdown = try persistence.loadStreamDocument(streamId: streamId)?.markdown ?? ""
+            priorTurns = try persistence.loadThreadExchanges(threadId: threadId, streamId: streamId).map {
+                ThreadAIConversationTurn(
+                    requestId: $0.requestId,
+                    userInput: $0.userInput,
+                    responseRaw: $0.responseRaw
+                )
+            }
         } catch {
             sendToWeb(BridgeMessage(
                 type: "documentAIError",
@@ -556,22 +582,20 @@ final class AIMessageHandler: BridgeMessageHandler {
 
         let sourceScopeRaw = payload["sourceScope"]?.value as? String
         let sourceScope = SourceScope(rawValue: sourceScopeRaw ?? "") ?? .auto
-        let anchorQuotes = anchors
-            .compactMap(\.quote)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        let anchorContext = anchorQuotes
-            .enumerated()
-            .map { anchorQuotes.count > 1 ? "Evidence \($0.offset + 1):\n\($0.element)" : $0.element }
-            .joined(separator: "\n\n")
-        // A canonical legacy thread document already contains every immutable evidence
-        // block. Sending the anchor bundle again makes the model weigh each quote
-        // twice; legacy textarea rows still need the separate starting passage.
-        let canonicalDraft = thread.docJSON != nil && thread.docFormatVersion == 1
-        let sentAnchorContext = canonicalDraft ? "" : (anchorContext.isEmpty ? thread.anchorText : anchorContext)
-        let isCompositeAnchor = anchorQuotes.count > 1
+        let sentAnchorContext = (payload["context"]?.value as? String ?? thread.anchorText)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let streamMarkdown = payload["streamMarkdown"]?.value as? String ?? storedStreamMarkdown
+        let anchorStart = payload["anchorStart"]?.intValue ?? thread.anchorStart
+        let anchorEnd = payload["anchorEnd"]?.intValue ?? thread.anchorEnd
+        let pinnedContext = anchors.compactMap { anchor -> ThreadAIPinnedContext? in
+            guard let quote = anchor.quote, !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return ThreadAIPinnedContext(kind: anchor.kind, quote: quote)
+        }
         let outboundQuery = TickerInternalURLSanitizer.sanitize(query)
-        let retrievalQuery = [outboundQuery, sentAnchorContext, thread.workingText]
+        let retrievalQuery = [outboundQuery, sentAnchorContext] + pinnedContext.map(\.quote)
+        let cleanedRetrievalQuery = retrievalQuery
             .map(TickerInternalURLSanitizer.sanitize)
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: "\n")
@@ -585,7 +609,9 @@ final class AIMessageHandler: BridgeMessageHandler {
                 requestId: requestId,
                 thread: thread,
                 anchorText: sentAnchorContext,
-                isCompositeAnchor: isCompositeAnchor,
+                anchorStart: anchorStart,
+                anchorEnd: anchorEnd,
+                anchors: anchors,
                 receipt: receipt
             )
             sentFacts = facts
@@ -611,7 +637,9 @@ final class AIMessageHandler: BridgeMessageHandler {
                 requestId: requestId,
                 thread: thread,
                 anchorText: sentAnchorContext,
-                isCompositeAnchor: isCompositeAnchor,
+                anchorStart: anchorStart,
+                anchorEnd: anchorEnd,
+                anchors: anchors,
                 receipt: receipt
             )
             guard !responseRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -709,12 +737,13 @@ final class AIMessageHandler: BridgeMessageHandler {
 
             await self.routeThreadAI(
                 outboundQuery,
-                retrievalQuery,
+                cleanedRetrievalQuery,
                 streamId,
                 sourceScope,
                 sentAnchorContext,
-                thread.workingText,
-                [],
+                streamMarkdown,
+                pinnedContext,
+                priorTurns,
                 onPrepared,
                 onChunk,
                 onComplete,
@@ -736,7 +765,9 @@ final class AIMessageHandler: BridgeMessageHandler {
         requestId: String,
         thread: StreamThread,
         anchorText: String,
-        isCompositeAnchor: Bool,
+        anchorStart: Int?,
+        anchorEnd: Int?,
+        anchors: [StreamThreadAnchor],
         receipt: ThreadAIRequestReceipt
     ) -> ThreadAISentFacts {
         var source: SourceReference?
@@ -747,9 +778,6 @@ final class AIMessageHandler: BridgeMessageHandler {
                 highlight = try? persistence.loadPDFHighlight(id: highlightId, sourceId: sourceId)
             }
         }
-        let cleanNote = TickerInternalURLSanitizer.sanitize(thread.workingText)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
         let sources: [ThreadAISentFacts.Source]
         if receipt.sourceContext?.mode == .retrieved {
             sources = (DocumentAICitationManifest.entries(from: receipt.sourceContext) ?? []).map {
@@ -781,29 +809,66 @@ final class AIMessageHandler: BridgeMessageHandler {
             sources = []
         }
 
+        let pinned = anchors.compactMap { anchor -> ThreadAISentFacts.Pinned? in
+            guard let quote = anchor.quote, !quote.isEmpty else { return nil }
+            var anchorSource: SourceReference?
+            var anchorHighlight: PDFHighlightRecord?
+            if let persistence, let sourceId = anchor.sourceId {
+                anchorSource = try? persistence.loadSource(id: sourceId)
+                if let highlightId = anchor.highlightId {
+                    anchorHighlight = try? persistence.loadPDFHighlight(id: highlightId, sourceId: sourceId)
+                }
+            }
+            let range = Self.streamAnchorRange(anchor.anchorSpanId)
+            return ThreadAISentFacts.Pinned(
+                kind: anchor.kind.rawValue,
+                quote: quote,
+                from: range?.from,
+                to: range?.to,
+                sourceId: anchor.sourceId?.uuidString,
+                sourceName: anchorSource?.shortTitle,
+                highlightId: anchor.highlightId?.uuidString,
+                page: anchorHighlight?.page
+            )
+        }
+
         return ThreadAISentFacts(
-            version: 1,
+            version: 2,
             kind: "threadAI",
             requestId: requestId,
             anchor: ThreadAISentFacts.Anchor(
-                kind: isCompositeAnchor ? "mixed" : thread.sourceId == nil ? "stream" : "pdf",
+                kind: thread.sourceId == nil ? "stream" : "pdf",
                 text: TickerInternalURLSanitizer.sanitize(anchorText),
-                sourceId: isCompositeAnchor ? nil : thread.sourceId?.uuidString,
-                sourceName: isCompositeAnchor ? nil : source?.shortTitle,
-                highlightId: isCompositeAnchor ? nil : thread.highlightId?.uuidString,
-                page: isCompositeAnchor ? nil : highlight?.page
+                from: anchorStart,
+                to: anchorEnd,
+                sourceId: thread.sourceId?.uuidString,
+                sourceName: source?.shortTitle,
+                highlightId: thread.highlightId?.uuidString,
+                page: highlight?.page
             ),
             note: ThreadAISentFacts.Note(
-                sent: !cleanNote.isEmpty,
-                text: cleanNote.isEmpty ? nil : cleanNote
+                sent: false,
+                text: nil
             ),
             turns: ThreadAISentFacts.Turns(
                 includedRequestIds: receipt.includedPriorRequestIds,
                 totalAtSend: receipt.totalPriorExchangeCount
             ),
             sourceContextMode: Self.sourceContextMode(receipt.sourceContext),
-            sources: sources
+            sources: sources,
+            pinned: pinned
         )
+    }
+
+    private static func streamAnchorRange(_ value: String?) -> (from: Int, to: Int)? {
+        guard let parts = value?.split(separator: ":"),
+              parts.count == 3,
+              parts[0] == "pm",
+              let from = Int(parts[1]),
+              let to = Int(parts[2]),
+              from >= 0,
+              to > from else { return nil }
+        return (from, to)
     }
 
     private static func sourceContextMode(_ context: SourceContext?) -> String {

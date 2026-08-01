@@ -45,6 +45,7 @@ import {
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import {
   conversationAnchorFromJSON,
+  conversationAnchorText,
   conversationAnchorTextForStorage,
   conversationAnchors,
   conversationRenderPosition,
@@ -1608,6 +1609,7 @@ export function RichStreamEditor({
 
   const formats = editor ? activeFormats(editor.view.state) : null;
   const activePDFHighlight = editor ? selectedPDFHighlight(editor.view.state) : null;
+  const liveConversationSurface = editor ? conversationSurface(editor.view.state) : null;
   const sourceScopeLabel = sourceScope === 'all' ? 'All' : sourceScope === 'none' ? 'None' : 'Auto';
   const openPDFTitle = pdfPaneState.visible && pdfPaneState.streamId === stream.id
     ? pdfPaneState.shortTitle ?? pdfPaneState.sourceName ?? 'Open PDF'
@@ -1966,6 +1968,12 @@ export function RichStreamEditor({
           sourceScope={sourceScope}
           threadId={expandedConversation.threadId}
           anchorText={expandedConversation.anchorText}
+          primaryText={editor && liveConversationSurface
+            ? conversationAnchorText(editor.view.state.doc, liveConversationSurface.anchor)
+            : expandedConversation.anchorText}
+          anchorStart={liveConversationSurface?.anchor.from ?? 0}
+          anchorEnd={liveConversationSurface?.anchor.to ?? 0}
+          streamMarkdown={editor?.getMarkdownProjection() ?? stream.document.markdown}
           focusComposer={expandedConversation.focusComposer}
           state={conversationLiveStates[expandedConversation.key]
             ?? initialConversationLiveState(expandedConversation.threadId)}

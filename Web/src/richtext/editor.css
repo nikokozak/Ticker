@@ -200,6 +200,31 @@
   white-space: pre-wrap;
 }
 
+.conversation-receipt {
+  grid-column: 2 / -1;
+  color: var(--text-muted);
+  font-size: var(--type-ui-small);
+  line-height: var(--type-ui-line-height);
+}
+
+.conversation-receipt summary {
+  width: max-content;
+  cursor: pointer;
+}
+
+.conversation-receipt-body,
+.conversation-receipt-body p {
+  margin: 0;
+}
+
+.conversation-receipt-body {
+  padding-top: var(--space-2);
+}
+
+.conversation-receipt-body span {
+  color: var(--text-faint);
+}
+
 .conversation-turn-copy {
   padding: 0;
   border: 0;

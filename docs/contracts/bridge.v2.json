@@ -306,7 +306,7 @@
       },
       "thinkDocument": {
         "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
-        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId", "threadId"]
+        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId", "threadId", "anchorStart", "anchorEnd", "streamMarkdown"]
       },
       "updateMarginNote": {
         "requiredPayloadKeys": ["noteId", "status"]

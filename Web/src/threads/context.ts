@@ -9,13 +9,26 @@ export interface ThreadAISourceFact {
   shortTitle: string;
 }
 
+export interface ThreadAIPinnedFact {
+  kind: 'stream_quote' | 'pdf_quote';
+  quote: string;
+  from?: number;
+  to?: number;
+  sourceId?: string;
+  sourceName?: string;
+  highlightId?: string;
+  page?: number;
+}
+
 export interface ThreadAISentFacts {
-  version: 1;
+  version: 1 | 2;
   kind: 'threadAI';
   requestId: string;
   anchor: {
     kind: 'stream' | 'pdf';
     text: string;
+    from?: number;
+    to?: number;
     sourceId?: string;
     sourceName?: string;
     highlightId?: string;
@@ -25,6 +38,7 @@ export interface ThreadAISentFacts {
   turns: { includedRequestIds: string[]; totalAtSend: number };
   sourceContextMode: 'none' | 'passthrough' | 'retrieved' | 'unavailable';
   sources: ThreadAISourceFact[];
+  pinned: ThreadAIPinnedFact[];
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -64,6 +78,30 @@ function parseSource(value: unknown): ThreadAISourceFact | null {
   };
 }
 
+function nonnegativeInteger(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : undefined;
+}
+
+function parsePinned(value: unknown): ThreadAIPinnedFact | null {
+  const pin = object(value);
+  if (!pin || (pin.kind !== 'stream_quote' && pin.kind !== 'pdf_quote')) return null;
+  if (typeof pin.quote !== 'string' || !pin.quote) return null;
+  const from = nonnegativeInteger(pin.from);
+  const to = nonnegativeInteger(pin.to);
+  if ((from === undefined) !== (to === undefined) || (from !== undefined && to! < from)) return null;
+  return {
+    kind: pin.kind,
+    quote: pin.quote,
+    from,
+    to,
+    sourceId: optionalString(pin.sourceId),
+    sourceName: optionalString(pin.sourceName),
+    highlightId: optionalString(pin.highlightId),
+    page: pageNumber(pin.page),
+  };
+}
+
 export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null {
   let parsed = value;
   if (typeof parsed === 'string') {
@@ -74,7 +112,8 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
   const anchor = object(receipt?.anchor);
   const note = object(receipt?.note);
   const turns = object(receipt?.turns);
-  if (receipt?.version !== 1 || receipt.kind !== 'threadAI' || !anchor || !note || !turns) return null;
+  if ((receipt?.version !== 1 && receipt?.version !== 2)
+    || receipt.kind !== 'threadAI' || !anchor || !note || !turns) return null;
   if (typeof receipt.requestId !== 'string' || typeof anchor.text !== 'string') return null;
   if (anchor.kind !== 'stream' && anchor.kind !== 'pdf') return null;
   if (typeof note.sent !== 'boolean' || !Array.isArray(turns.includedRequestIds)) return null;
@@ -86,14 +125,26 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
   if (!Number.isInteger(totalAtSend) || totalAtSend < includedRequestIds.length) return null;
   const modes = new Set(['none', 'passthrough', 'retrieved', 'unavailable']);
   if (typeof receipt.sourceContextMode !== 'string' || !modes.has(receipt.sourceContextMode)) return null;
+  const anchorFrom = nonnegativeInteger(anchor.from);
+  const anchorTo = nonnegativeInteger(anchor.to);
+  if ((anchorFrom === undefined) !== (anchorTo === undefined)
+    || (anchorFrom !== undefined && anchorTo! < anchorFrom)) return null;
+  const pinned = Array.isArray(receipt.pinned)
+    ? receipt.pinned.map(parsePinned)
+    : [];
+  if (receipt.version === 2 && (!Array.isArray(receipt.pinned) || pinned.some((pin) => pin === null))) {
+    return null;
+  }
 
   return {
-    version: 1,
+    version: receipt.version,
     kind: 'threadAI',
     requestId: receipt.requestId,
     anchor: {
       kind: anchor.kind,
       text: anchor.text,
+      from: anchorFrom,
+      to: anchorTo,
       sourceId: optionalString(anchor.sourceId),
       sourceName: optionalString(anchor.sourceName),
       highlightId: optionalString(anchor.highlightId),
@@ -108,6 +159,7 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
     sources: Array.isArray(receipt.sources)
       ? receipt.sources.flatMap((source) => parseSource(source) ?? [])
       : [],
+    pinned: pinned.flatMap((pin) => pin ?? []),
   };
 }
 
@@ -124,7 +176,7 @@ function citation(value: unknown, fallbackNumber: number): DocumentAICitation | 
     : null;
 }
 
-/** Accepts both released citation arrays and the v1 thread receipt object. */
+/** Accepts released citation arrays and both thread receipt versions. */
 export function manifestCitations(sourceManifest: string): DocumentAICitation[] {
   let parsed: unknown;
   try { parsed = JSON.parse(sourceManifest) as unknown; } catch { return []; }

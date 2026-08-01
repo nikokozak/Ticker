@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, type KeyboardEvent } from 'react';
 import { bridge, loadStreamThread } from '../types/bridge';
 import type { AIExchangeJSON, SourceScope, StreamThreadJSON } from '../types/models';
+import { parseThreadAISentFacts } from '../threads/context';
 
 export interface ConversationActiveTurn {
   requestId: string;
@@ -8,6 +9,7 @@ export interface ConversationActiveTurn {
   response: string;
   running: boolean;
   error?: string;
+  sentContext?: unknown;
 }
 
 export interface ConversationLiveState {
@@ -42,6 +44,10 @@ interface ConversationSurfaceProps {
   sourceScope: SourceScope;
   threadId?: string;
   anchorText: string;
+  primaryText: string;
+  anchorStart: number;
+  anchorEnd: number;
+  streamMarkdown: string;
   focusComposer: boolean;
   state: ConversationLiveState;
   updateState: (key: string, updater: ConversationLiveStateUpdater) => void;
@@ -52,11 +58,49 @@ interface ConversationSurfaceProps {
 
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
 
-const Turn = memo(function Turn({ who, text }: { who: 'You' | 'AI'; text: string }) {
+function ThreadContextDisclosure({ value }: { value: unknown }) {
+  const receipt = parseThreadAISentFacts(value);
+  if (!receipt) return null;
+  const retrieval = receipt.sourceContextMode === 'none'
+    ? 'No source retrieval'
+    : receipt.sourceContextMode === 'passthrough' ? 'All selected sources'
+      : receipt.sourceContextMode === 'retrieved' ? 'Retrieved passages' : 'Source retrieval unavailable';
+  return (
+    <details className="conversation-receipt">
+      <summary>What AI saw</summary>
+      <div className="conversation-receipt-body">
+        <p><span>Primary passage</span> {receipt.anchor.text || 'Unavailable'}</p>
+        {receipt.pinned.map((pin, index) => (
+          <p key={`${pin.kind}:${index}`}>
+            <span>{pin.kind === 'pdf_quote' ? 'Pinned PDF' : 'Pinned Stream'}</span> {pin.quote}
+          </p>
+        ))}
+        <p>
+          <span>Sources</span> {retrieval}
+          {receipt.sources.length > 0
+            ? ` · ${receipt.sources.map((source) => `${source.shortTitle}${source.page ? ` p.${source.page}` : ''}`).join(', ')}`
+            : ''}
+        </p>
+        <p><span>Prior turns</span> {receipt.turns.includedRequestIds.length} of {receipt.turns.totalAtSend}</p>
+      </div>
+    </details>
+  );
+}
+
+const Turn = memo(function Turn({
+  who,
+  text,
+  receipt,
+}: {
+  who: 'You' | 'AI';
+  text: string;
+  receipt?: unknown;
+}) {
   return (
     <div className={`conversation-turn conversation-turn--${who === 'You' ? 'you' : 'ai'}`}>
       <span className="conversation-turn-label">{who}</span>
       <div className="conversation-turn-text">{text}</div>
+      {who === 'AI' && <ThreadContextDisclosure value={receipt} />}
       <button type="button" className="conversation-turn-copy" onClick={() => copy(text)}>Copy</button>
     </div>
   );
@@ -68,6 +112,10 @@ export function ConversationSurface({
   sourceScope,
   threadId,
   anchorText,
+  primaryText,
+  anchorStart,
+  anchorEnd,
+  streamMarkdown,
   focusComposer,
   state,
   updateState,
@@ -119,6 +167,12 @@ export function ConversationSurface({
     if (message.type === 'documentAIChunk' && typeof payload.chunk === 'string') {
       updateState(conversationKey, (current) => current.active?.requestId === requestId
         ? { ...current, active: { ...current.active, response: current.active.response + payload.chunk } }
+        : current);
+      return;
+    }
+    if (message.type === 'threadAIContext') {
+      updateState(conversationKey, (current) => current.active?.requestId === requestId
+        ? { ...current, active: { ...current.active, sentContext: payload.sentContext } }
         : current);
       return;
     }
@@ -187,6 +241,10 @@ export function ConversationSurface({
         streamId,
         threadId: current.threadId,
         query,
+        context: primaryText,
+        anchorStart,
+        anchorEnd,
+        streamMarkdown,
         imageURLs: [],
         sourceScope,
         verb: 'develop',
@@ -228,13 +286,17 @@ export function ConversationSurface({
         {state.exchanges.map((exchange) => (
           <div className="conversation-exchange" key={exchange.requestId}>
             <Turn who="You" text={exchange.userInput} />
-            <Turn who="AI" text={exchange.responseRaw} />
+            <Turn who="AI" text={exchange.responseRaw} receipt={exchange.sourceManifest} />
           </div>
         ))}
         {state.active && (
           <div className="conversation-exchange">
             <Turn who="You" text={state.active.userInput} />
-            <Turn who="AI" text={state.active.response || state.active.error || 'Thinking…'} />
+            <Turn
+              who="AI"
+              text={state.active.response || state.active.error || 'Thinking…'}
+              receipt={state.active.sentContext}
+            />
           </div>
         )}
         {state.error && <p className="conversation-error" role="alert">{state.error}</p>}
