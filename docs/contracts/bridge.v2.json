@@ -164,6 +164,7 @@
       },
       "deleteStreamThread": {
         "requiredPayloadKeys": ["streamId", "threadId"],
+        "optionalPayloadKeys": ["ephemeralOnly"],
         "requiredCallbackId": true
       },
       "cancelDocumentAI": {
@@ -178,7 +179,7 @@
       },
       "createStreamThread": {
         "requiredPayloadKeys": ["streamId", "title", "anchorStart", "anchorEnd", "anchorText"],
-        "optionalPayloadKeys": ["sourceId", "highlightId", "ephemeral", "detached"],
+        "optionalPayloadKeys": ["sourceId", "highlightId", "ephemeral", "detached", "profile"],
         "requiredCallbackId": true
       },
       "createStream": {

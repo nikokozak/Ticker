@@ -12,6 +12,7 @@ import { TextSelection, type Command, type Transaction } from 'prosemirror-state
 import {
   bridge,
   createStreamThread,
+  deleteEphemeralThread,
   deleteStreamThread,
   getExchange,
   listConversations,
@@ -215,7 +216,7 @@ const SLASH_COMMANDS: Array<{ command: SlashCommand; description: string }> = [
 function slashCommandInput(view: RichTextEditor['view']) {
   const { selection } = view.state;
   const { $head } = selection;
-  if (!selection.empty || $head.parent.type.name !== 'paragraph') return null;
+  if (!selection.empty || $head.depth !== 1 || $head.parent.type.name !== 'paragraph') return null;
   const text = $head.parent.textContent;
   if ($head.parentOffset !== text.length) return null;
   const match = /^\/([a-z]*)(?:\s(.*))?$/.exec(text);
@@ -289,6 +290,9 @@ export function RichStreamEditor({
   const expandedConversationRef = useRef<ExpandedConversation | null>(null);
   const conversationLiveStatesRef = useRef<Record<string, ConversationLiveState>>({});
   const conversationCollapseTimerRef = useRef<number>();
+  const conversationCreatePromisesRef = useRef(new Map<string, Promise<StreamThreadJSON>>());
+  const conversationKeepPromisesRef = useRef(new Map<string, Promise<boolean>>());
+  const closingConversationKeysRef = useRef(new Set<string>());
   const slashArmedRef = useRef(false);
   const slashMenuRef = useRef<SlashMenuState | null>(null);
 
@@ -511,22 +515,20 @@ export function RichStreamEditor({
     key: string,
     updater: ConversationLiveStateUpdater,
   ) => {
-    setConversationLiveStates((current) => {
-      const value = updater(current[key] ?? initialConversationLiveState());
-      if (value === current[key]) return current;
-      const next = { ...current, [key]: value };
-      conversationLiveStatesRef.current = next;
-      return next;
-    });
+    const current = conversationLiveStatesRef.current;
+    const value = updater(current[key] ?? initialConversationLiveState());
+    if (value === current[key]) return;
+    const next = { ...current, [key]: value };
+    conversationLiveStatesRef.current = next;
+    setConversationLiveStates(next);
   }, []);
 
   const ensureConversationLiveState = useCallback((key: string, threadId?: string) => {
-    setConversationLiveStates((current) => {
-      if (current[key]) return current;
-      const next = { ...current, [key]: initialConversationLiveState(threadId) };
-      conversationLiveStatesRef.current = next;
-      return next;
-    });
+    const current = conversationLiveStatesRef.current;
+    if (current[key]) return;
+    const next = { ...current, [key]: initialConversationLiveState(threadId) };
+    conversationLiveStatesRef.current = next;
+    setConversationLiveStates(next);
   }, []);
 
   const cancelConversationRequest = useCallback((key: string, updateUI = true) => {
@@ -543,10 +545,16 @@ export function RichStreamEditor({
   }, []);
 
   const discardEphemeralConversation = useCallback(async (key: string): Promise<boolean> => {
+    await conversationKeepPromisesRef.current.get(key);
+    try {
+      await conversationCreatePromisesRef.current.get(key);
+    } catch {
+      // Creation reports its own error; there is no row left to discard.
+    }
     const thread = conversationLiveStatesRef.current[key]?.thread;
     if (!thread?.ephemeral) return true;
     try {
-      await deleteStreamThread({ streamId: stream.id, threadId: thread.threadId });
+      await deleteEphemeralThread({ streamId: stream.id, threadId: thread.threadId });
       const records = conversationRecordsRef.current.filter((record) => record.threadId !== thread.threadId);
       conversationRecordsRef.current = records;
       setConversationRecords(records);
@@ -566,60 +574,77 @@ export function RichStreamEditor({
     }
   }, [stream.id, updateConversationLiveState]);
 
-  const keepExpandedConversation = useCallback(async (): Promise<boolean> => {
+  const keepExpandedConversation = useCallback((): Promise<boolean> => {
     const expanded = expandedConversationRef.current;
-    if (!expanded?.ephemeral) return true;
-    const current = conversationLiveStatesRef.current[expanded.key];
-    let thread = current?.thread;
-    try {
-      if (thread) {
-        const saved = await saveStreamThread({
-          streamId: stream.id,
-          threadId: thread.threadId,
-          title: thread.title,
-          baseRevision: thread.revision,
-          ephemeral: false,
-        });
-        thread = saved.thread;
-        if (thread.ephemeral) throw new Error('Keep conflicted');
-        updateConversationLiveState(expanded.key, (state) => ({ ...state, thread }));
-      }
-      const kept = { ...expanded, ephemeral: false };
-      expandedConversationRef.current = kept;
-      setExpandedConversation(kept);
-      const liveEditor = editorRef.current;
-      const surface = liveEditor && conversationSurface(liveEditor.view.state);
-      if (thread && liveEditor && surface?.key === expanded.key) {
-        const anchor = { ...surface.anchor, threadId: thread.threadId };
-        liveEditor.view.dispatch(setConversationAnchors(liveEditor.view.state.tr, [
-          ...conversationAnchors(liveEditor.view.state)
-            .filter((candidate) => candidate.threadId !== thread!.threadId),
-          anchor,
-        ]));
-        const records = [
-          ...conversationRecordsRef.current.filter((record) => record.threadId !== thread!.threadId),
-          {
+    if (!expanded?.ephemeral) return Promise.resolve(true);
+    const pending = conversationKeepPromisesRef.current.get(expanded.key);
+    if (pending) return pending;
+    const task = (async () => {
+      updateConversationLiveState(expanded.key, (state) => ({ ...state, keeping: true }));
+      try {
+        try {
+          await conversationCreatePromisesRef.current.get(expanded.key);
+        } catch {
+          // A failed creation leaves this as an unsent draft, which can still be kept.
+        }
+        let thread = conversationLiveStatesRef.current[expanded.key]?.thread;
+        if (thread) {
+          const saved = await saveStreamThread({
+            streamId: stream.id,
             threadId: thread.threadId,
-            anchorStart: anchor.from,
-            anchorEnd: anchor.to,
-            anchorText: thread.anchorText,
-            detached: anchor.from >= anchor.to,
+            title: thread.title,
+            baseRevision: thread.revision,
             ephemeral: false,
-            updatedAt: thread.updatedAt,
-          },
-        ];
-        conversationRecordsRef.current = records;
-        setConversationRecords(records);
-        sessionRef.current?.documentChanged();
+          });
+          thread = saved.thread;
+          if (thread.ephemeral) throw new Error('Keep conflicted');
+          updateConversationLiveState(expanded.key, (state) => ({ ...state, thread }));
+        }
+        const currentExpanded = expandedConversationRef.current;
+        if (currentExpanded?.key === expanded.key) {
+          const kept = { ...currentExpanded, ephemeral: false };
+          expandedConversationRef.current = kept;
+          setExpandedConversation(kept);
+        }
+        const liveEditor = editorRef.current;
+        const surface = liveEditor && conversationSurface(liveEditor.view.state);
+        if (thread && liveEditor && surface?.key === expanded.key) {
+          const anchor = { ...surface.anchor, threadId: thread.threadId };
+          liveEditor.view.dispatch(setConversationAnchors(liveEditor.view.state.tr, [
+            ...conversationAnchors(liveEditor.view.state)
+              .filter((candidate) => candidate.threadId !== thread!.threadId),
+            anchor,
+          ]));
+          const records = [
+            ...conversationRecordsRef.current.filter((record) => record.threadId !== thread!.threadId),
+            {
+              threadId: thread.threadId,
+              anchorStart: anchor.from,
+              anchorEnd: anchor.to,
+              anchorText: thread.anchorText,
+              detached: anchor.from >= anchor.to,
+              ephemeral: false,
+              updatedAt: thread.updatedAt,
+            },
+          ];
+          conversationRecordsRef.current = records;
+          setConversationRecords(records);
+          sessionRef.current?.documentChanged();
+        }
+        return true;
+      } catch {
+        updateConversationLiveState(expanded.key, (state) => ({
+          ...state,
+          error: 'This chat could not be kept.',
+        }));
+        return false;
+      } finally {
+        conversationKeepPromisesRef.current.delete(expanded.key);
+        updateConversationLiveState(expanded.key, (state) => ({ ...state, keeping: false }));
       }
-      return true;
-    } catch {
-      updateConversationLiveState(expanded.key, (state) => ({
-        ...state,
-        error: 'This chat could not be kept.',
-      }));
-      return false;
-    }
+    })();
+    conversationKeepPromisesRef.current.set(expanded.key, task);
+    return task;
   }, [stream.id, updateConversationLiveState]);
 
   const discardExpandedEphemeralConversation = useCallback(async (): Promise<boolean> => {
@@ -630,8 +655,12 @@ export function RichStreamEditor({
   const flushAll = useCallback(async () => {
     cancelDocumentAI();
     const expanded = expandedConversationRef.current;
-    if (expanded) cancelConversationRequest(expanded.key);
-    if (!await discardExpandedEphemeralConversation()) return false;
+    if (expanded) {
+      closingConversationKeysRef.current.add(expanded.key);
+      cancelConversationRequest(expanded.key);
+      await discardExpandedEphemeralConversation();
+      closingConversationKeysRef.current.delete(expanded.key);
+    }
     return sessionRef.current?.saveNow() ?? Promise.resolve(true);
   }, [cancelConversationRequest, cancelDocumentAI, discardExpandedEphemeralConversation]);
 
@@ -640,10 +669,24 @@ export function RichStreamEditor({
     return () => onFlushAvailable?.(null);
   }, [flushAll, onFlushAvailable]);
 
-  const expandConversation = useCallback((next: ExpandedConversation) => {
+  const prepareConversationClose = useCallback(async (expanded: ExpandedConversation) => {
+    closingConversationKeysRef.current.add(expanded.key);
+    cancelConversationRequest(expanded.key);
+    updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: true }));
+    const discarded = expanded.ephemeral !== true
+      || await discardEphemeralConversation(expanded.key);
+    closingConversationKeysRef.current.delete(expanded.key);
+    if (!discarded) {
+      updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: false }));
+    }
+    return discarded;
+  }, [cancelConversationRequest, discardEphemeralConversation, updateConversationLiveState]);
+
+  const expandConversation = useCallback(async (next: ExpandedConversation) => {
     const current = expandedConversationRef.current;
     if (current?.key !== next.key) {
-      if (current) cancelConversationRequest(current.key);
+      if (current && !await prepareConversationClose(current)) return;
+      if (current) updateConversationLiveState(current.key, (state) => ({ ...state, closing: false }));
       ensureConversationLiveState(next.key, next.threadId);
     }
     if (conversationCollapseTimerRef.current !== undefined) {
@@ -652,16 +695,14 @@ export function RichStreamEditor({
     }
     expandedConversationRef.current = next;
     setExpandedConversation(next);
-  }, [cancelConversationRequest, ensureConversationLiveState]);
+  }, [ensureConversationLiveState, prepareConversationClose, updateConversationLiveState]);
 
   const collapseConversation = useCallback(async () => {
     const expanded = expandedConversationRef.current;
     if (!expanded || conversationCollapseTimerRef.current !== undefined) return;
     const currentEditor = editorRef.current;
     const anchor = currentEditor && conversationSurface(currentEditor.view.state)?.anchor;
-    cancelConversationRequest(expanded.key);
-    if (!await discardEphemeralConversation(expanded.key)) return;
-    updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: true }));
+    if (!await prepareConversationClose(expanded)) return;
     conversationCollapseTimerRef.current = window.setTimeout(() => {
       conversationCollapseTimerRef.current = undefined;
       if (expandedConversationRef.current?.key !== expanded.key) return;
@@ -679,7 +720,7 @@ export function RichStreamEditor({
         currentEditor.view.focus();
       });
     }, 150);
-  }, [cancelConversationRequest, discardEphemeralConversation, updateConversationLiveState]);
+  }, [prepareConversationClose, updateConversationLiveState]);
 
   useEffect(() => () => {
     if (conversationCollapseTimerRef.current !== undefined) {
@@ -689,9 +730,10 @@ export function RichStreamEditor({
       cancelConversationRequest(key, false);
     }
     const expanded = expandedConversationRef.current;
+    if (expanded) closingConversationKeysRef.current.add(expanded.key);
     const thread = expanded && conversationLiveStatesRef.current[expanded.key]?.thread;
     if (expanded?.ephemeral && thread?.ephemeral) {
-      void deleteStreamThread({ streamId: stream.id, threadId: thread.threadId }).catch(() => undefined);
+      void deleteEphemeralThread({ streamId: stream.id, threadId: thread.threadId }).catch(() => undefined);
     }
   }, [cancelConversationRequest, stream.id]);
 
@@ -740,6 +782,7 @@ export function RichStreamEditor({
   }, [collapseConversation, expandConversation]);
 
   const updateSlashMenu = useCallback(() => {
+    if (!slashArmedRef.current && !slashMenuRef.current) return;
     const view = editorRef.current?.view;
     const input = view && slashCommandInput(view);
     if (!view || !input) {
@@ -750,7 +793,6 @@ export function RichStreamEditor({
       }
       return;
     }
-    if (!slashArmedRef.current && !slashMenuRef.current) return;
     slashArmedRef.current = false;
     let coords = { left: 0, bottom: 0 };
     try {
@@ -1069,6 +1111,7 @@ export function RichStreamEditor({
     title: string,
     pdf?: { sourceId: string; highlightId: string },
     ephemeral = false,
+    profile?: 'research',
   ): Promise<StreamThreadJSON> => {
     const currentEditor = editorRef.current;
     if (!currentEditor) throw new Error('Conversation closed');
@@ -1084,6 +1127,7 @@ export function RichStreamEditor({
       highlightId: pdf?.highlightId,
       detached: currentSurface.anchor.detached,
       ephemeral,
+      profile,
     });
 
     const liveEditor = editorRef.current;
@@ -1136,12 +1180,36 @@ export function RichStreamEditor({
   const createPersistedConversation = useCallback(async (
     query: string,
     ephemeral: boolean,
+    profile?: 'research',
   ): Promise<StreamThreadJSON> => {
     const currentEditor = editorRef.current;
     const currentSurface = currentEditor && conversationSurface(currentEditor.view.state);
     if (!currentSurface) throw new Error('Conversation closed');
-    return persistConversation(currentSurface, query.split(/\r?\n/, 1)[0], undefined, ephemeral);
-  }, [persistConversation]);
+    const key = currentSurface.key;
+    let task: Promise<StreamThreadJSON>;
+    task = persistConversation(
+      currentSurface,
+      query.split(/\r?\n/, 1)[0],
+      undefined,
+      ephemeral,
+      profile,
+    ).then(async (thread) => {
+      if (closingConversationKeysRef.current.has(key)) {
+        if (thread.ephemeral) {
+          await deleteEphemeralThread({ streamId: stream.id, threadId: thread.threadId });
+        }
+        throw new Error('Conversation closed');
+      }
+      updateConversationLiveState(key, (state) => ({ ...state, thread }));
+      return thread;
+    }).finally(() => {
+      if (conversationCreatePromisesRef.current.get(key) === task) {
+        conversationCreatePromisesRef.current.delete(key);
+      }
+    });
+    conversationCreatePromisesRef.current.set(key, task);
+    return task;
+  }, [persistConversation, stream.id, updateConversationLiveState]);
 
   const conversationHasDrifted = useCallback((anchorText: string) => {
     const currentEditor = editorRef.current;
@@ -1446,6 +1514,7 @@ export function RichStreamEditor({
   useEffect(() => {
     if (!editor) return undefined;
     const keydown = (event: KeyboardEvent) => {
+      if (editor.view.composing) return;
       const menu = slashMenuRef.current;
       if (menu) {
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -1653,9 +1722,8 @@ export function RichStreamEditor({
   const leave = useCallback(async () => {
     cancelDocumentAI();
     const expanded = expandedConversationRef.current;
-    if (expanded) cancelConversationRequest(expanded.key);
     setLeaving(true);
-    if (!await discardExpandedEphemeralConversation()) {
+    if (expanded && !await prepareConversationClose(expanded)) {
       setLeaving(false);
       addToast('This chat could not be discarded, so the stream stayed open.', 'error');
       return;
@@ -1663,13 +1731,16 @@ export function RichStreamEditor({
     const documentSaved = await (sessionRef.current?.destroy() ?? Promise.resolve(true));
     if (documentSaved) return onBack();
     setLeaving(false);
+    if (expanded) {
+      updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: false }));
+    }
     addToast('Your changes could not be saved, so this stream stayed open.', 'error');
   }, [
     addToast,
-    cancelConversationRequest,
     cancelDocumentAI,
-    discardExpandedEphemeralConversation,
     onBack,
+    prepareConversationClose,
+    updateConversationLiveState,
   ]);
 
   const remove = useCallback(() => {

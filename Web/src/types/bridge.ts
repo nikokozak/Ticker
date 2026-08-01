@@ -258,6 +258,7 @@ export function createStreamThread(input: {
   highlightId?: string;
   ephemeral?: boolean;
   detached?: boolean;
+  profile?: 'research';
 }): Promise<{ thread: StreamThreadJSON }> {
   return bridge.sendAsync('createStreamThread', {
     streamId: input.streamId,
@@ -269,6 +270,7 @@ export function createStreamThread(input: {
     highlightId: input.highlightId,
     ephemeral: input.ephemeral,
     detached: input.detached,
+    profile: input.profile,
   });
 }
 
@@ -312,6 +314,17 @@ export function deleteStreamThread(input: {
   return bridge.sendAsync('deleteStreamThread', {
     streamId: input.streamId,
     threadId: input.threadId,
+  });
+}
+
+export function deleteEphemeralThread(input: {
+  streamId: string;
+  threadId: string;
+}): Promise<{ highlightIds: string[] }> {
+  return bridge.sendAsync('deleteStreamThread', {
+    streamId: input.streamId,
+    threadId: input.threadId,
+    ephemeralOnly: true,
   });
 }
 

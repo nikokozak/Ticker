@@ -158,6 +158,11 @@
   color: var(--text);
 }
 
+.conversation-keep:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .slash-command-menu {
   position: fixed;
   z-index: 920;

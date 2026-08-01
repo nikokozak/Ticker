@@ -141,6 +141,7 @@ export interface StreamThreadJSON {
   anchorEnd?: number;
   detached?: boolean;
   ephemeral?: boolean;
+  profile?: 'research';
   revision: number;
   createdAt: string;
   updatedAt: string;

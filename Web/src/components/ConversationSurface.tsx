@@ -30,6 +30,7 @@ export interface ConversationLiveState {
   loading: boolean;
   loadError: boolean;
   creating: boolean;
+  keeping: boolean;
   closing: boolean;
   error: string | null;
 }
@@ -42,6 +43,7 @@ export const initialConversationLiveState = (threadId?: string): ConversationLiv
   loading: Boolean(threadId),
   loadError: false,
   creating: false,
+  keeping: false,
   closing: false,
   error: null,
 });
@@ -64,7 +66,11 @@ interface ConversationSurfaceProps {
   profile?: 'research';
   state: ConversationLiveState;
   updateState: (key: string, updater: ConversationLiveStateUpdater) => void;
-  createThread: (query: string, ephemeral: boolean) => Promise<StreamThreadJSON>;
+  createThread: (
+    query: string,
+    ephemeral: boolean,
+    profile?: 'research',
+  ) => Promise<StreamThreadJSON>;
   hasDrifted: (anchorText: string) => boolean;
   onPromote: (exchange: AIExchangeJSON) => void;
   onKeep: () => void;
@@ -260,7 +266,7 @@ export function ConversationSurface({
     if (!current && !threadId) {
       updateState(conversationKey, (value) => ({ ...value, creating: true, error: null }));
       try {
-        current = await createThread(query, ephemeral);
+        current = await createThread(query, ephemeral, profile);
         updateState(conversationKey, (value) => ({ ...value, thread: current!, creating: false }));
       } catch {
         updateState(conversationKey, (value) => ({
@@ -280,9 +286,7 @@ export function ConversationSurface({
       error: null,
       active: { requestId, userInput: query, response: '', running: true },
     }));
-    const researchProfile = profile === 'research' || snapshot.exchanges.some(
-      (exchange) => parseThreadAISentFacts(exchange.sourceManifest)?.profile === 'research',
-    );
+    const researchProfile = current.profile === 'research' || profile === 'research';
     bridge.send({
       type: 'thinkDocument',
       payload: {
@@ -377,7 +381,14 @@ export function ConversationSurface({
       <div className="conversation-content">
         {ephemeral && (
           <div className="conversation-header">
-            <button type="button" className="conversation-keep" onClick={onKeep}>Keep</button>
+            <button
+              type="button"
+              className="conversation-keep"
+              disabled={state.keeping || state.creating}
+              onClick={onKeep}
+            >
+              Keep
+            </button>
           </div>
         )}
         {hasDrifted(originalAnchorText) && (

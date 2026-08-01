@@ -336,6 +336,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
             await sendStreamLoadFailed(id: id, requestId: requestId, reason: "notFound")
             return
         }
+        _ = try persistence.deleteEphemeralThreads(streamId: id)
         delegate?.setCurrentStreamIdForFileDrops(id)
         await delegate?.closePDFPaneIfShowingDifferentStream(id)
         // The document, its spans and both append queues TOGETHER, in one

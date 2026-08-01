@@ -72,7 +72,10 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 return
             }
             let detached = payload["detached"]?.value as? Bool ?? (anchorStart == anchorEnd)
-            guard detached == (anchorStart == anchorEnd), detached || !anchorText.isEmpty else {
+            let profile = payload["profile"]?.value as? String
+            guard detached == (anchorStart == anchorEnd),
+                  detached || !anchorText.isEmpty,
+                  profile == nil || profile == "research" else {
                 respondWithError(callbackId, "Invalid createStreamThread payload")
                 return
             }
@@ -86,7 +89,8 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                     anchorStart: anchorStart,
                     anchorEnd: anchorEnd,
                     detached: detached,
-                    ephemeral: payload["ephemeral"]?.value as? Bool ?? false
+                    ephemeral: payload["ephemeral"]?.value as? Bool ?? false,
+                    profile: profile
                 ))
                 respond(callbackId, [
                     "thread": AnyCodable(try encodeThread(thread))
@@ -165,10 +169,9 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 return
             }
             do {
-                let highlightIds = try persistence.deleteStreamThread(
-                    threadId: threadId,
-                    streamId: streamId
-                )
+                let highlightIds = payload["ephemeralOnly"]?.value as? Bool == true
+                    ? try persistence.deleteEphemeralThread(threadId: threadId, streamId: streamId)
+                    : try persistence.deleteStreamThread(threadId: threadId, streamId: streamId)
                 respond(callbackId, [
                     "highlightIds": AnyCodable(highlightIds.map(\.uuidString))
                 ])
