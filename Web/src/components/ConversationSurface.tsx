@@ -1,19 +1,8 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { memo, useEffect, useRef, type KeyboardEvent } from 'react';
 import { bridge, loadStreamThread } from '../types/bridge';
 import type { AIExchangeJSON, SourceScope, StreamThreadJSON } from '../types/models';
 
-interface ConversationSurfaceProps {
-  streamId: string;
-  sourceScope: SourceScope;
-  threadId?: string;
-  anchorText: string;
-  focusComposer: boolean;
-  createThread: (query: string) => Promise<StreamThreadJSON>;
-  hasDrifted: (anchorText: string) => boolean;
-  onCollapse: () => void;
-}
-
-interface ActiveTurn {
+export interface ConversationActiveTurn {
   requestId: string;
   userInput: string;
   response: string;
@@ -21,9 +10,49 @@ interface ActiveTurn {
   error?: string;
 }
 
+export interface ConversationLiveState {
+  thread: StreamThreadJSON | null;
+  exchanges: AIExchangeJSON[];
+  composer: string;
+  active: ConversationActiveTurn | null;
+  loading: boolean;
+  loadError: boolean;
+  creating: boolean;
+  closing: boolean;
+  error: string | null;
+}
+
+export const initialConversationLiveState = (threadId?: string): ConversationLiveState => ({
+  thread: null,
+  exchanges: [],
+  composer: '',
+  active: null,
+  loading: Boolean(threadId),
+  loadError: false,
+  creating: false,
+  closing: false,
+  error: null,
+});
+
+type ConversationLiveStateUpdater = (current: ConversationLiveState) => ConversationLiveState;
+
+interface ConversationSurfaceProps {
+  conversationKey: string;
+  streamId: string;
+  sourceScope: SourceScope;
+  threadId?: string;
+  anchorText: string;
+  focusComposer: boolean;
+  state: ConversationLiveState;
+  updateState: (key: string, updater: ConversationLiveStateUpdater) => void;
+  createThread: (query: string) => Promise<StreamThreadJSON>;
+  hasDrifted: (anchorText: string) => boolean;
+  onCollapse: () => void;
+}
+
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
 
-function Turn({ who, text }: { who: 'You' | 'AI'; text: string }) {
+const Turn = memo(function Turn({ who, text }: { who: 'You' | 'AI'; text: string }) {
   return (
     <div className={`conversation-turn conversation-turn--${who === 'You' ? 'you' : 'ai'}`}>
       <span className="conversation-turn-label">{who}</span>
@@ -31,45 +60,51 @@ function Turn({ who, text }: { who: 'You' | 'AI'; text: string }) {
       <button type="button" className="conversation-turn-copy" onClick={() => copy(text)}>Copy</button>
     </div>
   );
-}
+});
 
 export function ConversationSurface({
+  conversationKey,
   streamId,
   sourceScope,
   threadId,
   anchorText,
   focusComposer,
+  state,
+  updateState,
   createThread,
   hasDrifted,
   onCollapse,
 }: ConversationSurfaceProps) {
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const collapseTimer = useRef<number>();
-  const [thread, setThread] = useState<StreamThreadJSON | null>(null);
-  const [exchanges, setExchanges] = useState<AIExchangeJSON[]>([]);
-  const [composer, setComposer] = useState('');
-  const [active, setActive] = useState<ActiveTurn | null>(null);
-  const [loading, setLoading] = useState(Boolean(threadId));
-  const [error, setError] = useState<string | null>(null);
-  const [closing, setClosing] = useState(false);
+  const stateRef = useRef(state);
+  const activeRequestId = useRef(state.active?.running ? state.active.requestId : null);
+  stateRef.current = state;
+  activeRequestId.current = state.active?.running ? state.active.requestId : null;
 
   useEffect(() => {
-    if (!threadId) return undefined;
+    if (!threadId || state.thread || !state.loading) return undefined;
     let live = true;
     void loadStreamThread(streamId, threadId)
       .then(({ thread: loaded }) => {
         if (!live) return;
-        setThread(loaded);
-        setExchanges(loaded.exchanges ?? []);
-        setLoading(false);
+        updateState(conversationKey, (current) => ({
+          ...current,
+          thread: loaded,
+          exchanges: loaded.exchanges ?? [],
+          loading: false,
+          loadError: false,
+        }));
       })
       .catch(() => {
         if (!live) return;
-        setError('This conversation could not be loaded.');
-        setLoading(false);
+        updateState(conversationKey, (current) => ({
+          ...current,
+          loading: false,
+          loadError: true,
+        }));
       });
     return () => { live = false; };
-  }, [streamId, threadId]);
+  }, [conversationKey, state.loading, state.thread, streamId, threadId, updateState]);
 
   useEffect(() => {
     if (!focusComposer) return;
@@ -78,60 +113,73 @@ export function ConversationSurface({
   }, [focusComposer]);
 
   useEffect(() => bridge.onMessage((message) => {
+    const requestId = activeRequestId.current;
     const payload = message.payload as Record<string, unknown> | undefined;
-    if (!active || payload?.requestId !== active.requestId) return;
+    if (!requestId || payload?.requestId !== requestId) return;
     if (message.type === 'documentAIChunk' && typeof payload.chunk === 'string') {
-      setActive((current) => current?.requestId === active.requestId
-        ? { ...current, response: current.response + payload.chunk }
+      updateState(conversationKey, (current) => current.active?.requestId === requestId
+        ? { ...current, active: { ...current.active, response: current.active.response + payload.chunk } }
         : current);
       return;
     }
     if (message.type === 'documentAIComplete') {
+      activeRequestId.current = null;
       const exchange = payload.exchange as AIExchangeJSON | undefined;
-      if (exchange?.requestId === active.requestId) setExchanges((current) => [...current, exchange]);
-      setActive(null);
+      updateState(conversationKey, (current) => ({
+        ...current,
+        exchanges: exchange?.requestId === requestId
+          ? [...current.exchanges, exchange]
+          : current.exchanges,
+        active: null,
+      }));
       return;
     }
     if (message.type === 'documentAIError') {
-      setActive((current) => current?.requestId === active.requestId
+      activeRequestId.current = null;
+      updateState(conversationKey, (current) => current.active?.requestId === requestId
         ? {
           ...current,
-          running: false,
-          error: payload.errorCode === 'cancelled'
-            ? 'Stopped.'
-            : typeof payload.error === 'string' ? payload.error : 'AI request failed.',
+          active: {
+            ...current.active,
+            running: false,
+            error: payload.errorCode === 'cancelled'
+              ? 'Stopped.'
+              : typeof payload.error === 'string' ? payload.error : 'AI request failed.',
+          },
         }
         : current);
     }
-  }), [active]);
-
-  useEffect(() => () => {
-    if (collapseTimer.current !== undefined) window.clearTimeout(collapseTimer.current);
-  }, []);
-
-  const collapse = () => {
-    if (closing) return;
-    setClosing(true);
-    collapseTimer.current = window.setTimeout(onCollapse, 150);
-  };
+  }), [conversationKey, updateState]);
 
   const send = async () => {
-    const query = composer.trim();
-    if (!query || active?.running) return;
-    setError(null);
-    let current = thread;
-    if (!current) {
+    const snapshot = stateRef.current;
+    const query = snapshot.composer.trim();
+    if (!query || snapshot.active?.running || snapshot.loading || snapshot.creating) return;
+    if (threadId && !snapshot.thread) return;
+    let current = snapshot.thread;
+    if (!current && !threadId) {
+      updateState(conversationKey, (value) => ({ ...value, creating: true, error: null }));
       try {
         current = await createThread(query);
-        setThread(current);
+        updateState(conversationKey, (value) => ({ ...value, thread: current!, creating: false }));
       } catch {
-        setError('This conversation could not be created.');
+        updateState(conversationKey, (value) => ({
+          ...value,
+          creating: false,
+          error: 'This conversation could not be created.',
+        }));
         return;
       }
     }
+    if (!current) return;
     const requestId = crypto.randomUUID();
-    setComposer('');
-    setActive({ requestId, userInput: query, response: '', running: true });
+    activeRequestId.current = requestId;
+    updateState(conversationKey, (value) => ({
+      ...value,
+      composer: '',
+      error: null,
+      active: { requestId, userInput: query, response: '', running: true },
+    }));
     bridge.send({
       type: 'thinkDocument',
       payload: {
@@ -150,59 +198,74 @@ export function ConversationSurface({
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
       void send();
-    } else if (event.key === 'Escape' && composer.length === 0) {
+    } else if (event.key === 'Escape' && state.composer.length === 0) {
       event.preventDefault();
-      collapse();
+      onCollapse();
     }
   };
 
-  const originalAnchorText = thread?.anchorText ?? anchorText;
+  const retryLoad = () => updateState(conversationKey, (current) => ({
+    ...current,
+    loading: true,
+    loadError: false,
+  }));
+  const originalAnchorText = state.thread?.anchorText ?? anchorText;
+  const sendDisabled = !state.composer.trim() || state.loading || state.creating
+    || Boolean(threadId && !state.thread);
   return (
-    <section className={`conversation-surface ${closing ? 'conversation-surface--closing' : ''}`}>
-      <button type="button" className="conversation-rail" aria-label="Collapse conversation" onClick={collapse} />
+    <section className={`conversation-surface ${state.closing ? 'conversation-surface--closing' : ''}`}>
+      <button type="button" className="conversation-rail" aria-label="Collapse conversation" onClick={onCollapse} />
       <div className="conversation-content">
         {hasDrifted(originalAnchorText) && (
           <p className="conversation-drift-note">The passage has changed since this conversation started.</p>
         )}
-        {loading && <p className="conversation-status">Loading conversation…</p>}
-        {exchanges.map((exchange) => (
+        {state.loading && <p className="conversation-status">Loading conversation…</p>}
+        {state.loadError && (
+          <p className="conversation-load-error">
+            This conversation could not be loaded. <button type="button" onClick={retryLoad}>Retry</button>
+          </p>
+        )}
+        {state.exchanges.map((exchange) => (
           <div className="conversation-exchange" key={exchange.requestId}>
             <Turn who="You" text={exchange.userInput} />
             <Turn who="AI" text={exchange.responseRaw} />
           </div>
         ))}
-        {active && (
+        {state.active && (
           <div className="conversation-exchange">
-            <Turn who="You" text={active.userInput} />
-            <Turn who="AI" text={active.response || active.error || 'Thinking…'} />
+            <Turn who="You" text={state.active.userInput} />
+            <Turn who="AI" text={state.active.response || state.active.error || 'Thinking…'} />
           </div>
         )}
-        {error && <p className="conversation-error" role="alert">{error}</p>}
+        {state.error && <p className="conversation-error" role="alert">{state.error}</p>}
         <div className="conversation-composer-row">
           <textarea
             ref={composerRef}
             className="conversation-composer"
-            value={composer}
-            onChange={(event) => setComposer(event.target.value)}
+            value={state.composer}
+            onChange={(event) => updateState(conversationKey, (current) => ({
+              ...current,
+              composer: event.target.value,
+            }))}
             onKeyDown={handleComposerKeyDown}
             placeholder="Ask — sees this block, the Stream, and sources"
             rows={2}
             aria-label="Conversation message"
           />
-          {active?.running ? (
+          {state.active?.running ? (
             <button
               type="button"
               className="conversation-stop"
               onClick={() => bridge.send({
                 type: 'cancelDocumentAI',
-                payload: { requestId: active.requestId },
+                payload: { requestId: state.active!.requestId },
               })}
             >
               Stop
             </button>
           ) : (
-            <button type="button" className="conversation-send" disabled={!composer.trim()} onClick={() => void send()}>
-              Send ⌘↵
+            <button type="button" className="conversation-send" disabled={sendDisabled} onClick={() => void send()}>
+              {state.creating ? 'Starting…' : 'Send ⌘↵'}
             </button>
           )}
         </div>

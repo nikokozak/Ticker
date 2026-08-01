@@ -449,8 +449,6 @@ describe('RichStreamEditor inline conversations', () => {
   it('collapses an unsent draft without creating a row or leaving a glyph', async () => {
     const composer = await openDraftConversation();
     await vi.waitFor(() => expect(document.activeElement).toBe(composer));
-    expect(composer.tabIndex).toBe(0);
-    expect((composer.closest('.conversation-widget-host') as HTMLElement).contentEditable).toBe('false');
     expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
 
     await act(async () => {
@@ -488,6 +486,7 @@ describe('RichStreamEditor inline conversations', () => {
       }
       return { revision: 2 };
     }) as typeof bridge.sendAsync);
+    const subscribe = vi.spyOn(bridge, 'onMessage');
     const composer = await openDraftConversation();
     await enterConversationMessage(composer, 'Does this hold?');
 
@@ -513,8 +512,10 @@ describe('RichStreamEditor inline conversations', () => {
     const requestId = String(sent.find((message) => message.type === 'thinkDocument')?.payload?.requestId);
     await act(async () => {
       bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'It streams.' } });
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: ' Live.' } });
     });
-    expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams.');
+    expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams. Live.');
+    expect(subscribe).toHaveBeenCalledTimes(1);
     await act(async () => {
       (document.querySelector('.conversation-stop') as HTMLButtonElement).click();
       await Promise.resolve();
@@ -536,14 +537,14 @@ describe('RichStreamEditor inline conversations', () => {
             verb: 'thread',
             userInput: 'Does this hold?',
             sourceManifest: '[]',
-            responseRaw: 'It streams.',
+            responseRaw: 'It streams. Live.',
             createdAt,
           },
         },
       });
     });
     expect(document.querySelector('.conversation-stop')).toBe(null);
-    expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams.');
+    expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams. Live.');
 
     await vi.waitFor(() => {
       const save = vi.mocked(bridge.sendAsync).mock.calls
@@ -558,7 +559,12 @@ describe('RichStreamEditor inline conversations', () => {
     const anchored: Stream = {
       ...stream,
       id: 'conversation-stream',
-      document: { ...stream.document, streamId: 'conversation-stream' },
+      document: {
+        ...stream.document,
+        streamId: 'conversation-stream',
+        docJSON: docJSON('Original paragraph.\n\nFollowing paragraph.'),
+        markdown: 'Original paragraph.\n\nFollowing paragraph.',
+      },
       conversationAnchors: [{
         threadId: 'thread-existing',
         anchorStart: 1,
@@ -619,6 +625,274 @@ describe('RichStreamEditor inline conversations', () => {
     expect(scroller.scrollTop).toBe(37);
     expect(document.querySelectorAll('.conversation-widget-host')).toHaveLength(1);
     expect(document.activeElement).toBe(editor());
+
+    const tab = new KeyboardEvent('keydown', {
+      key: 'Tab', bubbles: true, cancelable: true,
+    });
+    await act(async () => { editor().dispatchEvent(tab); });
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(document.querySelector('.conversation-composer'));
+  });
+
+  it('keeps send disabled until a persisted conversation loads successfully', async () => {
+    const updatedAt = new Date().toISOString();
+    const anchored: Stream = {
+      ...stream,
+      id: 'loading-conversation-stream',
+      document: { ...stream.document, streamId: 'loading-conversation-stream' },
+      conversationAnchors: [{
+        threadId: 'thread-loading',
+        anchorStart: 1,
+        anchorEnd: 20,
+        anchorText: 'Original paragraph.',
+        detached: false,
+        ephemeral: false,
+        updatedAt,
+      }],
+    };
+    let rejectLoad: ((reason?: unknown) => void) | undefined;
+    let loadAttempts = 0;
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'loadStreamThread') {
+        loadAttempts += 1;
+        if (loadAttempts === 1) {
+          return new Promise((_resolve, reject) => { rejectLoad = reject; });
+        }
+        return {
+          thread: {
+            threadId: 'thread-loading',
+            streamId: anchored.id,
+            title: 'Existing conversation',
+            workingText: '',
+            anchorText: 'Original paragraph.',
+            anchorStart: 1,
+            anchorEnd: 20,
+            detached: false,
+            ephemeral: false,
+            revision: 0,
+            createdAt: updatedAt,
+            updatedAt,
+            exchanges: [],
+          },
+        };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    await renderStream(anchored);
+    const block = editor().querySelector('p') as HTMLParagraphElement;
+    await vi.waitFor(() => expect(block.classList.contains('conversation-block-anchored')).toBe(true));
+    vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+      left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
+      toJSON: () => ({}),
+    });
+    await act(async () => {
+      block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 320 }));
+      await Promise.resolve();
+    });
+    const composer = await vi.waitFor(() => document.querySelector('.conversation-composer') as HTMLTextAreaElement);
+    await enterConversationMessage(composer, 'Do not duplicate this.');
+    expect((document.querySelector('.conversation-send') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(sent.some((message) => message.type === 'thinkDocument')).toBe(false);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+
+    await act(async () => { rejectLoad?.(new Error('offline')); });
+    const retry = await vi.waitFor(() => {
+      const found = document.querySelector('.conversation-load-error button') as HTMLButtonElement | null;
+      expect(found?.textContent).toBe('Retry');
+      return found!;
+    });
+    expect((document.querySelector('.conversation-send') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      retry.click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(loadAttempts).toBe(2);
+      expect((document.querySelector('.conversation-send') as HTMLButtonElement).disabled).toBe(false);
+    });
+    await act(async () => {
+      (document.querySelector('.conversation-composer') as HTMLTextAreaElement).dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(sent.some((message) => message.type === 'thinkDocument')).toBe(true));
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+  });
+
+  it('keeps a detached draft surface and its composer text at the document end', async () => {
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      return updateState.call(this, state);
+    });
+    await renderStream({
+      ...stream,
+      id: 'detaching-draft-stream',
+      document: { ...stream.document, streamId: 'detaching-draft-stream' },
+    });
+    const composer = await openDraftConversation();
+    await enterConversationMessage(composer, 'Keep this draft.');
+
+    await act(async () => {
+      liveView!.dispatch(liveView!.state.tr.delete(1, 20));
+      await Promise.resolve();
+    });
+
+    const moved = await vi.waitFor(() => document.querySelector('.conversation-composer') as HTMLTextAreaElement);
+    expect(moved.value).toBe('Keep this draft.');
+    expect(document.querySelector('.conversation-drift-note')?.textContent)
+      .toBe('The passage has changed since this conversation started.');
+    expect(editor().lastElementChild?.classList.contains('conversation-widget-host')).toBe(true);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+  });
+
+  it.each(['collapse', 'editor unmount'] as const)(
+    'cancels an in-flight conversation on %s',
+    async (exit) => {
+      const createdAt = new Date(0).toISOString();
+      vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+        if (type === 'createStreamThread') {
+          return {
+            thread: {
+              threadId: `thread-${exit}`,
+              streamId: stream.id,
+              title: String(payload?.title),
+              workingText: '',
+              anchorText: String(payload?.anchorText),
+              anchorStart: Number(payload?.anchorStart),
+              anchorEnd: Number(payload?.anchorEnd),
+              detached: false,
+              ephemeral: false,
+              revision: 0,
+              createdAt,
+              updatedAt: createdAt,
+              exchanges: [],
+            },
+          };
+        }
+        return { revision: 2 };
+      }) as typeof bridge.sendAsync);
+      const composer = await openDraftConversation();
+      await enterConversationMessage(composer, 'Keep or cancel?');
+      await act(async () => {
+        composer.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+        }));
+        await Promise.resolve();
+      });
+      const requestId = activeRequestId();
+
+      if (exit === 'collapse') {
+        await act(async () => {
+          (document.querySelector('.conversation-rail') as HTMLButtonElement).click();
+          await new Promise((resolve) => window.setTimeout(resolve, 160));
+        });
+        expect(document.querySelector('.conversation-surface')).toBe(null);
+      } else {
+        await act(async () => {
+          root?.unmount();
+          await Promise.resolve();
+        });
+        root = null;
+      }
+      expect(sent).toContainEqual({
+        type: 'cancelDocumentAI',
+        payload: { requestId },
+      });
+    },
+  );
+
+  it('preserves composer and streamed text when a conflict reload remounts the portal', async () => {
+    const updatedAt = new Date(0).toISOString();
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'createStreamThread') {
+        return {
+          thread: {
+            threadId: 'thread-reloaded',
+            streamId: stream.id,
+            title: String(payload?.title),
+            workingText: '',
+            anchorText: String(payload?.anchorText),
+            anchorStart: Number(payload?.anchorStart),
+            anchorEnd: Number(payload?.anchorEnd),
+            detached: false,
+            ephemeral: false,
+            revision: 0,
+            createdAt: updatedAt,
+            updatedAt,
+            exchanges: [],
+          },
+        };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    const composer = await openDraftConversation();
+    await enterConversationMessage(composer, 'First question');
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    const requestId = activeRequestId();
+    await vi.waitFor(() => {
+      expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'saveRichStreamDocument')).toBe(true);
+    });
+    await act(async () => {
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Partial answer.' } });
+    });
+    await enterConversationMessage(
+      document.querySelector('.conversation-composer') as HTMLTextAreaElement,
+      'Follow-up draft',
+    );
+    const oldHost = document.querySelector('.conversation-widget-host');
+
+    await act(async () => {
+      bridge.receive({
+        type: 'streamDocumentConflict',
+        payload: {
+          streamId: stream.id,
+          docJSON: docJSON('Original paragraph.\n\nFrom elsewhere.'),
+          docFormatVersion: 1,
+          markdown: 'Original paragraph.\n\nFrom elsewhere.',
+          revision: 3,
+          spans: [],
+          conversationAnchors: [{
+            threadId: 'thread-reloaded',
+            anchorStart: 1,
+            anchorEnd: 20,
+            anchorText: 'Original paragraph.',
+            detached: false,
+            ephemeral: false,
+            updatedAt,
+          }],
+          pendingAppends: [],
+          appendInbox: [],
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => {
+      const newHost = document.querySelector('.conversation-widget-host');
+      expect(newHost).not.toBe(oldHost);
+      expect((newHost?.querySelector('.conversation-composer') as HTMLTextAreaElement).value)
+        .toBe('Follow-up draft');
+      expect(newHost?.querySelector('.conversation-turn--ai')?.textContent).toContain('Partial answer.');
+    });
+    expect(sent).not.toContainEqual({ type: 'cancelDocumentAI', payload: { requestId } });
   });
 
   it('lists, opens, and deletes a detached conversation from header overflow', async () => {
@@ -686,7 +960,6 @@ describe('RichStreamEditor inline conversations', () => {
     expect(document.querySelector('.conversation-drift-note')?.textContent)
       .toBe('The passage has changed since this conversation started.');
 
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     await act(async () => {
       conversations.click();
       await Promise.resolve();
@@ -694,6 +967,12 @@ describe('RichStreamEditor inline conversations', () => {
     await vi.waitFor(() => expect(document.querySelector('.conversation-list-delete')).not.toBe(null));
     await act(async () => {
       (document.querySelector('.conversation-list-delete') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(document.querySelector('.conversation-delete-confirm-dialog')).not.toBe(null);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'deleteStreamThread')).toBe(false);
+    await act(async () => {
+      (document.querySelector('.conversation-delete-confirm-delete') as HTMLButtonElement).click();
       await Promise.resolve();
     });
     expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([

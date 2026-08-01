@@ -141,11 +141,27 @@
 
 .conversation-drift-note,
 .conversation-status,
+.conversation-load-error,
 .conversation-error {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--type-ui-small);
   line-height: var(--type-ui-line-height);
+}
+
+.conversation-load-error button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.conversation-load-error button:hover,
+.conversation-load-error button:focus-visible {
+  color: var(--text);
 }
 
 .conversation-error {

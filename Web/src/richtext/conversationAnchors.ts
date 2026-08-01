@@ -1,5 +1,5 @@
 import type { Node as ProseNode } from 'prosemirror-model';
-import { Plugin, PluginKey, type EditorState, type Transaction } from 'prosemirror-state';
+import { Plugin, PluginKey, Selection, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { ConversationAnchorJSON } from '../types/models';
 
@@ -363,6 +363,35 @@ export function conversationAnchorField(
       },
     },
     props: {
+      handleKeyDown(view, event) {
+        const field = conversationAnchorKey.getState(view.state);
+        const surface = field?.surface;
+        const position = surface && (surface.renderAt
+          ?? conversationRenderPosition(view.state.doc, surface.anchor));
+        if (position !== null && position !== undefined && view.state.selection.empty) {
+          const block = textBlockAt(view.state.doc, view.state.selection.head);
+          const direction = event.key === 'ArrowDown' && block?.to === position
+            ? 1
+            : event.key === 'ArrowUp' && block?.from === position ? -1 : 0;
+          if (direction && view.endOfTextblock(direction > 0 ? 'down' : 'up')) {
+            const next = Selection.findFrom(view.state.doc.resolve(position), direction, true);
+            if (next) {
+              event.preventDefault();
+              view.dispatch(view.state.tr.setSelection(next).scrollIntoView());
+              return true;
+            }
+          }
+        }
+        if (event.key !== 'Tab' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) {
+          return false;
+        }
+        if (!field?.surface) return false;
+        const composer = view.dom.querySelector<HTMLTextAreaElement>('.conversation-composer');
+        if (!composer) return false;
+        event.preventDefault();
+        composer.focus();
+        return true;
+      },
       decorations(state) {
         const field = conversationAnchorKey.getState(state);
         if (!field) return null;
@@ -380,7 +409,8 @@ export function conversationAnchorField(
         ));
         const surface = field.surface;
         const position = surface && (surface.renderAt
-          ?? conversationRenderPosition(state.doc, surface.anchor));
+          ?? conversationRenderPosition(state.doc, surface.anchor)
+          ?? state.doc.content.size);
         if (surface && position !== null) {
           decorations.push(Decoration.widget(position, () => {
             const host = document.createElement('div');

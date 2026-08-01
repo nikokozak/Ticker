@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { undo } from 'prosemirror-history';
+import { TextSelection } from 'prosemirror-state';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import { parseMarkdown } from './markdown';
@@ -51,6 +52,11 @@ function recordFullBlock(ed: RichTextEditor, text: string) {
   if (!anchor) throw new Error('expected a non-empty block anchor');
   ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor]));
   return anchor;
+}
+
+function press(ed: RichTextEditor, key: string): boolean {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+  return Boolean(ed.view.someProp('handleKeyDown', (handler) => handler(ed.view, event)));
 }
 
 afterEach(() => {
@@ -218,6 +224,20 @@ it('routes gutter clicks and mounts only one caret-excluded block widget', () =>
   expect(widgets[0].dataset.conversationWidget).toBe('second');
   expect(widgets[0].contentEditable).toBe('false');
   expect(ed.getDocumentJSON()).toBe(before);
+});
+
+it('moves an ArrowDown caret from the anchored block to the block below the widget', () => {
+  const ed = open('Above\n\nBelow');
+  const anchor = recordFullBlock(ed, 'Above');
+  ed.view.dispatch(setConversationSurface(ed.view.state.tr, { key: 'open', anchor }));
+  ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(ed.view.state.doc, anchor.to)));
+  vi.spyOn(ed.view, 'endOfTextblock').mockReturnValue(true);
+
+  expect(press(ed, 'ArrowDown')).toBe(true);
+  expect(ed.view.state.selection.$head.parent.textContent).toBe('Below');
+  expect(ed.view.dom.querySelector('.conversation-widget-host')?.contains(
+    ed.view.domAtPos(ed.view.state.selection.head).node,
+  )).toBe(false);
 });
 
 it('coalesces viewport and hover work per animation frame and skips unchanged targets', () => {
