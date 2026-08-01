@@ -281,16 +281,16 @@ export function listStreamThreads(streamId: string): Promise<{ threads: StreamTh
 export function createStreamThread(input: CreateStreamThreadInput): Promise<{ thread: StreamThreadJSON }> {
   return bridge.sendAsync('createStreamThread', {
     streamId: input.streamId,
-    threadId: input.threadId ?? '',
     title: input.title ?? '',
-    workingText: input.workingText ?? '',
-    docJSON: input.docJSON,
-    docFormatVersion: input.docFormatVersion,
     anchorText: input.anchorText,
     anchorSpanId: input.anchorSpanId ?? '',
     sourceId: input.sourceId ?? '',
     highlightId: input.highlightId ?? '',
-    anchors: input.anchors ?? [],
+    ...(input.threadId ? { threadId: input.threadId } : {}),
+    ...(input.workingText !== undefined ? { workingText: input.workingText } : {}),
+    ...(input.docJSON !== undefined ? { docJSON: input.docJSON } : {}),
+    ...(input.docFormatVersion !== undefined ? { docFormatVersion: input.docFormatVersion } : {}),
+    ...(input.anchors ? { anchors: input.anchors } : {}),
   });
 }
 
@@ -315,9 +315,9 @@ export function saveStreamThread(input: {
     threadId: input.threadId,
     title: input.title,
     workingText: input.workingText,
-    docJSON: input.docJSON,
-    docFormatVersion: input.docFormatVersion,
     baseRevision: input.baseRevision,
+    ...(input.docJSON !== undefined ? { docJSON: input.docJSON } : {}),
+    ...(input.docFormatVersion !== undefined ? { docFormatVersion: input.docFormatVersion } : {}),
   });
 }
 

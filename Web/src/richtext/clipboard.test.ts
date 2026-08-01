@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { DOMParser, DOMSerializer, type Node as ProseNode } from 'prosemirror-model';
+import { DOMParser, DOMSerializer, Fragment, Slice, type Node as ProseNode } from 'prosemirror-model';
+import { sanitizeTickerClipboardSlice } from './editor';
 import { parseMarkdown } from './markdown';
 import { tickerSchema as S } from './schema';
 
@@ -57,6 +58,36 @@ describe('a document survives its own clipboard', () => {
 });
 
 describe('the attributes that a hand-written schema drops', () => {
+  it('keeps a Sidenote evidence atom and its navigation identity internally', () => {
+    const evidence = S.nodes.evidence.create({
+      anchorId: 'anchor-private',
+      kind: 'pdf_quote',
+      quote: 'Sleep current is 12 uA.',
+      label: 'Power Guide.pdf · p. 7',
+    });
+    const copied = throughClipboard(S.nodes.doc.create(null, evidence)).firstChild;
+    expect(copied?.type).toBe(S.nodes.evidence);
+    expect(copied?.attrs).toMatchObject({
+      anchorId: 'anchor-private',
+      kind: 'pdf_quote',
+      quote: 'Sleep current is 12 uA.',
+      label: 'Power Guide.pdf · p. 7',
+    });
+  });
+
+  it('turns evidence into a plain quote on the public clipboard', () => {
+    const evidence = S.nodes.evidence.create({
+      anchorId: 'anchor-private',
+      kind: 'stream_quote',
+      quote: 'The battery must last six months.',
+      label: 'Stream',
+    });
+    const clean = sanitizeTickerClipboardSlice(new Slice(Fragment.from(evidence), 0, 0));
+    expect(clean.content.firstChild?.type).toBe(S.nodes.blockquote);
+    expect(clean.content.textBetween(0, clean.content.size)).toBe('The battery must last six months.');
+    expect(JSON.stringify(clean.toJSON())).not.toContain('anchor-private');
+  });
+
   it('keeps a code block info string', () => {
     expect(throughClipboard(parseMarkdown('```ts\nx\n```')).firstChild?.attrs.params).toBe('ts');
   });

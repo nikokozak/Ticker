@@ -78,6 +78,7 @@ export function sanitizeTickerClipboardSlice(slice: Slice): Slice {
     return [mark.type.create(attrs)];
   });
   const cleanNode = (node: ProseNode): ProseNode => {
+    if (node.type === tickerSchema.nodes.evidence) return cleanNode(evidenceAsBlockquote(node));
     const marks = cleanMarks(node.marks);
     if (node.type === tickerSchema.nodes.image && INTERNAL_URL.test(String(node.attrs.src))) {
       return tickerSchema.text(sanitizeInternalText(String(node.attrs.alt || 'Image')), marks);
@@ -89,6 +90,26 @@ export function sanitizeTickerClipboardSlice(slice: Slice): Slice {
   };
   const content: ProseNode[] = [];
   slice.content.forEach((node) => content.push(cleanNode(node)));
+  return new Slice(Fragment.fromArray(content), slice.openStart, slice.openEnd);
+}
+
+function evidenceAsBlockquote(node: ProseNode): ProseNode {
+  const text = String(node.attrs.quote ?? '');
+  const paragraph = tickerSchema.nodes.paragraph.create(null, text ? tickerSchema.text(text) : undefined);
+  return tickerSchema.nodes.blockquote.create(null, paragraph);
+}
+
+/** Evidence identity is Sidenote-only; every other editor receives a plain quote. */
+export function flattenEvidenceSlice(slice: Slice): Slice {
+  const flatten = (node: ProseNode): ProseNode => {
+    if (node.type === tickerSchema.nodes.evidence) return evidenceAsBlockquote(node);
+    if (node.isLeaf) return node;
+    const children: ProseNode[] = [];
+    node.forEach((child) => children.push(flatten(child)));
+    return node.copy(Fragment.fromArray(children));
+  };
+  const content: ProseNode[] = [];
+  slice.content.forEach((node) => content.push(flatten(node)));
   return new Slice(Fragment.fromArray(content), slice.openStart, slice.openEnd);
 }
 
@@ -111,12 +132,13 @@ function writeClipboard(view: EditorView, event: ClipboardEvent, cut: boolean): 
   return true;
 }
 
-function pasteInternalClipboard(view: EditorView, event: ClipboardEvent): boolean {
+function pasteInternalClipboard(view: EditorView, event: ClipboardEvent, allowEvidence: boolean): boolean {
   const token = event.clipboardData?.getData(INTERNAL_CLIPBOARD_TYPE);
   if (!token || token !== internalClipboard?.token) return false;
   event.preventDefault();
+  const slice = allowEvidence ? internalClipboard.slice : flattenEvidenceSlice(internalClipboard.slice);
   view.dispatch(view.state.tr
-    .replaceSelection(internalClipboard.slice)
+    .replaceSelection(slice)
     .scrollIntoView()
     .setMeta('paste', true)
     .setMeta('uiEvent', 'paste'));
@@ -155,7 +177,16 @@ export interface RichTextEditor {
    * report where it landed so metadata can be placed inside it.
    */
   appendMarkdown(markdown: string): { from: number; to: number };
+  /** Append one immutable evidence quote to a Sidenote. */
+  appendEvidence(evidence: EvidenceBlock): void;
   destroy(): void;
+}
+
+export interface EvidenceBlock {
+  anchorId: string;
+  kind: string;
+  quote: string;
+  label: string;
 }
 
 export interface RichTextEditorOptions {
@@ -180,6 +211,10 @@ export interface RichTextEditorOptions {
    * can apply metadata to text that moved while an async host action was open.
    */
   onTransaction?: (transaction: Transaction) => void;
+  /** Evidence atoms are accepted only by the Sidenote editor. */
+  allowEvidence?: boolean;
+  onOpenEvidence?: (anchorId: string) => void;
+  onRemoveEvidence?: (anchorId: string) => void;
 }
 
 /** The href of a link at this position, if there is one. */
@@ -286,6 +321,69 @@ function imageView(node: ProseNode, view: EditorView, getPos: () => number | und
   };
 }
 
+function evidenceView(
+  initialNode: ProseNode,
+  view: EditorView,
+  getPos: () => number | undefined,
+  onOpen?: (anchorId: string) => void,
+  onRemove?: (anchorId: string) => void,
+): NodeView {
+  let node = initialNode;
+  const dom = document.createElement('aside');
+  dom.className = 'richtext-evidence';
+  dom.contentEditable = 'false';
+  dom.tabIndex = 0;
+  dom.setAttribute('role', 'button');
+
+  const label = document.createElement('span');
+  label.className = 'richtext-evidence-label';
+  const quote = document.createElement('blockquote');
+  quote.className = 'richtext-evidence-quote';
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'richtext-evidence-remove';
+  remove.setAttribute('aria-label', 'Remove quote from sidenote');
+  remove.textContent = '×';
+  dom.append(label, quote, remove);
+
+  const render = () => {
+    label.textContent = String(node.attrs.label || 'Stream');
+    quote.textContent = String(node.attrs.quote || '');
+    dom.setAttribute('aria-label', `${label.textContent}: ${quote.textContent}`);
+  };
+  const open = () => onOpen?.(String(node.attrs.anchorId));
+  dom.onclick = (event) => {
+    if (event.target !== remove) open();
+  };
+  dom.onkeydown = (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    open();
+  };
+  remove.onclick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const pos = getPos();
+    if (pos === undefined) return;
+    view.dispatch(view.state.tr.delete(pos, pos + node.nodeSize).scrollIntoView());
+    onRemove?.(String(node.attrs.anchorId));
+  };
+  render();
+
+  return {
+    dom,
+    update(next) {
+      if (next.type !== tickerSchema.nodes.evidence) return false;
+      node = next;
+      render();
+      return true;
+    },
+    selectNode: () => dom.classList.add('is-selected'),
+    deselectNode: () => dom.classList.remove('is-selected'),
+    stopEvent: (event) => event.target === remove,
+  };
+}
+
 function stateFor(doc: ProseNode): EditorState {
   // Order matters: our keymap gets first refusal, then the stock bindings.
   return EditorState.create({
@@ -295,18 +393,38 @@ function stateFor(doc: ProseNode): EditorState {
 }
 
 export function createRichTextEditor(options: RichTextEditorOptions): RichTextEditor {
-  const { parent, docJSON, onChange, onOpenLink, onTransaction, onUpdate } = options;
+  const {
+    parent,
+    docJSON,
+    onChange,
+    onOpenLink,
+    onTransaction,
+    onUpdate,
+    allowEvidence = false,
+    onOpenEvidence,
+    onRemoveEvidence,
+  } = options;
   parent.classList.add('richtext-editor');
 
   const view = new EditorView(parent, {
     state: stateFor(tickerSchema.nodeFromJSON(JSON.parse(docJSON))),
     clipboardParser,
-    nodeViews: { image: imageView },
+    nodeViews: {
+      image: imageView,
+      evidence: (node, currentView, getPos) => evidenceView(
+        node,
+        currentView,
+        getPos,
+        onOpenEvidence,
+        onRemoveEvidence,
+      ),
+    },
     transformCopied: sanitizeTickerClipboardSlice,
+    transformPasted: allowEvidence ? undefined : flattenEvidenceSlice,
     handleDOMEvents: {
       copy: (current, event) => writeClipboard(current, event as ClipboardEvent, false),
       cut: (current, event) => writeClipboard(current, event as ClipboardEvent, true),
-      paste: (current, event) => pasteInternalClipboard(current, event as ClipboardEvent),
+      paste: (current, event) => pasteInternalClipboard(current, event as ClipboardEvent, allowEvidence),
     },
 
     /**
@@ -366,6 +484,13 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
       // inserted blocks keep their internal structure, so a position measured
       // inside the parsed fragment is this base plus that position.
       return { from: end, to: view.state.doc.content.size };
+    },
+
+    appendEvidence(evidence: EvidenceBlock) {
+      if (!allowEvidence) return;
+      const end = view.state.doc.content.size;
+      const node = tickerSchema.nodes.evidence.create(evidence);
+      view.dispatch(view.state.tr.insert(end, node).scrollIntoView());
     },
 
     destroy: () => view.destroy(),
