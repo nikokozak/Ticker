@@ -1581,10 +1581,19 @@ final class StreamDocumentTests: XCTestCase {
             )
             try service.saveSource(sentSource)
             try service.saveSource(otherSource)
+            let canonicalWorkingText = """
+            > Read [the source](ticker-pdf://private-source?page=2).
+
+            > A second constraint.
+
+            Check [saved link](ticker-thread://private-note).
+            """
             let thread = StreamThread(
                 streamId: stream.id,
                 title: "Power",
-                workingText: "Check [saved link](ticker-thread://private-note).",
+                workingText: canonicalWorkingText,
+                docJSON: #"{"type":"doc","content":[]}"#,
+                docFormatVersion: 1,
                 anchorText: "Read [the source](ticker-pdf://private-source?page=2)."
             )
             try service.createStreamThread(thread, anchors: [
@@ -1622,11 +1631,13 @@ final class StreamDocumentTests: XCTestCase {
                 routeThreadAI: { query, retrievalQuery, _, _, anchorText, workingText, turns, onPrepared, onChunk, onComplete, _, onModelSelected in
                     routedQuery = query
                     routedRetrievalQuery = retrievalQuery
+                    XCTAssertEqual(anchorText, "")
+                    XCTAssertEqual(workingText, canonicalWorkingText)
                     XCTAssertEqual(
-                        anchorText,
-                        "Evidence 1:\n\(thread.anchorText)\n\nEvidence 2:\nA second constraint."
+                        (anchorText + workingText).components(separatedBy: "A second constraint.").count - 1,
+                        1,
+                        "canonical evidence must be sent exactly once"
                     )
-                    XCTAssertEqual(workingText, thread.workingText)
                     XCTAssertTrue(turns.isEmpty)
                     let receipt = ThreadAIRequestReceipt(
                         sourceContext: SourceContext(
@@ -1670,13 +1681,10 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(receipt["version"] as? Int, 1)
             XCTAssertEqual(receipt["kind"] as? String, "threadAI")
             let anchor = try XCTUnwrap(receipt["anchor"] as? [String: Any])
-            XCTAssertEqual(
-                anchor["text"] as? String,
-                "Evidence 1:\nRead the source.\n\nEvidence 2:\nA second constraint."
-            )
+            XCTAssertEqual(anchor["text"] as? String, "")
             XCTAssertEqual(anchor["kind"] as? String, "mixed")
             let note = try XCTUnwrap(receipt["note"] as? [String: Any])
-            XCTAssertEqual(note["text"] as? String, "Check saved link.")
+            XCTAssertEqual(note["text"] as? String, TickerInternalURLSanitizer.sanitize(canonicalWorkingText))
             let turns = try XCTUnwrap(receipt["turns"] as? [String: Any])
             XCTAssertEqual(turns["includedRequestIds"] as? [String], [])
             XCTAssertEqual(turns["totalAtSend"] as? Int, 0)

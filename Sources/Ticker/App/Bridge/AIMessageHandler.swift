@@ -565,7 +565,11 @@ final class AIMessageHandler: BridgeMessageHandler {
             .enumerated()
             .map { anchorQuotes.count > 1 ? "Evidence \($0.offset + 1):\n\($0.element)" : $0.element }
             .joined(separator: "\n\n")
-        let sentAnchorContext = anchorContext.isEmpty ? thread.anchorText : anchorContext
+        // Canonical Sidenote Markdown already contains every immutable evidence
+        // block. Sending the anchor bundle again makes the model weigh each quote
+        // twice; legacy textarea rows still need the separate starting passage.
+        let canonicalDraft = thread.docJSON != nil && thread.docFormatVersion == 1
+        let sentAnchorContext = canonicalDraft ? "" : (anchorContext.isEmpty ? thread.anchorText : anchorContext)
         let isCompositeAnchor = anchorQuotes.count > 1
         let outboundQuery = TickerInternalURLSanitizer.sanitize(query)
         let retrievalQuery = [outboundQuery, sentAnchorContext, thread.workingText]
