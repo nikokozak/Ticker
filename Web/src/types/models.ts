@@ -6,6 +6,7 @@ export interface Stream {
   sources: SourceReference[];
   document: StreamDocument;
   spans: ProvenanceSpanJSON[];
+  conversationAnchors?: ConversationAnchorJSON[];
   pendingAppends?: PendingAppendJSON[];
   appendInbox?: StreamAppendInboxJSON[];
   marginNotes: MarginNoteJSON[];
@@ -58,6 +59,16 @@ export interface ProvenanceSpanJSON {
   meta: string;
   textHash: string;
   createdAt: string;
+}
+
+export interface ConversationAnchorJSON {
+  threadId: string;
+  anchorStart: number | null;
+  anchorEnd: number | null;
+  anchorText: string;
+  detached: boolean;
+  ephemeral: boolean;
+  updatedAt: string;
 }
 
 export interface MarginNoteJSON {

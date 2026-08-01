@@ -99,6 +99,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     "sourceScope": AnyCodable(stream.sourceScope.rawValue),
                     "scrollOffset": AnyCodable(document.scrollOffset),
                     "spans": AnyCodable(StreamCodec.encodeSpans([])),
+                    "conversationAnchors": AnyCodable([]),
                     "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends([])),
                     "appendInbox": AnyCodable(StreamCodec.encodeAppendInbox([])),
                     "marginNotes": AnyCodable([])
@@ -168,15 +169,19 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 return
             }
             let canonicalDocument: (json: String, version: Int)?
+            let anchorUpdates: [ConversationAnchorUpdate]?
             if message.type == "saveRichStreamDocument" {
                 guard let docJSON = payload["docJSON"]?.value as? String,
-                      let docFormatVersion = payload["docFormatVersion"]?.intValue else {
+                      let docFormatVersion = payload["docFormatVersion"]?.intValue,
+                      let conversationAnchors = decodeConversationAnchors(payload["conversationAnchors"]?.value) else {
                     await bridgeService.respondWithError(to: callbackId, error: "Invalid saveRichStreamDocument payload")
                     return
                 }
                 canonicalDocument = (docJSON, docFormatVersion)
+                anchorUpdates = conversationAnchors
             } else {
                 canonicalDocument = nil
+                anchorUpdates = nil
             }
             do {
                 let revision: Int
@@ -188,6 +193,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                         markdown: markdown,
                         baseRevision: baseRevision,
                         spans: spans,
+                        conversationAnchors: anchorUpdates ?? [],
                         resolvedPendingThrough: payload["resolvedPendingThrough"]?.intValue,
                         consumedInboxThrough: payload["consumedInboxThrough"]?.intValue
                     )
@@ -216,6 +222,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                     "markdown": AnyCodable(conflict.markdown),
                     "revision": AnyCodable(conflict.revision),
                     "spans": AnyCodable(StreamCodec.encodeSpans(conflict.spans)),
+                    "conversationAnchors": AnyCodable(StreamCodec.encodeConversationAnchors(conflict.conversationAnchors)),
                     "pendingAppends": AnyCodable(pendingAppends),
                     "appendInbox": AnyCodable(appendInbox)
                 ]
@@ -339,6 +346,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
         let snapshot = try persistence.loadEditorSnapshot(streamId: id)
         let document = snapshot.document
         let spans = snapshot.spans
+        let conversationAnchors = snapshot.conversationAnchors
         let pendingAppends = snapshot.pendingAppends
         let appendInbox = snapshot.appendInbox
         let marginNotes = try persistence.loadMarginNotes(streamId: id)
@@ -348,6 +356,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
             "sourceScope": AnyCodable(stream.sourceScope.rawValue),
             "scrollOffset": AnyCodable(document.scrollOffset),
             "spans": AnyCodable(StreamCodec.encodeSpans(spans)),
+            "conversationAnchors": AnyCodable(StreamCodec.encodeConversationAnchors(conversationAnchors)),
             "marginNotes": AnyCodable(StreamCodec.encodeMarginNotes(marginNotes)),
             "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends(pendingAppends)),
             "appendInbox": AnyCodable(StreamCodec.encodeAppendInbox(appendInbox))
@@ -402,6 +411,25 @@ final class StreamMessageHandler: BridgeMessageHandler {
             DebugLog.log("[StreamMessageHandler] Dropped \(dropped) malformed provenance span(s)")
         }
         return spans
+    }
+
+    private func decodeConversationAnchors(_ value: Any?) -> [ConversationAnchorUpdate]? {
+        guard let items = value as? [[String: Any]] else { return nil }
+        var anchors: [ConversationAnchorUpdate] = []
+        for item in items {
+            guard let rawThreadId = item["threadId"] as? String,
+                  let threadId = UUID(uuidString: rawThreadId),
+                  let anchorStart = intValue(item["anchorStart"]),
+                  let anchorEnd = intValue(item["anchorEnd"]),
+                  let detached = item["detached"] as? Bool else { return nil }
+            anchors.append(ConversationAnchorUpdate(
+                threadId: threadId,
+                anchorStart: anchorStart,
+                anchorEnd: anchorEnd,
+                detached: detached
+            ))
+        }
+        return anchors
     }
 
     private func intValue(_ value: Any?) -> Int? {

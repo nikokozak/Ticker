@@ -2,7 +2,7 @@ import Foundation
 
 @MainActor
 final class ThreadMessageHandler: BridgeMessageHandler {
-    let handledTypes: Set<String> = ["saveStreamThread"]
+    let handledTypes: Set<String> = ["listConversations", "saveStreamThread"]
 
     private let persistence: PersistenceService
     private let sendToWeb: (BridgeMessage) -> Void
@@ -34,45 +34,65 @@ final class ThreadMessageHandler: BridgeMessageHandler {
             sendBridgeError(message.type, "Missing callbackId for \(message.type)")
             return
         }
-        guard message.type == "saveStreamThread",
-              let payload = message.payload,
-              let streamId = decodeUUID(payload, key: "streamId"),
-              let threadId = decodeUUID(payload, key: "threadId"),
-              let title = payload["title"]?.value as? String,
-              let baseRevision = payload["baseRevision"]?.intValue,
-              baseRevision >= 0 else {
-            respondWithError(callbackId, "Invalid saveStreamThread payload")
-            return
-        }
+        switch message.type {
+        case "listConversations":
+            // ponytail: no caller until C3 wires the conversation surface.
+            guard let streamId = decodeUUID(message.payload, key: "streamId") else {
+                respondWithError(callbackId, "Invalid listConversations payload")
+                return
+            }
+            do {
+                respond(callbackId, [
+                    "conversations": AnyCodable(StreamCodec.encodeConversationAnchors(
+                        try persistence.loadConversationAnchors(streamId: streamId)
+                    ))
+                ])
+            } catch {
+                respondWithError(callbackId, error.localizedDescription)
+            }
 
-        do {
-            let thread = try persistence.saveStreamThread(
-                threadId: threadId,
-                streamId: streamId,
-                title: title,
-                baseRevision: baseRevision
-            )
-            respond(callbackId, [
-                "conflict": AnyCodable(false),
-                "thread": AnyCodable(StreamCodec.encodeThread(
-                    thread,
-                    source: nil,
-                    highlight: nil,
-                    exchanges: nil
-                ))
-            ])
-        } catch let conflict as StreamThreadRevisionConflict {
-            respond(callbackId, [
-                "conflict": AnyCodable(true),
-                "thread": AnyCodable(StreamCodec.encodeThread(
-                    conflict.current,
-                    source: nil,
-                    highlight: nil,
-                    exchanges: nil
-                ))
-            ])
-        } catch {
-            respondWithError(callbackId, error.localizedDescription)
+        case "saveStreamThread":
+            guard let payload = message.payload,
+                  let streamId = decodeUUID(payload, key: "streamId"),
+                  let threadId = decodeUUID(payload, key: "threadId"),
+                  let title = payload["title"]?.value as? String,
+                  let baseRevision = payload["baseRevision"]?.intValue,
+                  baseRevision >= 0 else {
+                respondWithError(callbackId, "Invalid saveStreamThread payload")
+                return
+            }
+            do {
+                let thread = try persistence.saveStreamThread(
+                    threadId: threadId,
+                    streamId: streamId,
+                    title: title,
+                    baseRevision: baseRevision
+                )
+                respond(callbackId, [
+                    "conflict": AnyCodable(false),
+                    "thread": AnyCodable(StreamCodec.encodeThread(
+                        thread,
+                        source: nil,
+                        highlight: nil,
+                        exchanges: nil
+                    ))
+                ])
+            } catch let conflict as StreamThreadRevisionConflict {
+                respond(callbackId, [
+                    "conflict": AnyCodable(true),
+                    "thread": AnyCodable(StreamCodec.encodeThread(
+                        conflict.current,
+                        source: nil,
+                        highlight: nil,
+                        exchanges: nil
+                    ))
+                ])
+            } catch {
+                respondWithError(callbackId, error.localizedDescription)
+            }
+
+        default:
+            sendBridgeError(message.type, "Unsupported thread message")
         }
     }
 

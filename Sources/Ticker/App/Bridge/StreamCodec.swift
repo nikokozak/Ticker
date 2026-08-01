@@ -65,6 +65,21 @@ enum StreamCodec {
         }
     }
 
+    static func encodeConversationAnchors(_ anchors: [ConversationAnchor]) -> [[String: Any]] {
+        let formatter = ISO8601DateFormatter()
+        return anchors.map { anchor in
+            [
+                "threadId": anchor.threadId.uuidString,
+                "anchorStart": anchor.anchorStart.map { $0 as Any } ?? NSNull(),
+                "anchorEnd": anchor.anchorEnd.map { $0 as Any } ?? NSNull(),
+                "anchorText": anchor.anchorText,
+                "detached": anchor.detached,
+                "ephemeral": anchor.ephemeral,
+                "updatedAt": formatter.string(from: anchor.updatedAt)
+            ]
+        }
+    }
+
     static func encodeMarginNotes(_ notes: [MarginNote]) -> [[String: Any]] {
         let formatter = ISO8601DateFormatter()
         return notes.map { note in

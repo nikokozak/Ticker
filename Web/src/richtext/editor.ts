@@ -30,6 +30,7 @@ import {
 } from './commands';
 import { parseMarkdown, serializeMarkdown } from './markdown';
 import { aiWritingHighlight, setImageWidth } from './operations';
+import { conversationAnchorField, isConversationDecorationTransaction } from './conversationAnchors';
 import { provenance } from './provenance';
 import { BREAK_ATTRIBUTES, MAX_IMAGE_WIDTH, MIN_IMAGE_WIDTH, tickerSchema } from './schema';
 
@@ -290,7 +291,7 @@ function stateFor(doc: ProseNode): EditorState {
   // Order matters: our keymap gets first refusal, then the stock bindings.
   return EditorState.create({
     doc,
-    plugins: [history(), tickerKeymap(), keymap(baseKeymap), aiWritingHighlight(), provenance()],
+    plugins: [history(), tickerKeymap(), keymap(baseKeymap), aiWritingHighlight(), provenance(), conversationAnchorField()],
   });
 }
 
@@ -333,7 +334,7 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
       view.updateState(next);
       if (transaction.docChanged) onChange?.();
       onTransaction?.(transaction);
-      onUpdate?.();
+      if (!isConversationDecorationTransaction(transaction)) onUpdate?.();
     },
   });
 

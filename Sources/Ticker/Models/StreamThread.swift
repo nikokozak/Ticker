@@ -49,6 +49,11 @@ struct StreamThread: Codable, Equatable, Identifiable {
     let anchorSpanId: String?
     let sourceId: UUID?
     let highlightId: UUID?
+    // ProseMirror doc positions (opaque to Swift).
+    let anchorStart: Int?
+    let anchorEnd: Int?
+    let detached: Bool
+    let ephemeral: Bool
     let revision: Int
     let createdAt: Date
     let updatedAt: Date
@@ -66,6 +71,10 @@ struct StreamThread: Codable, Equatable, Identifiable {
         anchorSpanId: String? = nil,
         sourceId: UUID? = nil,
         highlightId: UUID? = nil,
+        anchorStart: Int? = nil,
+        anchorEnd: Int? = nil,
+        detached: Bool = false,
+        ephemeral: Bool = false,
         revision: Int = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -80,10 +89,33 @@ struct StreamThread: Codable, Equatable, Identifiable {
         self.anchorSpanId = anchorSpanId
         self.sourceId = sourceId
         self.highlightId = highlightId
+        self.anchorStart = anchorStart
+        self.anchorEnd = anchorEnd
+        self.detached = detached
+        self.ephemeral = ephemeral
         self.revision = revision
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+}
+
+struct ConversationAnchor: Codable, Equatable {
+    let threadId: UUID
+    // ProseMirror doc positions (opaque to Swift).
+    let anchorStart: Int?
+    let anchorEnd: Int?
+    let anchorText: String
+    let detached: Bool
+    let ephemeral: Bool
+    let updatedAt: Date
+}
+
+struct ConversationAnchorUpdate: Codable, Equatable {
+    let threadId: UUID
+    // ProseMirror doc positions (opaque to Swift).
+    let anchorStart: Int
+    let anchorEnd: Int
+    let detached: Bool
 }
 
 struct StreamThreadRevisionConflict: Error {

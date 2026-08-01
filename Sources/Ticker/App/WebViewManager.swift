@@ -290,6 +290,7 @@ final class WebViewManager: NSObject {
                 "sourceScope": AnyCodable(reloadedStream.sourceScope.rawValue),
                 "scrollOffset": AnyCodable(document.scrollOffset),
                 "spans": AnyCodable(StreamCodec.encodeSpans(snapshot.spans)),
+                "conversationAnchors": AnyCodable(StreamCodec.encodeConversationAnchors(snapshot.conversationAnchors)),
                 "pendingAppends": AnyCodable(StreamCodec.encodePendingAppends(snapshot.pendingAppends)),
                 "appendInbox": AnyCodable(StreamCodec.encodeAppendInbox(snapshot.appendInbox)),
                 "marginNotes": AnyCodable(StreamCodec.encodeMarginNotes(marginNotes))

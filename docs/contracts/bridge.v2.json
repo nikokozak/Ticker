@@ -122,11 +122,11 @@
         "requiredPayloadKeys": ["streamId", "appendInbox", "isNewStream", "source"]
       },
       "streamDocumentConflict": {
-        "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans", "pendingAppends", "appendInbox"],
+        "requiredPayloadKeys": ["streamId", "markdown", "revision", "spans", "conversationAnchors", "pendingAppends", "appendInbox"],
         "optionalPayloadKeys": ["docJSON", "docFormatVersion"]
       },
       "streamLoaded": {
-        "requiredPayloadKeys": ["stream", "spans", "marginNotes", "appendInbox"],
+        "requiredPayloadKeys": ["stream", "spans", "conversationAnchors", "marginNotes", "appendInbox"],
         "optionalPayloadKeys": ["scrollOffset", "sourceScope", "requestId", "pendingAppends"]
       },
       "streamLoadFailed": {
@@ -200,6 +200,10 @@
       "loadStorageState": {
         "requiredPayloadKeys": []
       },
+      "listConversations": {
+        "requiredPayloadKeys": ["streamId"],
+        "requiredCallbackId": true
+      },
       "loadStream": {
         "requiredPayloadKeys": ["id"],
         "optionalPayloadKeys": ["requestId"]
@@ -256,7 +260,7 @@
         ]
       },
       "saveRichStreamDocument": {
-        "requiredPayloadKeys": ["streamId", "docJSON", "docFormatVersion", "markdown", "baseRevision", "spans"],
+        "requiredPayloadKeys": ["streamId", "docJSON", "docFormatVersion", "markdown", "baseRevision", "spans", "conversationAnchors"],
         "optionalPayloadKeys": ["resolvedPendingThrough", "consumedInboxThrough"],
         "requiredCallbackId": true
       },

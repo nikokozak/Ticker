@@ -1,6 +1,7 @@
 import { debugLog } from '../utils/debug';
 import type {
   AIExchangeJSON,
+  ConversationAnchorJSON,
   PendingAppendJSON,
   ProvenanceSpanJSON,
   StreamAppendInboxJSON,
@@ -70,6 +71,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'loadProxyAuth',
   'loadSettings',
   'loadStorageState',
+  'listConversations',
   'loadStream',
   'loadStreams',
   'getExchange',
@@ -131,6 +133,7 @@ export interface StreamDocumentConflictPayload extends Record<string, unknown> {
   markdown: string;
   revision: number;
   spans: ProvenanceSpanJSON[];
+  conversationAnchors: ConversationAnchorJSON[];
   pendingAppends: PendingAppendJSON[];
   appendInbox: StreamAppendInboxJSON[];
 }
@@ -230,6 +233,11 @@ export const bridge: Bridge = {
 
 export function getExchange(requestId: string): Promise<{ exchange: AIExchangeJSON | null }> {
   return bridge.sendAsync('getExchange', { requestId });
+}
+
+// ponytail: no caller until C3 wires the conversation surface.
+export function listConversations(streamId: string): Promise<{ conversations: ConversationAnchorJSON[] }> {
+  return bridge.sendAsync('listConversations', { streamId });
 }
 
 export function updateMarginNote(payload: UpdateMarginNotePayload): void {

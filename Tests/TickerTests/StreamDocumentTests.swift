@@ -1808,7 +1808,7 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_v29MigrationCreatesSidenoteDocumentAndAnchorSchema() throws {
+    func test_v30MigrationCreatesConversationAnchorColumns() throws {
         try withTempPersistenceServiceAndURL { _, dbURL, _ in
             let dbQueue = try DatabaseQueue(path: dbURL.path)
             let columns = try dbQueue.read { db in
@@ -1837,7 +1837,7 @@ final class StreamDocumentTests: XCTestCase {
                 [
                     "thread_id", "stream_id", "title", "working_text", "anchor_text",
                     "anchor_span_id", "source_id", "highlight_id", "revision", "created_at", "updated_at",
-                    "doc_json", "doc_format_version"
+                    "doc_json", "doc_format_version", "anchor_start", "anchor_end", "detached", "ephemeral"
                 ]
             )
             XCTAssertEqual(
@@ -1853,6 +1853,110 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertTrue(indexes.contains("idx_stream_thread_anchors_span"))
             XCTAssertEqual(threadForeignKey?["table"] as String?, "stream_threads")
             XCTAssertEqual(threadForeignKey?["on_delete"] as String?, "SET NULL")
+        }
+    }
+
+    func test_v30MigrationDetachesPrototypeThreadRows() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+        var service: PersistenceService? = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        let stream = Stream(title: "Prototype migration")
+        try service?.saveStream(stream)
+        let thread = StreamThread(streamId: stream.id, anchorText: "Prototype anchor")
+        try service?.createStreamThread(thread)
+        service = nil
+
+        var fixtureDB: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
+        try fixtureDB?.write { db in
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN ephemeral")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN detached")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_end")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_start")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v30_conversation_anchors'")
+        }
+        fixtureDB = nil
+
+        service = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        let migrated = try XCTUnwrap(service?.loadConversationAnchors(streamId: stream.id).first)
+        XCTAssertEqual(migrated.threadId, thread.threadId)
+        XCTAssertNil(migrated.anchorStart)
+        XCTAssertNil(migrated.anchorEnd)
+        XCTAssertTrue(migrated.detached)
+        XCTAssertFalse(migrated.ephemeral)
+    }
+
+    func test_conversationAnchorProseMirrorPositionsRoundTripWithDocumentAndSkipMissingThread() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Anchor save")
+            try service.saveStream(stream)
+            let initial = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            let thread = StreamThread(
+                streamId: stream.id,
+                anchorText: "🙂",
+                anchorStart: 1,
+                anchorEnd: 3,
+                ephemeral: true
+            )
+            try service.createStreamThread(thread)
+            // These are ProseMirror positions; Swift must only round-trip them.
+            let update = ConversationAnchorUpdate(
+                threadId: thread.threadId,
+                anchorStart: 2,
+                anchorEnd: 4,
+                detached: false
+            )
+            let missing = ConversationAnchorUpdate(
+                threadId: UUID(),
+                anchorStart: 8,
+                anchorEnd: 13,
+                detached: false
+            )
+            let docJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"a🙂b"}]}]}"#
+
+            let revision = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: docJSON,
+                docFormatVersion: 1,
+                markdown: "a🙂b",
+                baseRevision: initial.revision,
+                spans: [],
+                conversationAnchors: [missing, update]
+            )
+
+            let anchors = try service.loadConversationAnchors(streamId: stream.id)
+            let loaded = try XCTUnwrap(anchors.first)
+            XCTAssertEqual(anchors.count, 1)
+            XCTAssertEqual(loaded.anchorStart, 2)
+            XCTAssertEqual(loaded.anchorEnd, 4)
+            XCTAssertFalse(loaded.detached)
+            XCTAssertTrue(loaded.ephemeral)
+            let document = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            XCTAssertEqual(document.docJSON, docJSON)
+            XCTAssertEqual(document.markdown, "a🙂b")
+            XCTAssertEqual(document.revision, revision)
+
+            XCTAssertThrowsError(try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: initial.docJSON,
+                docFormatVersion: initial.docFormatVersion,
+                markdown: "stale",
+                baseRevision: initial.revision,
+                spans: [],
+                conversationAnchors: [ConversationAnchorUpdate(
+                    threadId: thread.threadId,
+                    anchorStart: 0,
+                    anchorEnd: 0,
+                    detached: true
+                )]
+            )) { error in
+                let conflict = error as? StreamDocumentRevisionConflict
+                XCTAssertEqual(conflict?.revision, revision)
+                XCTAssertEqual(conflict?.conversationAnchors.first?.anchorStart, 2)
+            }
+            XCTAssertEqual(try service.loadConversationAnchors(streamId: stream.id).first?.anchorStart, 2)
         }
     }
 
@@ -2236,7 +2340,10 @@ final class StreamDocumentTests: XCTestCase {
                 title: "Original",
                 workingText: "Frozen draft",
                 docJSON: docJSON,
-                docFormatVersion: 1
+                docFormatVersion: 1,
+                anchorStart: 2,
+                anchorEnd: 6,
+                ephemeral: true
             )
             try service.createStreamThread(thread)
 
@@ -2251,7 +2358,27 @@ final class StreamDocumentTests: XCTestCase {
                     ]))
                 }
             )
-            XCTAssertEqual(handler.handledTypes, ["saveStreamThread"])
+            XCTAssertEqual(handler.handledTypes, ["listConversations", "saveStreamThread"])
+
+            await handler.handle(BridgeMessage(
+                type: "listConversations",
+                payload: ["streamId": AnyCodable(stream.id.uuidString)],
+                callbackId: "list"
+            ))
+            let listResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "list" }
+            )
+            let conversations = try XCTUnwrap(
+                listResponse.payload?["conversations"]?.value as? [[String: Any]]
+            )
+            XCTAssertEqual(conversations.count, 1)
+            XCTAssertEqual(conversations[0]["threadId"] as? String, thread.threadId.uuidString)
+            XCTAssertEqual(conversations[0]["anchorStart"] as? Int, 2)
+            XCTAssertEqual(conversations[0]["anchorEnd"] as? Int, 6)
+            XCTAssertEqual(conversations[0]["anchorText"] as? String, thread.anchorText)
+            XCTAssertEqual(conversations[0]["detached"] as? Bool, false)
+            XCTAssertEqual(conversations[0]["ephemeral"] as? Bool, true)
+            XCTAssertNotNil(conversations[0]["updatedAt"] as? String)
 
             await handler.handle(BridgeMessage(
                 type: "saveStreamThread",
@@ -5029,6 +5156,13 @@ final class StreamDocumentTests: XCTestCase {
             let other = Stream(title: "Other inbox")
             try service.saveStream(stream)
             try service.saveStream(other)
+            let thread = StreamThread(
+                streamId: stream.id,
+                anchorText: "First",
+                anchorStart: 1,
+                anchorEnd: 6
+            )
+            try service.createStreamThread(thread)
 
             let dbQueue = try DatabaseQueue(path: dbURL.path)
             try dbQueue.write { db in
@@ -5051,6 +5185,7 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(snapshot.appendInbox.map(\.fragment), ["First", "Third"])
             XCTAssertEqual(snapshot.appendInbox.last?.rawSpansJSON, #"[{"spanId":"span-3"}]"#)
             XCTAssertEqual(snapshot.appendInbox.last?.createdAt, Date(timeIntervalSince1970: 1002))
+            XCTAssertEqual(snapshot.conversationAnchors.map(\.threadId), [thread.threadId])
 
             let wire = StreamCodec.encodeAppendInbox(snapshot.appendInbox)
             XCTAssertEqual(wire.map { $0["seq"]?.intValue }, [1, 3])
