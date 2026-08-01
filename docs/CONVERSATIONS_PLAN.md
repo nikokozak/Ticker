@@ -143,9 +143,17 @@ writing), receipts in `sent_context`.
 
 ## 3. Bridge contract deltas (update `docs/contracts/bridge.v2.json` + `Web/src/types/bridge.ts` in the same commit as each change; contract checker gates CI)
 
-- KEEP: `createStreamThread`, `loadStreamThread`, `listStreamThreads`, `deleteStreamThread`,
-  `addStreamThreadAnchor`, `removeStreamThreadAnchor`, `setThreadExchangeDisposition`, `threadAIContext`,
-  `pdfThreadRequested` (repurposed for Quote & discuss).
+- KEEP: `saveStreamThread` (slimmed), `threadAIContext`, `pdfThreadRequested` (repurposed for
+  Quote & discuss).
+- C0 OUTCOME (2026-08-01): `createStreamThread`, `loadStreamThread`, `listStreamThreads`,
+  `deleteStreamThread`, `addStreamThreadAnchor`, `removeStreamThreadAnchor`,
+  `setThreadExchangeDisposition` had zero web callers after drawer deletion and were removed from the
+  contract + `bridge.ts` + handler registration per the zero-caller rule. Their PersistenceService
+  methods and Swift tests survive. **C3/C4 re-add the entries they need** (C3: create/load/list/delete
+  + exchange disposition; C4: anchor add/remove). C3 also restores anchors/exchanges on the
+  `saveStreamThread` conflict-path response (currently title/revision only) and, if needed, the Swift
+  `placement` anchor-kind decode case that C0 dropped (dead rows; v30 marks prototype threads
+  detached regardless).
 - CHANGE: `saveStreamThread` slims to anchor/ephemeral/detached updates (no draft doc payload).
 - ADD: `saveConversationAnchors` (batch, rides document save like provenance spans if not already in
   that payload), `promoteConversationTurn` is **not** a bridge message — promotion is a ProseMirror
@@ -320,10 +328,13 @@ acting on the Stream.
 - Model: **`gpt-5.6-sol` at max reasoning** for C2/C3/C7 (design-heavy); Sol medium is acceptable for
   C0/C1/C4/C5/C6 if the governor judges the brief fully specified (comparison data says medium ≈ high
   on well-specified briefs). **Never enable multi_agent_v2 / sub-agents.**
-- One session per phase. Round 1: `codex exec -s workspace-write "<brief>"` from the **worktree root**
-  (`Ticker-Next-stream-threads`), `< /dev/null` when backgrounded; capture the session UUID. Later
-  rounds: `codex exec -s workspace-write resume <SESSION_ID> "<brief>"` (`-s` before `resume`).
-  Compact with `codex exec resume <id> "/compact"`; fresh session after >1 compaction.
+- **One warm session across phases**, not one per phase: resume the same session id for every round
+  and every subsequent phase (`codex exec -s workspace-write resume <SESSION_ID> "<brief>"`, `-s`
+  before `resume`) so accumulated repo/plan context is never re-bought. Launch from the **worktree
+  root** (`Ticker-Next-stream-threads`); `< /dev/null` when backgrounded with no stdin prompt.
+  Compact proactively between phases (`codex exec resume <id> "/compact"`); start a FRESH session
+  only after the session has compacted more than once (context degraded past usefulness), re-primed
+  by pointing it at this doc, and record the new id in memory.
 - Sandbox git is flaky: tell Codex to commit on the current branch; governor pre-creates branches and
   commits for Codex when `.git` writes are denied.
 - Every prompt embeds: the ponytail ladder (does it need to exist → stdlib → platform → existing dep →
