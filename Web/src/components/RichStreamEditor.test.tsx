@@ -365,6 +365,57 @@ describe('RichStreamEditor chrome parity', () => {
     });
     expect(onDelete).toHaveBeenCalledOnce();
   });
+
+  it('fades Saving… after a save settles without rendering Saved', async () => {
+    vi.useFakeTimers();
+    try {
+      let finishSave: (() => void) | null = null;
+      vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+        if (type === 'saveRichStreamDocument') {
+          await new Promise<void>((resolve) => { finishSave = resolve; });
+        }
+        return { revision: 2 };
+      }) as typeof bridge.sendAsync);
+      let liveView: EditorView | null = null;
+      const updateState = EditorView.prototype.updateState;
+      vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+        this: EditorView,
+        state,
+      ) {
+        liveView = this;
+        return updateState.call(this, state);
+      });
+      await renderStream({ ...stream, id: 'save-status-stream' });
+      await selectEditorText('Original');
+      expect(liveView).not.toBe(null);
+
+      await act(async () => {
+        liveView!.dispatch(liveView!.state.tr.insertText('More ', 1));
+        await Promise.resolve();
+      });
+
+      expect(document.querySelector('.stream-save-status')?.textContent).toBe('Saving…');
+      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+      expect(finishSave).not.toBe(null);
+      await act(async () => {
+        finishSave!();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const status = document.querySelector('.stream-save-status');
+      expect(status?.textContent).toBe('Saving…');
+      expect(status?.classList.contains('stream-save-status--settled')).toBe(true);
+      expect(document.body.textContent).not.toContain('Saved');
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(799); });
+      expect(document.querySelector('.stream-save-status')).not.toBe(null);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(document.querySelector('.stream-save-status')).toBe(null);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('an image save that lands after the editor is gone', () => {
@@ -623,7 +674,7 @@ describe('RichStreamEditor document AI', () => {
     await clickAI('Develop with AI');
     const requestId = activeRequestId();
     expect(editor().getAttribute('contenteditable')).toBe('false');
-    expect(document.querySelector('.document-ai-status-pill')?.textContent)
+    expect(document.querySelector('.document-ai-status')?.textContent)
       .toContain('AI is writing');
     expect((document.querySelector('[aria-label="Stop document AI"]') as HTMLButtonElement).disabled)
       .toBe(false);
@@ -650,7 +701,7 @@ describe('RichStreamEditor document AI', () => {
 
     expect(editor().textContent).toBe('A streamed reply.');
     expect(editor().getAttribute('contenteditable')).toBe('true');
-    expect(document.querySelector('.document-ai-status-pill')).toBe(null);
+    expect(document.querySelector('.document-ai-status')).toBe(null);
     await act(async () => {
       editor().dispatchEvent(new KeyboardEvent('keydown', {
         key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
@@ -1227,8 +1278,11 @@ describe('RichStreamEditor scroll position', () => {
       sent = [];
       const scroller = document.querySelector('.stream-content') as HTMLElement;
 
-      scroller.scrollTop = 40;
-      scroller.dispatchEvent(new Event('scroll'));
+      await act(async () => {
+        scroller.scrollTop = 40;
+        scroller.dispatchEvent(new Event('scroll'));
+      });
+      expect(document.querySelector('.stream-header')?.classList.contains('stream-header--scrolled')).toBe(true);
       await vi.advanceTimersByTimeAsync(600);
       scroller.scrollTop = 75;
       scroller.dispatchEvent(new Event('scroll'));
@@ -1240,6 +1294,12 @@ describe('RichStreamEditor scroll position', () => {
         type: 'saveScrollPosition',
         payload: { streamId: 'scroll-stream', offset: 75 },
       }]);
+
+      await act(async () => {
+        scroller.scrollTop = 0;
+        scroller.dispatchEvent(new Event('scroll'));
+      });
+      expect(document.querySelector('.stream-header')?.classList.contains('stream-header--scrolled')).toBe(false);
     } finally {
       vi.useRealTimers();
     }

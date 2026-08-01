@@ -28,10 +28,10 @@
 }
 
 .richtext-editor .ProseMirror {
-  max-width: 68ch;
+  max-width: 64ch;
   min-height: inherit;
   margin: 0 auto;
-  padding: clamp(var(--space-6), 4.6vw, var(--space-8)) clamp(var(--space-5), 4.6vw, var(--space-8))
+  padding: 96px clamp(var(--space-5), 4.6vw, var(--space-8))
     clamp(220px, 30vh, 360px);
   outline: none;
   color: var(--color-text);
@@ -68,16 +68,15 @@
   margin: var(--space-6) 0 var(--space-3);
   color: var(--text);
   font-weight: 600;
-  line-height: var(--line-height-tight);
 }
 
 .richtext-editor .ProseMirror > :first-child {
   margin-top: 0;
 }
 
-.richtext-editor .ProseMirror h1 { font-size: 1.6em; }
-.richtext-editor .ProseMirror h2 { font-size: 1.35em; }
-.richtext-editor .ProseMirror h3 { font-size: 1.15em; }
+.richtext-editor .ProseMirror h1 { font-size: var(--editor-heading-1); line-height: 1.3333333333; }
+.richtext-editor .ProseMirror h2 { font-size: var(--editor-heading-2); line-height: 1.4736842105; }
+.richtext-editor .ProseMirror h3 { font-size: var(--editor-heading-3); line-height: 1.6470588235; }
 .richtext-editor .ProseMirror h4,
 .richtext-editor .ProseMirror h5,
 .richtext-editor .ProseMirror h6 { font-size: 1em; }

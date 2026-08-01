@@ -171,12 +171,6 @@ const decodePendingAppends = (rows: Stream['pendingAppends']): PendingAppend[] =
   rawSpans: parseRawSpans(append.rawSpansJSON),
 }));
 
-const SAVE_LABEL: Record<SaveState, string> = {
-  saved: 'Saved',
-  saving: 'Saving…',
-  error: 'Save failed',
-};
-
 export function RichStreamEditor({
   stream,
   onBack,
@@ -205,6 +199,9 @@ export function RichStreamEditor({
 
   const [editor, setEditor] = useState<RichTextEditor | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('saved');
+  const [showSaving, setShowSaving] = useState(false);
+  const wasSaving = useRef(false);
+  const [headerScrolled, setHeaderScrolled] = useState(false);
   const [aiRunning, setAIRunning] = useState(false);
   const [aiDetail, setAIDetail] = useState<string | null>(null);
   const [sourceIndexNotice, setSourceIndexNotice] = useState<string | null>(null);
@@ -271,6 +268,23 @@ export function RichStreamEditor({
     onFlushAvailable?.(flushAll);
     return () => onFlushAvailable?.(null);
   }, [flushAll, onFlushAvailable]);
+
+  useEffect(() => {
+    if (saveState === 'saving') {
+      wasSaving.current = true;
+      setShowSaving(true);
+      return;
+    }
+    if (saveState === 'error') {
+      wasSaving.current = false;
+      setShowSaving(false);
+      return;
+    }
+    if (!wasSaving.current) return;
+    wasSaving.current = false;
+    const timer = window.setTimeout(() => setShowSaving(false), 800);
+    return () => window.clearTimeout(timer);
+  }, [saveState]);
 
   const canStartAI = useCallback(() => {
     if (!aiInFlightRef.current && !pdfAIInFlightRef.current) return true;
@@ -1332,7 +1346,7 @@ export function RichStreamEditor({
         }
       }}
     >
-      <header className="stream-header">
+      <header className={`stream-header ${headerScrolled ? 'stream-header--scrolled' : ''}`}>
         <button onClick={leave} disabled={leaving} className="back-button">← Back</button>
         {isEditingTitle ? (
           <input
@@ -1351,16 +1365,18 @@ export function RichStreamEditor({
           </h1>
         )}
         <div className="stream-header-actions">
-          {saveState !== 'saved' && (
+          {(saveState === 'error' || showSaving) && (
             <span
-              className={`stream-save-status stream-save-status--${saveState}`}
+              className={`stream-save-status stream-save-status--${saveState === 'error' ? 'error' : saveState === 'saved' ? 'settled' : 'saving'}`}
               role="status"
               aria-live="polite"
-              aria-label={SAVE_LABEL[saveState]}
-              title={SAVE_LABEL[saveState]}
+              aria-label={saveState === 'error' ? 'Save failed' : 'Saving'}
+              title={saveState === 'error' ? 'Save failed' : 'Saving…'}
             >
               <span className="stream-save-status-dot" aria-hidden="true" />
-              <span className="stream-save-status-label">{SAVE_LABEL[saveState]}</span>
+              <span className="stream-save-status-label">
+                {saveState === 'error' ? 'Save failed' : 'Saving…'}
+              </span>
             </span>
           )}
           <button
@@ -1634,7 +1650,10 @@ export function RichStreamEditor({
       )}
 
       <div className="stream-body">
-        <div className="stream-content">
+        <div
+          className="stream-content"
+          onScroll={(event) => setHeaderScrolled(event.currentTarget.scrollTop > 0)}
+        >
           <div
             ref={editorShellRef}
             className={`document-editor-shell ${xray ? 'richtext-xray' : ''}`}
@@ -1642,7 +1661,7 @@ export function RichStreamEditor({
             <div ref={host} />
             {aiRunning && (
               <div
-                className="document-ai-status-pill"
+                className="document-ai-status"
                 role="status"
                 aria-live="polite"
               >

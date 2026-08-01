@@ -10,8 +10,8 @@ export interface EditorTypographySettings {
 
 export const DEFAULT_EDITOR_TYPOGRAPHY: EditorTypographySettings = {
   editorFont: 'systemSans',
-  editorFontSize: 16,
-  editorLineSpacing: 1.55,
+  editorFontSize: 17,
+  editorLineSpacing: 1.65,
 };
 
 export function editorFontStack(font: EditorFont): string {
