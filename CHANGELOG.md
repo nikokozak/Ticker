@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Changed
+- Keep Threads beside the Stream at normal window sizes and use a full-width Thread view only in narrow windows.
 - Adding a Thread note or AI reply now keeps the carried text visible, previews the exact insertion point, and requires an explicit click or keyboard target before changing the Stream.
 - Stream and Thread chrome now hides idle status noise, uses plain-language AI source controls, and keeps provider details out of the writing workflow.
 - Quick Window now names the save destination and chat persistence in its footer, confirms saves during dismissal, and closes without discarding a draft.

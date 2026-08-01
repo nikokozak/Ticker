@@ -1323,12 +1323,12 @@ body {
   font-size: var(--font-size-xs);
 }
 
-@media (max-width: 760px) {
+@media (max-width: 700px) {
   .thread-drawer {
     position: absolute;
     z-index: 4;
-    inset: 0 0 0 auto;
-    width: min(25rem, 100%);
+    inset: 0;
+    width: 100%;
     min-width: 0;
     box-shadow: var(--overlay-shadow);
   }
