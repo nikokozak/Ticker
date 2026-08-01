@@ -67,10 +67,11 @@
 .richtext-editor .ProseMirror .conversation-block-active::before {
   content: '';
   position: absolute;
-  inset: 0 auto 0 -18px;
-  width: 2px;
-  background: var(--accent);
-  pointer-events: none;
+  inset: 0 auto 0 -23px;
+  width: 12px;
+  background: linear-gradient(to right, transparent 5px, var(--accent) 5px 7px, transparent 7px);
+  cursor: pointer;
+  pointer-events: auto;
 }
 
 .richtext-editor .ProseMirror .conversation-block-anchored::after {
@@ -82,8 +83,187 @@
   font-size: 8px;
   line-height: 1;
   opacity: 0.55;
-  pointer-events: none;
+  cursor: pointer;
+  pointer-events: auto;
   transform: translateY(-50%);
+}
+
+.richtext-editor .ProseMirror .conversation-widget-host {
+  display: block;
+  width: 100%;
+}
+
+.conversation-surface {
+  position: relative;
+  margin: 0 0 var(--space-5) 28px;
+  padding-left: var(--space-4);
+  color: var(--text);
+  font-family: var(--editor-font-family);
+  font-size: var(--conversation-body);
+  line-height: var(--conversation-line-height);
+  white-space: normal;
+  animation: conversation-expand 150ms ease-out;
+}
+
+.conversation-surface--closing {
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+}
+
+@keyframes conversation-expand {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.conversation-rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(to right, var(--accent) 0 2px, transparent 2px);
+  opacity: 0.25;
+  cursor: pointer;
+}
+
+.conversation-rail:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.conversation-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.conversation-drift-note,
+.conversation-status,
+.conversation-load-error,
+.conversation-error {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--type-ui-small);
+  line-height: var(--type-ui-line-height);
+}
+
+.conversation-load-error button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.conversation-load-error button:hover,
+.conversation-load-error button:focus-visible {
+  color: var(--text);
+}
+
+.conversation-error {
+  color: var(--danger);
+}
+
+.conversation-exchange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.conversation-turn {
+  position: relative;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.conversation-turn--you {
+  color: var(--text-muted);
+}
+
+.conversation-turn--ai {
+  color: var(--text);
+}
+
+.conversation-turn-label {
+  font-size: var(--type-ui-caption);
+  line-height: var(--conversation-line-height);
+}
+
+.conversation-turn-text {
+  min-width: 0;
+  white-space: pre-wrap;
+}
+
+.conversation-turn-copy {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--type-ui-caption);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.conversation-turn:hover .conversation-turn-copy,
+.conversation-turn-copy:focus-visible {
+  opacity: 1;
+}
+
+.conversation-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.conversation-composer {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: var(--conversation-line-height);
+}
+
+.conversation-composer:focus {
+  border-color: var(--accent);
+}
+
+.conversation-composer::placeholder {
+  color: var(--text-muted);
+}
+
+.conversation-send,
+.conversation-stop {
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--type-ui-small);
+  cursor: pointer;
+}
+
+.conversation-send:hover,
+.conversation-stop:hover {
+  background: var(--surface-hover);
+}
+
+.conversation-send:disabled {
+  color: var(--text-faint);
+  cursor: default;
 }
 
 .richtext-editor .ProseMirror h1,

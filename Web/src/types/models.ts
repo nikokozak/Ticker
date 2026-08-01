@@ -135,6 +135,10 @@ export interface StreamThreadJSON {
   sourceShortTitle?: string;
   highlightId?: string;
   sourcePage?: number;
+  anchorStart?: number;
+  anchorEnd?: number;
+  detached?: boolean;
+  ephemeral?: boolean;
   revision: number;
   createdAt: string;
   updatedAt: string;

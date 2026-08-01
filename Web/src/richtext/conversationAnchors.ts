@@ -1,5 +1,5 @@
 import type { Node as ProseNode } from 'prosemirror-model';
-import { Plugin, PluginKey, type EditorState, type Transaction } from 'prosemirror-state';
+import { Plugin, PluginKey, Selection, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { ConversationAnchorJSON } from '../types/models';
 
@@ -34,12 +34,25 @@ interface ConversationAnchorState {
   markerBlockFrom: Set<number>;
   visibleRanges: VisibleRange[];
   hoveredBlockFrom: number | null;
+  surface: ConversationSurfaceState | null;
+}
+
+export interface ConversationSurfaceState {
+  key: string;
+  anchor: ConversationAnchor;
+  renderAt?: number;
+}
+
+export interface ConversationAnchorFieldOptions {
+  onCreate?: (anchor: ConversationAnchor) => void;
+  onOpen?: (threadId: string) => void;
 }
 
 type AnchorMessage =
   | { kind: 'set'; anchors: ConversationAnchor[] }
   | { kind: 'visible'; ranges: VisibleRange[] }
-  | { kind: 'hover'; blockFrom: number | null };
+  | { kind: 'hover'; blockFrom: number | null }
+  | { kind: 'surface'; surface: ConversationSurfaceState | null };
 
 const conversationAnchorKey = new PluginKey<ConversationAnchorState>('tickerConversationAnchors');
 const pendingViewportRefreshes = new WeakSet<EditorView>();
@@ -57,7 +70,9 @@ const cancelFrame = (handle: number): void => {
 
 export function isConversationDecorationTransaction(tr: Transaction): boolean {
   const meta = tr.getMeta(conversationAnchorKey) as AnchorMessage | undefined;
-  return !tr.docChanged && !tr.selectionSet && (meta?.kind === 'visible' || meta?.kind === 'hover');
+  return !tr.docChanged && !tr.selectionSet && (
+    meta?.kind === 'visible' || meta?.kind === 'hover' || meta?.kind === 'surface'
+  );
 }
 
 export const setConversationAnchors = (
@@ -69,6 +84,11 @@ export const setConversationVisibleRanges = (
   tr: Transaction,
   ranges: VisibleRange[],
 ): Transaction => tr.setMeta(conversationAnchorKey, { kind: 'visible', ranges });
+
+export const setConversationSurface = (
+  tr: Transaction,
+  surface: ConversationSurfaceState | null,
+): Transaction => tr.setMeta(conversationAnchorKey, { kind: 'surface', surface });
 
 export function refreshConversationViewport(view: EditorView): void {
   if (pendingViewportRefreshes.has(view)) return;
@@ -110,6 +130,10 @@ function applyConversationViewport(view: EditorView): void {
 
 export function conversationAnchors(state: EditorState): ConversationAnchor[] {
   return conversationAnchorKey.getState(state)?.anchors ?? [];
+}
+
+export function conversationSurface(state: EditorState): ConversationSurfaceState | null {
+  return conversationAnchorKey.getState(state)?.surface ?? null;
 }
 
 /** Create the initial anchor from the complete text content of the current block. */
@@ -267,7 +291,9 @@ export function conversationDecorationTargets(
   return [...visibleBlocks.values()].filter((target) => target.left || target.right);
 }
 
-export function conversationAnchorField(): Plugin<ConversationAnchorState> {
+export function conversationAnchorField(
+  options: ConversationAnchorFieldOptions = {},
+): Plugin<ConversationAnchorState> {
   let hoverFrame: number | null = null;
   let pendingHover: { view: EditorView; left: number; top: number } | { view: EditorView } | null = null;
   const queueHover = (view: EditorView, point?: { left: number; top: number }): void => {
@@ -291,7 +317,13 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
   return new Plugin<ConversationAnchorState>({
     key: conversationAnchorKey,
     state: {
-      init: () => ({ anchors: [], markerBlockFrom: new Set(), visibleRanges: [], hoveredBlockFrom: null }),
+      init: () => ({
+        anchors: [],
+        markerBlockFrom: new Set(),
+        visibleRanges: [],
+        hoveredBlockFrom: null,
+        surface: null,
+      }),
       apply(tr, current, _old, next) {
         const anchors = current.anchors.map((anchor) => mapAnchor(anchor, tr));
         const mapped: ConversationAnchorState = {
@@ -305,6 +337,15 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
           hoveredBlockFrom: current.hoveredBlockFrom === null
             ? null
             : tr.mapping.map(current.hoveredBlockFrom, -1),
+          surface: current.surface === null
+            ? null
+            : {
+              ...current.surface,
+              anchor: mapAnchor(current.surface.anchor, tr),
+              renderAt: current.surface.renderAt === undefined
+                ? undefined
+                : tr.mapping.map(current.surface.renderAt, -1),
+            },
         };
         const meta = tr.getMeta(conversationAnchorKey) as AnchorMessage | undefined;
         if (!meta) return mapped;
@@ -317,10 +358,40 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
           };
         }
         if (meta.kind === 'visible') return { ...mapped, visibleRanges: meta.ranges };
-        return { ...mapped, hoveredBlockFrom: meta.blockFrom };
+        if (meta.kind === 'hover') return { ...mapped, hoveredBlockFrom: meta.blockFrom };
+        return { ...mapped, surface: meta.surface };
       },
     },
     props: {
+      handleKeyDown(view, event) {
+        const field = conversationAnchorKey.getState(view.state);
+        const surface = field?.surface;
+        const position = surface && (surface.renderAt
+          ?? conversationRenderPosition(view.state.doc, surface.anchor));
+        if (position !== null && position !== undefined && view.state.selection.empty) {
+          const block = textBlockAt(view.state.doc, view.state.selection.head);
+          const direction = event.key === 'ArrowDown' && block?.to === position
+            ? 1
+            : event.key === 'ArrowUp' && block?.from === position ? -1 : 0;
+          if (direction && view.endOfTextblock(direction > 0 ? 'down' : 'up')) {
+            const next = Selection.findFrom(view.state.doc.resolve(position), direction, true);
+            if (next) {
+              event.preventDefault();
+              view.dispatch(view.state.tr.setSelection(next).scrollIntoView());
+              return true;
+            }
+          }
+        }
+        if (event.key !== 'Tab' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) {
+          return false;
+        }
+        if (!field?.surface) return false;
+        const composer = view.dom.querySelector<HTMLTextAreaElement>('.conversation-composer');
+        if (!composer) return false;
+        event.preventDefault();
+        composer.focus();
+        return true;
+      },
       decorations(state) {
         const field = conversationAnchorKey.getState(state);
         if (!field) return null;
@@ -331,11 +402,30 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
           field.visibleRanges,
           field.hoveredBlockFrom ?? cursorBlock,
         );
-        return DecorationSet.create(state.doc, targets.map((target) => Decoration.node(
+        const decorations = targets.map((target) => Decoration.node(
           target.from,
           target.to,
           { class: [target.left && 'conversation-block-active', target.right && 'conversation-block-anchored'].filter(Boolean).join(' ') },
-        )));
+        ));
+        const surface = field.surface;
+        const position = surface && (surface.renderAt
+          ?? conversationRenderPosition(state.doc, surface.anchor)
+          ?? state.doc.content.size);
+        if (surface && position !== null) {
+          decorations.push(Decoration.widget(position, () => {
+            const host = document.createElement('div');
+            host.className = 'conversation-widget-host';
+            host.contentEditable = 'false';
+            host.dataset.conversationWidget = surface.key;
+            return host;
+          }, {
+            key: surface.key,
+            side: 1,
+            stopEvent: () => true,
+            ignoreSelection: true,
+          }));
+        }
+        return DecorationSet.create(state.doc, decorations);
       },
       handleDOMEvents: {
         mousemove(view, event) {
@@ -346,8 +436,37 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
           queueHover(view);
           return false;
         },
-        click() {
-          // ponytail: visual no-op for C2; C3 replaces this with open/create routing.
+        click(view, event) {
+          const target = event.target instanceof Element
+            ? event.target.closest<HTMLElement>('.conversation-block-active, .conversation-block-anchored')
+            : null;
+          if (!target || !view.dom.contains(target)) return false;
+          const rect = target.getBoundingClientRect();
+          let block: BlockRange | null = null;
+          try {
+            block = textBlockAt(view.state.doc, view.posAtDOM(target, 0));
+          } catch {
+            return false;
+          }
+          if (!block) return false;
+          if (event.clientX < rect.left && target.classList.contains('conversation-block-active')) {
+            const anchor = fullBlockConversationAnchor(view.state.doc, block.contentFrom, '');
+            if (!anchor) return false;
+            event.preventDefault();
+            options.onCreate?.(anchor);
+            return true;
+          }
+          if (event.clientX > rect.right && target.classList.contains('conversation-block-anchored')) {
+            const field = conversationAnchorKey.getState(view.state);
+            const anchor = field?.anchors.find((candidate) => {
+              const position = conversationRenderPosition(view.state.doc, candidate);
+              return position !== null && textBlockAt(view.state.doc, position - 1)?.from === block?.from;
+            });
+            if (!anchor) return false;
+            event.preventDefault();
+            options.onOpen?.(anchor.threadId);
+            return true;
+          }
           return false;
         },
       },

@@ -583,6 +583,10 @@ body {
   backdrop-filter: var(--overlay-backdrop);
 }
 
+.stream-overflow-panel--conversations {
+  width: min(320px, calc(100vw - 2 * var(--space-4)));
+}
+
 .stream-overflow-panel button {
   width: 100%;
   padding: var(--space-2) var(--space-3);
@@ -622,6 +626,68 @@ body {
   margin-top: var(--space-1);
   border-top: 1px solid var(--border-subtle);
   border-radius: 0 0 var(--radius-small) var(--radius-small);
+}
+
+.conversation-list {
+  max-height: min(360px, 50vh);
+  margin-top: var(--space-1);
+  overflow-y: auto;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.conversation-list > p {
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--type-ui-small);
+}
+
+.conversation-list-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.conversation-list-row:last-child {
+  border-bottom: 0;
+}
+
+.stream-overflow-panel .conversation-list-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  white-space: normal;
+}
+
+.stream-overflow-panel .conversation-list-open:hover,
+.stream-overflow-panel .conversation-list-open:focus-visible {
+  background: var(--surface-hover);
+}
+
+.conversation-list-title,
+.conversation-list-meta {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-list-meta {
+  margin-top: var(--space-1);
+  color: var(--text-faint);
+  font-size: var(--type-ui-caption);
+}
+
+.stream-overflow-panel .conversation-list-delete {
+  width: auto;
+  flex: 0 0 auto;
+  color: var(--danger);
+  opacity: 0;
+}
+
+.conversation-list-row:hover .conversation-list-delete,
+.conversation-list-delete:focus-visible {
+  opacity: 1;
 }
 
 /* Shared native modal behavior */

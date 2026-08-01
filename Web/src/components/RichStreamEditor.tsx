@@ -6,22 +6,33 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import type { Slice } from 'prosemirror-model';
 import { TextSelection, type Command, type Transaction } from 'prosemirror-state';
 import {
   bridge,
+  createStreamThread,
+  deleteStreamThread,
   getExchange,
+  listConversations,
   type DocumentAIVerb,
   type SourceTitlePayload,
   type StreamDocumentConflictPayload,
 } from '../types/bridge';
 import type {
   AIExchangeJSON,
+  ConversationAnchorJSON,
   SourceReference,
   SourceScope,
   Stream,
   StreamAppendInboxJSON,
+  StreamThreadJSON,
 } from '../types/models';
+import {
+  ConversationSurface,
+  initialConversationLiveState,
+  type ConversationLiveState,
+} from './ConversationSurface';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { EyeIcon, XIcon } from './icons';
 import { Modal } from './Modal';
@@ -32,7 +43,18 @@ import {
   type PDFSectionActionRequest,
 } from './StreamEditor';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
-import { conversationAnchorFromJSON, refreshConversationViewport } from '../richtext/conversationAnchors';
+import {
+  conversationAnchorFromJSON,
+  conversationAnchorTextForStorage,
+  conversationAnchors,
+  conversationRenderPosition,
+  conversationSurface,
+  hasConversationAnchorTextDrifted,
+  refreshConversationViewport,
+  setConversationAnchors,
+  setConversationSurface,
+  type ConversationAnchor,
+} from '../richtext/conversationAnchors';
 import {
   aiWritingRange,
   insertImage,
@@ -67,6 +89,7 @@ import {
   type PendingPDFAnchorSelection,
 } from '../utils/pdfAnchorSelection';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
+import { formatRelativeTime } from '../utils/relativeTime';
 import {
   activeFormats,
   toggleBlockquote,
@@ -147,6 +170,17 @@ interface SelectionMenuState {
   to: number;
 }
 
+interface ExpandedConversation {
+  key: string;
+  threadId?: string;
+  anchor?: ConversationAnchor;
+  renderAt?: number;
+  anchorText: string;
+  focusComposer: boolean;
+}
+
+type ConversationLiveStateUpdater = (current: ConversationLiveState) => ConversationLiveState;
+
 function documentAITarget(editor: RichTextEditor): { from: number; to: number; text: string } | null {
   const { doc, selection } = editor.view.state;
   const from = selection.empty ? selection.$head.start() : selection.from;
@@ -197,6 +231,10 @@ export function RichStreamEditor({
   // PDF jobs ever become a supported workflow.
   const pdfAIInFlightRef = useRef(false);
   const consumedPendingSourceRef = useRef<string | null>(null);
+  const conversationRecordsRef = useRef<ConversationAnchorJSON[]>(stream.conversationAnchors ?? []);
+  const expandedConversationRef = useRef<ExpandedConversation | null>(null);
+  const conversationLiveStatesRef = useRef<Record<string, ConversationLiveState>>({});
+  const conversationCollapseTimerRef = useRef<number>();
 
   const [editor, setEditor] = useState<RichTextEditor | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('saved');
@@ -227,7 +265,17 @@ export function RichStreamEditor({
     from: 0,
     to: 0,
   });
-  const [, redraw] = useState(0);
+  const [editorVersion, redraw] = useState(0);
+  const [expandedConversation, setExpandedConversation] = useState<ExpandedConversation | null>(null);
+  const [conversationLiveStates, setConversationLiveStates] = useState<Record<string, ConversationLiveState>>({});
+  const [conversationWidgetTarget, setConversationWidgetTarget] = useState<HTMLElement | null>(null);
+  const [conversationRecords, setConversationRecords] = useState<ConversationAnchorJSON[]>(
+    stream.conversationAnchors ?? [],
+  );
+  const [showConversationList, setShowConversationList] = useState(false);
+  const [conversationListLoading, setConversationListLoading] = useState(false);
+  const [conversationListError, setConversationListError] = useState(false);
+  const [conversationPendingDelete, setConversationPendingDelete] = useState<ConversationAnchorJSON | null>(null);
   const addToast = useToastStore((state) => state.addToast);
   const { sources, setSources } = useBridgeMessages({
     streamId: stream.id,
@@ -411,6 +459,122 @@ export function RichStreamEditor({
     setSelectionMenu({ visible: true, ...placement, from, to });
   }, [getSelectionMenuPlacement, hideSelectionMenu]);
 
+  const updateConversationLiveState = useCallback((
+    key: string,
+    updater: ConversationLiveStateUpdater,
+  ) => {
+    setConversationLiveStates((current) => {
+      const value = updater(current[key] ?? initialConversationLiveState());
+      if (value === current[key]) return current;
+      const next = { ...current, [key]: value };
+      conversationLiveStatesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const ensureConversationLiveState = useCallback((key: string, threadId?: string) => {
+    setConversationLiveStates((current) => {
+      if (current[key]) return current;
+      const next = { ...current, [key]: initialConversationLiveState(threadId) };
+      conversationLiveStatesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const cancelConversationRequest = useCallback((key: string, updateUI = true) => {
+    const current = conversationLiveStatesRef.current[key];
+    if (!current?.active?.running) return;
+    bridge.send({ type: 'cancelDocumentAI', payload: { requestId: current.active.requestId } });
+    const stopped = {
+      ...current,
+      active: { ...current.active, running: false, error: 'Stopped.' },
+    };
+    const next = { ...conversationLiveStatesRef.current, [key]: stopped };
+    conversationLiveStatesRef.current = next;
+    if (updateUI) setConversationLiveStates(next);
+  }, []);
+
+  const expandConversation = useCallback((next: ExpandedConversation) => {
+    const current = expandedConversationRef.current;
+    if (current?.key !== next.key) {
+      if (current) cancelConversationRequest(current.key);
+      ensureConversationLiveState(next.key, next.threadId);
+    }
+    if (conversationCollapseTimerRef.current !== undefined) {
+      window.clearTimeout(conversationCollapseTimerRef.current);
+      conversationCollapseTimerRef.current = undefined;
+    }
+    expandedConversationRef.current = next;
+    setExpandedConversation(next);
+  }, [cancelConversationRequest, ensureConversationLiveState]);
+
+  const collapseConversation = useCallback(() => {
+    const expanded = expandedConversationRef.current;
+    if (!expanded || conversationCollapseTimerRef.current !== undefined) return;
+    const currentEditor = editorRef.current;
+    const anchor = currentEditor && conversationSurface(currentEditor.view.state)?.anchor;
+    cancelConversationRequest(expanded.key);
+    updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: true }));
+    conversationCollapseTimerRef.current = window.setTimeout(() => {
+      conversationCollapseTimerRef.current = undefined;
+      if (expandedConversationRef.current?.key !== expanded.key) return;
+      expandedConversationRef.current = null;
+      setExpandedConversation(null);
+      setConversationWidgetTarget(null);
+      updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: false }));
+      if (!currentEditor || !anchor) return;
+      window.requestAnimationFrame(() => {
+        if (currentEditor.view.isDestroyed) return;
+        const pos = Math.max(0, Math.min(anchor.from, currentEditor.view.state.doc.content.size));
+        currentEditor.view.dispatch(currentEditor.view.state.tr.setSelection(
+          TextSelection.near(currentEditor.view.state.doc.resolve(pos)),
+        ));
+        currentEditor.view.focus();
+      });
+    }, 150);
+  }, [cancelConversationRequest, updateConversationLiveState]);
+
+  useEffect(() => () => {
+    if (conversationCollapseTimerRef.current !== undefined) {
+      window.clearTimeout(conversationCollapseTimerRef.current);
+    }
+    for (const key of Object.keys(conversationLiveStatesRef.current)) {
+      cancelConversationRequest(key, false);
+    }
+  }, [cancelConversationRequest]);
+
+  const openConversationFromGlyph = useCallback((threadId: string) => {
+    const view = editorRef.current?.view;
+    const anchor = view && conversationAnchors(view.state).find((candidate) => candidate.threadId === threadId);
+    if (!anchor) return;
+    const record = conversationRecordsRef.current.find((candidate) => candidate.threadId === threadId);
+    expandConversation({
+      key: `thread:${threadId}`,
+      threadId,
+      anchorText: record?.anchorText ?? '',
+      focusComposer: false,
+    });
+  }, [expandConversation]);
+
+  const createConversationAtBlock = useCallback((anchor: ConversationAnchor) => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+    const open = conversationSurface(view.state);
+    if (open && conversationRenderPosition(view.state.doc, open.anchor)
+      === conversationRenderPosition(view.state.doc, anchor)) {
+      collapseConversation();
+      return;
+    }
+    const key = `draft:${crypto.randomUUID()}`;
+    const draft = { ...anchor, threadId: key };
+    expandConversation({
+      key,
+      anchor: draft,
+      anchorText: conversationAnchorTextForStorage(view.state.doc, draft),
+      focusComposer: true,
+    });
+  }, [collapseConversation, expandConversation]);
+
   // Which formatting buttons are lit depends on the SELECTION, so the menu has to
   // redraw on every transaction and not only on edits.
   const onUpdate = useCallback(() => {
@@ -521,6 +685,10 @@ export function RichStreamEditor({
         onTransaction,
         onUpdate,
         onOpenLink: openLink,
+        conversations: {
+          onCreate: createConversationAtBlock,
+          onOpen: openConversationFromGlyph,
+        },
       });
     } catch {
       addToast('This stream’s rich-text document could not be read.', 'error');
@@ -644,7 +812,187 @@ export function RichStreamEditor({
         });
       });
     };
-  }, [addToast, onTransaction, onUpdate, openLink, stream.id, updateSelectionMenu]);
+  }, [
+    addToast,
+    createConversationAtBlock,
+    onTransaction,
+    onUpdate,
+    openConversationFromGlyph,
+    openLink,
+    stream.id,
+    updateSelectionMenu,
+  ]);
+
+  useEffect(() => {
+    const records = stream.conversationAnchors ?? [];
+    conversationRecordsRef.current = records;
+    setConversationRecords(records);
+  }, [stream.conversationAnchors]);
+
+  const createPersistedConversation = useCallback(async (query: string): Promise<StreamThreadJSON> => {
+    const currentEditor = editorRef.current;
+    const currentSurface = currentEditor && conversationSurface(currentEditor.view.state);
+    if (!currentEditor || !currentSurface) throw new Error('Conversation closed');
+    const anchorText = conversationAnchorTextForStorage(currentEditor.view.state.doc, currentSurface.anchor);
+    if (!anchorText) throw new Error('Anchor deleted');
+    const { thread } = await createStreamThread({
+      streamId: stream.id,
+      title: query.split(/\r?\n/, 1)[0],
+      anchorStart: currentSurface.anchor.from,
+      anchorEnd: currentSurface.anchor.to,
+      anchorText,
+    });
+
+    const liveEditor = editorRef.current;
+    if (!liveEditor || liveEditor.view.isDestroyed) return thread;
+    const liveSurface = conversationSurface(liveEditor.view.state);
+    const mapped = liveSurface?.key === currentSurface.key ? liveSurface.anchor : currentSurface.anchor;
+    const persisted = { ...mapped, threadId: thread.threadId, detached: mapped.from >= mapped.to };
+    const anchors = conversationAnchors(liveEditor.view.state)
+      .filter((anchor) => anchor.threadId !== thread.threadId);
+    liveEditor.view.dispatch(setConversationAnchors(liveEditor.view.state.tr, [...anchors, persisted]));
+    if (liveSurface?.key === currentSurface.key) {
+      liveEditor.view.dispatch(setConversationSurface(liveEditor.view.state.tr, {
+        key: currentSurface.key,
+        anchor: persisted,
+      }));
+      const expanded = expandedConversationRef.current;
+      if (expanded?.key === currentSurface.key) {
+        const next = { ...expanded, threadId: thread.threadId, anchor: undefined };
+        expandedConversationRef.current = next;
+        setExpandedConversation(next);
+      }
+    }
+    const records = [
+      ...conversationRecordsRef.current.filter((record) => record.threadId !== thread.threadId),
+      {
+        threadId: thread.threadId,
+        anchorStart: persisted.from,
+        anchorEnd: persisted.to,
+        anchorText,
+        detached: false,
+        ephemeral: false,
+        updatedAt: thread.updatedAt,
+      },
+    ];
+    conversationRecordsRef.current = records;
+    setConversationRecords(records);
+    sessionRef.current?.documentChanged();
+    return thread;
+  }, [stream.id]);
+
+  const conversationHasDrifted = useCallback((anchorText: string) => {
+    const currentEditor = editorRef.current;
+    const surface = currentEditor && conversationSurface(currentEditor.view.state);
+    return !currentEditor || !surface || hasConversationAnchorTextDrifted(
+      currentEditor.view.state.doc,
+      surface.anchor,
+      anchorText,
+    );
+  }, []);
+
+  const toggleConversationList = useCallback(async () => {
+    if (showConversationList) {
+      setShowConversationList(false);
+      return;
+    }
+    setShowConversationList(true);
+    setConversationListLoading(true);
+    setConversationListError(false);
+    try {
+      const { conversations } = await listConversations(stream.id);
+      conversationRecordsRef.current = conversations;
+      setConversationRecords(conversations);
+    } catch {
+      setConversationListError(true);
+    } finally {
+      setConversationListLoading(false);
+    }
+  }, [showConversationList, stream.id]);
+
+  const openConversationFromList = useCallback((record: ConversationAnchorJSON) => {
+    const liveEditor = editorRef.current;
+    if (!liveEditor) return;
+    const anchor = conversationAnchors(liveEditor.view.state)
+      .find((candidate) => candidate.threadId === record.threadId);
+    if (anchor && !record.detached) {
+      expandConversation({
+        key: `thread:${record.threadId}`,
+        threadId: record.threadId,
+        anchorText: record.anchorText,
+        focusComposer: false,
+      });
+      window.requestAnimationFrame(() => {
+        const target = liveEditor.view.domAtPos(anchor.from).node;
+        (target instanceof Element ? target : target.parentElement)?.scrollIntoView({ block: 'center' });
+      });
+    } else {
+      const position = liveEditor.view.state.doc.content.size;
+      // ponytail: detached conversations render at document end; add archive
+      // positioning only if detached browsing grows beyond this plain list.
+      expandConversation({
+        key: `thread:${record.threadId}`,
+        threadId: record.threadId,
+        anchor: { threadId: record.threadId, from: position, to: position, detached: true },
+        renderAt: position,
+        anchorText: record.anchorText,
+        focusComposer: false,
+      });
+      window.requestAnimationFrame(() => liveEditor.view.dom.lastElementChild?.scrollIntoView({ block: 'center' }));
+    }
+    setShowConversationList(false);
+    if (streamOverflowMenuRef.current) streamOverflowMenuRef.current.open = false;
+  }, [expandConversation]);
+
+  const deleteConversation = useCallback(async (record: ConversationAnchorJSON) => {
+    try {
+      await deleteStreamThread({ streamId: stream.id, threadId: record.threadId });
+      const records = conversationRecordsRef.current
+        .filter((candidate) => candidate.threadId !== record.threadId);
+      conversationRecordsRef.current = records;
+      setConversationRecords(records);
+      const liveEditor = editorRef.current;
+      const deletingOpenConversation = liveEditor
+        && conversationSurface(liveEditor.view.state)?.anchor.threadId === record.threadId;
+      if (liveEditor) {
+        liveEditor.view.dispatch(setConversationAnchors(
+          liveEditor.view.state.tr,
+          conversationAnchors(liveEditor.view.state)
+            .filter((anchor) => anchor.threadId !== record.threadId),
+        ));
+      }
+      if (deletingOpenConversation) collapseConversation();
+    } catch {
+      addToast('This conversation could not be deleted.', 'error');
+    }
+  }, [addToast, collapseConversation, stream.id]);
+
+  useLayoutEffect(() => {
+    if (!editor) return;
+    let surface = conversationSurface(editor.view.state);
+    if (!expandedConversation) {
+      if (surface) editor.view.dispatch(setConversationSurface(editor.view.state.tr, null));
+      if (conversationWidgetTarget) setConversationWidgetTarget(null);
+      return;
+    }
+    if (surface?.key !== expandedConversation.key) {
+      const anchor = expandedConversation.anchor ?? conversationAnchors(editor.view.state)
+        .find((candidate) => candidate.threadId === expandedConversation.threadId);
+      if (!anchor) {
+        setConversationWidgetTarget(null);
+        return;
+      }
+      editor.view.dispatch(setConversationSurface(editor.view.state.tr, {
+        key: expandedConversation.key,
+        anchor,
+        renderAt: expandedConversation.renderAt,
+      }));
+      surface = conversationSurface(editor.view.state);
+    }
+    const target = [...editor.view.dom.querySelectorAll<HTMLElement>('[data-conversation-widget]')]
+      .find((candidate) => candidate.dataset.conversationWidget === surface?.key) ?? null;
+    setConversationWidgetTarget((current) => current === target ? current : target);
+  }, [conversationWidgetTarget, editor, editorVersion, expandedConversation]);
 
   useEffect(() => {
     if (!editor) return undefined;
@@ -1426,7 +1774,48 @@ export function RichStreamEditor({
             <summary title="More stream actions" aria-label="More stream actions">
               <span aria-hidden="true">•••</span>
             </summary>
-            <div className="stream-overflow-panel">
+            <div className={`stream-overflow-panel ${showConversationList ? 'stream-overflow-panel--conversations' : ''}`}>
+              <button
+                type="button"
+                className="stream-overflow-action"
+                aria-expanded={showConversationList}
+                onClick={() => void toggleConversationList()}
+              >
+                Conversations
+              </button>
+              {showConversationList && (
+                <div className="conversation-list" aria-label="Conversations">
+                  {conversationListLoading && <p>Loading…</p>}
+                  {conversationListError && <p>Conversations could not be loaded.</p>}
+                  {!conversationListLoading && !conversationListError && conversationRecords.length === 0 && (
+                    <p>No conversations yet.</p>
+                  )}
+                  {conversationRecords.map((record) => (
+                    <div className="conversation-list-row" key={record.threadId}>
+                      <button
+                        type="button"
+                        className="conversation-list-open"
+                        onClick={() => openConversationFromList(record)}
+                      >
+                        <span className="conversation-list-title">
+                          {record.anchorText.split(/\r?\n/, 1)[0] || 'Conversation'}
+                        </span>
+                        <span className="conversation-list-meta">
+                          {formatRelativeTime(record.updatedAt)}{record.detached ? ' · detached' : ''}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="conversation-list-delete"
+                        aria-label="Delete conversation"
+                        onClick={() => setConversationPendingDelete(record)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <button
                 type="button"
                 className="stream-overflow-delete"
@@ -1441,6 +1830,35 @@ export function RichStreamEditor({
           </details>
         </div>
       </header>
+
+      {conversationPendingDelete && (
+        <Modal
+          className="delete-confirm-dialog conversation-delete-confirm-dialog"
+          aria-labelledby="conversation-delete-confirm-title"
+          onRequestClose={() => setConversationPendingDelete(null)}
+        >
+          <h2 id="conversation-delete-confirm-title">Delete this conversation?</h2>
+          <p>This permanently deletes its turns. The Stream text stays unchanged.</p>
+          <div className="delete-confirm-actions">
+            <button
+              className="delete-confirm-cancel"
+              onClick={() => setConversationPendingDelete(null)}
+            >
+              Cancel
+            </button>
+            <button
+              className="delete-confirm-delete conversation-delete-confirm-delete"
+              onClick={() => {
+                const record = conversationPendingDelete;
+                setConversationPendingDelete(null);
+                void deleteConversation(record);
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {showDeleteConfirm && (
         <Modal
@@ -1539,6 +1957,25 @@ export function RichStreamEditor({
           onClose={() => setExchangeOverlay(null)}
           onOpenManifestEntry={openExchangeManifestEntry}
         />
+      )}
+
+      {conversationWidgetTarget && expandedConversation && createPortal(
+        <ConversationSurface
+          conversationKey={expandedConversation.key}
+          streamId={stream.id}
+          sourceScope={sourceScope}
+          threadId={expandedConversation.threadId}
+          anchorText={expandedConversation.anchorText}
+          focusComposer={expandedConversation.focusComposer}
+          state={conversationLiveStates[expandedConversation.key]
+            ?? initialConversationLiveState(expandedConversation.threadId)}
+          updateState={updateConversationLiveState}
+          createThread={createPersistedConversation}
+          hasDrifted={conversationHasDrifted}
+          onCollapse={collapseConversation}
+        />,
+        conversationWidgetTarget,
+        expandedConversation.key,
       )}
 
       {formats && selectionMenu.visible && (

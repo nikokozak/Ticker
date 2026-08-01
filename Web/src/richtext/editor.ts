@@ -30,7 +30,11 @@ import {
 } from './commands';
 import { parseMarkdown, serializeMarkdown } from './markdown';
 import { aiWritingHighlight, setImageWidth } from './operations';
-import { conversationAnchorField, isConversationDecorationTransaction } from './conversationAnchors';
+import {
+  conversationAnchorField,
+  isConversationDecorationTransaction,
+  type ConversationAnchorFieldOptions,
+} from './conversationAnchors';
 import { provenance } from './provenance';
 import { BREAK_ATTRIBUTES, MAX_IMAGE_WIDTH, MIN_IMAGE_WIDTH, tickerSchema } from './schema';
 
@@ -181,6 +185,7 @@ export interface RichTextEditorOptions {
    * can apply metadata to text that moved while an async host action was open.
    */
   onTransaction?: (transaction: Transaction) => void;
+  conversations?: ConversationAnchorFieldOptions;
 }
 
 /** The href of a link at this position, if there is one. */
@@ -287,11 +292,11 @@ function imageView(node: ProseNode, view: EditorView, getPos: () => number | und
   };
 }
 
-function stateFor(doc: ProseNode): EditorState {
+function stateFor(doc: ProseNode, conversations?: ConversationAnchorFieldOptions): EditorState {
   // Order matters: our keymap gets first refusal, then the stock bindings.
   return EditorState.create({
     doc,
-    plugins: [history(), tickerKeymap(), keymap(baseKeymap), aiWritingHighlight(), provenance(), conversationAnchorField()],
+    plugins: [history(), tickerKeymap(), keymap(baseKeymap), aiWritingHighlight(), provenance(), conversationAnchorField(conversations)],
   });
 }
 
@@ -303,11 +308,12 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
     onOpenLink,
     onTransaction,
     onUpdate,
+    conversations,
   } = options;
   parent.classList.add('richtext-editor');
 
   const view = new EditorView(parent, {
-    state: stateFor(tickerSchema.nodeFromJSON(JSON.parse(docJSON))),
+    state: stateFor(tickerSchema.nodeFromJSON(JSON.parse(docJSON)), conversations),
     clipboardParser,
     nodeViews: { image: imageView },
     transformCopied: sanitizeTickerClipboardSlice,
@@ -346,7 +352,7 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
     },
 
     setDocumentJSON(next: string) {
-      view.updateState(stateFor(tickerSchema.nodeFromJSON(JSON.parse(next))));
+      view.updateState(stateFor(tickerSchema.nodeFromJSON(JSON.parse(next)), conversations));
       onUpdate?.();
     },
 

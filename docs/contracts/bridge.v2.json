@@ -158,6 +158,10 @@
       "deletePdfHighlight": {
         "requiredPayloadKeys": ["streamId", "highlightId"]
       },
+      "deleteStreamThread": {
+        "requiredPayloadKeys": ["streamId", "threadId"],
+        "requiredCallbackId": true
+      },
       "cancelDocumentAI": {
         "requiredPayloadKeys": ["requestId"]
       },
@@ -166,6 +170,10 @@
       },
       "clearProxyDeviceKey": {
         "requiredPayloadKeys": [],
+        "requiredCallbackId": true
+      },
+      "createStreamThread": {
+        "requiredPayloadKeys": ["streamId", "title", "anchorStart", "anchorEnd", "anchorText"],
         "requiredCallbackId": true
       },
       "createStream": {
@@ -202,6 +210,10 @@
       },
       "listConversations": {
         "requiredPayloadKeys": ["streamId"],
+        "requiredCallbackId": true
+      },
+      "loadStreamThread": {
+        "requiredPayloadKeys": ["streamId", "threadId"],
         "requiredCallbackId": true
       },
       "loadStream": {

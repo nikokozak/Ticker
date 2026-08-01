@@ -141,6 +141,33 @@ async function enterPrompt(value: string) {
   });
 }
 
+async function openDraftConversation(): Promise<HTMLTextAreaElement> {
+  const block = editor().querySelector('p') as HTMLParagraphElement;
+  await vi.waitFor(() => expect(block.classList.contains('conversation-block-active')).toBe(true));
+  vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+    left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
+    toJSON: () => ({}),
+  });
+  await act(async () => {
+    block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 0 }));
+    await Promise.resolve();
+  });
+  const composer = await vi.waitFor(() => {
+    const found = document.querySelector('.conversation-composer') as HTMLTextAreaElement | null;
+    expect(found).not.toBe(null);
+    return found!;
+  });
+  return composer;
+}
+
+async function enterConversationMessage(input: HTMLTextAreaElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await Promise.resolve();
+  });
+}
+
 function activeRequestId(): string {
   const messages = sent.filter((candidate) => candidate.type === 'thinkDocument');
   const message = messages[messages.length - 1];
@@ -316,7 +343,7 @@ describe('RichStreamEditor chrome parity', () => {
     expect(document.querySelector('.stream-xray-button')?.textContent).toBe('');
     expect(document.querySelector('.stream-overflow-menu')).not.toBe(null);
     expect([...document.querySelectorAll('.stream-overflow-panel button')]
-      .map((button) => button.textContent?.trim())).toEqual(['Delete stream…']);
+      .map((button) => button.textContent?.trim())).toEqual(['Conversations', 'Delete stream…']);
     expect(document.querySelector('.delete-button')).toBe(null);
     expect(document.querySelector('.stream-format-bar')).toBe(null);
     expect(document.querySelector('.selection-action-menu')).toBe(null);
@@ -415,6 +442,544 @@ describe('RichStreamEditor chrome parity', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('RichStreamEditor inline conversations', () => {
+  it('collapses an unsent draft without creating a row or leaving a glyph', async () => {
+    const composer = await openDraftConversation();
+    await vi.waitFor(() => expect(document.activeElement).toBe(composer));
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    });
+
+    expect(document.querySelector('.conversation-surface')).toBe(null);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+    expect(editor().querySelector('p')?.classList.contains('conversation-block-anchored')).toBe(false);
+    await vi.waitFor(() => expect(document.activeElement).toBe(editor()));
+  });
+
+  it('creates on first send, streams the AI turn, and keeps the widget out of the document save', async () => {
+    const createdAt = new Date(0).toISOString();
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'createStreamThread') {
+        return {
+          thread: {
+            threadId: 'thread-created',
+            streamId: stream.id,
+            title: String(payload?.title),
+            workingText: '',
+            anchorText: String(payload?.anchorText),
+            anchorStart: Number(payload?.anchorStart),
+            anchorEnd: Number(payload?.anchorEnd),
+            detached: false,
+            ephemeral: false,
+            revision: 0,
+            createdAt,
+            updatedAt: createdAt,
+            exchanges: [],
+          },
+        };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    const subscribe = vi.spyOn(bridge, 'onMessage');
+    const composer = await openDraftConversation();
+    await enterConversationMessage(composer, 'Does this hold?');
+
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(sent.some((message) => message.type === 'thinkDocument')).toBe(true));
+
+    const createCall = vi.mocked(bridge.sendAsync).mock.calls
+      .find(([type]) => type === 'createStreamThread');
+    expect(createCall?.[1]).toMatchObject({
+      streamId: stream.id,
+      title: 'Does this hold?',
+      anchorText: 'Original paragraph.',
+    });
+    expect(Number(createCall?.[1]?.anchorEnd)).toBeGreaterThan(Number(createCall?.[1]?.anchorStart));
+    expect(editor().querySelector('p')?.classList.contains('conversation-block-anchored')).toBe(true);
+    expect(document.querySelector('.conversation-stop')).not.toBe(null);
+
+    const requestId = String(sent.find((message) => message.type === 'thinkDocument')?.payload?.requestId);
+    await act(async () => {
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'It streams.' } });
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: ' Live.' } });
+    });
+    expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams. Live.');
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      (document.querySelector('.conversation-stop') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(sent).toContainEqual({
+      type: 'cancelDocumentAI',
+      payload: { requestId },
+    });
+
+    await act(async () => {
+      bridge.receive({
+        type: 'documentAIComplete',
+        payload: {
+          requestId,
+          exchange: {
+            requestId,
+            streamId: stream.id,
+            threadId: 'thread-created',
+            verb: 'thread',
+            userInput: 'Does this hold?',
+            sourceManifest: '[]',
+            responseRaw: 'It streams. Live.',
+            createdAt,
+          },
+        },
+      });
+    });
+    expect(document.querySelector('.conversation-stop')).toBe(null);
+    expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams. Live.');
+
+    await vi.waitFor(() => {
+      const save = vi.mocked(bridge.sendAsync).mock.calls
+        .find(([type]) => type === 'saveRichStreamDocument');
+      expect(save?.[1]?.docJSON).not.toContain('Does this hold?');
+      expect(save?.[1]?.docJSON).not.toContain('It streams.');
+    });
+  });
+
+  it('opens a persisted glyph in place and restores its saved turns', async () => {
+    const updatedAt = new Date().toISOString();
+    const anchored: Stream = {
+      ...stream,
+      id: 'conversation-stream',
+      document: {
+        ...stream.document,
+        streamId: 'conversation-stream',
+        docJSON: docJSON('Original paragraph.\n\nFollowing paragraph.'),
+        markdown: 'Original paragraph.\n\nFollowing paragraph.',
+      },
+      conversationAnchors: [{
+        threadId: 'thread-existing',
+        anchorStart: 1,
+        anchorEnd: 20,
+        anchorText: 'Original paragraph.',
+        detached: false,
+        ephemeral: false,
+        updatedAt,
+      }],
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'loadStreamThread') {
+        return {
+          thread: {
+            threadId: 'thread-existing',
+            streamId: anchored.id,
+            title: 'Why?',
+            workingText: '',
+            anchorText: 'Original paragraph.',
+            anchorStart: 1,
+            anchorEnd: 20,
+            detached: false,
+            ephemeral: false,
+            revision: 0,
+            createdAt: updatedAt,
+            updatedAt,
+            exchanges: [{
+              requestId: 'exchange-1',
+              streamId: anchored.id,
+              threadId: 'thread-existing',
+              verb: 'thread',
+              userInput: 'Why?',
+              sourceManifest: '[]',
+              responseRaw: 'Because.',
+              createdAt: updatedAt,
+            }],
+          },
+        };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    await renderStream(anchored);
+    const block = editor().querySelector('p') as HTMLParagraphElement;
+    await vi.waitFor(() => expect(block.classList.contains('conversation-block-anchored')).toBe(true));
+    vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+      left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
+      toJSON: () => ({}),
+    });
+    const scroller = document.querySelector('.stream-content') as HTMLElement;
+    scroller.scrollTop = 37;
+    editor().focus();
+    await act(async () => {
+      block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 320 }));
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('Because.'));
+    expect(scroller.scrollTop).toBe(37);
+    expect(document.querySelectorAll('.conversation-widget-host')).toHaveLength(1);
+    expect(document.activeElement).toBe(editor());
+
+    const tab = new KeyboardEvent('keydown', {
+      key: 'Tab', bubbles: true, cancelable: true,
+    });
+    await act(async () => { editor().dispatchEvent(tab); });
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(document.querySelector('.conversation-composer'));
+  });
+
+  it('keeps send disabled until a persisted conversation loads successfully', async () => {
+    const updatedAt = new Date().toISOString();
+    const anchored: Stream = {
+      ...stream,
+      id: 'loading-conversation-stream',
+      document: { ...stream.document, streamId: 'loading-conversation-stream' },
+      conversationAnchors: [{
+        threadId: 'thread-loading',
+        anchorStart: 1,
+        anchorEnd: 20,
+        anchorText: 'Original paragraph.',
+        detached: false,
+        ephemeral: false,
+        updatedAt,
+      }],
+    };
+    let rejectLoad: ((reason?: unknown) => void) | undefined;
+    let loadAttempts = 0;
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'loadStreamThread') {
+        loadAttempts += 1;
+        if (loadAttempts === 1) {
+          return new Promise((_resolve, reject) => { rejectLoad = reject; });
+        }
+        return {
+          thread: {
+            threadId: 'thread-loading',
+            streamId: anchored.id,
+            title: 'Existing conversation',
+            workingText: '',
+            anchorText: 'Original paragraph.',
+            anchorStart: 1,
+            anchorEnd: 20,
+            detached: false,
+            ephemeral: false,
+            revision: 0,
+            createdAt: updatedAt,
+            updatedAt,
+            exchanges: [],
+          },
+        };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    await renderStream(anchored);
+    const block = editor().querySelector('p') as HTMLParagraphElement;
+    await vi.waitFor(() => expect(block.classList.contains('conversation-block-anchored')).toBe(true));
+    vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+      left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
+      toJSON: () => ({}),
+    });
+    await act(async () => {
+      block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 320 }));
+      await Promise.resolve();
+    });
+    const composer = await vi.waitFor(() => document.querySelector('.conversation-composer') as HTMLTextAreaElement);
+    await enterConversationMessage(composer, 'Do not duplicate this.');
+    expect((document.querySelector('.conversation-send') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(sent.some((message) => message.type === 'thinkDocument')).toBe(false);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+
+    await act(async () => { rejectLoad?.(new Error('offline')); });
+    const retry = await vi.waitFor(() => {
+      const found = document.querySelector('.conversation-load-error button') as HTMLButtonElement | null;
+      expect(found?.textContent).toBe('Retry');
+      return found!;
+    });
+    expect((document.querySelector('.conversation-send') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      retry.click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(loadAttempts).toBe(2);
+      expect((document.querySelector('.conversation-send') as HTMLButtonElement).disabled).toBe(false);
+    });
+    await act(async () => {
+      (document.querySelector('.conversation-composer') as HTMLTextAreaElement).dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(sent.some((message) => message.type === 'thinkDocument')).toBe(true));
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+  });
+
+  it('keeps a detached draft surface and its composer text at the document end', async () => {
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      return updateState.call(this, state);
+    });
+    await renderStream({
+      ...stream,
+      id: 'detaching-draft-stream',
+      document: { ...stream.document, streamId: 'detaching-draft-stream' },
+    });
+    const composer = await openDraftConversation();
+    await enterConversationMessage(composer, 'Keep this draft.');
+
+    await act(async () => {
+      liveView!.dispatch(liveView!.state.tr.delete(1, 20));
+      await Promise.resolve();
+    });
+
+    const moved = await vi.waitFor(() => document.querySelector('.conversation-composer') as HTMLTextAreaElement);
+    expect(moved.value).toBe('Keep this draft.');
+    expect(document.querySelector('.conversation-drift-note')?.textContent)
+      .toBe('The passage has changed since this conversation started.');
+    expect(editor().lastElementChild?.classList.contains('conversation-widget-host')).toBe(true);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+  });
+
+  it.each(['collapse', 'editor unmount'] as const)(
+    'cancels an in-flight conversation on %s',
+    async (exit) => {
+      const createdAt = new Date(0).toISOString();
+      vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+        if (type === 'createStreamThread') {
+          return {
+            thread: {
+              threadId: `thread-${exit}`,
+              streamId: stream.id,
+              title: String(payload?.title),
+              workingText: '',
+              anchorText: String(payload?.anchorText),
+              anchorStart: Number(payload?.anchorStart),
+              anchorEnd: Number(payload?.anchorEnd),
+              detached: false,
+              ephemeral: false,
+              revision: 0,
+              createdAt,
+              updatedAt: createdAt,
+              exchanges: [],
+            },
+          };
+        }
+        return { revision: 2 };
+      }) as typeof bridge.sendAsync);
+      const composer = await openDraftConversation();
+      await enterConversationMessage(composer, 'Keep or cancel?');
+      await act(async () => {
+        composer.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+        }));
+        await Promise.resolve();
+      });
+      const requestId = activeRequestId();
+
+      if (exit === 'collapse') {
+        await act(async () => {
+          (document.querySelector('.conversation-rail') as HTMLButtonElement).click();
+          await new Promise((resolve) => window.setTimeout(resolve, 160));
+        });
+        expect(document.querySelector('.conversation-surface')).toBe(null);
+      } else {
+        await act(async () => {
+          root?.unmount();
+          await Promise.resolve();
+        });
+        root = null;
+      }
+      expect(sent).toContainEqual({
+        type: 'cancelDocumentAI',
+        payload: { requestId },
+      });
+    },
+  );
+
+  it('preserves composer and streamed text when a conflict reload remounts the portal', async () => {
+    const updatedAt = new Date(0).toISOString();
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'createStreamThread') {
+        return {
+          thread: {
+            threadId: 'thread-reloaded',
+            streamId: stream.id,
+            title: String(payload?.title),
+            workingText: '',
+            anchorText: String(payload?.anchorText),
+            anchorStart: Number(payload?.anchorStart),
+            anchorEnd: Number(payload?.anchorEnd),
+            detached: false,
+            ephemeral: false,
+            revision: 0,
+            createdAt: updatedAt,
+            updatedAt,
+            exchanges: [],
+          },
+        };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    const composer = await openDraftConversation();
+    await enterConversationMessage(composer, 'First question');
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    const requestId = activeRequestId();
+    await vi.waitFor(() => {
+      expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'saveRichStreamDocument')).toBe(true);
+    });
+    await act(async () => {
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Partial answer.' } });
+    });
+    await enterConversationMessage(
+      document.querySelector('.conversation-composer') as HTMLTextAreaElement,
+      'Follow-up draft',
+    );
+    const oldHost = document.querySelector('.conversation-widget-host');
+
+    await act(async () => {
+      bridge.receive({
+        type: 'streamDocumentConflict',
+        payload: {
+          streamId: stream.id,
+          docJSON: docJSON('Original paragraph.\n\nFrom elsewhere.'),
+          docFormatVersion: 1,
+          markdown: 'Original paragraph.\n\nFrom elsewhere.',
+          revision: 3,
+          spans: [],
+          conversationAnchors: [{
+            threadId: 'thread-reloaded',
+            anchorStart: 1,
+            anchorEnd: 20,
+            anchorText: 'Original paragraph.',
+            detached: false,
+            ephemeral: false,
+            updatedAt,
+          }],
+          pendingAppends: [],
+          appendInbox: [],
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => {
+      const newHost = document.querySelector('.conversation-widget-host');
+      expect(newHost).not.toBe(oldHost);
+      expect((newHost?.querySelector('.conversation-composer') as HTMLTextAreaElement).value)
+        .toBe('Follow-up draft');
+      expect(newHost?.querySelector('.conversation-turn--ai')?.textContent).toContain('Partial answer.');
+    });
+    expect(sent).not.toContainEqual({ type: 'cancelDocumentAI', payload: { requestId } });
+  });
+
+  it('lists, opens, and deletes a detached conversation from header overflow', async () => {
+    const updatedAt = new Date().toISOString();
+    const record = {
+      threadId: 'thread-detached',
+      anchorStart: null,
+      anchorEnd: null,
+      anchorText: 'Original passage',
+      detached: true,
+      ephemeral: false,
+      updatedAt,
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'listConversations') return { conversations: [record] };
+      if (type === 'loadStreamThread') {
+        return {
+          thread: {
+            threadId: record.threadId,
+            streamId: stream.id,
+            title: 'Detached question',
+            workingText: '',
+            anchorText: record.anchorText,
+            detached: true,
+            ephemeral: false,
+            revision: 0,
+            createdAt: updatedAt,
+            updatedAt,
+            exchanges: [{
+              requestId: 'detached-exchange',
+              streamId: stream.id,
+              threadId: record.threadId,
+              verb: 'thread',
+              userInput: 'Where did it go?',
+              sourceManifest: '[]',
+              responseRaw: 'The passage was removed.',
+              createdAt: updatedAt,
+            }],
+          },
+        };
+      }
+      if (type === 'deleteStreamThread') return { highlightIds: [] };
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+
+    const conversations = document.querySelector('.stream-overflow-action') as HTMLButtonElement;
+    await act(async () => {
+      conversations.click();
+      await Promise.resolve();
+    });
+    const row = await vi.waitFor(() => {
+      const found = document.querySelector('.conversation-list-row');
+      expect(found?.textContent).toContain('Original passage');
+      expect(found?.textContent).toContain('detached');
+      return found!;
+    });
+    await act(async () => {
+      (row.querySelector('.conversation-list-open') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(document.querySelector('.conversation-turn--ai')?.textContent)
+        .toContain('The passage was removed.');
+    });
+    expect(document.querySelector('.conversation-drift-note')?.textContent)
+      .toBe('The passage has changed since this conversation started.');
+
+    await act(async () => {
+      conversations.click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.conversation-list-delete')).not.toBe(null));
+    await act(async () => {
+      (document.querySelector('.conversation-list-delete') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(document.querySelector('.conversation-delete-confirm-dialog')).not.toBe(null);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'deleteStreamThread')).toBe(false);
+    await act(async () => {
+      (document.querySelector('.conversation-delete-confirm-delete') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([
+      'deleteStreamThread',
+      { streamId: stream.id, threadId: record.threadId },
+    ]);
+    expect(document.querySelector('.conversation-list-row')).toBe(null);
   });
 });
 

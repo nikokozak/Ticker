@@ -20,6 +20,7 @@ import { DocumentIcon, KeyIcon, Spinner, XIcon } from './components/icons';
 import { useToastStore } from './store/toastStore';
 import { debugError, debugLog } from './utils/debug';
 import { deserializeProvenanceSpans } from './utils/provenanceSpans';
+import { formatRelativeTime } from './utils/relativeTime';
 import {
   editorFontStack,
   normalizeEditorTypography,
@@ -644,22 +645,6 @@ interface StreamListViewProps {
   onCreate: () => void;
   onSettings: () => void;
   onRetry: () => void;
-}
-
-function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return 'just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 30) return `${diffDays}d ago`;
-  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
-  return `${Math.floor(diffDays / 365)}y ago`;
 }
 
 function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSettings, onRetry }: StreamListViewProps) {
