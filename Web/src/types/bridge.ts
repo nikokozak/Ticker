@@ -5,6 +5,7 @@ import type {
   PendingAppendJSON,
   ProvenanceSpanJSON,
   StreamAppendInboxJSON,
+  StreamThreadAnchorJSON,
   StreamThreadJSON,
 } from './models';
 
@@ -57,6 +58,7 @@ export type AIOperationState = 'queued' | 'preparing' | 'generating' | 'saving' 
 
 export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'addSource',
+  'addStreamThreadAnchor',
   'beginPdfAnchorPick',
   'deletePdfHighlight',
   'cancelDocumentAI',
@@ -84,6 +86,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'quitApp',
   'refreshProxyAuth',
   'removeSource',
+  'removeStreamThreadAnchor',
   'retrySourceIndexing',
   'runPdfSectionAI',
   'saveImage',
@@ -116,6 +119,9 @@ export interface ThinkDocumentPayload extends Record<string, unknown> {
   verb?: DocumentAIVerb;
   parentRequestId?: string;
   threadId?: string;
+  anchorStart?: number;
+  anchorEnd?: number;
+  streamMarkdown?: string;
 }
 
 export interface UpdateMarginNotePayload extends Record<string, unknown> {
@@ -263,6 +269,32 @@ export function loadStreamThread(
   threadId: string,
 ): Promise<{ thread: StreamThreadJSON }> {
   return bridge.sendAsync('loadStreamThread', { streamId, threadId });
+}
+
+export function addStreamThreadAnchor(input: {
+  streamId: string;
+  threadId: string;
+  anchor: Omit<StreamThreadAnchorJSON, 'threadId'> & {
+    rects?: Array<{ page: number; x: number; y: number; w: number; h: number }>;
+  };
+}): Promise<{ anchor: StreamThreadAnchorJSON }> {
+  return bridge.sendAsync('addStreamThreadAnchor', {
+    streamId: input.streamId,
+    threadId: input.threadId,
+    anchors: [input.anchor],
+  });
+}
+
+export function removeStreamThreadAnchor(input: {
+  streamId: string;
+  threadId: string;
+  anchorId: string;
+}): Promise<{ removed: boolean }> {
+  return bridge.sendAsync('removeStreamThreadAnchor', {
+    streamId: input.streamId,
+    threadId: input.threadId,
+    anchorId: input.anchorId,
+  });
 }
 
 export function deleteStreamThread(input: {

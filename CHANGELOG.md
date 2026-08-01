@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Changed
+- editor: add complete AI context, persistent pins, and receipts to inline conversations (phase C4)
 - editor: open block-anchored conversations inline with streaming replies (phase C3)
 - editor: add durable conversation anchors and passive gutter markers (phase C2)
 - editor: adopt the inline-conversation design language (phase C1)

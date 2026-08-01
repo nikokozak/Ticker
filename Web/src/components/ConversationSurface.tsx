@@ -1,6 +1,17 @@
-import { memo, useEffect, useRef, type KeyboardEvent } from 'react';
-import { bridge, loadStreamThread } from '../types/bridge';
-import type { AIExchangeJSON, SourceScope, StreamThreadJSON } from '../types/models';
+import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  addStreamThreadAnchor,
+  bridge,
+  loadStreamThread,
+  removeStreamThreadAnchor,
+} from '../types/bridge';
+import type {
+  AIExchangeJSON,
+  SourceScope,
+  StreamThreadAnchorJSON,
+  StreamThreadJSON,
+} from '../types/models';
+import { parseThreadAISentFacts } from '../threads/context';
 
 export interface ConversationActiveTurn {
   requestId: string;
@@ -8,6 +19,7 @@ export interface ConversationActiveTurn {
   response: string;
   running: boolean;
   error?: string;
+  sentContext?: unknown;
 }
 
 export interface ConversationLiveState {
@@ -42,6 +54,11 @@ interface ConversationSurfaceProps {
   sourceScope: SourceScope;
   threadId?: string;
   anchorText: string;
+  primaryText: string;
+  anchorStart: number;
+  anchorEnd: number;
+  streamMarkdown: string;
+  contextOptions: ConversationContextOption[];
   focusComposer: boolean;
   state: ConversationLiveState;
   updateState: (key: string, updater: ConversationLiveStateUpdater) => void;
@@ -50,13 +67,68 @@ interface ConversationSurfaceProps {
   onCollapse: () => void;
 }
 
+export interface ConversationContextOption {
+  kind: 'stream_quote' | 'pdf_quote';
+  quote: string;
+  from?: number;
+  to?: number;
+  sourceId?: string;
+  sourceName?: string;
+  sourceShortTitle?: string;
+  highlightId?: string;
+  page?: number;
+  createdAt?: string;
+  rects?: Array<{ page: number; x: number; y: number; w: number; h: number }>;
+}
+
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
 
-const Turn = memo(function Turn({ who, text }: { who: 'You' | 'AI'; text: string }) {
+function ThreadContextDisclosure({ value }: { value: unknown }) {
+  const receipt = parseThreadAISentFacts(value);
+  if (!receipt) return null;
+  const retrieval = receipt.sourceContextMode === 'none'
+    ? 'No source retrieval'
+    : receipt.sourceContextMode === 'passthrough' ? 'All selected sources'
+      : receipt.sourceContextMode === 'retrieved' ? 'Retrieved passages' : 'Source retrieval unavailable';
+  return (
+    <details className="conversation-receipt">
+      <summary>What AI saw</summary>
+      <div className="conversation-receipt-body">
+        <p><span>Primary passage</span> {receipt.anchor.text || 'Unavailable'}</p>
+        {receipt.streamDocument && (
+          <p><span>Full stream document</span> · {receipt.streamDocument.charCount} chars</p>
+        )}
+        {receipt.pinned.map((pin, index) => (
+          <p key={`${pin.kind}:${index}`}>
+            <span>{pin.kind === 'pdf_quote' ? 'Pinned PDF' : 'Pinned Stream'}</span> {pin.quote}
+          </p>
+        ))}
+        <p>
+          <span>Sources</span> {retrieval}
+          {receipt.sources.length > 0
+            ? ` · ${receipt.sources.map((source) => `${source.shortTitle}${source.page ? ` p.${source.page}` : ''}`).join(', ')}`
+            : ''}
+        </p>
+        <p><span>Prior turns</span> {receipt.turns.includedRequestIds.length} of {receipt.turns.totalAtSend}</p>
+      </div>
+    </details>
+  );
+}
+
+const Turn = memo(function Turn({
+  who,
+  text,
+  receipt,
+}: {
+  who: 'You' | 'AI';
+  text: string;
+  receipt?: unknown;
+}) {
   return (
     <div className={`conversation-turn conversation-turn--${who === 'You' ? 'you' : 'ai'}`}>
       <span className="conversation-turn-label">{who}</span>
       <div className="conversation-turn-text">{text}</div>
+      {who === 'AI' && <ThreadContextDisclosure value={receipt} />}
       <button type="button" className="conversation-turn-copy" onClick={() => copy(text)}>Copy</button>
     </div>
   );
@@ -68,6 +140,11 @@ export function ConversationSurface({
   sourceScope,
   threadId,
   anchorText,
+  primaryText,
+  anchorStart,
+  anchorEnd,
+  streamMarkdown,
+  contextOptions,
   focusComposer,
   state,
   updateState,
@@ -76,6 +153,7 @@ export function ConversationSurface({
   onCollapse,
 }: ConversationSurfaceProps) {
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [showContextMenu, setShowContextMenu] = useState(false);
   const stateRef = useRef(state);
   const activeRequestId = useRef(state.active?.running ? state.active.requestId : null);
   stateRef.current = state;
@@ -119,6 +197,12 @@ export function ConversationSurface({
     if (message.type === 'documentAIChunk' && typeof payload.chunk === 'string') {
       updateState(conversationKey, (current) => current.active?.requestId === requestId
         ? { ...current, active: { ...current.active, response: current.active.response + payload.chunk } }
+        : current);
+      return;
+    }
+    if (message.type === 'threadAIContext') {
+      updateState(conversationKey, (current) => current.active?.requestId === requestId
+        ? { ...current, active: { ...current.active, sentContext: payload.sentContext } }
         : current);
       return;
     }
@@ -187,6 +271,10 @@ export function ConversationSurface({
         streamId,
         threadId: current.threadId,
         query,
+        context: primaryText,
+        anchorStart,
+        anchorEnd,
+        streamMarkdown,
         imageURLs: [],
         sourceScope,
         verb: 'develop',
@@ -209,6 +297,57 @@ export function ConversationSurface({
     loading: true,
     loadError: false,
   }));
+  const addContext = async (option: ConversationContextOption) => {
+    const thread = stateRef.current.thread;
+    if (!thread) return;
+    setShowContextMenu(false);
+    try {
+      const { anchor } = await addStreamThreadAnchor({
+        streamId,
+        threadId: thread.threadId,
+        anchor: {
+          anchorId: crypto.randomUUID(),
+          kind: option.kind,
+          quote: option.quote,
+          createdAt: option.createdAt ?? new Date().toISOString(),
+          ...(option.kind === 'stream_quote'
+            ? { anchorSpanId: `pm:${option.from}:${option.to}` }
+            : {
+              sourceId: option.sourceId,
+              highlightId: option.highlightId,
+              rects: option.rects,
+            }),
+        },
+      });
+      updateState(conversationKey, (current) => current.thread ? {
+        ...current,
+        thread: { ...current.thread, anchors: [...(current.thread.anchors ?? []), anchor] },
+      } : current);
+    } catch {
+      updateState(conversationKey, (current) => ({ ...current, error: 'Context could not be added.' }));
+    }
+  };
+  const removeContext = async (anchor: StreamThreadAnchorJSON) => {
+    const thread = stateRef.current.thread;
+    if (!thread) return;
+    try {
+      const { removed } = await removeStreamThreadAnchor({
+        streamId,
+        threadId: thread.threadId,
+        anchorId: anchor.anchorId,
+      });
+      if (!removed) return;
+      updateState(conversationKey, (current) => current.thread ? {
+        ...current,
+        thread: {
+          ...current.thread,
+          anchors: (current.thread.anchors ?? []).filter((item) => item.anchorId !== anchor.anchorId),
+        },
+      } : current);
+    } catch {
+      updateState(conversationKey, (current) => ({ ...current, error: 'Context could not be removed.' }));
+    }
+  };
   const originalAnchorText = state.thread?.anchorText ?? anchorText;
   const sendDisabled = !state.composer.trim() || state.loading || state.creating
     || Boolean(threadId && !state.thread);
@@ -228,17 +367,56 @@ export function ConversationSurface({
         {state.exchanges.map((exchange) => (
           <div className="conversation-exchange" key={exchange.requestId}>
             <Turn who="You" text={exchange.userInput} />
-            <Turn who="AI" text={exchange.responseRaw} />
+            <Turn who="AI" text={exchange.responseRaw} receipt={exchange.sourceManifest} />
           </div>
         ))}
         {state.active && (
           <div className="conversation-exchange">
             <Turn who="You" text={state.active.userInput} />
-            <Turn who="AI" text={state.active.response || state.active.error || 'Thinking…'} />
+            <Turn
+              who="AI"
+              text={state.active.response || state.active.error || 'Thinking…'}
+              receipt={state.active.sentContext}
+            />
           </div>
         )}
         {state.error && <p className="conversation-error" role="alert">{state.error}</p>}
+        {(state.thread?.anchors?.length ?? 0) > 0 && (
+          <div className="conversation-pins" aria-label="Pinned context">
+            {state.thread!.anchors!.map((anchor) => (
+              <span className="conversation-pin" key={anchor.anchorId}>
+                {anchor.kind === 'pdf_quote'
+                  ? `${anchor.sourceShortTitle ?? anchor.sourceName ?? 'PDF'}${anchor.sourcePage ? ` p.${anchor.sourcePage}` : ''}`
+                  : anchor.quote}
+                <button type="button" aria-label="Remove pinned context" onClick={() => void removeContext(anchor)}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="conversation-composer-row">
+          <div className="conversation-context-picker">
+            <button
+              type="button"
+              className="conversation-context-button"
+              disabled={!state.thread || contextOptions.length === 0}
+              onClick={() => setShowContextMenu((visible) => !visible)}
+            >
+              + context
+            </button>
+            {showContextMenu && (
+              <div className="conversation-context-menu">
+                {contextOptions.map((option) => (
+                  <button
+                    type="button"
+                    key={`${option.kind}:${option.highlightId ?? `${option.from}:${option.to}`}`}
+                    onClick={() => void addContext(option)}
+                  >
+                    {option.kind === 'pdf_quote' ? 'PDF selection' : 'Stream selection'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <textarea
             ref={composerRef}
             className="conversation-composer"

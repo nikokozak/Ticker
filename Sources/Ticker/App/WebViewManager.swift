@@ -219,6 +219,15 @@ final class WebViewManager: NSObject {
                 DebugLog.log("[WebViewManager] Failed to save PDF page position (\(DebugLog.errorSummary(error)))")
             }
         }
+        pdfPaneController.onSelectionChanged = { [weak self] streamId, sourceId, sourceName, selection in
+            self?.sendPDFPaneStateChanged(
+                visible: true,
+                streamId: streamId,
+                sourceId: sourceId,
+                sourceName: sourceName,
+                selection: selection
+            )
+        }
         pdfPaneController.onClose = { [weak self] in
             Task { @MainActor in
                 self?.activePDFPaneStreamId = nil
@@ -428,7 +437,8 @@ final class WebViewManager: NSObject {
         visible: Bool,
         streamId: UUID? = nil,
         sourceId: UUID? = nil,
-        sourceName: String? = nil
+        sourceName: String? = nil,
+        selection: PDFHighlightRecord? = nil
     ) {
         var payload: [String: AnyCodable] = ["visible": AnyCodable(visible)]
         if let streamId {
@@ -440,6 +450,17 @@ final class WebViewManager: NSObject {
         if let sourceName {
             payload["sourceName"] = AnyCodable(sourceName)
             payload["shortTitle"] = AnyCodable(SourceShortTitle.derive(displayName: sourceName))
+        }
+        if let selection {
+            payload["selection"] = AnyCodable([
+                "highlightId": selection.id.uuidString,
+                "page": selection.page,
+                "quote": selection.quote,
+                "createdAt": ISO8601DateFormatter().string(from: selection.createdAt),
+                "rects": selection.rects.map { rect in
+                    ["page": rect.page, "x": rect.x, "y": rect.y, "w": rect.w, "h": rect.h]
+                }
+            ])
         }
         bridgeService.send(BridgeMessage(type: "pdfPaneStateChanged", payload: payload))
     }

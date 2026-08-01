@@ -45,6 +45,7 @@ import {
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import {
   conversationAnchorFromJSON,
+  conversationAnchorText,
   conversationAnchorTextForStorage,
   conversationAnchors,
   conversationRenderPosition,
@@ -158,8 +159,16 @@ type PromptIntent = {
 interface PDFPaneState {
   visible: boolean;
   streamId?: string;
+  sourceId?: string;
   sourceName?: string;
   shortTitle?: string;
+  selection?: {
+    highlightId: string;
+    page: number;
+    quote: string;
+    createdAt: string;
+    rects: Array<{ page: number; x: number; y: number; w: number; h: number }>;
+  };
 }
 
 interface SelectionMenuState {
@@ -1260,11 +1269,20 @@ export function RichStreamEditor({
     }
 
     if (message.type === 'pdfPaneStateChanged') {
+      const rawSelection = payload?.selection as PDFPaneState['selection'];
       setPDFPaneState({
         visible: payload?.visible === true,
         streamId: typeof payload?.streamId === 'string' ? payload.streamId : undefined,
+        sourceId: typeof payload?.sourceId === 'string' ? payload.sourceId : undefined,
         sourceName: (payload as SourceTitlePayload | undefined)?.sourceName,
         shortTitle: (payload as SourceTitlePayload | undefined)?.shortTitle,
+        selection: rawSelection
+          && typeof rawSelection.highlightId === 'string'
+          && typeof rawSelection.quote === 'string'
+          && rawSelection.quote.length > 0
+          && Array.isArray(rawSelection.rects)
+          ? rawSelection
+          : undefined,
       });
       return;
     }
@@ -1608,6 +1626,33 @@ export function RichStreamEditor({
 
   const formats = editor ? activeFormats(editor.view.state) : null;
   const activePDFHighlight = editor ? selectedPDFHighlight(editor.view.state) : null;
+  const liveConversationSurface = editor ? conversationSurface(editor.view.state) : null;
+  const streamSelection = editor?.view.state.selection;
+  const conversationContextOptions = [
+    ...(editor && streamSelection && !streamSelection.empty
+      && (!liveConversationSurface
+        || streamSelection.to <= liveConversationSurface.anchor.from
+        || streamSelection.from >= liveConversationSurface.anchor.to) ? [{
+      kind: 'stream_quote' as const,
+      quote: editor.view.state.doc.textBetween(streamSelection.from, streamSelection.to, '\n', ''),
+      from: streamSelection.from,
+      to: streamSelection.to,
+    }] : []),
+    ...(pdfPaneState.visible
+      && pdfPaneState.streamId === stream.id
+      && pdfPaneState.sourceId
+      && pdfPaneState.selection ? [{
+        kind: 'pdf_quote' as const,
+        quote: pdfPaneState.selection.quote,
+        sourceId: pdfPaneState.sourceId,
+        sourceName: pdfPaneState.sourceName,
+        sourceShortTitle: pdfPaneState.shortTitle,
+        highlightId: pdfPaneState.selection.highlightId,
+        page: pdfPaneState.selection.page,
+        createdAt: pdfPaneState.selection.createdAt,
+        rects: pdfPaneState.selection.rects,
+      }] : []),
+  ].filter((option) => option.quote.length > 0);
   const sourceScopeLabel = sourceScope === 'all' ? 'All' : sourceScope === 'none' ? 'None' : 'Auto';
   const openPDFTitle = pdfPaneState.visible && pdfPaneState.streamId === stream.id
     ? pdfPaneState.shortTitle ?? pdfPaneState.sourceName ?? 'Open PDF'
@@ -1966,6 +2011,13 @@ export function RichStreamEditor({
           sourceScope={sourceScope}
           threadId={expandedConversation.threadId}
           anchorText={expandedConversation.anchorText}
+          primaryText={editor && liveConversationSurface
+            ? conversationAnchorText(editor.view.state.doc, liveConversationSurface.anchor)
+            : expandedConversation.anchorText}
+          anchorStart={liveConversationSurface?.anchor.from ?? 0}
+          anchorEnd={liveConversationSurface?.anchor.to ?? 0}
+          streamMarkdown={editor?.getMarkdownProjection() ?? stream.document.markdown}
+          contextOptions={conversationContextOptions}
           focusComposer={expandedConversation.focusComposer}
           state={conversationLiveStates[expandedConversation.key]
             ?? initialConversationLiveState(expandedConversation.threadId)}

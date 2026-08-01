@@ -3,10 +3,12 @@ import Foundation
 @MainActor
 final class ThreadMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
+        "addStreamThreadAnchor",
         "listConversations",
         "createStreamThread",
         "deleteStreamThread",
         "loadStreamThread",
+        "removeStreamThreadAnchor",
         "saveStreamThread"
     ]
 
@@ -105,6 +107,47 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 respondWithError(callbackId, error.localizedDescription)
             }
 
+        case "addStreamThreadAnchor":
+            guard let payload = message.payload,
+                  let streamId = decodeUUID(payload, key: "streamId"),
+                  let threadId = decodeUUID(payload, key: "threadId") else {
+                respondWithError(callbackId, "Invalid addStreamThreadAnchor payload")
+                return
+            }
+            do {
+                let decoded = try decodeAnchors(payload["anchors"]?.value, threadId: threadId)
+                guard decoded.anchors.count == 1, decoded.highlights.count <= 1 else {
+                    throw StreamThreadPersistenceError.invalidAnchor
+                }
+                let anchor = try persistence.addStreamThreadAnchor(
+                    decoded.anchors[0],
+                    streamId: streamId,
+                    pdfHighlight: decoded.highlights.first
+                )
+                respond(callbackId, ["anchor": AnyCodable(try encodeAnchor(anchor))])
+            } catch {
+                respondWithError(callbackId, error.localizedDescription)
+            }
+
+        case "removeStreamThreadAnchor":
+            guard let payload = message.payload,
+                  let streamId = decodeUUID(payload, key: "streamId"),
+                  let threadId = decodeUUID(payload, key: "threadId"),
+                  let anchorId = payload["anchorId"]?.value as? String,
+                  !anchorId.isEmpty else {
+                respondWithError(callbackId, "Invalid removeStreamThreadAnchor payload")
+                return
+            }
+            do {
+                respond(callbackId, ["removed": AnyCodable(try persistence.removeStreamThreadAnchor(
+                    anchorId: anchorId,
+                    threadId: threadId,
+                    streamId: streamId
+                ))])
+            } catch {
+                respondWithError(callbackId, error.localizedDescription)
+            }
+
         case "deleteStreamThread":
             guard let payload = message.payload,
                   let streamId = decodeUUID(payload, key: "streamId"),
@@ -193,6 +236,99 @@ final class ThreadMessageHandler: BridgeMessageHandler {
             exchanges: exchanges,
             anchors: anchors
         )
+    }
+
+    private func encodeAnchor(_ anchor: StreamThreadAnchor) throws -> [String: Any] {
+        let source = try anchor.sourceId.flatMap { try persistence.loadSource(id: $0) }
+        let highlight = try source.flatMap { source in
+            try anchor.highlightId.flatMap {
+                try persistence.loadPDFHighlight(id: $0, sourceId: source.id)
+            }
+        }
+        return StreamCodec.encodeThreadAnchor(anchor, source: source, highlight: highlight)
+    }
+
+    private func decodeAnchors(
+        _ value: Any?,
+        threadId: UUID
+    ) throws -> (anchors: [StreamThreadAnchor], highlights: [PDFHighlightRecord]) {
+        guard let items = value as? [[String: Any]] else {
+            throw StreamThreadPersistenceError.invalidAnchor
+        }
+        var anchors: [StreamThreadAnchor] = []
+        var highlights: [PDFHighlightRecord] = []
+        for item in items {
+            guard let anchorId = item["anchorId"] as? String,
+                  !anchorId.isEmpty,
+                  let kindRaw = item["kind"] as? String,
+                  let kind = StreamThreadAnchorKind(rawValue: kindRaw),
+                  let quote = Self.optionalString(item["quote"]) else {
+                throw StreamThreadPersistenceError.invalidAnchor
+            }
+            let createdAt = Self.dateValue(item["createdAt"]) ?? Date()
+            let anchorSpanId = Self.optionalString(item["anchorSpanId"])
+            let sourceId = Self.optionalString(item["sourceId"]).flatMap(UUID.init(uuidString:))
+            let highlightId = Self.optionalString(item["highlightId"]).flatMap(UUID.init(uuidString:))
+            anchors.append(StreamThreadAnchor(
+                anchorId: anchorId,
+                threadId: threadId,
+                kind: kind,
+                quote: quote,
+                anchorSpanId: anchorSpanId,
+                sourceId: sourceId,
+                highlightId: highlightId,
+                createdAt: createdAt
+            ))
+
+            guard kind == .pdfQuote,
+                  let sourceId,
+                  let highlightId,
+                  let rectItems = item["rects"] as? [[String: Any]],
+                  !rectItems.isEmpty else { continue }
+            let rects = try rectItems.map { rect -> PDFHighlightRect in
+                guard let page = Self.intValue(rect["page"]),
+                      let x = Self.doubleValue(rect["x"]),
+                      let y = Self.doubleValue(rect["y"]),
+                      let w = Self.doubleValue(rect["w"]),
+                      let h = Self.doubleValue(rect["h"]),
+                      page > 0, w > 0, h > 0 else {
+                    throw StreamThreadPersistenceError.invalidAnchor
+                }
+                return PDFHighlightRect(page: page, x: x, y: y, w: w, h: h)
+            }
+            highlights.append(PDFHighlightRecord(
+                id: highlightId,
+                sourceId: sourceId,
+                page: rects[0].page,
+                rects: rects,
+                quote: quote,
+                createdAt: createdAt
+            ))
+        }
+        return (anchors, highlights)
+    }
+
+    private static func optionalString(_ value: Any?) -> String? {
+        guard let value = value as? String, !value.isEmpty else { return nil }
+        return value
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? Double, value.rounded(.towardZero) == value { return Int(value) }
+        return nil
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        return nil
+    }
+
+    private static func dateValue(_ value: Any?) -> Date? {
+        if let raw = value as? String { return ISO8601DateFormatter().date(from: raw) }
+        if let seconds = doubleValue(value) { return Date(timeIntervalSince1970: seconds) }
+        return nil
     }
 
     private func respond(_ callbackId: String, _ payload: [String: AnyCodable]) {

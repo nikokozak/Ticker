@@ -339,6 +339,7 @@ final class PDFReaderPaneController: NSViewController {
     var onRevealHighlightInStream: (@MainActor (PDFHighlightRevealPayload) -> Void)?
     var onDeleteHighlight: (@MainActor (PDFHighlightRevealPayload) -> Bool)?
     var onPageChanged: ((UUID, Int) -> Void)?
+    var onSelectionChanged: (@MainActor (UUID, UUID, String, PDFHighlightRecord?) -> Void)?
     var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
     var sectionProvider: ((UUID, UUID, Int) throws -> PDFSectionDescriptor)?
     var onClose: (() -> Void)?
@@ -387,6 +388,13 @@ final class PDFReaderPaneController: NSViewController {
     private var pdfHighlightClickTracker: PDFHighlightClickTracker?
     private var anchorPickPreviousAcceptsMouseMovedEvents: Bool?
     private var pdfFindDebounceWorkItem: DispatchWorkItem?
+    private var pdfSelectionNotifyWorkItem: DispatchWorkItem?
+    private var pdfSelectionCache: (
+        sourceId: UUID,
+        quote: String,
+        rects: [PDFHighlightRect],
+        payload: PDFHighlightLinkPayload
+    )?
     private var pdfFindGeneration = 0
     private var pdfFindMatches: [PDFSelection] = []
     private var pdfFindCurrentIndex: Int?
@@ -400,6 +408,7 @@ final class PDFReaderPaneController: NSViewController {
     deinit {
         pdfFindDebounceWorkItem?.cancel()
         pdfPageSaveWorkItem?.cancel()
+        pdfSelectionNotifyWorkItem?.cancel()
         pdfPaneMessageWorkItem?.cancel()
         NotificationCenter.default.removeObserver(self)
         if let pdfHighlightActivationMonitor {
@@ -1493,6 +1502,9 @@ final class PDFReaderPaneController: NSViewController {
         exitAnchorPickMode(notifyCancelled: false)
         flushPDFPageSave()
         pdfPageSaveWorkItem?.cancel()
+        pdfSelectionNotifyWorkItem?.cancel()
+        pdfSelectionNotifyWorkItem = nil
+        pdfSelectionCache = nil
         pdfPaneMessageWorkItem?.cancel()
         pdfPaneTransientMessage = nil
         resetPDFFindState()
@@ -1515,10 +1527,12 @@ final class PDFReaderPaneController: NSViewController {
     @objc private func handlePDFPaneSelectionChanged() {
         guard !isAnchorPickMode else {
             setPDFSelectionActionsEnabled(false)
+            scheduleSelectionChanged(nil)
             return
         }
-        let selectedText = pdfPanePDFView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        setPDFSelectionActionsEnabled(!selectedText.isEmpty)
+        let payload = currentSelectionPayload()
+        setPDFSelectionActionsEnabled(payload != nil)
+        scheduleSelectionChanged(payload?.highlight)
     }
 
     @objc private func handlePDFPanePageChanged() {
@@ -1678,44 +1692,71 @@ final class PDFReaderPaneController: NSViewController {
     ) {
         exitAnchorPickMode(notifyCancelled: true)
 
-        guard let context = activePDFContext else {
+        guard activePDFContext != nil else {
             showPDFPaneMessage(missingPDFMessage)
             return
         }
-        guard let selection = pdfPanePDFView.currentSelection else {
+        guard pdfPanePDFView.currentSelection != nil else {
             showPDFPaneMessage(missingSelectionMessage)
             return
         }
-
-        let quote = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !quote.isEmpty else {
-            showPDFPaneMessage(missingSelectionMessage)
-            return
-        }
-
-        let rects = highlightRects(for: selection)
-        guard let firstRect = rects.first else {
+        guard let payload = currentSelectionPayload() else {
             showPDFPaneMessage(invalidSelectionMessage)
             return
         }
+        guard action?(payload) == true else { return }
 
-        let highlight = PDFHighlightRecord(
-            id: UUID(),
-            sourceId: context.sourceId,
-            page: firstRect.page,
-            rects: rects,
-            quote: quote,
-            createdAt: Date()
-        )
+        applyHighlight(payload.highlight)
+        pdfPanePDFView.clearSelection()
+    }
+
+    private func currentSelectionPayload() -> PDFHighlightLinkPayload? {
+        guard let context = activePDFContext,
+              let selection = pdfPanePDFView.currentSelection else {
+            pdfSelectionCache = nil
+            return nil
+        }
+        let quote = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rects = highlightRects(for: selection)
+        guard !quote.isEmpty, let firstRect = rects.first else {
+            pdfSelectionCache = nil
+            return nil
+        }
+        if let cached = pdfSelectionCache,
+           cached.sourceId == context.sourceId,
+           cached.quote == quote,
+           cached.rects == rects {
+            return cached.payload
+        }
         let payload = PDFHighlightLinkPayload(
             streamId: context.streamId,
             sourceName: context.sourceName,
-            highlight: highlight
+            highlight: PDFHighlightRecord(
+                id: UUID(),
+                sourceId: context.sourceId,
+                page: firstRect.page,
+                rects: rects,
+                quote: quote,
+                createdAt: Date()
+            )
         )
-        guard action?(payload) == true else { return }
+        pdfSelectionCache = (context.sourceId, quote, rects, payload)
+        return payload
+    }
 
-        applyHighlight(highlight)
-        pdfPanePDFView.clearSelection()
+    private func scheduleSelectionChanged(_ highlight: PDFHighlightRecord?) {
+        pdfSelectionNotifyWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.pdfSelectionNotifyWorkItem = nil
+            self?.notifySelectionChanged(highlight)
+        }
+        pdfSelectionNotifyWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+    }
+
+    private func notifySelectionChanged(_ highlight: PDFHighlightRecord?) {
+        guard let context = activePDFContext else { return }
+        onSelectionChanged?(context.streamId, context.sourceId, context.sourceName, highlight)
     }
 
     private func highlightRects(for selection: PDFSelection) -> [PDFHighlightRect] {

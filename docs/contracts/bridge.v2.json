@@ -79,7 +79,7 @@
       },
       "pdfPaneStateChanged": {
         "requiredPayloadKeys": ["visible"],
-        "optionalPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle"]
+        "optionalPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "selection"]
       },
       "pdfSectionActionRequested": {
         "requiredPayloadKeys": ["action", "streamId", "sourceId", "shortTitle", "sectionTitle", "page"]
@@ -149,6 +149,10 @@
   },
   "webToSwift": {
     "messages": {
+      "addStreamThreadAnchor": {
+        "requiredPayloadKeys": ["streamId", "threadId", "anchors"],
+        "requiredCallbackId": true
+      },
       "addSource": {
         "requiredPayloadKeys": ["streamId"]
       },
@@ -247,6 +251,10 @@
       "removeSource": {
         "requiredPayloadKeys": ["id"]
       },
+      "removeStreamThreadAnchor": {
+        "requiredPayloadKeys": ["streamId", "threadId", "anchorId"],
+        "requiredCallbackId": true
+      },
       "retrySourceIndexing": {
         "requiredPayloadKeys": ["sourceId"]
       },
@@ -306,7 +314,7 @@
       },
       "thinkDocument": {
         "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
-        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId", "threadId"]
+        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId", "threadId", "anchorStart", "anchorEnd", "streamMarkdown"]
       },
       "updateMarginNote": {
         "requiredPayloadKeys": ["noteId", "status"]

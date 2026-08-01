@@ -1260,7 +1260,7 @@ final class StreamDocumentTests: XCTestCase {
         let withoutHistory = try AIOrchestrator.prepareThreadRequest(
             query: "What follows?",
             anchorText: "A fixed starting passage.",
-            workingText: "My current note.",
+            streamMarkdown: "My current Stream.",
             priorTurns: [],
             sourceContext: nil
         )
@@ -1275,7 +1275,7 @@ final class StreamDocumentTests: XCTestCase {
         let prepared = try AIOrchestrator.prepareThreadRequest(
             query: "What follows?",
             anchorText: "A fixed starting passage.",
-            workingText: "My current note.",
+            streamMarkdown: "My current Stream.",
             priorTurns: [old, recent],
             sourceContext: nil,
             tokenBudget: boundary
@@ -1289,11 +1289,32 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(truncated.messages.map(\.content), prepared.request.messages.map(\.content))
     }
 
+    func test_conversationAIFramesAndSanitizesPrimaryStreamAndPinnedMaterial() throws {
+        let pinnedQuote = "Pinned [link](ticker-pdf://private) verbatim."
+        let prepared = try AIOrchestrator.prepareThreadRequest(
+            query: "Check this",
+            anchorText: "Primary block",
+            streamMarkdown: "Primary block\n\nWhole [Stream](ticker-thread://private)",
+            pinnedContext: [ThreadAIPinnedContext(kind: .pdfQuote, quote: pinnedQuote)],
+            priorTurns: [],
+            sourceContext: nil
+        )
+        let content = prepared.request.messages.map(\.content).joined(separator: "\n")
+
+        XCTAssertTrue(content.contains("PRIMARY anchor block"))
+        XCTAssertTrue(content.contains("<primary_anchor>\nPrimary block\n</primary_anchor>"))
+        XCTAssertTrue(content.contains("<stream_document>\nPrimary block\n\nWhole Stream\n</stream_document>"))
+        XCTAssertTrue(content.contains("<pinned_context kind=\"pdf_quote\">\n\(pinnedQuote)\n</pinned_context>"))
+        XCTAssertEqual(content.components(separatedBy: pinnedQuote).count - 1, 1)
+        let pinnedFrames = prepared.request.messages.filter { $0.content.contains("<pinned_context") }
+        XCTAssertFalse(pinnedFrames.contains { $0.content.contains("Primary block") })
+    }
+
     func test_threadAIRequestRefusesOneTokenPastProtectedBoundary() throws {
         let fitted = try AIOrchestrator.prepareThreadRequest(
             query: "Question",
             anchorText: "Starting passage",
-            workingText: "Working note",
+            streamMarkdown: "Whole Stream",
             priorTurns: [],
             sourceContext: nil
         )
@@ -1302,7 +1323,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertThrowsError(try AIOrchestrator.prepareThreadRequest(
             query: "Question",
             anchorText: "Starting passage",
-            workingText: "Working note",
+            streamMarkdown: "Whole Stream",
             priorTurns: [],
             sourceContext: nil,
             tokenBudget: exactBudget - 1
@@ -1322,7 +1343,7 @@ final class StreamDocumentTests: XCTestCase {
         let protected = try AIOrchestrator.prepareThreadRequest(
             query: "Question",
             anchorText: "Starting passage",
-            workingText: "Working note",
+            streamMarkdown: "Whole Stream",
             priorTurns: [],
             sourceContext: nil
         )
@@ -1338,7 +1359,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertThrowsError(try AIOrchestrator.prepareThreadRequest(
             query: "Question",
             anchorText: "Starting passage",
-            workingText: "Working note",
+            streamMarkdown: "Whole Stream",
             priorTurns: [],
             sourceContext: sourceContext,
             tokenBudget: protectedBudget
@@ -1368,7 +1389,7 @@ final class StreamDocumentTests: XCTestCase {
         let prepared = try AIOrchestrator.prepareThreadRequest(
             query: "Follow up",
             anchorText: "Starting passage",
-            workingText: "",
+            streamMarkdown: "Whole Stream",
             priorTurns: [ThreadAIConversationTurn(
                 requestId: "earlier",
                 userInput: "How many controllers?",
@@ -1557,7 +1578,7 @@ final class StreamDocumentTests: XCTestCase {
     }
 
     @MainActor
-    func test_threadAIStoresRawPromptAndExactSentReceiptWithoutChangingStream() async throws {
+    func test_conversationAISendsFullContextAndPersistsVersion2ReceiptWithoutChangingStream() async throws {
         try await withTempPersistenceService { service in
             let stream = Stream(title: "Thread AI")
             try service.saveStream(stream)
@@ -1594,7 +1615,9 @@ final class StreamDocumentTests: XCTestCase {
                 workingText: canonicalWorkingText,
                 docJSON: #"{"type":"doc","content":[]}"#,
                 docFormatVersion: 1,
-                anchorText: "Read [the source](ticker-pdf://private-source?page=2)."
+                anchorText: "Read [the source](ticker-pdf://private-source?page=2).",
+                anchorStart: 1,
+                anchorEnd: 58
             )
             try service.createStreamThread(thread, anchors: [
                 StreamThreadAnchor(
@@ -1608,6 +1631,19 @@ final class StreamDocumentTests: XCTestCase {
                     threadId: thread.threadId,
                     kind: .streamQuote,
                     quote: "A second constraint."
+                ),
+                StreamThreadAnchor(
+                    anchorId: "anchor-range-duplicate",
+                    threadId: thread.threadId,
+                    kind: .streamQuote,
+                    quote: "Same primary range",
+                    anchorSpanId: "pm:1:58"
+                ),
+                StreamThreadAnchor(
+                    anchorId: "anchor-whitespace",
+                    threadId: thread.threadId,
+                    kind: .streamQuote,
+                    quote: " \n "
                 )
             ])
             let prior = AIExchange(
@@ -1628,17 +1664,13 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
                 routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
-                routeThreadAI: { query, retrievalQuery, _, _, anchorText, workingText, turns, onPrepared, onChunk, onComplete, _, onModelSelected in
+                routeThreadAI: { query, retrievalQuery, _, _, anchorText, streamMarkdown, pinned, turns, onPrepared, onChunk, onComplete, _, onModelSelected in
                     routedQuery = query
                     routedRetrievalQuery = retrievalQuery
-                    XCTAssertEqual(anchorText, "")
-                    XCTAssertEqual(workingText, canonicalWorkingText)
-                    XCTAssertEqual(
-                        (anchorText + workingText).components(separatedBy: "A second constraint.").count - 1,
-                        1,
-                        "canonical evidence must be sent exactly once"
-                    )
-                    XCTAssertTrue(turns.isEmpty)
+                    XCTAssertEqual(anchorText, thread.anchorText)
+                    XCTAssertEqual(streamMarkdown, "Stream stays unchanged.")
+                    XCTAssertEqual(pinned.map(\.quote), ["A second constraint."])
+                    XCTAssertEqual(turns.map(\.requestId), [prior.requestId])
                     let receipt = ThreadAIRequestReceipt(
                         sourceContext: SourceContext(
                             text: sentSource.extractedText ?? "",
@@ -1646,8 +1678,8 @@ final class StreamDocumentTests: XCTestCase {
                             mode: .passthrough,
                             sourceIds: [sentSource.id]
                         ),
-                        includedPriorRequestIds: [],
-                        totalPriorExchangeCount: 0
+                        includedPriorRequestIds: [prior.requestId],
+                        totalPriorExchangeCount: 1
                     )
                     onPrepared(receipt)
                     onModelSelected?("provider/model")
@@ -1678,16 +1710,23 @@ final class StreamDocumentTests: XCTestCase {
 
             let data = try XCTUnwrap(exchange.sourceManifest.data(using: .utf8))
             let receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-            XCTAssertEqual(receipt["version"] as? Int, 1)
+            XCTAssertEqual(receipt["version"] as? Int, 2)
             XCTAssertEqual(receipt["kind"] as? String, "threadAI")
             let anchor = try XCTUnwrap(receipt["anchor"] as? [String: Any])
-            XCTAssertEqual(anchor["text"] as? String, "")
-            XCTAssertEqual(anchor["kind"] as? String, "mixed")
+            XCTAssertEqual(anchor["text"] as? String, "Read the source.")
+            XCTAssertEqual(anchor["kind"] as? String, "stream")
+            XCTAssertEqual(anchor["from"] as? Int, 1)
+            XCTAssertEqual(anchor["to"] as? Int, 58)
             let note = try XCTUnwrap(receipt["note"] as? [String: Any])
-            XCTAssertEqual(note["text"] as? String, TickerInternalURLSanitizer.sanitize(canonicalWorkingText))
+            XCTAssertEqual(note["sent"] as? Bool, false)
             let turns = try XCTUnwrap(receipt["turns"] as? [String: Any])
-            XCTAssertEqual(turns["includedRequestIds"] as? [String], [])
-            XCTAssertEqual(turns["totalAtSend"] as? Int, 0)
+            XCTAssertEqual(turns["includedRequestIds"] as? [String], [prior.requestId])
+            XCTAssertEqual(turns["totalAtSend"] as? Int, 1)
+            let pinned = try XCTUnwrap(receipt["pinned"] as? [[String: Any]])
+            XCTAssertEqual(pinned.map { $0["quote"] as? String }, ["A second constraint."])
+            let streamDocument = try XCTUnwrap(receipt["streamDocument"] as? [String: Any])
+            XCTAssertEqual(streamDocument["sent"] as? Bool, true)
+            XCTAssertEqual(streamDocument["charCount"] as? Int, "Stream stays unchanged.".count)
             let sources = try XCTUnwrap(receipt["sources"] as? [[String: Any]])
             XCTAssertEqual(sources.map { $0["sourceId"] as? String }, [sentSource.id.uuidString])
             XCTAssertFalse(sources.contains { $0["sourceId"] as? String == otherSource.id.uuidString })
@@ -1713,7 +1752,7 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
                 routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
-                routeThreadAI: { _, _, _, _, _, _, _, _, _, _, onError, _ in
+                routeThreadAI: { _, _, _, _, _, _, _, _, _, _, _, onError, _ in
                     onError(ThreadAIRequestError.contextTooLarge(
                         largestBlock: "Your note",
                         protectedTokens: 98_000,
@@ -1940,8 +1979,8 @@ final class StreamDocumentTests: XCTestCase {
 
             XCTAssertThrowsError(try service.saveStreamDocument(
                 streamId: stream.id,
-                docJSON: initial.docJSON,
-                docFormatVersion: initial.docFormatVersion,
+                docJSON: docJSON,
+                docFormatVersion: 1,
                 markdown: "stale",
                 baseRevision: initial.revision,
                 spans: [],
@@ -2359,10 +2398,12 @@ final class StreamDocumentTests: XCTestCase {
                 }
             )
             XCTAssertEqual(handler.handledTypes, [
+                "addStreamThreadAnchor",
                 "listConversations",
                 "createStreamThread",
                 "deleteStreamThread",
                 "loadStreamThread",
+                "removeStreamThreadAnchor",
                 "saveStreamThread"
             ])
 
@@ -2406,6 +2447,50 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(createdPayload["anchorEnd"] as? Int, 12)
             XCTAssertEqual(createdPayload["anchorText"] as? String, "Power budget")
             XCTAssertEqual((createdPayload["exchanges"] as? [[String: Any]])?.count, 0)
+
+            let pinnedAnchorPayload: [[String: Any]] = [[
+                "anchorId": "pinned-stream",
+                "kind": "stream_quote",
+                "quote": "Pinned passage",
+                "anchorSpanId": "pm:14:28"
+            ]]
+            await handler.handle(BridgeMessage(
+                type: "addStreamThreadAnchor",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(createdThreadId.uuidString),
+                    "anchors": AnyCodable(pinnedAnchorPayload)
+                ],
+                callbackId: "add-anchor"
+            ))
+            let addResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "add-anchor" }
+            )
+            let addedAnchor = try XCTUnwrap(addResponse.payload?["anchor"]?.value as? [String: Any])
+            XCTAssertEqual(addedAnchor["anchorStart"] as? Int, 14)
+            XCTAssertEqual(addedAnchor["anchorEnd"] as? Int, 28)
+            XCTAssertEqual(try service.loadStreamThreadAnchors(
+                threadId: createdThreadId,
+                streamId: stream.id
+            ).map(\.quote), ["Pinned passage"])
+
+            await handler.handle(BridgeMessage(
+                type: "removeStreamThreadAnchor",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(createdThreadId.uuidString),
+                    "anchorId": AnyCodable("pinned-stream")
+                ],
+                callbackId: "remove-anchor"
+            ))
+            let removeResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "remove-anchor" }
+            )
+            XCTAssertEqual(removeResponse.payload?["removed"]?.value as? Bool, true)
+            XCTAssertEqual(try service.loadStreamThreadAnchors(
+                threadId: createdThreadId,
+                streamId: stream.id
+            ), [])
 
             try service.saveExchange(AIExchange(
                 requestId: "conversation-turn",
@@ -6573,6 +6658,25 @@ final class StreamDocumentTests: XCTestCase {
             responseRaw: "Existing answer",
             createdAt: Date(timeIntervalSince1970: 5_001)
         )
+        let prototypeThread = StreamThread(
+            streamId: stream.id,
+            title: "Existing sidenote",
+            workingText: "Existing draft",
+            docJSON: #"{"type":"doc","content":[]}"#,
+            docFormatVersion: 1,
+            anchorText: "Existing passage",
+            anchorSpanId: "existing-span",
+            createdAt: Date(timeIntervalSince1970: 5_002),
+            updatedAt: Date(timeIntervalSince1970: 5_003)
+        )
+        let prototypeAnchor = StreamThreadAnchor(
+            anchorId: "existing-anchor",
+            threadId: prototypeThread.threadId,
+            kind: .streamQuote,
+            quote: prototypeThread.anchorText,
+            anchorSpanId: prototypeThread.anchorSpanId,
+            createdAt: prototypeThread.createdAt
+        )
 
         var service: PersistenceService? = try PersistenceService(
             databaseURL: dbURL,
@@ -6583,20 +6687,18 @@ final class StreamDocumentTests: XCTestCase {
         try service?.saveSource(source)
         try service?.savePDFHighlight(highlight)
         try service?.saveExchange(exchange)
+        try service?.createStreamThread(prototypeThread, anchors: [prototypeAnchor])
         service = nil
 
-        // Turn the fresh database into the exact pre-v28 shape while preserving
-        // representative released data. Reopening it must exercise v28 and v29.
+        // Turn the fresh database into the exact released v29 shape while preserving
+        // representative prototype data. Reopening it must run the real v30 migrator.
         var dbQueue: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
         try dbQueue?.write { db in
-            try db.execute(sql: "DROP TABLE stream_thread_anchors")
-            try db.execute(sql: "ALTER TABLE ai_exchanges DROP COLUMN thread_disposition")
-            try db.execute(sql: "DROP INDEX idx_ai_exchanges_thread")
-            try db.execute(sql: "ALTER TABLE ai_exchanges DROP COLUMN thread_id")
-            try db.execute(sql: "DROP TABLE stream_threads")
-            try db.execute(
-                sql: "DELETE FROM grdb_migrations WHERE identifier IN ('v28_stream_threads', 'v29_sidenote_documents')"
-            )
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN ephemeral")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN detached")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_end")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_start")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v30_conversation_anchors'")
         }
         dbQueue = nil
 
@@ -6610,7 +6712,24 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(try service?.loadSource(id: source.id)?.displayName, source.displayName)
         XCTAssertEqual(try service?.loadPDFHighlights(sourceId: source.id), [highlight])
         XCTAssertEqual(try service?.loadExchange(requestId: exchange.requestId), exchange)
-        XCTAssertTrue(try service?.loadStreamThreads(streamId: stream.id).isEmpty == true)
+        let migratedThread = try XCTUnwrap(service?.loadStreamThreads(streamId: stream.id).first)
+        XCTAssertEqual(migratedThread.threadId, prototypeThread.threadId)
+        XCTAssertEqual(migratedThread.title, prototypeThread.title)
+        XCTAssertEqual(migratedThread.workingText, prototypeThread.workingText)
+        XCTAssertEqual(migratedThread.docJSON, prototypeThread.docJSON)
+        XCTAssertEqual(migratedThread.docFormatVersion, prototypeThread.docFormatVersion)
+        XCTAssertEqual(migratedThread.anchorText, prototypeThread.anchorText)
+        XCTAssertNil(migratedThread.anchorStart)
+        XCTAssertNil(migratedThread.anchorEnd)
+        XCTAssertTrue(migratedThread.detached)
+        XCTAssertFalse(migratedThread.ephemeral)
+        XCTAssertEqual(
+            try service?.loadStreamThreadAnchors(
+                threadId: prototypeThread.threadId,
+                streamId: stream.id
+            ),
+            [prototypeAnchor]
+        )
         service = nil
 
         let backupURL = try XCTUnwrap(preMigrationBackups(nextTo: dbURL, fileManager: fileManager).first)
@@ -6622,15 +6741,34 @@ final class StreamDocumentTests: XCTestCase {
             )
             let exchangeColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(ai_exchanges)")
                 .map { (row: Row) -> String in row["name"] }
+            let threadColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(stream_threads)")
+                .map { (row: Row) -> String in row["name"] }
             let storedAnswer = try String.fetchOne(
                 db,
                 sql: "SELECT response_raw FROM ai_exchanges WHERE request_id = ?",
                 arguments: [exchange.requestId]
             )
+            let storedThreadTitle = try String.fetchOne(
+                db,
+                sql: "SELECT title FROM stream_threads WHERE thread_id = ?",
+                arguments: [prototypeThread.threadId.uuidString]
+            )
+            let migrations = try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
 
-            XCTAssertFalse(tables.contains("stream_threads"))
-            XCTAssertFalse(exchangeColumns.contains("thread_id"))
+            XCTAssertTrue(tables.contains("stream_threads"))
+            XCTAssertTrue(tables.contains("stream_thread_anchors"))
+            XCTAssertTrue(exchangeColumns.contains("thread_id"))
+            XCTAssertTrue(exchangeColumns.contains("thread_disposition"))
+            XCTAssertTrue(threadColumns.contains("doc_json"))
+            XCTAssertTrue(threadColumns.contains("doc_format_version"))
+            XCTAssertFalse(threadColumns.contains("anchor_start"))
+            XCTAssertFalse(threadColumns.contains("anchor_end"))
+            XCTAssertFalse(threadColumns.contains("detached"))
+            XCTAssertFalse(threadColumns.contains("ephemeral"))
+            XCTAssertTrue(migrations.contains("v29_sidenote_documents"))
+            XCTAssertFalse(migrations.contains("v30_conversation_anchors"))
             XCTAssertEqual(storedAnswer, exchange.responseRaw)
+            XCTAssertEqual(storedThreadTitle, prototypeThread.title)
         }
     }
 

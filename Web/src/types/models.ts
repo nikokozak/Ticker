@@ -104,6 +104,8 @@ export interface StreamThreadAnchorJSON {
   kind: 'stream_quote' | 'pdf_quote';
   quote?: string;
   anchorSpanId?: string;
+  anchorStart?: number;
+  anchorEnd?: number;
   sourceId?: string;
   sourceName?: string;
   sourceShortTitle?: string;
