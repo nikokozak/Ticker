@@ -2600,8 +2600,23 @@ describe('RichStreamEditor PDF highlight links', () => {
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
     };
+    const loadedThread: StreamThreadJSON = {
+      ...pdfThread,
+      exchanges: [{
+        requestId: 'prior-pdf-turn',
+        streamId: stream.id,
+        threadId: pdfThread.threadId,
+        verb: 'thread',
+        userInput: 'What constraint follows?',
+        sourceManifest: '{}',
+        responseRaw: 'Keep the rail below 3.6 volts.',
+        model: 'provider/model',
+        createdAt: new Date(0).toISOString(),
+      }],
+    };
     vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
       if (type === 'listStreamThreads') return { threads: [pdfThread] };
+      if (type === 'loadStreamThread') return { thread: loadedThread };
       throw new Error(`Unexpected ${type}`);
     }) as typeof bridge.sendAsync);
 
@@ -2619,6 +2634,12 @@ describe('RichStreamEditor PDF highlight links', () => {
 
     await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
     expect(document.querySelector('.thread-origin')?.textContent).toContain('Selected evidence.');
+    expect(document.querySelector('.thread-assistant-turn')?.textContent)
+      .toContain('Keep the rail below 3.6 volts.');
+    expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([
+      'loadStreamThread',
+      { streamId: stream.id, threadId: pdfThread.threadId },
+    ]);
     expect(useToastStore.getState().toasts.map((toast) => toast.message))
       .not.toContain('This highlight is no longer linked in the Stream.');
   });

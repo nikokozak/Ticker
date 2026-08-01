@@ -594,7 +594,7 @@ export function RichStreamEditor({
       }
       setShowThreads(true);
       hideSelectionMenu();
-      if (!await threadDrawerRef.current?.showThread(thread)) {
+      if (!await threadDrawerRef.current?.openThread(thread.threadId)) {
         addToast('Save the open thread note before switching threads.', 'error');
       }
     } catch {
