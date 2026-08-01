@@ -77,6 +77,7 @@ import {
   addProvenanceSpans,
   hashProvenanceText,
   provenanceSpanAt,
+  provenanceSpans,
   spanFromJSON,
   type ProvenanceSpanJSON,
 } from '../richtext/provenance';
@@ -97,6 +98,7 @@ import {
 } from '../utils/pdfAnchorSelection';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 import { formatRelativeTime } from '../utils/relativeTime';
+import { manifestCitations } from '../threads/context';
 import {
   activeFormats,
   toggleBlockquote,
@@ -948,25 +950,51 @@ export function RichStreamEditor({
     const currentEditor = editorRef.current;
     const surface = currentEditor && conversationSurface(currentEditor.view.state);
     if (!currentEditor || !surface) return;
-    const inserted = promoteConversationMarkdown(
-      currentEditor.view,
-      conversationSurfacePosition(currentEditor.view.state.doc, surface.anchor)
-        ?? currentEditor.view.state.doc.content.size,
-      exchange.responseRaw,
-      { requestId: exchange.requestId, model: exchange.model, verb: exchange.verb },
-    );
-    window.setTimeout(() => {
-      if (currentEditor.view.isDestroyed) return;
-      const highlighted = aiWritingRange(currentEditor.view.state);
-      if (highlighted?.from !== inserted.from || highlighted.to !== inserted.to) return;
-      currentEditor.view.dispatch(
-        setAIWritingRange(currentEditor.view.state.tr, null).setMeta('addToHistory', false),
+    try {
+      const priorPromotionEnd = provenanceSpans(currentEditor.view.state)
+        .filter((span) => span.origin === 'ai' && span.meta.threadId === surface.anchor.threadId)
+        .reduce((end, span) => Math.max(end, span.to), 0);
+      const inserted = promoteConversationMarkdown(
+        currentEditor.view,
+        priorPromotionEnd || conversationSurfacePosition(currentEditor.view.state.doc, surface.anchor)
+          || currentEditor.view.state.doc.content.size,
+        swapCitationMarkersWithMetadata(
+          exchange.responseRaw,
+          manifestCitations(exchange.sourceManifest),
+        ).text,
+        {
+          requestId: exchange.requestId,
+          model: exchange.model,
+          verb: exchange.verb,
+          threadId: surface.anchor.threadId,
+        },
       );
-    }, 1_200);
-    addToast('Added to the Stream.', 'success');
+      window.setTimeout(() => {
+        if (currentEditor.view.isDestroyed) return;
+        const highlighted = aiWritingRange(currentEditor.view.state);
+        if (highlighted?.from !== inserted.from || highlighted.to !== inserted.to) return;
+        currentEditor.view.dispatch(
+          setAIWritingRange(currentEditor.view.state.tr, null).setMeta('addToHistory', false),
+        );
+      }, 1_200);
+      addToast('Added to the Stream.', 'success');
+    } catch {
+      addToast("Couldn't add the reply.", 'error');
+    }
   }, [addToast]);
 
+  const discardPDFQuote = useCallback((streamId: unknown, highlightId: unknown) => {
+    if (typeof highlightId === 'string') {
+      bridge.send({
+        type: 'deletePdfHighlight',
+        payload: { streamId: typeof streamId === 'string' ? streamId : stream.id, highlightId },
+      });
+    }
+    addToast("Couldn't add the quote", 'info');
+  }, [addToast, stream.id]);
+
   const quoteAndDiscussPDF = useCallback(async (selection: {
+    streamId: string;
     sourceId: string;
     sourceName: string;
     shortTitle: string;
@@ -975,31 +1003,34 @@ export function RichStreamEditor({
     quote: string;
   }) => {
     const currentEditor = editorRef.current;
-    if (!currentEditor) return;
-    const { view } = currentEditor;
-    const cursor = lastEditorCursorRef.current;
-    const cursorAnchor = cursor === null
-      ? null
-      : fullBlockConversationAnchor(view.state.doc, cursor, '');
-    const insertAt = cursorAnchor
-      ? conversationSurfacePosition(view.state.doc, cursorAnchor) ?? view.state.doc.content.size
-      : view.state.doc.content.size;
-    const linkURL = buildTickerPDFLinkURL(selection);
-    const inserted = insertMarkdownBlocks(view, insertAt, buildPDFQuoteSnippet({
-      quote: selection.quote,
-      linkLabel: `${selection.shortTitle || selection.sourceName || 'PDF'} p.${selection.page}`,
-      linkURL,
-    }));
-    const key = `pdf:${crypto.randomUUID()}`;
-    const anchor = fullBlockConversationAnchor(view.state.doc, inserted.from + 2, key);
-    if (!anchor) {
-      addToast('The PDF quote was added, but its conversation could not be anchored.', 'warning');
+    const session = sessionRef.current;
+    if (!currentEditor || !session) {
+      discardPDFQuote(selection.streamId, selection.highlightId);
       return;
     }
-    view.dispatch(setConversationAnchors(view.state.tr, [...conversationAnchors(view.state), anchor]));
-    view.dispatch(setConversationSurface(view.state.tr, { key, anchor }));
-
+    const { view } = currentEditor;
+    let key: string | undefined;
     try {
+      const cursor = lastEditorCursorRef.current;
+      const cursorAnchor = cursor === null
+        ? null
+        : fullBlockConversationAnchor(view.state.doc, cursor, '');
+      const insertAt = cursorAnchor
+        ? conversationSurfacePosition(view.state.doc, cursorAnchor) ?? view.state.doc.content.size
+        : view.state.doc.content.size;
+      const linkURL = buildTickerPDFLinkURL(selection);
+      const inserted = insertMarkdownBlocks(view, insertAt, buildPDFQuoteSnippet({
+        quote: selection.quote,
+        linkLabel: `${selection.shortTitle || selection.sourceName || 'PDF'} p.${selection.page}`,
+        linkURL,
+      }));
+      key = `pdf:${crypto.randomUUID()}`;
+      const anchor = fullBlockConversationAnchor(view.state.doc, inserted.from + 2, key);
+      if (!anchor) throw new Error('The PDF quote could not be anchored.');
+      view.dispatch(setConversationAnchors(view.state.tr, [...conversationAnchors(view.state), anchor]));
+      view.dispatch(setConversationSurface(view.state.tr, { key, anchor }));
+      if (!await session.saveNow()) throw new Error('The PDF quote could not be saved.');
+
       const thread = await persistConversation(
         { key, anchor },
         selection.quote.slice(0, 80),
@@ -1020,7 +1051,7 @@ export function RichStreamEditor({
       addToast('Added PDF quote and opened a conversation.', 'success');
     } catch {
       const liveEditor = editorRef.current;
-      if (liveEditor && !liveEditor.view.isDestroyed) {
+      if (key && liveEditor && !liveEditor.view.isDestroyed) {
         liveEditor.view.dispatch(setConversationAnchors(
           liveEditor.view.state.tr,
           conversationAnchors(liveEditor.view.state).filter((item) => item.threadId !== key),
@@ -1029,9 +1060,9 @@ export function RichStreamEditor({
           liveEditor.view.dispatch(setConversationSurface(liveEditor.view.state.tr, null));
         }
       }
-      addToast('The PDF quote was added, but its conversation could not be created.', 'error');
+      discardPDFQuote(selection.streamId, selection.highlightId);
     }
-  }, [addToast, expandConversation, persistConversation, updateConversationLiveState]);
+  }, [addToast, discardPDFQuote, expandConversation, persistConversation, updateConversationLiveState]);
 
   const toggleConversationList = useCallback(async () => {
     if (showConversationList) {
@@ -1246,6 +1277,10 @@ export function RichStreamEditor({
   }, [stream.sourceScope]);
 
   useEffect(() => {
+    lastEditorCursorRef.current = null;
+  }, [stream.id]);
+
+  useEffect(() => {
     if (!pendingSourceId) {
       consumedPendingSourceRef.current = null;
       return;
@@ -1385,9 +1420,42 @@ export function RichStreamEditor({
   }, [onDelete]);
 
   useEffect(() => bridge.onMessage((message) => {
+    const payload = message.payload as Record<string, unknown> | undefined;
+
+    if (message.type === 'pdfThreadRequested') {
+      const requestStreamId = payload?.streamId;
+      const sourceId = payload?.sourceId;
+      const sourceName = payload?.sourceName;
+      const shortTitle = payload?.shortTitle;
+      const highlightId = payload?.highlightId;
+      const quote = payload?.quote;
+      const page = Number(payload?.page);
+      if (requestStreamId !== stream.id
+        || typeof sourceId !== 'string'
+        || typeof sourceName !== 'string'
+        || typeof shortTitle !== 'string'
+        || typeof highlightId !== 'string'
+        || typeof quote !== 'string'
+        || !quote.trim()
+        || !Number.isInteger(page)
+        || page < 1) {
+        discardPDFQuote(requestStreamId, highlightId);
+        return;
+      }
+      void quoteAndDiscussPDF({
+        streamId: requestStreamId,
+        sourceId,
+        sourceName,
+        shortTitle,
+        highlightId,
+        page,
+        quote,
+      });
+      return;
+    }
+
     const session = sessionRef.current;
     if (!session) return;
-    const payload = message.payload as Record<string, unknown> | undefined;
 
     if (message.type === 'getEditorSelection') {
       const requestId = payload?.requestId;
@@ -1438,26 +1506,6 @@ export function RichStreamEditor({
       }));
       editorRef.current!.view.focus();
       addToast('Added PDF quote to stream.', 'success');
-      return;
-    }
-
-    if (message.type === 'pdfThreadRequested') {
-      if (payload?.streamId !== stream.id) return;
-      const sourceId = payload.sourceId;
-      const sourceName = payload.sourceName;
-      const shortTitle = payload.shortTitle;
-      const highlightId = payload.highlightId;
-      const quote = payload.quote;
-      const page = Number(payload.page);
-      if (typeof sourceId !== 'string'
-        || typeof sourceName !== 'string'
-        || typeof shortTitle !== 'string'
-        || typeof highlightId !== 'string'
-        || typeof quote !== 'string'
-        || !quote.trim()
-        || !Number.isInteger(page)
-        || page < 1) return;
-      void quoteAndDiscussPDF({ sourceId, sourceName, shortTitle, highlightId, page, quote });
       return;
     }
 
@@ -1683,6 +1731,7 @@ export function RichStreamEditor({
     addToast,
     canStartAI,
     cancelDocumentAI,
+    discardPDFQuote,
     flushAll,
     quoteAndDiscussPDF,
     revealPDFConversation,
@@ -1782,7 +1831,10 @@ export function RichStreamEditor({
     ...(pdfPaneState.visible
       && pdfPaneState.streamId === stream.id
       && pdfPaneState.sourceId
-      && pdfPaneState.selection ? [{
+      && pdfPaneState.selection
+      && pdfPaneState.selection.highlightId !== (expandedConversation
+        ? conversationLiveStates[expandedConversation.key]?.thread?.highlightId
+        : undefined) ? [{
         kind: 'pdf_quote' as const,
         quote: pdfPaneState.selection.quote,
         sourceId: pdfPaneState.sourceId,

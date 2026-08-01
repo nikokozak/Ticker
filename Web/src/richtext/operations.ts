@@ -153,7 +153,7 @@ export function promoteConversationMarkdown(
   view: EditorView,
   pos: number,
   markdown: string,
-  attribution: { requestId: string; model?: string | null; verb: string },
+  attribution: { requestId: string; model?: string | null; verb: string; threadId: string },
 ): { from: number; to: number } {
   const { tr, inserted } = markdownBlockInsertion(view, pos, markdown);
   addProvenanceSpans(setAIWritingRange(tr, inserted), [{
@@ -161,7 +161,7 @@ export function promoteConversationMarkdown(
     ...inserted,
     origin: 'ai',
     requestId: attribution.requestId,
-    meta: { model: attribution.model ?? null, verb: attribution.verb },
+    meta: { model: attribution.model ?? null, verb: attribution.verb, threadId: attribution.threadId },
     textHash: hashProvenanceText(tr.doc, inserted),
     createdAt: Date.now(),
   }]);
@@ -173,8 +173,11 @@ function markdownBlockInsertion(view: EditorView, pos: number, markdown: string)
   const parsed = parseMarkdown(markdown);
   if (parsed.childCount === 0) throw new Error('There is no content to add.');
   const from = Math.max(0, Math.min(pos, view.state.doc.content.size));
+  const tr = view.state.tr.replace(from, from, new Slice(Fragment.from(parsed.content), 0, 0));
+  tr.setTime(1);
+  closeHistory(tr);
   return {
-    tr: view.state.tr.replace(from, from, new Slice(Fragment.from(parsed.content), 0, 0)),
+    tr,
     inserted: { from, to: from + parsed.content.size },
   };
 }

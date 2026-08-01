@@ -136,7 +136,7 @@ describe('applying what the AI wrote', () => {
 });
 
 describe('promoting a conversation answer', () => {
-  it('inserts formatted blocks with AI provenance and one exact undo step', () => {
+  it('isolates adjacent typing and undo removes both the promotion and its AI provenance', () => {
     const ed = open('Anchor block.\n\nAfter.');
     const before = ed.getDocumentJSON();
     const anchor = find(ed, 'Anchor block.');
@@ -144,7 +144,12 @@ describe('promoting a conversation answer', () => {
       ed.view,
       ed.view.state.doc.resolve(anchor.from).after(1),
       'First **paragraph**.\n\nSecond [citation](https://example.test).',
-      { requestId: 'conversation-request', model: 'test-model', verb: 'thread' },
+      {
+        requestId: 'conversation-request',
+        model: 'test-model',
+        verb: 'thread',
+        threadId: 'thread-1',
+      },
     );
 
     expect(ed.getMarkdownProjection()).toBe(
@@ -156,11 +161,19 @@ describe('promoting a conversation answer', () => {
         to: inserted.to,
         origin: 'ai',
         requestId: 'conversation-request',
-        meta: { model: 'test-model', verb: 'thread' },
+        meta: { model: 'test-model', verb: 'thread', threadId: 'thread-1' },
       }),
     ]);
+    const promoted = ed.getDocumentJSON();
+    const after = find(ed, 'After.');
+    ed.view.dispatch(ed.view.state.tr.insertText(' typed', after.to));
+
+    undo(ed);
+    expect(ed.getDocumentJSON()).toBe(promoted);
+    expect(provenanceSpans(ed.view.state)).toHaveLength(1);
     undo(ed);
     expect(ed.getDocumentJSON()).toBe(before);
+    expect(provenanceSpans(ed.view.state)).toEqual([]);
   });
 });
 

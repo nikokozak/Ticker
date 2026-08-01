@@ -319,13 +319,11 @@ final class ThreadMessageHandler: BridgeMessageHandler {
     private static func decodePrimaryPDFReferences(
         _ payload: [String: AnyCodable]
     ) -> (sourceId: UUID?, highlightId: UUID?)? {
-        let hasSource = payload["sourceId"] != nil
-        let hasHighlight = payload["highlightId"] != nil
-        guard hasSource == hasHighlight else { return nil }
-        guard hasSource else { return (nil, nil) }
-        guard let source = payload["sourceId"]?.value as? String,
-              let highlight = payload["highlightId"]?.value as? String,
-              let sourceId = UUID(uuidString: source),
+        let source = payload["sourceId"]?.value as? String
+        let highlight = payload["highlightId"]?.value as? String
+        guard (source == nil) == (highlight == nil) else { return nil }
+        guard let source, let highlight else { return (nil, nil) }
+        guard let sourceId = UUID(uuidString: source),
               let highlightId = UUID(uuidString: highlight) else { return nil }
         return (sourceId, highlightId)
     }

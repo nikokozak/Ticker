@@ -37,7 +37,17 @@ describe('pdf anchor selection helpers', () => {
       linkLabel: 'Guide \\ [draft] p.7',
       linkURL: 'ticker-pdf://source?highlight=h1&page=7',
     })).toBe(
-      '\n> A wrapped PDF quote. [Guide \\\\ \\[draft\\] p.7](ticker-pdf://source?highlight=h1&page=7)\n'
+      '\n> A wrapped PDF quote\\. [Guide \\\\ \\[draft\\] p.7](ticker-pdf://source?highlight=h1&page=7)\n'
+    );
+  });
+
+  it('escapes markdown syntax in the quoted PDF text', () => {
+    expect(buildPDFQuoteSnippet({
+      quote: '*literal* `code` [label](url)',
+      linkLabel: 'Paper p.1',
+      linkURL: 'ticker-pdf://source?highlight=h1&page=1',
+    })).toBe(
+      '\n> \\*literal\\* \\`code\\` \\[label\\]\\(url\\) [Paper p.1](ticker-pdf://source?highlight=h1&page=1)\n'
     );
   });
 });

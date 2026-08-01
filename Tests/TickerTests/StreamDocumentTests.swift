@@ -2473,7 +2473,9 @@ final class StreamDocumentTests: XCTestCase {
                     "title": AnyCodable("Does this hold?"),
                     "anchorStart": AnyCodable(1),
                     "anchorEnd": AnyCodable(12),
-                    "anchorText": AnyCodable("Power budget")
+                    "anchorText": AnyCodable("Power budget"),
+                    "sourceId": AnyCodable(NSNull()),
+                    "highlightId": AnyCodable(NSNull())
                 ],
                 callbackId: "create"
             ))
