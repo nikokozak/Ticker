@@ -7,6 +7,7 @@ import type { Stream, StreamAppendInboxJSON, StreamSummary } from './types/model
 import { parseMarkdown } from './richtext/markdown';
 import { useToastStore } from './store/toastStore';
 import { App } from './App';
+import { buildSidenoteDocumentJSON } from './components/ThreadDrawer';
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -129,6 +130,18 @@ function loads() {
   return sent.filter((message) => message.type === 'loadStream');
 }
 
+async function openSidenotes() {
+  const button = await vi.waitFor(() => {
+    const found = document.querySelector('[aria-label^="Sidenotes,"]') as HTMLButtonElement | null;
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+  });
+}
+
 beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
   useToastStore.getState().clearToasts();
@@ -235,21 +248,43 @@ describe('App stream loading', () => {
       .toContain('I’ve been wondering about Cape Verde');
   });
 
-  it('does not switch streams while a local thread note has a save conflict', async () => {
+  it('does not switch streams while a local Sidenote has a save conflict', async () => {
+    const primaryAnchor = {
+      anchorId: 'anchor-1',
+      threadId: 'thread-1',
+      kind: 'stream_quote' as const,
+      quote: 'Base',
+      anchorSpanId: 'span-1',
+      createdAt: now,
+    };
     const storedThread = {
       threadId: 'thread-1',
       streamId: 'stream-1',
       title: 'Power budget',
       workingText: 'Stored elsewhere',
+      docJSON: buildSidenoteDocumentJSON([primaryAnchor], 'Stored elsewhere'),
+      docFormatVersion: 1,
       anchorText: 'Base',
+      anchors: [primaryAnchor],
       revision: 8,
       createdAt: now,
       updatedAt: now,
     };
-    vi.mocked(bridge.sendAsync).mockImplementation((async (type: string) => {
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type: string, payload) => {
       if (type === 'loadProxyAuth') return { state: 'active' };
       if (type === 'listStreamThreads') return { threads: [storedThread] };
       if (type === 'loadStreamThread') return { thread: { ...storedThread, revision: 2 } };
+      if (type === 'addStreamThreadAnchor') {
+        const wire = (payload?.anchors as Array<Record<string, unknown>>)[0];
+        return {
+          anchor: {
+            ...wire,
+            threadId: 'thread-1',
+            sourceShortTitle: 'Data sheet',
+            sourcePage: Number(wire.page),
+          },
+        };
+      }
       if (type === 'saveStreamThread') return { conflict: true, thread: storedThread };
       return { revision: 2 };
     }) as typeof bridge.sendAsync);
@@ -261,21 +296,31 @@ describe('App stream loading', () => {
       await Promise.resolve();
     });
 
+    await openSidenotes();
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-list-item')).not.toBeNull());
     await act(async () => {
-      (document.querySelector('[aria-label="Threads"]') as HTMLButtonElement).click();
+      (document.querySelector('.sidenote-list-item') as HTMLButtonElement).click();
       await Promise.resolve();
     });
-    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
     await act(async () => {
-      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      bridge.receive({
+        type: 'pdfThreadRequested',
+        payload: {
+          streamId: 'stream-1',
+          sourceId: 'source-1',
+          sourceName: 'data-sheet.pdf',
+          shortTitle: 'Data sheet',
+          highlightId: 'highlight-1',
+          page: 4,
+          quote: 'Unsaved local evidence',
+          createdAt: now,
+          rects: [{ page: 4, x: 0.1, y: 0.2, w: 0.3, h: 0.04 }],
+        },
+      });
       await Promise.resolve();
     });
-    await vi.waitFor(() => expect(document.querySelector('[aria-label="My note"]')).not.toBeNull());
-    const note = document.querySelector('[aria-label="My note"]') as HTMLTextAreaElement;
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-warning')).not.toBeNull());
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')
-        ?.set?.call(note, 'Unsaved local note');
-      note.dispatchEvent(new Event('input', { bubbles: true }));
       bridge.receive({
         type: 'streamDocumentAppended',
         payload: {
@@ -290,9 +335,8 @@ describe('App stream loading', () => {
       await Promise.resolve();
     });
 
-    await vi.waitFor(() => expect(document.querySelector('.thread-save-warning')).not.toBeNull());
     expect(loads().map((message) => message.payload?.id)).toEqual(['stream-1']);
-    expect(note.value).toBe('Unsaved local note');
+    expect(document.querySelector('.sidenote-editor')?.textContent).toContain('Unsaved local evidence');
     expect(document.querySelector('.ProseMirror')?.textContent).toBe('Base');
   });
 
@@ -322,14 +366,11 @@ describe('App stream loading', () => {
       bridge.receive(loaded(Number(loads()[0].payload?.requestId)));
       await Promise.resolve();
     });
-    await act(async () => {
-      (document.querySelector('[aria-label="Threads"]') as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
-    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')?.textContent)
+    await openSidenotes();
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-list-item')?.textContent)
       .toContain('First thread'));
     await act(async () => {
-      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      (document.querySelector('.sidenote-list-item') as HTMLButtonElement).click();
       await Promise.resolve();
       bridge.receive({
         type: 'streamDocumentAppended',
@@ -347,12 +388,9 @@ describe('App stream loading', () => {
       await Promise.resolve();
     });
 
-    expect(document.querySelector('.thread-drawer')).toBeNull();
-    await act(async () => {
-      (document.querySelector('[aria-label="Threads"]') as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
-    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')?.textContent)
+    expect(document.querySelector('.sidenote-panel')).toBeNull();
+    await openSidenotes();
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-list-item')?.textContent)
       .toContain('Second thread'));
   });
 });

@@ -10,6 +10,7 @@ import type { Slice } from 'prosemirror-model';
 import { TextSelection, type Command, type Transaction } from 'prosemirror-state';
 import {
   bridge,
+  addStreamThreadAnchor,
   createStreamThread,
   getExchange,
   listStreamThreads,
@@ -23,6 +24,7 @@ import type {
   SourceScope,
   Stream,
   StreamAppendInboxJSON,
+  StreamThreadAnchorJSON,
   StreamThreadJSON,
 } from '../types/models';
 import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
@@ -31,8 +33,9 @@ import { Modal } from './Modal';
 import { SourcesModal } from './SourcesModal';
 import {
   ThreadDrawer,
+  buildSidenoteDocumentJSON,
   type ThreadDrawerHandle,
-  type ThreadInsertionRequest,
+  type SidenotePromotionRequest,
 } from './ThreadDrawer';
 import {
   nextSourceScope,
@@ -43,18 +46,19 @@ import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import {
   aiWritingRange,
   insertImage,
-  insertThreadWork,
+  insertSidenoteWork,
   removePDFHighlightLink,
   revealPDFHighlight,
   selectedPDFHighlight,
   selectText,
   setAIWritingRange,
   streamAIMarkdown,
-  threadInsertionTarget,
+  sidenoteInsertionTarget,
 } from '../richtext/operations';
 import { DocumentSession, type SaveState } from '../richtext/session';
 import {
   addProvenanceSpans,
+  dissolveProvenanceSpans,
   hashProvenanceText,
   provenanceSpanAt,
   provenanceSpans,
@@ -113,13 +117,6 @@ interface RichStreamEditorProps {
 const PDF_URL_PREFIX = 'ticker-pdf://';
 const THREAD_URL_PREFIX = 'ticker-thread://';
 
-type PendingThreadInsertion = ThreadInsertionRequest;
-
-function insertionExcerpt(text: string, limit = 64): string {
-  const singleLine = text.replace(/\s+/g, ' ').trim();
-  return singleLine.length > limit ? `${singleLine.slice(0, limit - 1)}…` : singleLine;
-}
-
 function readBlobAsBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -162,6 +159,11 @@ interface PDFThreadRequest {
   sourceId: string;
   highlightId: string;
   quote: string;
+  sourceName?: string;
+  shortTitle?: string;
+  page: number;
+  createdAt: string;
+  rects: Array<{ page: number; x: number; y: number; w: number; h: number }>;
 }
 
 interface SelectionMenuState {
@@ -170,6 +172,12 @@ interface SelectionMenuState {
   top: number;
   from: number;
   to: number;
+}
+
+interface SidenoteMarkerChooser {
+  threadIds: string[];
+  left: number;
+  top: number;
 }
 
 function documentAITarget(editor: RichTextEditor): { from: number; to: number; text: string } | null {
@@ -183,6 +191,15 @@ function documentAITarget(editor: RichTextEditor): { from: number; to: number; t
 function defaultThreadTitle(text: string): string {
   const oneLine = text.trim().replace(/\s+/g, ' ');
   return oneLine.length <= 64 ? oneLine : `${oneLine.slice(0, 61)}…`;
+}
+
+function sidenoteSourceLabel(thread: StreamThreadJSON): string {
+  const labels = (thread.anchors ?? []).flatMap((anchor) => {
+    if (anchor.kind === 'placement') return [];
+    if (anchor.kind === 'stream_quote') return ['Stream'];
+    return [anchor.sourceShortTitle || anchor.sourceName || 'PDF'];
+  });
+  return [...new Set(labels)].join(' · ') || 'Stream';
 }
 
 function restoreDocumentAI(editor: RichTextEditor, active: ActiveDocumentAI): void {
@@ -233,7 +250,12 @@ export function RichStreamEditor({
   const selectionActionMenuRef = useRef<HTMLDivElement>(null);
   const threadDrawerRef = useRef<ThreadDrawerHandle>(null);
   const threadButtonRef = useRef<HTMLButtonElement>(null);
-  const pendingThreadInsertionRef = useRef<PendingThreadInsertion | null>(null);
+  const markerChooserRef = useRef<HTMLDivElement>(null);
+  const pendingSidenotePlacementRef = useRef<{
+    threadId: string;
+    anchorId: string;
+    anchorSpanId: string;
+  } | null>(null);
   // ponytail: one stream-wide PDF AI lock; track host operation ids if concurrent
   // PDF jobs ever become a supported workflow.
   const pdfAIInFlightRef = useRef(false);
@@ -257,8 +279,10 @@ export function RichStreamEditor({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [showThreads, setShowThreads] = useState(false);
-  const [pendingThreadInsertion, setPendingThreadInsertion] = useState<PendingThreadInsertion | null>(null);
-  const [threadInsertionGuidance, setThreadInsertionGuidance] = useState('');
+  const [activeSidenote, setActiveSidenote] = useState<StreamThreadJSON | null>(null);
+  const [sidenotes, setSidenotes] = useState<StreamThreadJSON[]>([]);
+  const sidenotesRef = useRef<StreamThreadJSON[]>([]);
+  const [markerChooser, setMarkerChooser] = useState<SidenoteMarkerChooser | null>(null);
   const [threadInsertionSaveFailed, setThreadInsertionSaveFailed] = useState<string | null>(null);
   const [threadCreating, setThreadCreating] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
@@ -285,12 +309,38 @@ export function RichStreamEditor({
     } : null,
   });
 
-  const cancelThreadInsertion = useCallback((restoreDrawer = true) => {
-    const pending = pendingThreadInsertionRef.current;
-    pendingThreadInsertionRef.current = null;
-    setPendingThreadInsertion(null);
-    if (pending && restoreDrawer) setShowThreads(true);
+  const rememberSidenotes = useCallback((next: StreamThreadJSON[] | undefined) => {
+    const valid = Array.isArray(next) ? next : [];
+    sidenotesRef.current = valid;
+    setSidenotes(valid);
   }, []);
+
+  const rememberSidenote = useCallback((thread: StreamThreadJSON) => {
+    rememberSidenotes([
+      thread,
+      ...sidenotesRef.current.filter((candidate) => candidate.threadId !== thread.threadId),
+    ]);
+  }, [rememberSidenotes]);
+
+  const rememberSidenoteAnchor = useCallback((threadId: string, anchor: StreamThreadAnchorJSON) => {
+    const thread = sidenotesRef.current.find((candidate) => candidate.threadId === threadId);
+    if (!thread) return;
+    rememberSidenote({
+      ...thread,
+      anchors: [
+        ...(thread.anchors ?? []).filter((candidate) => candidate.anchorId !== anchor.anchorId),
+        anchor,
+      ],
+    });
+  }, [rememberSidenote]);
+
+  useEffect(() => {
+    let live = true;
+    void listStreamThreads(stream.id)
+      .then((result) => { if (live) rememberSidenotes(result.threads); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [rememberSidenotes, stream.id]);
 
   const cancelDocumentAI = useCallback((notifyHost = true) => {
     const active = aiRequestRef.current;
@@ -315,13 +365,9 @@ export function RichStreamEditor({
   const flushAll = useCallback(async () => {
     cancelDocumentAI();
     threadDrawerRef.current?.cancelAI();
-    cancelThreadInsertion(false);
-    const [documentSaved, threadSaved] = await Promise.all([
-      sessionRef.current?.saveNow() ?? Promise.resolve(true),
-      threadDrawerRef.current?.flush() ?? Promise.resolve(true),
-    ]);
-    return documentSaved && threadSaved;
-  }, [cancelDocumentAI, cancelThreadInsertion]);
+    if (!await (threadDrawerRef.current?.leave() ?? Promise.resolve(true))) return false;
+    return sessionRef.current?.saveNow() ?? Promise.resolve(true);
+  }, [cancelDocumentAI]);
 
   useEffect(() => {
     onFlushAvailable?.(flushAll);
@@ -329,10 +375,6 @@ export function RichStreamEditor({
   }, [flushAll, onFlushAvailable]);
 
   const canStartAI = useCallback(() => {
-    if (pendingThreadInsertionRef.current) {
-      addToast('Add the pending thread item, or cancel it first.', 'info');
-      return false;
-    }
     if (!aiInFlightRef.current && !pdfAIInFlightRef.current && !threadAIInFlightRef.current) return true;
     addToast('Wait for the current AI operation to finish, or stop it first.', 'info');
     return false;
@@ -514,12 +556,12 @@ export function RichStreamEditor({
     }
   }, []);
 
-  const locateThreadAnchor = useCallback((thread: StreamThreadJSON) => {
-    if (!thread.anchorSpanId) return true;
+  const locateThreadAnchor = useCallback((anchor: StreamThreadAnchorJSON) => {
+    if (!anchor.anchorSpanId) return true;
     const view = editorRef.current?.view;
     if (!view) return false;
     const span = provenanceSpans(view.state)
-      .find((candidate) => candidate.spanId === thread.anchorSpanId);
+      .find((candidate) => candidate.spanId === anchor.anchorSpanId);
     if (!span) return false;
 
     const $from = view.state.doc.resolve(span.from);
@@ -535,10 +577,31 @@ export function RichStreamEditor({
         return span.from <= to && span.to >= from;
       });
     element?.scrollIntoView({ block: 'center' });
-    element?.classList.add('thread-anchor-reveal');
-    window.setTimeout(() => element?.classList.remove('thread-anchor-reveal'), 1_600);
-    return true;
+    element?.classList.add('sidenote-anchor-reveal');
+    window.setTimeout(() => element?.classList.remove('sidenote-anchor-reveal'), 1_600);
+    return hashProvenanceText(view.state.doc, span) === span.textHash;
   }, []);
+
+  const removeSidenoteMarkers = useCallback(async (threadId: string) => {
+    const currentEditor = editorRef.current;
+    const session = sessionRef.current;
+    if (currentEditor && session) {
+      const spanIds = provenanceSpans(currentEditor.view.state)
+        .filter((span) => span.origin === 'thread' && span.meta.threadId === threadId)
+        .map((span) => span.spanId);
+      if (spanIds.length) {
+        currentEditor.view.dispatch(
+          dissolveProvenanceSpans(currentEditor.view.state.tr, spanIds)
+            .setMeta('addToHistory', false),
+        );
+        session.documentChanged();
+        if (!await session.saveNow()) {
+          addToast('The Sidenote was deleted, but its Stream markers still need to save.', 'warning');
+        }
+      }
+    }
+    rememberSidenotes(sidenotesRef.current.filter((thread) => thread.threadId !== threadId));
+  }, [addToast, rememberSidenotes]);
 
   /**
    * A citation is not an external URL. Swift rejects any non-HTTP scheme from
@@ -549,7 +612,7 @@ export function RichStreamEditor({
     if (href.startsWith(THREAD_URL_PREFIX)) {
       const threadId = href.slice(THREAD_URL_PREFIX.length).split(/[?#]/, 1)[0];
       if (!threadId) {
-        addToast('This thread link is damaged.', 'error');
+        addToast('This Sidenote link is damaged.', 'error');
         return;
       }
       setShowThreads(true);
@@ -563,41 +626,23 @@ export function RichStreamEditor({
     bridge.send({ type: 'openExternalURL', payload: { url: href } });
   }, [addToast, stream.id]);
 
-  const beginThreadInsertion = useCallback((request: ThreadInsertionRequest) => {
-    if (aiInFlightRef.current || pdfAIInFlightRef.current || threadAIInFlightRef.current) {
-      addToast('Wait for the current AI operation to finish, or stop it first.', 'info');
-      return;
-    }
-    if (threadInsertionSaveFailed) {
-      addToast('Retry the unsaved Stream change before adding another item.', 'info');
-      return;
-    }
-    const pending: PendingThreadInsertion = request;
-    pendingThreadInsertionRef.current = pending;
-    setPendingThreadInsertion(pending);
-    setThreadInsertionGuidance('Click text to place below it, or use ↑↓ then Return');
-    hideSelectionMenu();
-    setShowThreads(false);
-  }, [addToast, hideSelectionMenu, threadInsertionSaveFailed]);
-
   const openPDFHighlightThread = useCallback(async (sourceId: string, highlightId: string) => {
-    if (pendingThreadInsertionRef.current) {
-      addToast('Add the pending thread item, or cancel it first.', 'info');
-      return;
-    }
     try {
       const result = await listStreamThreads(stream.id);
       const thread = result.threads.find((candidate) => (
-        candidate.sourceId === sourceId && candidate.highlightId === highlightId
+        (candidate.sourceId === sourceId && candidate.highlightId === highlightId)
+        || candidate.anchors?.some((anchor) => (
+          anchor.sourceId === sourceId && anchor.highlightId === highlightId
+        ))
       ));
       if (!thread) {
-        addToast('This highlight is no longer linked in the Stream.', 'warning');
+        addToast('This highlight is no longer linked to a Sidenote.', 'warning');
         return;
       }
       setShowThreads(true);
       hideSelectionMenu();
       if (!await threadDrawerRef.current?.openThread(thread.threadId)) {
-        addToast('Save the open thread note before switching threads.', 'error');
+        addToast('Save the open Sidenote before switching.', 'error');
       }
     } catch {
       addToast('This highlight could not be opened.', 'error');
@@ -605,8 +650,28 @@ export function RichStreamEditor({
   }, [addToast, stream.id]);
 
   const retryThreadInsertionSave = useCallback(async () => {
-    if (await sessionRef.current?.saveNow()) setThreadInsertionSaveFailed(null);
-  }, []);
+    if (!await sessionRef.current?.saveNow()) return;
+    const pending = pendingSidenotePlacementRef.current;
+    if (pending) {
+      try {
+        const result = await addStreamThreadAnchor({
+          streamId: stream.id,
+          threadId: pending.threadId,
+          anchor: {
+            anchorId: pending.anchorId,
+            kind: 'placement',
+            anchorSpanId: pending.anchorSpanId,
+          },
+        });
+        rememberSidenoteAnchor(pending.threadId, result.anchor);
+        await threadDrawerRef.current?.addAnchor(result.anchor);
+        pendingSidenotePlacementRef.current = null;
+      } catch {
+        addToast('The Stream is saved, but the Sidenote marker could not be recorded.', 'warning');
+      }
+    }
+    setThreadInsertionSaveFailed(null);
+  }, [addToast, rememberSidenoteAnchor, stream.id]);
 
   const startPDFSelectionThread = useCallback(async (request: PDFThreadRequest) => {
     const discardHighlight = () => bridge.send({
@@ -614,12 +679,11 @@ export function RichStreamEditor({
       payload: { streamId: request.streamId, highlightId: request.highlightId },
     });
     if (threadCreateInFlightRef.current
-        || pendingThreadInsertionRef.current
         || aiInFlightRef.current
         || pdfAIInFlightRef.current
         || threadAIInFlightRef.current) {
       discardHighlight();
-      addToast('Finish the current operation before starting a PDF thread.', 'info');
+      addToast('Finish the current operation before adding a PDF quote.', 'info');
       return;
     }
 
@@ -628,30 +692,75 @@ export function RichStreamEditor({
     let created = false;
     try {
       if (!await (threadDrawerRef.current?.flush() ?? Promise.resolve(true))) {
-        throw new Error('The open thread note is not saved.');
+        throw new Error('The open Sidenote is not saved.');
+      }
+      const threadId = activeSidenote?.threadId ?? crypto.randomUUID();
+      const anchorId = crypto.randomUUID();
+      const displayAnchor: StreamThreadAnchorJSON = {
+        anchorId,
+        threadId,
+        kind: 'pdf_quote',
+        quote: request.quote,
+        sourceId: request.sourceId,
+        sourceName: request.sourceName,
+        sourceShortTitle: request.shortTitle,
+        highlightId: request.highlightId,
+        sourcePage: request.page,
+        createdAt: request.createdAt,
+      };
+      const wireAnchor = {
+        anchorId,
+        kind: 'pdf_quote' as const,
+        quote: request.quote,
+        sourceId: request.sourceId,
+        highlightId: request.highlightId,
+        createdAt: request.createdAt,
+        page: request.page,
+        rects: request.rects,
+      };
+      if (activeSidenote) {
+        const result = await addStreamThreadAnchor({
+          streamId: request.streamId,
+          threadId,
+          anchor: wireAnchor,
+        });
+        created = true;
+        setShowThreads(true);
+        if (!await threadDrawerRef.current?.addAnchor(result.anchor)) {
+          addToast('The quote is attached, but the open Sidenote still needs to save.', 'warning');
+        } else {
+          addToast('Added the PDF quote to this Sidenote.', 'success');
+        }
+        return;
       }
       const result = await createStreamThread({
         streamId: request.streamId,
+        threadId,
         title: defaultThreadTitle(request.quote),
+        workingText: '',
+        docJSON: buildSidenoteDocumentJSON([displayAnchor]),
+        docFormatVersion: 1,
         anchorText: request.quote,
         sourceId: request.sourceId,
         highlightId: request.highlightId,
+        anchors: [wireAnchor],
       });
       created = true;
+      rememberSidenote(result.thread);
       setShowThreads(true);
       if (!await threadDrawerRef.current?.showThread(result.thread)) {
-        addToast('The PDF thread was created. Open it from Threads.', 'info');
+        addToast('The Sidenote was created. Open it from Sidenotes.', 'info');
         return;
       }
-      addToast('Started a thread from the PDF selection.', 'success');
+      addToast('Created a Sidenote from the PDF quote.', 'success');
     } catch {
       if (!created) discardHighlight();
-      addToast('The PDF thread could not be created.', 'error');
+      addToast('The PDF quote could not be added to a Sidenote.', 'error');
     } finally {
       threadCreateInFlightRef.current = false;
       setThreadCreating(false);
     }
-  }, [addToast]);
+  }, [activeSidenote, addToast, rememberSidenote]);
 
   const saveImageToAssets = useCallback(async (blob: Blob): Promise<string> => {
     const requestId = crypto.randomUUID();
@@ -895,173 +1004,53 @@ export function RichStreamEditor({
   }, [editor, xray]);
 
   useEffect(() => {
-    if (!editor || !pendingThreadInsertion) return undefined;
-    const { view } = editor;
-    const previousEditable = view.props.editable;
-    const previousTabIndex = view.dom.getAttribute('tabindex');
-    let activeBlock: HTMLElement | null = null;
-    view.setProps({ editable: () => false });
-    view.dom.setAttribute('tabindex', '0');
-    window.getSelection()?.removeAllRanges();
-    view.dom.focus({ preventScroll: true });
-
-    const refuse = (message = 'Choose a text paragraph in the Stream') => {
-      if (pendingThreadInsertionRef.current) setThreadInsertionGuidance(message);
-    };
-
-    const candidateFor = (eventTarget: EventTarget | null) => {
-      const clicked = eventTarget instanceof Element ? eventTarget : null;
-      if (!clicked
-        || clicked.closest('a, pre, img, .richtext-image, .ProseMirror-selectednode')) return null;
-      const closest = clicked.closest<HTMLElement>('p, h1, h2, h3, h4, h5, h6, li');
-      if (!closest || !view.dom.contains(closest)) return null;
-      const block = closest.closest<HTMLElement>('li') ?? closest;
-      try {
-        const target = threadInsertionTarget(view.state, view.posAtDOM(block, 0));
-        return target ? { block, target } : null;
-      } catch {
-        return null;
-      }
-    };
-
-    const candidates = () => {
-      const available: Array<NonNullable<ReturnType<typeof candidateFor>>> = [];
-      const seen = new Set<HTMLElement>();
-      for (const block of view.dom.querySelectorAll<HTMLElement>('p, h1, h2, h3, h4, h5, h6, li')) {
-        const candidate = candidateFor(block);
-        if (!candidate || seen.has(candidate.block)) continue;
-        seen.add(candidate.block);
-        available.push(candidate);
-      }
-      return available;
-    };
-
-    const showTarget = (block: HTMLElement | null) => {
-      if (activeBlock === block) return;
-      activeBlock?.classList.remove('thread-insertion-target');
-      activeBlock = block;
-      activeBlock?.classList.add('thread-insertion-target');
-      if (block) {
-        setThreadInsertionGuidance(
-          `Place after “${insertionExcerpt(block.textContent ?? '', 42)}” · Return to confirm`,
-        );
-      }
-    };
-
-    const commit = (target: Exclude<ReturnType<typeof threadInsertionTarget>, null>) => {
-      const pending = pendingThreadInsertionRef.current;
-      if (!pending) return;
-
-      pendingThreadInsertionRef.current = null;
-      setPendingThreadInsertion(null);
-      activeBlock?.classList.remove('thread-insertion-target');
-      activeBlock = null;
-      let inserted: ReturnType<typeof insertThreadWork>;
-      try {
-        inserted = insertThreadWork(view, target, pending);
-      } catch {
-        pendingThreadInsertionRef.current = pending;
-        setPendingThreadInsertion(pending);
-        setThreadInsertionGuidance('This item could not be added. Choose another position.');
-        return;
-      }
-
-      const revealed = inserted.blockPositions
-        .map((pos) => view.nodeDOM(pos))
-        .map((node) => (node instanceof Element ? node : node?.parentElement))
-        .filter((node): node is Element => Boolean(node));
-      revealed.forEach((node) => node.classList.add('thread-insertion-reveal'));
-      window.setTimeout(() => {
-        revealed.forEach((node) => node.classList.remove('thread-insertion-reveal'));
-      }, 1_600);
-
-      setShowThreads(true);
-      void threadDrawerRef.current?.openThread(pending.threadId);
-      const session = sessionRef.current;
-      if (!session) {
-        setThreadInsertionSaveFailed(pending.threadId);
-        return;
-      }
-      void session.saveNow().then((saved) => {
-        if (saved) {
-          setThreadInsertionSaveFailed((threadId) => (
-            threadId === pending.threadId ? null : threadId
-          ));
-          return;
-        }
-        setThreadInsertionSaveFailed(pending.threadId);
-        setShowThreads(true);
-        void threadDrawerRef.current?.openThread(pending.threadId);
+    if (!editor) return undefined;
+    const labelMarkers = () => {
+      const directory = new Map(sidenotesRef.current.map((thread) => [thread.threadId, thread]));
+      editor.view.dom.querySelectorAll<HTMLButtonElement>('.sidenote-marker').forEach((marker) => {
+        const threadIds = marker.dataset.threadIds?.split(',').filter(Boolean) ?? [];
+        const titles = threadIds.map((id) => directory.get(id)?.title).filter(Boolean) as string[];
+        const label = threadIds.length > 1
+          ? `Open ${threadIds.length} Sidenotes${titles.length ? `: ${titles.join(', ')}` : ''}`
+          : `Open Sidenote${titles[0] ? `: ${titles[0]}` : ''}`;
+        marker.setAttribute('aria-label', label);
+        marker.dataset.peek = threadIds.length > 1 ? `${threadIds.length} Sidenotes` : titles[0] ?? 'Open Sidenote';
       });
     };
-
-    const point = (event: MouseEvent) => {
-      showTarget(candidateFor(event.target)?.block ?? null);
-    };
-
-    const place = (event: MouseEvent) => {
-      if (!pendingThreadInsertionRef.current || event.button !== 0) return;
+    const openMarker = (event: MouseEvent) => {
+      const marker = event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>('.sidenote-marker')
+        : null;
+      const threadIds = marker?.dataset.threadIds?.split(',').filter(Boolean) ?? [];
+      if (!marker || !threadIds.length) return;
       event.preventDefault();
-      event.stopImmediatePropagation();
-      const candidate = candidateFor(event.target);
-      if (!candidate) {
-        showTarget(null);
-        refuse();
+      event.stopPropagation();
+      if (threadIds.length > 1) {
+        const rect = marker.getBoundingClientRect();
+        setMarkerChooser({
+          threadIds,
+          left: Math.min(rect.right + 8, window.innerWidth - 280),
+          top: Math.min(rect.top, window.innerHeight - 240),
+        });
         return;
       }
-      commit(candidate.target);
+      setShowThreads(true);
+      void threadDrawerRef.current?.openThread(threadIds[0]);
     };
-
-    const chooseWithKeyboard = (event: KeyboardEvent) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        const candidate = activeBlock ? candidateFor(activeBlock) : null;
-        if (candidate) commit(candidate.target);
-        else refuse('Choose a position with ↑ or ↓ first');
-        return;
-      }
-      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      const available = candidates();
-      if (!available.length) {
-        refuse('There is no available insertion position in this Stream');
-        return;
-      }
-      const currentIndex = available.findIndex(({ block }) => block === activeBlock);
-      const nextIndex = currentIndex < 0
-        ? (event.key === 'ArrowDown' ? 0 : available.length - 1)
-        : Math.max(0, Math.min(
-          available.length - 1,
-          currentIndex + (event.key === 'ArrowDown' ? 1 : -1),
-        ));
-      showTarget(available[nextIndex].block);
-      available[nextIndex].block.scrollIntoView({ block: 'nearest' });
-    };
-
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      cancelThreadInsertion();
-    };
-
-    view.dom.addEventListener('mousemove', point, true);
-    view.dom.addEventListener('mousedown', place, true);
-    view.dom.addEventListener('keydown', chooseWithKeyboard, true);
-    window.addEventListener('keydown', escape, true);
+    labelMarkers();
+    const observer = new MutationObserver(labelMarkers);
+    observer.observe(editor.view.dom, { childList: true, subtree: true });
+    editor.view.dom.addEventListener('click', openMarker);
     return () => {
-      activeBlock?.classList.remove('thread-insertion-target');
-      view.dom.removeEventListener('mousemove', point, true);
-      view.dom.removeEventListener('mousedown', place, true);
-      view.dom.removeEventListener('keydown', chooseWithKeyboard, true);
-      window.removeEventListener('keydown', escape, true);
-      if (previousTabIndex === null) view.dom.removeAttribute('tabindex');
-      else view.dom.setAttribute('tabindex', previousTabIndex);
-      view.setProps({ editable: previousEditable });
+      observer.disconnect();
+      editor.view.dom.removeEventListener('click', openMarker);
     };
-  }, [cancelThreadInsertion, editor, pendingThreadInsertion]);
+  }, [editor, sidenotes]);
+
+  useEffect(() => {
+    if (!markerChooser) return;
+    window.requestAnimationFrame(() => markerChooserRef.current?.querySelector<HTMLButtonElement>('button')?.focus());
+  }, [markerChooser]);
 
   useEffect(() => {
     if (!editor || !xray) return undefined;
@@ -1231,18 +1220,17 @@ export function RichStreamEditor({
    * and the page is left only if it actually landed.
    */
   const leave = useCallback(async () => {
-    cancelThreadInsertion(false);
     cancelDocumentAI();
     threadDrawerRef.current?.cancelAI();
     setLeaving(true);
-    const [documentSaved, threadSaved] = await Promise.all([
-      sessionRef.current?.destroy() ?? Promise.resolve(true),
-      threadDrawerRef.current?.flush() ?? Promise.resolve(true),
-    ]);
-    if (documentSaved && threadSaved) return onBack();
+    const threadSaved = await (threadDrawerRef.current?.leave() ?? Promise.resolve(true));
+    const documentSaved = threadSaved
+      ? await (sessionRef.current?.destroy() ?? Promise.resolve(true))
+      : false;
+    if (documentSaved) return onBack();
     setLeaving(false);
     addToast('Your changes could not be saved, so this stream stayed open.', 'error');
-  }, [addToast, cancelDocumentAI, cancelThreadInsertion, onBack]);
+  }, [addToast, cancelDocumentAI, onBack]);
 
   const remove = useCallback(() => {
     deleting.current = true;
@@ -1302,19 +1290,31 @@ export function RichStreamEditor({
       const sourceId = payload.sourceId;
       const highlightId = payload.highlightId;
       const quote = payload.quote;
+      const rawRects = payload.rects;
+      const rects = Array.isArray(rawRects) ? rawRects.flatMap((value) => {
+        if (!value || typeof value !== 'object') return [];
+        const rect = value as Record<string, unknown>;
+        const page = Number(rect.page);
+        const x = Number(rect.x);
+        const y = Number(rect.y);
+        const w = Number(rect.w);
+        const h = Number(rect.h);
+        return [page, x, y, w, h].every(Number.isFinite) ? [{ page, x, y, w, h }] : [];
+      }) : [];
       if (typeof sourceId !== 'string'
           || typeof highlightId !== 'string'
           || typeof quote !== 'string'
           || !sourceId
           || !highlightId
-          || !quote.trim()) {
+          || !quote.trim()
+          || rects.length === 0) {
         if (typeof highlightId === 'string' && highlightId) {
           bridge.send({
             type: 'deletePdfHighlight',
             payload: { streamId: stream.id, highlightId },
           });
         }
-        addToast('That PDF selection could not start a thread.', 'error');
+        addToast('That PDF selection could not create a Sidenote.', 'error');
         return;
       }
       void startPDFSelectionThread({
@@ -1322,6 +1322,11 @@ export function RichStreamEditor({
         sourceId,
         highlightId,
         quote,
+        sourceName: typeof payload.sourceName === 'string' ? payload.sourceName : undefined,
+        shortTitle: typeof payload.shortTitle === 'string' ? payload.shortTitle : undefined,
+        page: Number.isFinite(Number(payload.page)) ? Number(payload.page) : rects[0].page,
+        createdAt: typeof payload.createdAt === 'string' ? payload.createdAt : new Date().toISOString(),
+        rects,
       });
       return;
     }
@@ -1683,12 +1688,84 @@ export function RichStreamEditor({
     },
   ];
 
-  const startStreamThread = async () => {
+  const promoteSidenote = async (request: SidenotePromotionRequest): Promise<boolean> => {
+    const currentEditor = editorRef.current;
+    const session = sessionRef.current;
+    if (!currentEditor || !session || threadInsertionSaveFailed) {
+      addToast('Retry the unsaved Stream change before adding another.', 'info');
+      return false;
+    }
+    const { view } = currentEditor;
+    const requestedAnchorSpanId = 'anchorSpanId' in request.target ? request.target.anchorSpanId : null;
+    const anchorSpan = requestedAnchorSpanId
+      ? provenanceSpans(view.state).find((span) => span.spanId === requestedAnchorSpanId)
+      : null;
+    if (requestedAnchorSpanId && !anchorSpan) {
+      addToast('That Stream quote was removed. Choose the Stream cursor instead.', 'warning');
+      return false;
+    }
+    const target = request.target.kind === 'replaceAnchor'
+      ? { kind: 'replace' as const, from: anchorSpan!.from, to: anchorSpan!.to }
+      : request.target.kind === 'afterAnchor'
+        ? sidenoteInsertionTarget(view.state, anchorSpan!.from)
+        : request.target.kind === 'cursor'
+          ? sidenoteInsertionTarget(view.state, view.state.selection.head)
+          : { kind: 'block' as const, pos: view.state.doc.content.size };
+    if (!target) {
+      addToast('Place the Stream cursor in a text block, then try again.', 'info');
+      return false;
+    }
+
+    let inserted: ReturnType<typeof insertSidenoteWork>;
+    try {
+      inserted = insertSidenoteWork(view, target, request);
+    } catch {
+      addToast('That Sidenote passage could not be added here.', 'error');
+      return false;
+    }
+    const placementSpanId = crypto.randomUUID();
+    view.dispatch(addProvenanceSpans(view.state.tr, [{
+      spanId: placementSpanId,
+      from: inserted.from,
+      to: inserted.to,
+      origin: 'thread',
+      meta: { threadId: request.threadId, placement: true },
+      textHash: hashProvenanceText(view.state.doc, inserted),
+      createdAt: Date.now(),
+    }]));
+    const anchorId = crypto.randomUUID();
+    if (!await session.saveNow()) {
+      pendingSidenotePlacementRef.current = { threadId: request.threadId, anchorId, anchorSpanId: placementSpanId };
+      setThreadInsertionSaveFailed(request.threadId);
+      return false;
+    }
+    setThreadInsertionSaveFailed(null);
+    try {
+      const result = await addStreamThreadAnchor({
+        streamId: stream.id,
+        threadId: request.threadId,
+        anchor: { anchorId, kind: 'placement', anchorSpanId: placementSpanId },
+      });
+      rememberSidenoteAnchor(request.threadId, result.anchor);
+      await threadDrawerRef.current?.addAnchor(result.anchor);
+    } catch {
+      addToast('The text is saved, but its Sidenote marker could not be recorded.', 'warning');
+    }
+    const revealed = inserted.blockPositions
+      .map((pos) => view.nodeDOM(pos))
+      .map((node) => (node instanceof Element ? node : node?.parentElement))
+      .filter((node): node is Element => Boolean(node));
+    revealed.forEach((node) => node.classList.add('sidenote-promotion-reveal'));
+    window.setTimeout(() => revealed.forEach((node) => node.classList.remove('sidenote-promotion-reveal')), 1_200);
+    return true;
+  };
+
+  const startStreamSidenote = async () => {
     const requestEditor = editorRef.current;
     if (!requestEditor || threadCreateInFlightRef.current) return;
     if (!await (threadDrawerRef.current?.flush() ?? Promise.resolve(true))) {
       setShowThreads(true);
-      addToast('Resolve the open thread note before starting another thread.', 'error');
+      addToast('Resolve the open Sidenote before adding another quote.', 'error');
       return;
     }
 
@@ -1697,18 +1774,55 @@ export function RichStreamEditor({
     if (!anchorText.trim()) return;
 
     const anchorSpanId = crypto.randomUUID();
+    const threadId = activeSidenote?.threadId ?? crypto.randomUUID();
+    const anchorId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const anchor: StreamThreadAnchorJSON = {
+      anchorId,
+      threadId,
+      kind: 'stream_quote',
+      quote: anchorText,
+      anchorSpanId,
+      createdAt,
+    };
     pendingThreadAnchorSelectionRef.current = { from, to };
     threadCreateInFlightRef.current = true;
     setThreadCreating(true);
     hideSelectionMenu();
 
     try {
-      const { thread } = await createStreamThread({
-        streamId: stream.id,
-        title: defaultThreadTitle(anchorText),
-        anchorText,
-        anchorSpanId,
-      });
+      const result = activeSidenote
+        ? await addStreamThreadAnchor({
+          streamId: stream.id,
+          threadId,
+          anchor: {
+            anchorId,
+            kind: 'stream_quote',
+            quote: anchorText,
+            anchorSpanId,
+            createdAt,
+          },
+        })
+        : await createStreamThread({
+          streamId: stream.id,
+          threadId,
+          title: defaultThreadTitle(anchorText),
+          workingText: '',
+          docJSON: buildSidenoteDocumentJSON([anchor]),
+          docFormatVersion: 1,
+          anchorText,
+          anchorSpanId,
+          anchors: [{
+            anchorId,
+            kind: 'stream_quote',
+            quote: anchorText,
+            anchorSpanId,
+            createdAt,
+          }],
+        });
+      const thread = 'thread' in result ? result.thread : activeSidenote!;
+      const savedAnchor = 'anchor' in result ? result.anchor : anchor;
+      if (!activeSidenote) rememberSidenote(thread);
       const pending = pendingThreadAnchorSelectionRef.current;
       pendingThreadAnchorSelectionRef.current = null;
       if (editorRef.current !== requestEditor) return;
@@ -1731,12 +1845,20 @@ export function RichStreamEditor({
       }
 
       setShowThreads(true);
-      if (!await threadDrawerRef.current?.showThread(thread)) {
-        addToast('The thread was created, but another note needs attention before it can open.', 'error');
+      if (activeSidenote) {
+        if (!await threadDrawerRef.current?.addAnchor(savedAnchor)) {
+          addToast('The quote is attached, but the Sidenote still needs to save.', 'warning');
+        } else {
+          addToast('Added the Stream quote to this Sidenote.', 'success');
+        }
+      } else if (!await threadDrawerRef.current?.showThread(thread)) {
+        addToast('The Sidenote was created, but another draft needs attention before it can open.', 'error');
+      } else {
+        addToast('Created a Sidenote from the Stream quote.', 'success');
       }
     } catch {
       pendingThreadAnchorSelectionRef.current = null;
-      addToast('The thread could not be created.', 'error');
+      addToast('The Sidenote quote could not be added.', 'error');
     } finally {
       threadCreateInFlightRef.current = false;
       setThreadCreating(false);
@@ -1778,6 +1900,11 @@ export function RichStreamEditor({
       onPointerDownCapture={(event) => {
         const menu = streamOverflowMenuRef.current;
         if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+        if (markerChooser
+            && !markerChooserRef.current?.contains(event.target as Node)
+            && !(event.target as Element).closest?.('.sidenote-marker')) {
+          setMarkerChooser(null);
+        }
       }}
       onKeyDownCapture={(event) => {
         if (event.key === 'Escape' && streamOverflowMenuRef.current?.open) {
@@ -1826,21 +1953,22 @@ export function RichStreamEditor({
           >
             <EyeIcon size={16} />
           </button>
-          <button
-            ref={threadButtonRef}
-            type="button"
-            className={`stream-threads-button ${showThreads ? 'stream-threads-button--active' : ''}`}
-            aria-label="Threads"
-            aria-pressed={showThreads}
-            title="Threads"
-            disabled={Boolean(pendingThreadInsertion)}
-            onClick={() => {
-              if (showThreads) void threadDrawerRef.current?.close();
-              else setShowThreads(true);
-            }}
-          >
-            Threads
-          </button>
+          {sidenotes.length > 0 && (
+            <button
+              ref={threadButtonRef}
+              type="button"
+              className={`stream-threads-button ${showThreads ? 'stream-threads-button--active' : ''}`}
+              aria-label={`Sidenotes, ${sidenotes.length}`}
+              aria-pressed={showThreads}
+              title="Sidenotes"
+              onClick={() => {
+                if (showThreads) void threadDrawerRef.current?.close();
+                else setShowThreads(true);
+              }}
+            >
+              Sidenotes · {sidenotes.length}
+            </button>
+          )}
           <button
             type="button"
             className="stream-sources-button"
@@ -1983,6 +2111,53 @@ export function RichStreamEditor({
         />
       )}
 
+      {markerChooser && (
+        <div
+          ref={markerChooserRef}
+          className="sidenote-marker-chooser"
+          role="menu"
+          aria-label="Choose a Sidenote"
+          style={{ left: `${markerChooser.left}px`, top: `${markerChooser.top}px` }}
+          onBlur={(event) => {
+            if (!event.relatedTarget || !event.currentTarget.contains(event.relatedTarget)) {
+              setMarkerChooser(null);
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              setMarkerChooser(null);
+              return;
+            }
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+            event.preventDefault();
+            const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')];
+            const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+            const step = event.key === 'ArrowDown' ? 1 : -1;
+            buttons[(index + step + buttons.length) % buttons.length]?.focus();
+          }}
+        >
+          {markerChooser.threadIds.map((threadId) => {
+            const thread = sidenotes.find((candidate) => candidate.threadId === threadId);
+            return (
+              <button
+                key={threadId}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMarkerChooser(null);
+                  setShowThreads(true);
+                  void threadDrawerRef.current?.openThread(threadId);
+                }}
+              >
+                <strong>{thread?.title || 'Untitled Sidenote'}</strong>
+                <span>{thread ? sidenoteSourceLabel(thread) : 'Stream'}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {formats && selectionMenu.visible && (
         <div
           ref={selectionActionMenuRef}
@@ -1996,12 +2171,12 @@ export function RichStreamEditor({
             <button
               type="button"
               className="selection-action-button selection-action-button--text selection-action-button--thread"
-              aria-label="Start thread"
+              aria-label={activeSidenote ? 'Add quote to Sidenote' : 'New Sidenote'}
               disabled={threadCreating}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => { void startStreamThread(); }}
+              onClick={() => { void startStreamSidenote(); }}
             >
-              Start thread
+              {activeSidenote ? 'Add quote' : 'New Sidenote'}
             </button>
             <div className="selection-action-submenu">
               <button
@@ -2118,15 +2293,6 @@ export function RichStreamEditor({
             className={`document-editor-shell ${xray ? 'richtext-xray' : ''}`}
           >
             <div ref={host} />
-            {pendingThreadInsertion && (
-              <div className="thread-insertion-bar" role="status" aria-live="assertive">
-                <span className="thread-insertion-excerpt" title={pendingThreadInsertion.text}>
-                  “{insertionExcerpt(pendingThreadInsertion.text)}”
-                </span>
-                <span className="thread-insertion-guidance">{threadInsertionGuidance}</span>
-                <button type="button" onClick={() => cancelThreadInsertion()}>Cancel</button>
-              </div>
-            )}
             {aiRunning && (
               <div
                 className="document-ai-status-pill"
@@ -2160,11 +2326,15 @@ export function RichStreamEditor({
           onRequestClose={() => setShowThreads(false)}
           onAfterClose={() => threadButtonRef.current?.focus()}
           onLocateAnchor={locateThreadAnchor}
+          onActiveThreadChange={setActiveSidenote}
+          onThreadsChange={rememberSidenotes}
+          onSidenoteUpdated={rememberSidenote}
+          onSidenoteDeleted={removeSidenoteMarkers}
           sourceScope={sourceScope}
           onBeginAI={beginThreadAI}
           onEndAI={endThreadAI}
           onOpenPDFDestination={openLink}
-          onRequestInsertion={beginThreadInsertion}
+          onPromote={promoteSidenote}
           streamSaveErrorThreadId={threadInsertionSaveFailed}
           onRetryStreamSave={() => { void retryThreadInsertionSave(); }}
         />

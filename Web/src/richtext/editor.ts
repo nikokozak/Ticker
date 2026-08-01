@@ -17,7 +17,7 @@ import {
 type ClipboardParseOptions = ParseOptions & {
   ruleFromNode?: (node: Node) => { ignore?: boolean } | null;
 };
-import { EditorState, type Command, type Transaction } from 'prosemirror-state';
+import { EditorState, Selection, type Command, type Transaction } from 'prosemirror-state';
 import { EditorView, type NodeView } from 'prosemirror-view';
 import {
   indentListItem,
@@ -170,6 +170,8 @@ export interface RichTextEditor {
   setDocumentJSON(docJSON: string): void;
   /** A derived markdown projection. Reading it must never rewrite the live document. */
   getMarkdownProjection(): string;
+  /** The current selection, or its owning top-level block, as ordinary markdown. */
+  getSelectionOrBlockMarkdown(): string;
   /** Insert a markdown fragment at the current selection as one undo step. */
   insertMarkdown(markdown: string): void;
   /**
@@ -177,7 +179,7 @@ export interface RichTextEditor {
    * report where it landed so metadata can be placed inside it.
    */
   appendMarkdown(markdown: string): { from: number; to: number };
-  /** Append one immutable evidence quote to a Sidenote. */
+  /** Insert one immutable evidence quote after the current top-level block. */
   appendEvidence(evidence: EvidenceBlock): void;
   destroy(): void;
 }
@@ -214,7 +216,7 @@ export interface RichTextEditorOptions {
   /** Evidence atoms are accepted only by the Sidenote editor. */
   allowEvidence?: boolean;
   onOpenEvidence?: (anchorId: string) => void;
-  onRemoveEvidence?: (anchorId: string) => void;
+  onRemoveEvidence?: (anchorId: string) => boolean | void | Promise<boolean | void>;
 }
 
 /** The href of a link at this position, if there is one. */
@@ -326,7 +328,7 @@ function evidenceView(
   view: EditorView,
   getPos: () => number | undefined,
   onOpen?: (anchorId: string) => void,
-  onRemove?: (anchorId: string) => void,
+  onRemove?: (anchorId: string) => boolean | void | Promise<boolean | void>,
 ): NodeView {
   let node = initialNode;
   const dom = document.createElement('aside');
@@ -347,6 +349,7 @@ function evidenceView(
   dom.append(label, quote, remove);
 
   const render = () => {
+    dom.dataset.anchorId = String(node.attrs.anchorId);
     label.textContent = String(node.attrs.label || 'Stream');
     quote.textContent = String(node.attrs.quote || '');
     dom.setAttribute('aria-label', `${label.textContent}: ${quote.textContent}`);
@@ -360,13 +363,21 @@ function evidenceView(
     event.preventDefault();
     open();
   };
-  remove.onclick = (event) => {
+  remove.onclick = async (event) => {
     event.preventDefault();
     event.stopPropagation();
-    const pos = getPos();
-    if (pos === undefined) return;
-    view.dispatch(view.state.tr.delete(pos, pos + node.nodeSize).scrollIntoView());
-    onRemove?.(String(node.attrs.anchorId));
+    remove.disabled = true;
+    try {
+      if (await onRemove?.(String(node.attrs.anchorId)) === false) return;
+      const pos = getPos();
+      if (pos === undefined) return;
+      view.dispatch(view.state.tr
+        .delete(pos, pos + node.nodeSize)
+        .setMeta('addToHistory', false)
+        .scrollIntoView());
+    } finally {
+      remove.disabled = false;
+    }
   };
   render();
 
@@ -464,6 +475,26 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
       return serializeMarkdown(view.state.doc);
     },
 
+    getSelectionOrBlockMarkdown() {
+      const { doc, selection } = view.state;
+      if (!selection.empty) {
+        const selected = doc.cut(selection.from, selection.to);
+        const blocks: ProseNode[] = [];
+        selected.forEach((node) => {
+          if (node.type !== tickerSchema.nodes.evidence) blocks.push(node);
+        });
+        if (blocks.length) return serializeMarkdown(doc.type.create(null, blocks)).trim();
+      }
+      const selectedIndex = Math.min(selection.$head.index(0), doc.childCount - 1);
+      const indexes = [
+        ...Array.from({ length: doc.childCount - selectedIndex }, (_, offset) => selectedIndex + offset),
+        ...Array.from({ length: selectedIndex }, (_, offset) => selectedIndex - offset - 1),
+      ];
+      const block = indexes.map((index) => doc.child(index))
+        .find((node) => node.type !== tickerSchema.nodes.evidence);
+      return block ? serializeMarkdown(doc.type.create(null, block)).trim() : '';
+    },
+
     insertMarkdown(markdown: string) {
       const parsed = parseMarkdown(markdown);
       if (parsed.childCount === 0) return;
@@ -488,9 +519,24 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
 
     appendEvidence(evidence: EvidenceBlock) {
       if (!allowEvidence) return;
-      const end = view.state.doc.content.size;
+      const { doc, selection } = view.state;
+      const index = Math.min(selection.$head.index(0), doc.childCount - 1);
+      let insertionPos = 0;
+      for (let child = 0; child <= index; child += 1) insertionPos += doc.child(child).nodeSize;
       const node = tickerSchema.nodes.evidence.create(evidence);
-      view.dispatch(view.state.tr.insert(end, node).scrollIntoView());
+      const content = insertionPos === doc.content.size
+        ? Fragment.fromArray([node, tickerSchema.nodes.paragraph.create()])
+        : Fragment.from(node);
+      const tr = view.state.tr.insert(insertionPos, content);
+      tr.setSelection(Selection.near(tr.doc.resolve(insertionPos + node.nodeSize), 1));
+      view.dispatch(tr.scrollIntoView());
+      window.requestAnimationFrame(() => {
+        const element = Array.from(view.dom.querySelectorAll<HTMLElement>('.richtext-evidence'))
+          .find((candidate) => candidate.dataset.anchorId === evidence.anchorId);
+        element?.scrollIntoView?.({ block: 'nearest' });
+        element?.classList.add('richtext-evidence--added');
+        window.setTimeout(() => element?.classList.remove('richtext-evidence--added'), 1_200);
+      });
     },
 
     destroy: () => view.destroy(),

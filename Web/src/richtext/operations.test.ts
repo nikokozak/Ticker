@@ -8,13 +8,13 @@ import {
   applyAIMarkdown,
   focusAtEnd,
   insertImage,
-  insertThreadWork,
+  insertSidenoteWork,
   removePDFHighlightLink,
   selectedPDFHighlight,
   selectText,
   setImageWidth,
   streamAIMarkdown,
-  threadInsertionTarget,
+  sidenoteInsertionTarget,
 } from './operations';
 
 /**
@@ -173,48 +173,47 @@ describe('images', () => {
   });
 });
 
-describe('adding thread work to the Stream', () => {
-  it('adds after a paragraph without splitting its sentence', () => {
+describe('adding Sidenote work to the Stream', () => {
+  it('adds parsed blocks after a paragraph without a visible backlink', () => {
     const ed = open('Before this sentence ends.\n\nAfter.');
     const inside = find(ed, 'sentence').from + 3;
-    const target = threadInsertionTarget(ed.view.state, inside);
+    const target = sidenoteInsertionTarget(ed.view.state, inside);
     expect(target).toEqual({ kind: 'block', pos: ed.view.state.doc.child(0).nodeSize });
 
-    insertThreadWork(ed.view, target!, {
-      kind: 'note',
-      text: '* literal\n# still literal',
+    insertSidenoteWork(ed.view, target!, {
+      text: '**Finding**\n\n## Detail',
       threadId: 'thread-1',
     });
 
     expect(ed.view.state.doc.child(0).textContent).toBe('Before this sentence ends.');
-    expect(ed.view.state.doc.child(1).textContent).toBe('* literal');
-    expect(ed.view.state.doc.child(2).textContent).toBe('# still literal Thread');
-    expect(ed.getMarkdownProjection()).toContain('[Thread](ticker-thread://thread-1)');
+    expect(ed.view.state.doc.child(1).textContent).toBe('Finding');
+    expect(ed.view.state.doc.child(2).textContent).toBe('Detail');
+    expect(ed.getMarkdownProjection()).not.toContain('ticker-thread://');
   });
 
   it('adds after a heading and keeps the heading byte-identical', () => {
     const ed = open('## Hardware choices\n\nExisting text.');
     const before = ed.view.state.doc.child(0).toJSON();
-    const target = threadInsertionTarget(ed.view.state, find(ed, 'Hardware').from + 2);
-    insertThreadWork(ed.view, target!, {
-      kind: 'note', text: 'New evidence.', threadId: 'thread-2',
+    const target = sidenoteInsertionTarget(ed.view.state, find(ed, 'Hardware').from + 2);
+    insertSidenoteWork(ed.view, target!, {
+      text: 'New evidence.', threadId: 'thread-2',
     });
     expect(ed.view.state.doc.child(0).toJSON()).toEqual(before);
-    expect(ed.view.state.doc.child(1).textContent).toBe('New evidence. Thread');
+    expect(ed.view.state.doc.child(1).textContent).toBe('New evidence.');
   });
 
   it('adds one sibling list item per payload block at the same depth', () => {
     const ed = open('* One\n* Two stays intact\n* Three');
-    const target = threadInsertionTarget(ed.view.state, find(ed, 'Two').from + 1);
+    const target = sidenoteInsertionTarget(ed.view.state, find(ed, 'Two').from + 1);
     expect(target?.kind).toBe('list');
-    insertThreadWork(ed.view, target!, {
-      kind: 'note', text: 'First added\nSecond added', threadId: 'thread-3',
+    insertSidenoteWork(ed.view, target!, {
+      text: 'First added\n\nSecond added', threadId: 'thread-3',
     });
 
     const list = ed.view.state.doc.firstChild!;
     expect(list.childCount).toBe(5);
     expect(Array.from({ length: list.childCount }, (_, index) => list.child(index).textContent))
-      .toEqual(['One', 'Two stays intact', 'First added', 'Second added Thread', 'Three']);
+      .toEqual(['One', 'Two stays intact', 'First added', 'Second added', 'Three']);
     expect(parseMarkdown(ed.getMarkdownProjection()).eq(ed.view.state.doc)).toBe(true);
   });
 
@@ -238,9 +237,9 @@ describe('adding thread work to the Stream', () => {
   for (const { name, markdown, insertedTypes } of complexListPayloads) {
     it(`puts AI payload with ${name} after the enclosing list`, () => {
       const ed = open('* One\n* Two stays intact\n* Three');
-      const target = threadInsertionTarget(ed.view.state, find(ed, 'Two').from + 1);
-      insertThreadWork(ed.view, target!, {
-        kind: 'ai', text: markdown, threadId: 'thread-complex',
+      const target = sidenoteInsertionTarget(ed.view.state, find(ed, 'Two').from + 1);
+      insertSidenoteWork(ed.view, target!, {
+        text: markdown, threadId: 'thread-complex',
       });
 
       const originalList = ed.view.state.doc.firstChild!;
@@ -250,33 +249,40 @@ describe('adding thread work to the Stream', () => {
         .toEqual(['One', 'Two stays intact', 'Three']);
       expect(Array.from({ length: insertedTypes.length }, (_, index) => ed.view.state.doc.child(index + 1).type.name))
         .toEqual(insertedTypes);
-      expect(ed.view.state.doc.textContent).toContain('Thread');
       expect(parseMarkdown(ed.getMarkdownProjection()).eq(ed.view.state.doc)).toBe(true);
     });
   }
 
-  it('keeps AI block formatting and one Undo removes the payload and backlink', () => {
+  it('keeps formatting and one Undo removes the whole promotion', () => {
     const ed = open('Host paragraph.\n\nTail.');
     const before = ed.getDocumentJSON();
-    const target = threadInsertionTarget(ed.view.state, find(ed, 'Host').from);
-    insertThreadWork(ed.view, target!, {
-      kind: 'ai',
+    const target = sidenoteInsertionTarget(ed.view.state, find(ed, 'Host').from);
+    insertSidenoteWork(ed.view, target!, {
       text: '**Finding**\n\n* First\n* Second',
       threadId: 'thread-4',
     });
     expect(ed.getMarkdownProjection()).toContain('**Finding**');
-    expect(ed.getMarkdownProjection()).toContain('* Second [Thread](ticker-thread://thread-4)');
+    expect(ed.getMarkdownProjection()).toContain('* Second');
     expect(parseMarkdown(ed.getMarkdownProjection()).eq(ed.view.state.doc)).toBe(true);
     undo(ed);
     expect(ed.getDocumentJSON()).toBe(before);
     redo(ed);
-    expect(ed.getMarkdownProjection()).toContain('[Thread](ticker-thread://thread-4)');
+    expect(ed.getMarkdownProjection()).toContain('**Finding**');
+  });
+
+  it('can replace the quoted Stream passage', () => {
+    const ed = open('Before. Replace this passage. After.');
+    const range = find(ed, 'Replace this passage.');
+    insertSidenoteWork(ed.view, { kind: 'replace', ...range }, {
+      text: 'Resolved finding.', threadId: 'thread-5',
+    });
+    expect(ed.getMarkdownProjection()).toBe('Before. Resolved finding. After.');
   });
 
   it('refuses code blocks and non-text boundaries', () => {
     const ed = open('```swift\nlet x = 1\n```\n\nText.');
-    expect(threadInsertionTarget(ed.view.state, find(ed, 'let x').from)).toBeNull();
-    expect(threadInsertionTarget(ed.view.state, 0)).toBeNull();
+    expect(sidenoteInsertionTarget(ed.view.state, find(ed, 'let x').from)).toBeNull();
+    expect(sidenoteInsertionTarget(ed.view.state, 0)).toBeNull();
   });
 });
 

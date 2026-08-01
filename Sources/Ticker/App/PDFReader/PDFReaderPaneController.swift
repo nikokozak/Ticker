@@ -1663,9 +1663,9 @@ final class PDFReaderPaneController: NSViewController {
 
     @objc private func handlePDFPaneDiscussSelection() {
         handlePDFPaneSelection(
-            missingPDFMessage: "Open a PDF before starting a Sidenote.",
+            missingPDFMessage: "Open a PDF before creating a Sidenote.",
             missingSelectionMessage: "Nothing is selected to discuss.",
-            invalidSelectionMessage: "That selection cannot start a Sidenote.",
+            invalidSelectionMessage: "That selection cannot create a Sidenote.",
             action: onDiscussSelection
         )
     }

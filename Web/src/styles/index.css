@@ -1334,6 +1334,641 @@ body {
   }
 }
 
+/* ==================== Sidenotes ==================== */
+
+.sidenote-panel {
+  flex: 0 0 calc(var(--space-8) * 6);
+  width: calc(var(--space-8) * 6);
+  min-width: calc(var(--space-8) * 5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-surface-elevated);
+}
+
+.sidenote-header {
+  min-height: var(--space-8);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.sidenote-header h2,
+.sidenote-modal h2 {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+.sidenote-header-actions,
+.sidenote-proposal-actions,
+.sidenote-formatbar,
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sidenote-back,
+.sidenote-close,
+.sidenote-menu summary,
+.sidenote-menu button,
+.sidenote-list-state button,
+.sidenote-warning button,
+.sidenote-formatbar button,
+.sidenote-promote summary,
+.sidenote-promote button,
+.sidenote-proposal-actions button,
+.sidenote-ai-context button,
+.sidenote-prompt button,
+.modal-actions button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sidenote-back:hover,
+.sidenote-close:hover,
+.sidenote-menu button:hover,
+.sidenote-list-state button:hover,
+.sidenote-warning button:hover,
+.sidenote-formatbar button:hover,
+.sidenote-promote button:hover,
+.sidenote-ai-context button:hover {
+  color: var(--color-accent);
+}
+
+.sidenote-close {
+  width: var(--space-6);
+  height: var(--space-6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-small);
+}
+
+.sidenote-menu,
+.sidenote-promote details {
+  position: relative;
+}
+
+.sidenote-menu summary,
+.sidenote-promote summary {
+  list-style: none;
+  border-radius: var(--radius-small);
+  padding: var(--space-1) var(--space-2);
+}
+
+.sidenote-menu summary::-webkit-details-marker,
+.sidenote-promote summary::-webkit-details-marker {
+  display: none;
+}
+
+.sidenote-menu > div,
+.sidenote-promote details > div {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  min-width: calc(var(--space-8) * 3);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-elevated);
+  box-shadow: var(--control-shadow);
+}
+
+.sidenote-menu button,
+.sidenote-promote details button {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-small);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sidenote-menu button:hover,
+.sidenote-promote details button:hover {
+  background: var(--color-surface-hover);
+}
+
+.sidenote-menu .sidenote-delete:hover {
+  color: var(--color-error);
+}
+
+.sidenote-detail {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidenote-document-scroll,
+.sidenote-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+.sidenote-editor-wrap {
+  position: relative;
+}
+
+.sidenote-editor .ProseMirror {
+  min-height: calc(var(--space-8) * 4);
+  padding: 0;
+  outline: none;
+  font-family: var(--editor-font-family);
+  font-size: var(--editor-font-size);
+  line-height: var(--editor-line-height);
+}
+
+.sidenote-editor .ProseMirror > * + * {
+  margin-top: var(--space-3);
+}
+
+.sidenote-editor .richtext-evidence {
+  position: relative;
+  display: block;
+  padding: var(--space-3) var(--space-6) var(--space-3) var(--space-4);
+  border-left: 2px solid var(--color-accent);
+  border-radius: var(--radius-small);
+  background: var(--color-accent-soft);
+  cursor: pointer;
+}
+
+.sidenote-editor .richtext-evidence--added {
+  animation: sidenote-evidence-added 1.2s ease-out;
+}
+
+@keyframes sidenote-evidence-added {
+  from { box-shadow: 0 0 0 2px var(--color-accent); }
+  to { box-shadow: 0 0 0 2px transparent; }
+}
+
+.sidenote-editor .richtext-evidence-label {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: var(--color-accent);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.sidenote-editor .richtext-evidence-quote {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.sidenote-editor .richtext-evidence-remove {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  width: var(--space-5);
+  height: var(--space-5);
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.sidenote-editor .richtext-evidence-remove:hover {
+  background: var(--danger-soft);
+  color: var(--color-error);
+}
+
+.sidenote-placeholder {
+  position: absolute;
+  pointer-events: none;
+  color: var(--color-text-tertiary);
+  font-size: var(--editor-font-size);
+}
+
+.sidenote-warning,
+.sidenote-proposal {
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: var(--font-size-sm);
+}
+
+.sidenote-warning {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+
+.sidenote-warning button {
+  margin-top: var(--space-2);
+  margin-right: var(--space-3);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.sidenote-proposal {
+  background: var(--color-surface);
+}
+
+.sidenote-proposal-label,
+.sidenote-proposal-question {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.sidenote-proposal-question {
+  margin-top: var(--space-1);
+}
+
+.sidenote-ai-response {
+  margin-top: var(--space-3);
+  overflow-wrap: anywhere;
+  line-height: var(--line-height-normal);
+}
+
+.sidenote-ai-response > * + * {
+  margin-top: var(--space-2);
+}
+
+.sidenote-ai-response ul,
+.sidenote-ai-response ol {
+  padding-left: var(--space-5);
+}
+
+.sidenote-ai-response pre,
+.sidenote-ai-response code {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.sidenote-ai-response a,
+.sidenote-ai-context summary {
+  color: var(--color-accent);
+}
+
+.sidenote-ai-waiting,
+.sidenote-ai-context {
+  margin-top: var(--space-3);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.sidenote-ai-context summary {
+  cursor: pointer;
+}
+
+.sidenote-ai-context > div,
+.sidenote-history article {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-small);
+  background: var(--color-surface-elevated);
+}
+
+.sidenote-ai-context blockquote {
+  margin-bottom: var(--space-2);
+  white-space: pre-wrap;
+}
+
+.sidenote-ai-context button {
+  margin-right: var(--space-2);
+  color: var(--color-accent);
+}
+
+.sidenote-proposal-actions {
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+}
+
+.sidenote-proposal-actions button,
+.sidenote-prompt button,
+.sidenote-promote-main,
+.modal-actions button {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-small);
+  background: var(--color-surface-elevated);
+}
+
+.sidenote-proposal-actions .sidenote-keep,
+.sidenote-prompt button,
+.sidenote-promote .sidenote-promote-main {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--on-accent);
+}
+
+.sidenote-footer {
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-elevated);
+}
+
+.sidenote-placement-link,
+.sidenote-placements summary,
+.sidenote-placements button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.sidenote-placement-link,
+.sidenote-placements {
+  margin-bottom: var(--space-2);
+}
+
+.sidenote-placement-link:hover,
+.sidenote-placements summary:hover,
+.sidenote-placements button:hover {
+  color: var(--color-accent);
+}
+
+.sidenote-placements summary {
+  list-style: none;
+}
+
+.sidenote-placements summary::-webkit-details-marker {
+  display: none;
+}
+
+.sidenote-placements > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.sidenote-formatbar {
+  margin-bottom: var(--space-2);
+}
+
+.sidenote-formatbar > button {
+  min-width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-small);
+  font-size: var(--font-size-xs);
+}
+
+.sidenote-formatbar > button.is-active {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.sidenote-promote {
+  display: flex;
+  margin-left: auto;
+}
+
+.sidenote-promote-main {
+  max-width: calc(var(--space-8) * 3);
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidenote-prompt textarea {
+  width: 100%;
+  min-height: var(--space-8);
+  resize: vertical;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.sidenote-prompt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: end;
+}
+
+.sidenote-prompt textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+  outline: none;
+}
+
+.sidenote-prompt button:disabled {
+  border-color: var(--color-border);
+  background: var(--color-surface-active);
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+.sidenote-list-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidenote-list-item strong,
+.sidenote-list-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidenote-list-item strong {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.sidenote-list-item span,
+.sidenote-list-item time,
+.sidenote-list-state {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.sidenote-list-item span {
+  grid-column: 1 / -1;
+}
+
+.sidenote-list-item time {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.sidenote-list-item:hover strong {
+  color: var(--color-accent);
+}
+
+.sidenote-list-state button {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--color-accent);
+}
+
+.sidenote-marker {
+  position: absolute;
+  right: var(--space-2);
+  width: var(--space-3);
+  height: var(--space-3);
+  padding: 0;
+  border: 2px solid var(--color-bg);
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+  color: var(--on-accent);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.sidenote-marker:not(:empty) {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+.sidenote-marker::after {
+  content: attr(data-peek);
+  position: absolute;
+  z-index: 8;
+  top: 50%;
+  right: calc(100% + var(--space-2));
+  max-width: calc(var(--space-8) * 4);
+  transform: translateY(-50%);
+  overflow: hidden;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-small);
+  background: var(--color-surface-elevated);
+  box-shadow: var(--control-shadow);
+  color: var(--color-text);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  opacity: 0;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidenote-marker:hover,
+.sidenote-marker:focus-visible {
+  opacity: 1;
+  transform: scale(1.2);
+}
+
+.sidenote-marker:hover::after,
+.sidenote-marker:focus-visible::after {
+  opacity: 1;
+  transition: opacity var(--duration-fast) ease 300ms;
+}
+
+.sidenote-marker-chooser {
+  position: fixed;
+  z-index: 1000;
+  width: min(calc(var(--space-8) * 4), calc(100vw - var(--space-6)));
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-elevated);
+  box-shadow: var(--overlay-shadow);
+}
+
+.sidenote-marker-chooser button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidenote-marker-chooser button:hover,
+.sidenote-marker-chooser button:focus-visible {
+  background: var(--color-surface-hover);
+  outline: none;
+}
+
+.sidenote-marker-chooser span {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.sidenote-anchor-reveal,
+.sidenote-promotion-reveal {
+  background: var(--color-accent-soft);
+  border-radius: var(--radius-small);
+  transition: background var(--duration-base) ease;
+}
+
+.sidenote-modal {
+  width: min(calc(var(--space-8) * 7), calc(100vw - var(--space-6)));
+}
+
+.sidenote-history {
+  max-height: calc(var(--space-8) * 6);
+  overflow-y: auto;
+}
+
+.sidenote-history article + article {
+  margin-top: var(--space-3);
+}
+
+.sidenote-history article > span,
+.sidenote-history article > h3 {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.modal-actions {
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+
+.modal-actions .danger {
+  border-color: var(--color-error);
+  background: var(--color-error);
+  color: var(--on-accent);
+}
+
+@media (max-width: 900px) {
+  .sidenote-panel {
+    position: absolute;
+    z-index: 4;
+    inset: 0;
+    width: 100%;
+    min-width: 0;
+    box-shadow: var(--overlay-shadow);
+  }
+}
+
 .stream-footer {
   flex: 0 0 auto;
   display: flex;

@@ -3,27 +3,57 @@ import { act, createRef, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bridge } from '../types/bridge';
-import type { StreamThreadJSON } from '../types/models';
+import type { AIExchangeJSON, StreamThreadAnchorJSON, StreamThreadJSON } from '../types/models';
 import { useToastStore } from '../store/toastStore';
-import { ThreadDrawer, type ThreadDrawerHandle } from './ThreadDrawer';
+import {
+  buildSidenoteDocumentJSON,
+  ThreadDrawer,
+  type ThreadDrawerHandle,
+} from './ThreadDrawer';
 
-const thread = (overrides: Partial<StreamThreadJSON> = {}): StreamThreadJSON => ({
+const streamAnchor = (overrides: Partial<StreamThreadAnchorJSON> = {}): StreamThreadAnchorJSON => ({
+  anchorId: 'anchor-1',
   threadId: 'thread-1',
-  streamId: 'stream-1',
-  title: 'Power budget',
-  workingText: 'Check sleep current.',
-  anchorText: 'The MCU may draw too much power.',
-  revision: 2,
+  kind: 'stream_quote',
+  quote: 'The MCU may draw too much power.',
+  anchorSpanId: 'span-1',
   createdAt: new Date(0).toISOString(),
-  updatedAt: new Date(0).toISOString(),
   ...overrides,
 });
+
+const thread = (overrides: Partial<StreamThreadJSON> = {}): StreamThreadJSON => {
+  const value: StreamThreadJSON = {
+    threadId: 'thread-1',
+    streamId: 'stream-1',
+    title: 'Check sleep current.',
+    workingText: 'Check sleep current.',
+    anchorText: 'The MCU may draw too much power.',
+    anchors: [streamAnchor()],
+    revision: 2,
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    ...overrides,
+  };
+  return {
+    ...value,
+    docJSON: overrides.docJSON ?? buildSidenoteDocumentJSON(value.anchors ?? [], value.workingText),
+    docFormatVersion: overrides.docFormatVersion ?? 1,
+  };
+};
 
 let root: Root;
 const drawerRef = createRef<ThreadDrawerHandle>();
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const empty = () => ({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) });
+  const none = () => Object.assign([] as unknown[], { item: () => null });
+  for (const proto of [Range.prototype, Element.prototype, Text.prototype] as Array<{ getClientRects?: unknown; getBoundingClientRect?: unknown }>) {
+    proto.getClientRects ??= none;
+    proto.getBoundingClientRect ??= empty;
+  }
+  HTMLDialogElement.prototype.showModal ??= function showModal() { this.setAttribute('open', ''); };
+  HTMLDialogElement.prototype.close ??= function close() { this.removeAttribute('open'); };
 });
 
 async function renderDrawer(props: Partial<ComponentProps<typeof ThreadDrawer>> = {}) {
@@ -41,25 +71,46 @@ async function renderDrawer(props: Partial<ComponentProps<typeof ThreadDrawer>> 
   });
 }
 
-async function openListedThread() {
-  await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+async function openListedSidenote() {
+  await vi.waitFor(() => expect(document.querySelector('.sidenote-list-item')).not.toBeNull());
   await act(async () => {
-    (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+    (document.querySelector('.sidenote-list-item') as HTMLButtonElement).click();
     await Promise.resolve();
   });
-  await vi.waitFor(() => expect(document.querySelector('[aria-label="My note"]')).not.toBeNull());
-}
-
-function typeNote(value: string) {
-  const note = document.querySelector('[aria-label="My note"]') as HTMLTextAreaElement;
-  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(note, value);
-  note.dispatchEvent(new Event('input', { bubbles: true }));
+  await vi.waitFor(() => expect(document.querySelector('.sidenote-editor .ProseMirror')).not.toBeNull());
 }
 
 function typePrompt(value: string) {
-  const prompt = document.querySelector('[aria-label="Ask in this thread"]') as HTMLTextAreaElement;
+  const prompt = document.querySelector('[aria-label="Ask AI in this Sidenote"]') as HTMLTextAreaElement;
   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(prompt, value);
   prompt.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function mockBridge(stored: StreamThreadJSON, save = vi.fn(), failAnchorRemoval = false) {
+  return vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type, payload) => {
+    if (type === 'listStreamThreads') return { threads: [stored] };
+    if (type === 'loadStreamThread') return { thread: stored };
+    if (type === 'saveStreamThread') {
+      save(payload);
+      return {
+        conflict: false,
+        thread: thread({
+          ...stored,
+          title: String(payload?.title ?? stored.title),
+          workingText: String(payload?.workingText ?? stored.workingText),
+          docJSON: String(payload?.docJSON ?? stored.docJSON),
+          revision: Number(payload?.baseRevision ?? stored.revision) + 1,
+        }),
+      };
+    }
+    if (type === 'setThreadExchangeDisposition') return { saved: true };
+    if (type === 'removeStreamThreadAnchor') {
+      if (failAnchorRemoval) throw new Error('remove failed');
+      return { removed: true };
+    }
+    if (type === 'deleteStreamThread') return { highlightIds: ['highlight-1'] };
+    throw new Error(`Unexpected ${type}`);
+  }) as typeof bridge.sendAsync);
 }
 
 beforeEach(() => {
@@ -75,348 +126,222 @@ afterEach(async () => {
   document.body.innerHTML = '';
 });
 
-describe('ThreadDrawer', () => {
-  it('lists threads, opens one, and flushes its latest note', async () => {
-    const save = vi.fn().mockResolvedValue({
-      conflict: false,
-      thread: thread({ revision: 3, workingText: 'Local work' }),
-    });
-    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type, payload) => {
-      if (type === 'listStreamThreads') return { threads: [thread()] };
-      if (type === 'loadStreamThread') return { thread: thread() };
-      if (type === 'saveStreamThread') return save(payload);
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
+describe('Sidenotes', () => {
+  it('lists compact Sidenotes and opens one rich document with its evidence inline', async () => {
+    const stored = thread();
+    mockBridge(stored);
 
     await renderDrawer();
-    expect(document.querySelector('.thread-list-anchor')?.textContent)
-      .toBe('The MCU may draw too much power.');
-    expect(document.querySelector('.thread-list-item time')?.textContent).toMatch(/years ago/);
-    await openListedThread();
+    const item = await vi.waitFor(() => document.querySelector('.sidenote-list-item') as HTMLButtonElement);
+    expect(item.textContent).toContain('Check sleep current.');
+    expect(item.textContent).toMatch(/years ago/);
 
-    await act(async () => {
-      typeNote('Local work');
-      await Promise.resolve();
+    await openListedSidenote();
+    expect(document.querySelector('.richtext-evidence')?.textContent)
+      .toContain('The MCU may draw too much power.');
+    expect(document.querySelector('.sidenote-editor .ProseMirror')?.textContent)
+      .toContain('Check sleep current.');
+    expect(document.querySelector('.sidenote-status-row')).toBeNull();
+  });
+
+  it('adds another live quote to the same document and saves the canonical draft', async () => {
+    const stored = thread();
+    const save = vi.fn();
+    mockBridge(stored, save);
+    await renderDrawer();
+    await act(async () => { await drawerRef.current!.showThread(stored); });
+
+    const pdfAnchor = streamAnchor({
+      anchorId: 'anchor-2',
+      kind: 'pdf_quote',
+      quote: 'The regulator needs 300 mV of headroom.',
+      anchorSpanId: undefined,
+      sourceId: 'source-1',
+      sourceShortTitle: 'Regulator data sheet',
+      highlightId: 'highlight-1',
+      sourcePage: 4,
     });
-    await expect(drawerRef.current!.flush()).resolves.toBe(true);
+    await act(async () => {
+      await expect(drawerRef.current!.addAnchor(pdfAnchor)).resolves.toBe(true);
+    });
+
+    expect(document.querySelectorAll('.richtext-evidence')).toHaveLength(2);
     expect(save).toHaveBeenCalledWith(expect.objectContaining({
-      streamId: 'stream-1',
-      threadId: 'thread-1',
-      workingText: 'Local work',
-      baseRevision: 2,
+      docFormatVersion: 1,
+      docJSON: expect.stringContaining('anchor-2'),
     }));
-    expect(document.querySelector('.thread-save-state')?.textContent).toBe('Saved');
   });
 
-  it('keeps local text after a conflict and reloads only on request', async () => {
-    const stored = thread({ revision: 8, workingText: 'Stored elsewhere' });
-    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [thread()] };
-      if (type === 'loadStreamThread') return { thread: thread() };
-      if (type === 'saveStreamThread') return { conflict: true, thread: stored };
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
+  it('opens an evidence quote in its original PDF location', async () => {
+    const pdfAnchor = streamAnchor({
+      kind: 'pdf_quote',
+      sourceId: 'source-1',
+      sourceShortTitle: 'Board spec',
+      highlightId: 'highlight-1',
+      sourcePage: 7,
+    });
+    const stored = thread({ anchors: [pdfAnchor] });
+    const openPDF = vi.fn();
+    mockBridge(stored);
+    await renderDrawer({ onOpenPDFDestination: openPDF });
+    await openListedSidenote();
 
+    await act(async () => {
+      (document.querySelector('.richtext-evidence') as HTMLElement).click();
+    });
+    expect(openPDF).toHaveBeenCalledWith('ticker-pdf://source-1?highlight=highlight-1&page=7');
+  });
+
+  it('keeps a quote in place when its anchor cannot be removed', async () => {
+    const second = streamAnchor({ anchorId: 'anchor-2', quote: 'A second constraint.' });
+    const stored = thread({
+      anchors: [streamAnchor(), second],
+      docJSON: buildSidenoteDocumentJSON([streamAnchor(), second], 'Working conclusion.'),
+    });
+    mockBridge(stored, vi.fn(), true);
     await renderDrawer();
-    await openListedThread();
+    await openListedSidenote();
+
+    const before = [...document.querySelectorAll('.richtext-evidence')].map((node) => node.textContent);
     await act(async () => {
-      typeNote('Local work survives');
+      (document.querySelector('.richtext-evidence-remove') as HTMLButtonElement).click();
       await Promise.resolve();
     });
 
-    await expect(drawerRef.current!.flush()).resolves.toBe(false);
-    expect((document.querySelector('[aria-label="My note"]') as HTMLTextAreaElement).value)
-      .toBe('Local work survives');
-    expect(document.querySelector('.thread-save-warning')?.textContent)
-      .toContain('changed elsewhere');
-
-    await act(async () => {
-      ([...document.querySelectorAll('button')]
-        .find((button) => button.textContent === 'Reload stored note') as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      const { toasts } = useToastStore.getState();
+      expect(toasts[toasts.length - 1]?.message).toBe('The quote could not be removed.');
     });
-    expect((document.querySelector('[aria-label="My note"]') as HTMLTextAreaElement).value)
-      .toBe('Stored elsewhere');
+    expect([...document.querySelectorAll('.richtext-evidence')].map((node) => node.textContent)).toEqual(before);
   });
 
-  it('can resolve a conflict by saving the local note over the stored copy', async () => {
-    const stored = thread({ revision: 8, workingText: 'Stored elsewhere' });
-    const save = vi.fn()
-      .mockResolvedValueOnce({ conflict: true, thread: stored })
-      .mockResolvedValueOnce({
-        conflict: false,
-        thread: thread({ revision: 9, workingText: 'Local work survives' }),
-      });
-    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type, payload) => {
-      if (type === 'listStreamThreads') return { threads: [thread()] };
-      if (type === 'loadStreamThread') return { thread: thread() };
-      if (type === 'saveStreamThread') return save(payload);
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
-
-    await renderDrawer();
-    await openListedThread();
-    await act(async () => {
-      typeNote('Local work survives');
-      await Promise.resolve();
-    });
-    await expect(drawerRef.current!.flush()).resolves.toBe(false);
-    await act(async () => {
-      ([...document.querySelectorAll('button')]
-        .find((button) => button.textContent === 'Save my note instead') as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
-
-    await vi.waitFor(() => expect(document.querySelector('.thread-save-state')?.textContent).toBe('Saved'));
-    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ baseRevision: 8 }));
-    expect((document.querySelector('[aria-label="My note"]') as HTMLTextAreaElement).value)
-      .toBe('Local work survives');
-  });
-
-  it('streams a saved thread exchange without writing to the Stream', async () => {
+  it('keeps an AI proposal outside the document until the user accepts it', async () => {
+    const stored = thread();
+    mockBridge(stored);
     const sent: Array<{ type: string; payload?: Record<string, unknown> }> = [];
     vi.spyOn(bridge, 'send').mockImplementation((message) => { sent.push(message); });
-    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [thread()] };
-      if (type === 'loadStreamThread') return { thread: thread() };
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
     const endAI = vi.fn();
-
     await renderDrawer({ onBeginAI: () => true, onEndAI: endAI });
-    await openListedThread();
+    await openListedSidenote();
+
+    await act(async () => { typePrompt('Which part should we choose?'); });
     await act(async () => {
-      typePrompt('What constraint follows?');
-    });
-    await act(async () => {
-      (document.querySelector('.thread-prompt button[type="submit"]') as HTMLButtonElement).click();
+      (document.querySelector('.sidenote-prompt button') as HTMLButtonElement).click();
       await Promise.resolve();
     });
-
     const request = sent.find((message) => message.type === 'thinkDocument');
-    expect(request?.payload).toEqual(expect.objectContaining({
-      streamId: 'stream-1',
-      threadId: 'thread-1',
-      query: 'What constraint follows?',
-    }));
-    const requestId = request?.payload?.requestId as string;
+    const requestId = String(request?.payload?.requestId);
     const receipt = {
       version: 1,
       kind: 'threadAI',
       requestId,
-      anchor: { kind: 'stream', text: 'The MCU may draw too much power.' },
-      note: { sent: true, text: 'Check sleep current.' },
+      anchor: { kind: 'stream', text: stored.anchorText },
+      note: { sent: true, text: stored.workingText },
       turns: { includedRequestIds: [], totalAtSend: 0 },
       sourceContextMode: 'none',
       sources: [],
     };
-    const exchange = {
+    const exchange: AIExchangeJSON = {
       requestId,
       streamId: 'stream-1',
       threadId: 'thread-1',
       verb: 'thread',
-      userInput: 'What constraint follows?',
+      userInput: 'Which part should we choose?',
+      responseRaw: 'Choose the part with lower sleep current.',
       sourceManifest: JSON.stringify(receipt),
-      responseRaw: 'Use the lower-power part.',
-      model: 'provider/model',
+      threadDisposition: 'pending',
       createdAt: new Date().toISOString(),
     };
 
     await act(async () => {
       bridge.receive({ type: 'threadAIContext', payload: { requestId, sentContext: receipt } });
-      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'Use the lower-power part.' } });
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: exchange.responseRaw } });
       bridge.receive({ type: 'documentAIComplete', payload: { requestId, exchange, sentContext: receipt } });
     });
 
-    expect(document.querySelector('.thread-assistant-turn')?.textContent)
-      .toContain('Use the lower-power part.');
-    expect(document.querySelector('.thread-assistant-turn')?.textContent)
-      .not.toContain('provider/model');
-    expect(document.querySelector('.thread-sent-context')?.textContent)
-      .toContain('What the AI used');
-    expect(document.querySelector('.thread-sent-context')?.textContent)
-      .not.toContain('Previous turns: 0 of 0');
-    expect(sent.some((message) => message.type === 'saveRichStreamDocument')).toBe(false);
+    expect(document.querySelector('.sidenote-proposal')?.textContent).toContain(exchange.responseRaw);
+    expect(document.querySelector('.sidenote-editor .ProseMirror')?.textContent).not.toContain(exchange.responseRaw);
+    await act(async () => {
+      ([...document.querySelectorAll<HTMLButtonElement>('.sidenote-proposal-actions button')]
+        .find((button) => button.textContent === 'Keep in Sidenote')!).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-proposal')).toBeNull());
+    expect(document.querySelector('.sidenote-editor .ProseMirror')?.textContent).toContain(exchange.responseRaw);
+    expect((bridge.sendAsync as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      'setThreadExchangeDisposition',
+      expect.objectContaining({ requestId, disposition: 'kept' }),
+    );
     expect(sent.some((message) => message.type === 'saveStreamDocument')).toBe(false);
     expect(endAI).toHaveBeenCalledTimes(1);
   });
 
-  it('does not send while the visible note is unsaved', async () => {
-    const sent: Array<{ type: string }> = [];
-    vi.spyOn(bridge, 'send').mockImplementation((message) => { sent.push(message); });
-    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [thread()] };
-      if (type === 'loadStreamThread') return { thread: thread() };
-      if (type === 'saveStreamThread') return new Promise(() => {});
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
+  it('promotes the current writing below its primary Stream quote', async () => {
+    const stored = thread();
+    mockBridge(stored);
+    const promote = vi.fn().mockResolvedValue(true);
+    await renderDrawer({ onPromote: promote });
+    await act(async () => { await drawerRef.current!.showThread(stored); });
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-promote-main')).not.toBeNull());
 
-    await renderDrawer({ onBeginAI: () => true });
-    await openListedThread();
     await act(async () => {
-      typeNote('Still saving');
-      typePrompt('Do not send this yet.');
+      (document.querySelector('.sidenote-promote-main') as HTMLButtonElement).click();
+      await Promise.resolve();
     });
-
-    const send = document.querySelector('.thread-prompt button[type="submit"]') as HTMLButtonElement;
-    expect(send.disabled).toBe(true);
-    send.click();
-    await act(async () => {
-      (document.querySelector('[aria-label="Ask in this thread"]') as HTMLTextAreaElement)
-        .dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
-        }));
+    expect(promote).toHaveBeenCalledWith({
+      text: 'Check sleep current.',
+      threadId: 'thread-1',
+      target: { kind: 'afterAnchor', anchorSpanId: 'span-1' },
     });
-    expect(sent.some((message) => message.type === 'thinkDocument')).toBe(false);
   });
 
-  it('ignores late chunks after cancel when a new thread request starts', async () => {
+  it('deletes the Sidenote while leaving already-promoted Stream text alone', async () => {
+    const stored = thread();
+    mockBridge(stored);
     const sent: Array<{ type: string; payload?: Record<string, unknown> }> = [];
     vi.spyOn(bridge, 'send').mockImplementation((message) => { sent.push(message); });
-    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [thread()] };
-      if (type === 'loadStreamThread') return { thread: thread() };
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
+    await renderDrawer();
+    await openListedSidenote();
 
-    await renderDrawer({ onBeginAI: () => true, onEndAI: () => {} });
-    await openListedThread();
-    await act(async () => { typePrompt('First prompt'); });
     await act(async () => {
-      (document.querySelector('.thread-prompt button[type="submit"]') as HTMLButtonElement).click();
+      ([...document.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'Delete Sidenote')!).click();
+    });
+    await act(async () => {
+      ([...document.querySelectorAll<HTMLButtonElement>('.modal-actions button')]
+        .find((button) => button.textContent === 'Delete Sidenote')!).click();
       await Promise.resolve();
     });
-    const firstId = sent.find((message) => message.type === 'thinkDocument')?.payload?.requestId as string;
-    await act(async () => {
-      ([...document.querySelectorAll('.thread-prompt-actions button')]
-        .find((button) => button.textContent === 'Stop') as HTMLButtonElement).click();
-    });
-    expect(sent).toContainEqual({ type: 'cancelDocumentAI', payload: { requestId: firstId } });
-    expect((document.querySelector('[aria-label="Ask in this thread"]') as HTMLTextAreaElement).value)
-      .toBe('First prompt');
 
-    await act(async () => { typePrompt('Second prompt'); });
-    await act(async () => {
-      (document.querySelector('.thread-prompt button[type="submit"]') as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
-    const requests = sent.filter((message) => message.type === 'thinkDocument');
-    const secondId = requests[1].payload?.requestId as string;
-
-    await act(async () => {
-      bridge.receive({ type: 'documentAIChunk', payload: { requestId: firstId, chunk: 'Stale reply.' } });
-      bridge.receive({ type: 'documentAIChunk', payload: { requestId: secondId, chunk: 'Current reply.' } });
-    });
-    expect(document.querySelector('.thread-assistant-turn')?.textContent).toContain('Current reply.');
-    expect(document.querySelector('.thread-assistant-turn')?.textContent).not.toContain('Stale reply.');
-  });
-
-  it('offers the saved note and citation-linked AI reply for explicit insertion', async () => {
-    const requestInsertion = vi.fn();
-    const exchange = {
-      requestId: 'request-1',
-      streamId: 'stream-1',
-      threadId: 'thread-1',
-      verb: 'thread',
-      userInput: 'What follows?',
-      responseRaw: 'Use this result. 【1|support】',
-      sourceManifest: JSON.stringify([{
-        n: 1,
-        sourceId: 'source-1',
-        chunkId: 'chunk-1',
-        page: 4,
-        shortTitle: 'Manual',
-      }]),
-      createdAt: new Date(0).toISOString(),
-    };
-    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [thread()] };
-      if (type === 'loadStreamThread') return { thread: thread({ exchanges: [exchange] }) };
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
-
-    await renderDrawer({ onRequestInsertion: requestInsertion });
-    await openListedThread();
-    const buttons = [...document.querySelectorAll<HTMLButtonElement>('.thread-add-to-stream')];
-    expect(buttons).toHaveLength(2);
-
-    await act(async () => {
-      buttons[0].click();
-      await Promise.resolve();
-    });
-    expect(requestInsertion).toHaveBeenCalledWith({
-      kind: 'note', text: 'Check sleep current.', threadId: 'thread-1',
-    });
-
-    await act(async () => {
-      buttons[1].click();
-      await Promise.resolve();
-    });
-    expect(requestInsertion).toHaveBeenLastCalledWith({
-      kind: 'ai',
-      text: 'Use this result. [p.4](ticker-pdf://source-1?page=4&chunk=chunk-1)',
-      threadId: 'thread-1',
+    await vi.waitFor(() => expect(bridge.sendAsync).toHaveBeenCalledWith(
+      'deleteStreamThread',
+      { streamId: 'stream-1', threadId: 'thread-1' },
+    ));
+    expect(sent).toContainEqual({
+      type: 'deletePdfHighlight',
+      payload: { streamId: 'stream-1', highlightId: 'highlight-1' },
     });
   });
 
-  it('opens a whole-source receipt by source id instead of treating it as a legacy highlight', async () => {
-    const openPDF = vi.fn();
-    const receipt = {
-      version: 1,
-      kind: 'threadAI',
-      requestId: 'request-1',
-      anchor: { kind: 'stream', text: 'Anchor' },
-      note: { sent: false, text: '' },
-      turns: { includedRequestIds: [], totalAtSend: 0 },
-      sourceContextMode: 'passthrough',
-      sources: [{ kind: 'wholeSource', sourceId: 'source-1', shortTitle: 'Manual' }],
-    };
-    const exchange = {
-      requestId: 'request-1',
-      streamId: 'stream-1',
-      threadId: 'thread-1',
-      verb: 'thread',
-      userInput: 'Read it',
-      responseRaw: 'Result.',
-      sourceManifest: JSON.stringify(receipt),
-      createdAt: new Date(0).toISOString(),
-    };
-    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [thread()] };
-      if (type === 'loadStreamThread') return { thread: thread({ exchanges: [exchange] }) };
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
+  it('removes a one-quote draft when the user leaves without writing', async () => {
+    const stored = thread({
+      title: 'The MCU may draw too much power.',
+      workingText: '',
+      docJSON: buildSidenoteDocumentJSON([streamAnchor()]),
+    });
+    const deleted = vi.fn();
+    mockBridge(stored);
+    await renderDrawer({ onSidenoteDeleted: deleted });
+    await act(async () => { await drawerRef.current!.showThread(stored); });
 
-    await renderDrawer({ onOpenPDFDestination: openPDF });
-    await openListedThread();
     await act(async () => {
-      ([...document.querySelectorAll('button')]
-        .find((button) => button.textContent === 'Manual · whole source') as HTMLButtonElement).click();
+      await expect(drawerRef.current!.leave()).resolves.toBe(true);
     });
-    expect(openPDF).toHaveBeenCalledWith('ticker-pdf://source-1?page=1');
-  });
 
-  it('reopens the exact PDF highlight that started the thread', async () => {
-    const openPDF = vi.fn();
-    const pdfThread = thread({
-      sourceId: 'source-1',
-      sourceName: 'board-spec.pdf',
-      sourceShortTitle: 'Board spec',
-      highlightId: 'highlight-1',
-      sourcePage: 7,
-    });
-    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [pdfThread] };
-      if (type === 'loadStreamThread') return { thread: pdfThread };
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
-
-    await renderDrawer({ onOpenPDFDestination: openPDF });
-    await openListedThread();
-    await act(async () => {
-      (document.querySelector('.thread-origin-source') as HTMLButtonElement).click();
-    });
-    expect(openPDF).toHaveBeenCalledWith(
-      'ticker-pdf://source-1?highlight=highlight-1&page=7',
+    expect(bridge.sendAsync).toHaveBeenCalledWith(
+      'deleteStreamThread',
+      { streamId: 'stream-1', threadId: 'thread-1' },
     );
+    expect(deleted).toHaveBeenCalledWith('thread-1');
   });
 });

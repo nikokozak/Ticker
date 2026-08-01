@@ -5,6 +5,8 @@ export type ThreadSaveState = 'saved' | 'saving' | 'error' | 'conflict';
 export interface ThreadDraft {
   title: string;
   workingText: string;
+  docJSON?: string;
+  docFormatVersion?: number;
 }
 
 interface ThreadDraftSessionOptions {
@@ -14,6 +16,8 @@ interface ThreadDraftSessionOptions {
     threadId: string;
     title: string;
     workingText: string;
+    docJSON?: string;
+    docFormatVersion?: number;
     baseRevision: number;
   }) => Promise<{ conflict: boolean; thread: StreamThreadJSON }>;
   autosaveDelay?: number;
@@ -48,6 +52,8 @@ export class ThreadDraftSession {
     this.saved = {
       title: options.thread.title,
       workingText: options.thread.workingText,
+      docJSON: options.thread.docJSON,
+      docFormatVersion: options.thread.docFormatVersion,
     };
     this.draft = { ...this.saved };
   }
@@ -57,7 +63,7 @@ export class ThreadDraftSession {
   }
 
   update(draft: ThreadDraft): void {
-    this.draft = { ...draft };
+    this.draft = { ...this.draft, ...draft };
     if (this.storedConflict) return;
     this.setState('saving');
     if (this.timer) clearTimeout(this.timer);
@@ -78,7 +84,12 @@ export class ThreadDraftSession {
     const thread = this.storedConflict;
     if (!thread) return null;
     this.revision = thread.revision;
-    this.saved = { title: thread.title, workingText: thread.workingText };
+    this.saved = {
+      title: thread.title,
+      workingText: thread.workingText,
+      docJSON: thread.docJSON,
+      docFormatVersion: thread.docFormatVersion,
+    };
     this.draft = { ...this.saved };
     this.storedConflict = null;
     this.setState('saved');
@@ -90,7 +101,12 @@ export class ThreadDraftSession {
     const thread = this.storedConflict;
     if (!thread) return Promise.resolve(true);
     this.revision = thread.revision;
-    this.saved = { title: thread.title, workingText: thread.workingText };
+    this.saved = {
+      title: thread.title,
+      workingText: thread.workingText,
+      docJSON: thread.docJSON,
+      docFormatVersion: thread.docFormatVersion,
+    };
     this.storedConflict = null;
     this.setState('saving');
     return this.saveNow();
@@ -103,7 +119,9 @@ export class ThreadDraftSession {
 
   private isDirty(): boolean {
     return this.draft.title !== this.saved.title
-      || this.draft.workingText !== this.saved.workingText;
+      || this.draft.workingText !== this.saved.workingText
+      || this.draft.docJSON !== this.saved.docJSON
+      || this.draft.docFormatVersion !== this.saved.docFormatVersion;
   }
 
   private async drain(): Promise<boolean> {

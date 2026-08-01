@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { TextSelection } from 'prosemirror-state';
+import { NodeSelection, TextSelection } from 'prosemirror-state';
 import type { Node as ProseNode, ResolvedPos, Slice } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import * as prosemirrorView from 'prosemirror-view';
@@ -462,5 +462,49 @@ describe('an external append', () => {
     ed.appendMarkdown('\n\ntwo');
     press(ed, 'z', MOD);
     expect(ed.getMarkdownProjection()).toBe('one');
+  });
+});
+
+describe('Sidenote evidence', () => {
+  it('lands after the current block and leaves the cursor ready to write', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    editor = createRichTextEditor({
+      parent,
+      docJSON: JSON.stringify(parseMarkdown('First thought.\n\nSecond thought.').toJSON()),
+      allowEvidence: true,
+    });
+    place(editor, find(editor, 'First thought.'));
+
+    editor.appendEvidence({
+      anchorId: 'anchor-2',
+      kind: 'pdf_quote',
+      label: 'Board spec · p. 7',
+      quote: 'The regulator needs 300 mV of headroom.',
+    });
+
+    expect(Array.from({ length: editor.view.state.doc.childCount }, (_, index) => (
+      editor!.view.state.doc.child(index).type.name
+    ))).toEqual(['paragraph', 'evidence', 'paragraph']);
+    expect(editor.view.state.selection.$head.index(0)).toBe(2);
+    expect(editor.view.dom.querySelector('[data-anchor-id="anchor-2"]')).not.toBeNull();
+  });
+
+  it('uses nearby writing when an evidence atom is selected', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = parseMarkdown('Writing to promote.');
+    const evidence = doc.type.schema.nodes.evidence.create({
+      anchorId: 'anchor-1', kind: 'stream_quote', label: 'Stream', quote: 'Quoted context.',
+    });
+    const withEvidence = doc.type.create(null, [evidence, ...Array.from({ length: doc.childCount }, (_, index) => doc.child(index))]);
+    editor = createRichTextEditor({
+      parent,
+      docJSON: JSON.stringify(withEvidence.toJSON()),
+      allowEvidence: true,
+    });
+    editor.view.dispatch(editor.view.state.tr.setSelection(NodeSelection.create(editor.view.state.doc, 0)));
+
+    expect(editor.getSelectionOrBlockMarkdown()).toBe('Writing to promote.');
   });
 });

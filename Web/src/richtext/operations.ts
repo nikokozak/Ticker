@@ -147,20 +147,20 @@ export function streamAIMarkdown(view: EditorView, range: { from: number; to: nu
   };
 }
 
-/* Thread insertion ------------------------------------------------------ */
+/* Sidenote promotion ---------------------------------------------------- */
 
-export type ThreadInsertionTarget =
+export type SidenoteInsertionTarget =
   | { kind: 'block'; pos: number }
-  | { kind: 'list'; pos: number; fallbackPos: number };
+  | { kind: 'list'; pos: number; fallbackPos: number }
+  | { kind: 'replace'; from: number; to: number };
 
-export interface ThreadInsertionPayload {
-  kind: 'note' | 'ai';
+export interface SidenoteInsertionPayload {
   text: string;
   threadId: string;
 }
 
 /** Resolve a click inside text to an additive boundary after its owning block. */
-export function threadInsertionTarget(state: EditorState, pos: number): ThreadInsertionTarget | null {
+export function sidenoteInsertionTarget(state: EditorState, pos: number): SidenoteInsertionTarget | null {
   if (pos < 0 || pos > state.doc.content.size) return null;
   const $pos = state.doc.resolve(pos);
   if ($pos.parent.type === tickerSchema.nodes.code_block) return null;
@@ -187,74 +187,31 @@ export function threadInsertionTarget(state: EditorState, pos: number): ThreadIn
   return null;
 }
 
-function literalParagraphs(text: string): Fragment {
-  const paragraphs = text
-    .replace(/\r\n?/g, '\n')
-    .split(/\n+/)
-    .filter((line) => line.length > 0)
-    .map((line) => tickerSchema.nodes.paragraph.create(
-      null,
-      line ? tickerSchema.text(line) : undefined,
-    ));
-  return Fragment.fromArray(paragraphs);
-}
-
-function appendThreadLink(node: ProseNode, link: ProseNode): { node: ProseNode; appended: boolean } {
-  if (node.type === tickerSchema.nodes.paragraph) {
-    const spacer = node.content.size ? Fragment.from(tickerSchema.text(' ')) : Fragment.empty;
-    return { node: node.copy(node.content.append(spacer).append(Fragment.from(link))), appended: true };
-  }
-  for (let index = node.childCount - 1; index >= 0; index -= 1) {
-    const child = appendThreadLink(node.child(index), link);
-    if (!child.appended) continue;
-    const children: ProseNode[] = [];
-    node.forEach((candidate, _offset, childIndex) => {
-      children.push(childIndex === index ? child.node : candidate);
-    });
-    return { node: node.copy(Fragment.fromArray(children)), appended: true };
-  }
-  return { node, appended: false };
-}
-
-function withThreadLink(content: Fragment, threadId: string): Fragment {
-  const mark = tickerSchema.marks.link.create({
-    href: `ticker-thread://${encodeURIComponent(threadId)}`,
-    title: null,
-  });
-  const link = tickerSchema.text('Thread', [mark]);
-  const blocks: ProseNode[] = [];
-  content.forEach((node) => blocks.push(node));
-  const last = blocks[blocks.length - 1];
-  if (last) {
-    const appended = appendThreadLink(last, link);
-    blocks[blocks.length - 1] = appended.node;
-    if (appended.appended) return Fragment.fromArray(blocks);
-  }
-  blocks.push(tickerSchema.nodes.paragraph.create(null, link));
-  return Fragment.fromArray(blocks);
-}
-
-/** Add a thread result without changing any existing Stream block. */
-export function insertThreadWork(
+/** Add selected Sidenote work as one undo step, with no visible backlink. */
+export function insertSidenoteWork(
   view: EditorView,
-  target: ThreadInsertionTarget,
-  payload: ThreadInsertionPayload,
+  target: SidenoteInsertionTarget,
+  payload: SidenoteInsertionPayload,
 ): { from: number; to: number; blockPositions: number[] } {
-  const parsed = payload.kind === 'note'
-    ? literalParagraphs(payload.text)
-    : parseMarkdown(payload.text).content;
-  if (parsed.childCount === 0) throw new Error('There is no thread text to add.');
+  const parsedDoc = parseMarkdown(payload.text);
+  const parsed = parsedDoc.content;
+  if (parsed.childCount === 0) throw new Error('There is no Sidenote text to add.');
 
-  const linked = withThreadLink(parsed, payload.threadId);
+  const inlineReplacement = target.kind === 'replace'
+    && parsed.childCount === 1
+    && parsedDoc.firstChild?.type === tickerSchema.nodes.paragraph
+    && view.state.doc.resolve(target.from).sameParent(view.state.doc.resolve(target.to));
   const insertAsListItems = target.kind === 'list'
-    && Array.from({ length: linked.childCount }, (_, index) => linked.child(index))
+    && Array.from({ length: parsed.childCount }, (_, index) => parsed.child(index))
       .every((node) => node.type === tickerSchema.nodes.paragraph);
-  const insertionPos = target.kind === 'list' && !insertAsListItems ? target.fallbackPos : target.pos;
+  const insertionPos = target.kind === 'replace'
+    ? target.from
+    : target.kind === 'list' && !insertAsListItems ? target.fallbackPos : target.pos;
   const blocks: ProseNode[] = [];
-  linked.forEach((node) => blocks.push(
+  parsed.forEach((node) => blocks.push(
     insertAsListItems ? tickerSchema.nodes.list_item.createChecked(null, node) : node,
   ));
-  const content = Fragment.fromArray(blocks);
+  const content = inlineReplacement ? parsedDoc.firstChild!.content : Fragment.fromArray(blocks);
   const blockPositions: number[] = [];
   let offset = 0;
   for (const block of blocks) {
@@ -262,7 +219,8 @@ export function insertThreadWork(
     offset += block.nodeSize;
   }
 
-  const tr = view.state.tr.replace(insertionPos, insertionPos, new Slice(content, 0, 0));
+  const replaceTo = target.kind === 'replace' ? target.to : insertionPos;
+  const tr = view.state.tr.replace(insertionPos, replaceTo, new Slice(content, 0, 0));
   const to = insertionPos + content.size;
   tr.setSelection(Selection.near(tr.doc.resolve(to), -1));
   view.dispatch(tr.scrollIntoView());

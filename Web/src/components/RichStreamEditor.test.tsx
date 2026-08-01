@@ -8,11 +8,18 @@ import {
   type SwiftToWebBridgeMessage,
   type WebToSwiftBridgeMessage,
 } from '../types/bridge';
-import type { AIExchangeJSON, SourceReference, Stream, StreamThreadJSON } from '../types/models';
+import type {
+  AIExchangeJSON,
+  SourceReference,
+  Stream,
+  StreamThreadAnchorJSON,
+  StreamThreadJSON,
+} from '../types/models';
 import { DocumentSession } from '../richtext/session';
 import { parseMarkdown } from '../richtext/markdown';
 import { useToastStore } from '../store/toastStore';
 import { fnv1a } from '../utils/fnv1a';
+import { buildSidenoteDocumentJSON } from './ThreadDrawer';
 import { RichStreamEditor } from './RichStreamEditor';
 
 beforeAll(() => {
@@ -63,7 +70,10 @@ const editor = () => document.querySelector('.ProseMirror') as HTMLElement;
 
 async function click(label: string) {
   const button = [...document.querySelectorAll('button')]
-    .find((candidate) => candidate.getAttribute('aria-label') === label);
+    .find((candidate) => {
+      const ariaLabel = candidate.getAttribute('aria-label');
+      return ariaLabel === label || ariaLabel?.startsWith(`${label}, `);
+    });
   expect(button, `Expected ${label} button`).toBeDefined();
   await act(async () => {
     (button as HTMLButtonElement).click();
@@ -461,38 +471,84 @@ describe('RichStreamEditor lifecycle', () => {
       .filter(([type]) => type === 'saveRichStreamDocument')).toHaveLength(1);
   });
 
-  it('reports a thread-note conflict to the host without losing the local note', async () => {
-    const savedThread: import('../types/models').StreamThreadJSON = {
+  it('reports a Sidenote conflict to the host without losing its local evidence', async () => {
+    const createdAt = new Date(0).toISOString();
+    const primaryAnchor: StreamThreadAnchorJSON = {
+      anchorId: 'anchor-1',
+      threadId: 'thread-1',
+      kind: 'stream_quote',
+      quote: 'Original paragraph.',
+      anchorSpanId: 'span-1',
+      createdAt,
+    };
+    const savedThread: StreamThreadJSON = {
       threadId: 'thread-1',
       streamId: stream.id,
       title: 'Power budget',
       workingText: 'Stored elsewhere',
+      docJSON: buildSidenoteDocumentJSON([primaryAnchor], 'Stored elsewhere'),
+      docFormatVersion: 1,
       anchorText: 'Original paragraph.',
       anchorSpanId: 'span-1',
       revision: 8,
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
+      anchors: [primaryAnchor],
+      createdAt,
+      updatedAt: createdAt,
     };
-    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+    const localThread = { ...savedThread, revision: 2 };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
       if (type === 'listStreamThreads') return { threads: [savedThread] };
-      if (type === 'loadStreamThread') return { thread: { ...savedThread, revision: 2 } };
+      if (type === 'loadStreamThread') return { thread: localThread };
+      if (type === 'addStreamThreadAnchor') {
+        const wire = (payload?.anchors as Array<Record<string, unknown>>)[0];
+        return {
+          anchor: {
+            anchorId: String(wire.anchorId),
+            threadId: 'thread-1',
+            kind: 'pdf_quote',
+            quote: String(wire.quote),
+            sourceId: String(wire.sourceId),
+            sourceShortTitle: 'Data sheet',
+            highlightId: String(wire.highlightId),
+            sourcePage: Number(wire.page),
+            createdAt: String(wire.createdAt),
+          },
+        };
+      }
       if (type === 'saveStreamThread') return { conflict: true, thread: savedThread };
       if (type === 'saveRichStreamDocument') return { revision: 2 };
-      throw new Error(`Unexpected ${type}`);
+      throw new Error('Unexpected ' + type);
     }) as typeof bridge.sendAsync);
 
-    await click('Threads');
-    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+    await act(async () => root!.render(null));
+    await renderStream(stream);
+
+    await click('Sidenotes');
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-list-item')).not.toBeNull());
     await act(async () => {
-      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      (document.querySelector('.sidenote-list-item') as HTMLButtonElement).click();
       await Promise.resolve();
     });
-    await vi.waitFor(() => expect(document.querySelector('[aria-label="My note"]')).not.toBeNull());
-    const note = document.querySelector('[aria-label="My note"]') as HTMLTextAreaElement;
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')
-        ?.set?.call(note, 'Local work survives');
-      note.dispatchEvent(new Event('input', { bubbles: true }));
+      bridge.receive({
+        type: 'pdfThreadRequested',
+        payload: {
+          streamId: stream.id,
+          sourceId: 'source-1',
+          sourceName: 'data-sheet.pdf',
+          shortTitle: 'Data sheet',
+          highlightId: 'highlight-2',
+          page: 4,
+          quote: 'New local evidence.',
+          createdAt,
+          rects: [{ page: 4, x: 0.1, y: 0.2, w: 0.3, h: 0.04 }],
+        },
+      });
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-warning')?.textContent)
+      .toContain('changed elsewhere'));
+    await act(async () => {
       bridge.receive({ type: 'flushEditor', payload: { requestId: 'quit-1' } });
       await Promise.resolve();
     });
@@ -501,28 +557,63 @@ describe('RichStreamEditor lifecycle', () => {
       type: 'editorFlushed',
       payload: { requestId: 'quit-1', saved: false },
     }));
-    expect(note.value).toBe('Local work survives');
-    expect(document.querySelector('.thread-save-warning')?.textContent)
-      .toContain('changed elsewhere');
+    expect([...document.querySelectorAll('.richtext-evidence')].map((node) => node.textContent))
+      .toEqual(expect.arrayContaining([
+        expect.stringContaining('Original paragraph.'),
+        expect.stringContaining('New local evidence.'),
+      ]));
   });
 });
 
-describe('RichStreamEditor Stream threads', () => {
-  it('keeps thread AI events out of document AI state', async () => {
+describe('RichStreamEditor Sidenotes', () => {
+  const createdAt = new Date(0).toISOString();
+
+  function sidenote(overrides: Partial<StreamThreadJSON> = {}): StreamThreadJSON {
+    const threadId = overrides.threadId ?? 'thread-1';
+    const defaultAnchor: StreamThreadAnchorJSON = {
+      anchorId: 'anchor-1',
+      threadId,
+      kind: 'stream_quote',
+      quote: 'Original paragraph.',
+      anchorSpanId: 'span-1',
+      createdAt,
+    };
+    const anchors = overrides.anchors ?? [defaultAnchor];
+    const value: StreamThreadJSON = {
+      threadId,
+      streamId: overrides.streamId ?? stream.id,
+      title: 'Evidence stays rich',
+      workingText: 'Evidence *stays rich*',
+      anchorText: 'Original paragraph.',
+      anchorSpanId: anchors[0]?.anchorSpanId,
+      revision: 1,
+      createdAt,
+      updatedAt: createdAt,
+      ...overrides,
+      anchors,
+    };
+    return {
+      ...value,
+      docJSON: overrides.docJSON ?? buildSidenoteDocumentJSON(anchors, value.workingText),
+      docFormatVersion: overrides.docFormatVersion ?? 1,
+    };
+  }
+
+  it('keeps Sidenote AI events out of document AI state', async () => {
     await act(async () => {
       bridge.receive({
         type: 'threadAIContext',
-        payload: { requestId: 'thread-request', sentContext: {} },
+        payload: { requestId: 'sidenote-request', sentContext: {} },
       });
       bridge.receive({
         type: 'documentAIChunk',
-        payload: { requestId: 'thread-request', chunk: 'Thread-only reply.' },
+        payload: { requestId: 'sidenote-request', chunk: 'Sidenote-only proposal.' },
       });
       bridge.receive({
         type: 'documentAIError',
         payload: {
-          requestId: 'thread-request',
-          error: 'Thread request was refused.',
+          requestId: 'sidenote-request',
+          error: 'Sidenote request was refused.',
           errorCode: 'thread_context_too_large',
         },
       });
@@ -533,60 +624,66 @@ describe('RichStreamEditor Stream threads', () => {
     expect(useToastStore.getState().toasts).toEqual([]);
   });
 
-  it('starts a thread from selected text without changing the Stream document', async () => {
-    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+  it('starts a Sidenote from selected Stream text without changing it', async () => {
     vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
       if (type === 'createStreamThread') {
+        const threadId = String(payload?.threadId);
+        const wire = (payload?.anchors as Array<Record<string, unknown>>)[0];
+        const anchor: StreamThreadAnchorJSON = {
+          anchorId: String(wire.anchorId),
+          threadId,
+          kind: 'stream_quote',
+          quote: String(wire.quote),
+          anchorSpanId: String(wire.anchorSpanId),
+          createdAt: String(wire.createdAt),
+        };
         return {
-          thread: {
-            threadId: 'thread-1',
-            streamId: stream.id,
-            title: 'Original paragraph.',
+          thread: sidenote({
+            threadId,
+            title: String(payload?.title),
             workingText: '',
-            anchorText: 'Original paragraph.',
-            anchorSpanId: String(payload?.anchorSpanId),
+            docJSON: String(payload?.docJSON),
+            anchorText: String(payload?.anchorText),
+            anchorSpanId: anchor.anchorSpanId,
+            anchors: [anchor],
             revision: 0,
-            createdAt: new Date(0).toISOString(),
-            updatedAt: new Date(0).toISOString(),
-          },
+          }),
         };
       }
       if (type === 'saveRichStreamDocument') return { revision: 2 };
-      throw new Error(`Unexpected ${type}`);
+      throw new Error('Unexpected ' + type);
     }) as typeof bridge.sendAsync);
 
     await selectEditorText('Original paragraph.');
-    scrollIntoView.mockClear();
-    await click('Start thread');
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
-    expect(document.querySelector('.selection-action-menu')).toBeNull();
+    await click('New Sidenote');
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-detail')).not.toBeNull());
 
     const create = vi.mocked(bridge.sendAsync).mock.calls
       .find(([type]) => type === 'createStreamThread');
     expect(create?.[1]).toMatchObject({
       streamId: stream.id,
-      title: 'Original paragraph.',
+      threadId: expect.any(String),
+      workingText: '',
+      docFormatVersion: 1,
       anchorText: 'Original paragraph.',
-      sourceId: '',
-      highlightId: '',
+      anchors: [expect.objectContaining({
+        kind: 'stream_quote',
+        quote: 'Original paragraph.',
+        anchorSpanId: expect.any(String),
+      })],
     });
+    expect(String(create?.[1]?.docJSON)).toContain('evidence');
     expect(editor().textContent).toBe('Original paragraph.');
+    expect(editor().querySelector('.sidenote-marker')).not.toBeNull();
     expect(editor().querySelector('.richtext-provenance-thread')).toBeNull();
-    expect(scrollIntoView).toHaveBeenCalled();
-    expect(document.querySelector('.thread-anchor-warning')).toBeNull();
-    await toggleXray();
-    await act(async () => {
-      editor().querySelector('p')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      await Promise.resolve();
-    });
-    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'getExchange')).toBe(false);
+    expect(document.querySelector('.richtext-evidence')?.textContent)
+      .toContain('Original paragraph.');
 
     await vi.waitFor(() => expect(vi.mocked(bridge.sendAsync).mock.calls
       .some(([type]) => type === 'saveRichStreamDocument')).toBe(true));
     const save = vi.mocked(bridge.sendAsync).mock.calls
       .filter(([type]) => type === 'saveRichStreamDocument')
       .pop()?.[1] as Record<string, unknown>;
-    expect(save.docJSON).toBe(stream.document?.docJSON);
     expect(save.markdown).toBe('Original paragraph.');
     expect(save.spans).toEqual([
       expect.objectContaining({
@@ -597,25 +694,40 @@ describe('RichStreamEditor Stream threads', () => {
     ]);
   });
 
-  it('starts a thread from a saved PDF selection without changing the Stream', async () => {
-    const pdfThread: StreamThreadJSON = {
-      threadId: 'pdf-thread-1',
-      streamId: stream.id,
-      title: 'The voltage must stay below 3.6 V.',
-      workingText: '',
-      anchorText: 'The voltage must stay below 3.6 V.',
-      sourceId: 'source-1',
-      sourceName: 'board-spec.pdf',
-      sourceShortTitle: 'Board spec',
-      highlightId: 'highlight-1',
-      sourcePage: 7,
-      revision: 0,
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    };
-    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
-      if (type === 'createStreamThread') return { thread: pdfThread };
-      throw new Error(`Unexpected ${type}`);
+  it('creates a PDF-backed Sidenote and persists its provisional highlight in one request', async () => {
+    const rects = [{ page: 7, x: 0.1, y: 0.2, w: 0.3, h: 0.04 }];
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type !== 'createStreamThread') throw new Error('Unexpected ' + type);
+      const threadId = String(payload?.threadId);
+      const wire = (payload?.anchors as Array<Record<string, unknown>>)[0];
+      const anchor: StreamThreadAnchorJSON = {
+        anchorId: String(wire.anchorId),
+        threadId,
+        kind: 'pdf_quote',
+        quote: String(wire.quote),
+        sourceId: String(wire.sourceId),
+        sourceName: 'board-spec.pdf',
+        sourceShortTitle: 'Board spec',
+        highlightId: String(wire.highlightId),
+        sourcePage: Number(wire.page),
+        createdAt: String(wire.createdAt),
+      };
+      return {
+        thread: sidenote({
+          threadId,
+          title: String(payload?.title),
+          workingText: '',
+          docJSON: String(payload?.docJSON),
+          anchorText: anchor.quote ?? '',
+          sourceId: anchor.sourceId,
+          sourceName: anchor.sourceName,
+          sourceShortTitle: anchor.sourceShortTitle,
+          highlightId: anchor.highlightId,
+          sourcePage: anchor.sourcePage,
+          anchors: [anchor],
+          revision: 0,
+        }),
+      };
     }) as typeof bridge.sendAsync);
 
     await act(async () => {
@@ -629,29 +741,34 @@ describe('RichStreamEditor Stream threads', () => {
           highlightId: 'highlight-1',
           page: 7,
           quote: 'The voltage must stay below 3.6 V.',
+          createdAt,
+          rects,
         },
       });
       await Promise.resolve();
     });
 
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
-    expect(vi.mocked(bridge.sendAsync)).toHaveBeenCalledWith('createStreamThread', {
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-detail')).not.toBeNull());
+    const create = vi.mocked(bridge.sendAsync).mock.calls
+      .find(([type]) => type === 'createStreamThread');
+    expect(create?.[1]).toMatchObject({
       streamId: stream.id,
-      title: 'The voltage must stay below 3.6 V.',
-      anchorText: 'The voltage must stay below 3.6 V.',
-      anchorSpanId: '',
       sourceId: 'source-1',
       highlightId: 'highlight-1',
+      docFormatVersion: 1,
+      anchors: [expect.objectContaining({
+        kind: 'pdf_quote',
+        page: 7,
+        rects,
+      })],
     });
-    expect(document.querySelector('.thread-origin')?.textContent)
-      .toContain('Board spec · page 7');
+    expect(document.querySelector('.richtext-evidence')?.textContent)
+      .toContain('Board spec · p. 7');
     expect(editor().textContent).toBe('Original paragraph.');
-    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'saveRichStreamDocument'))
-      .toBe(false);
     expect(sent.some((message) => message.type === 'deletePdfHighlight')).toBe(false);
   });
 
-  it('removes the saved PDF highlight when its thread cannot be created', async () => {
+  it('removes a provisional PDF highlight when its Sidenote cannot be created', async () => {
     vi.mocked(bridge.sendAsync).mockRejectedValue(new Error('write failed'));
 
     await act(async () => {
@@ -664,7 +781,9 @@ describe('RichStreamEditor Stream threads', () => {
           shortTitle: 'Board spec',
           highlightId: 'highlight-rollback',
           page: 7,
-          quote: 'A quote that could not become a thread.',
+          quote: 'A quote that could not become a Sidenote.',
+          createdAt,
+          rects: [{ page: 7, x: 0.1, y: 0.2, w: 0.3, h: 0.04 }],
         },
       });
       await Promise.resolve();
@@ -677,72 +796,24 @@ describe('RichStreamEditor Stream threads', () => {
     expect(editor().textContent).toBe('Original paragraph.');
   });
 
-  it('keeps the thread but warns when its selected passage changes during creation', async () => {
-    let finishCreate!: (value: { thread: StreamThreadJSON }) => void;
-    let liveView: EditorView | null = null;
-    const updateState = EditorView.prototype.updateState;
-    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
-      this: EditorView,
-      state,
-    ) {
-      liveView = this;
-      updateState.call(this, state);
-    });
-    const pendingCreate = new Promise<{ thread: StreamThreadJSON }>((resolve) => {
-      finishCreate = resolve;
-    });
-    vi.mocked(bridge.sendAsync).mockImplementation(((type) => {
-      if (type === 'createStreamThread') return pendingCreate;
-      if (type === 'saveRichStreamDocument') return Promise.resolve({ revision: 2 });
-      return Promise.reject(new Error(`Unexpected ${type}`));
-    }) as typeof bridge.sendAsync);
-
-    await selectEditorText('paragraph');
-    await click('Start thread');
-    expect(liveView).not.toBeNull();
-    const create = vi.mocked(bridge.sendAsync).mock.calls
-      .find(([type]) => type === 'createStreamThread');
-    await act(async () => {
-      liveView!.dispatch(liveView!.state.tr.insertText('changed ', 10, 19));
-      finishCreate({
-        thread: {
-          threadId: 'thread-2',
-          streamId: stream.id,
-          title: 'paragraph',
-          workingText: '',
-          anchorText: 'paragraph',
-          anchorSpanId: String(create?.[1]?.anchorSpanId),
-          revision: 0,
-          createdAt: new Date(0).toISOString(),
-          updatedAt: new Date(0).toISOString(),
-        },
-      });
-      await Promise.resolve();
-    });
-
-    await vi.waitFor(() => expect(document.querySelector('.thread-anchor-warning')?.textContent)
-      .toBe('The Stream text has changed since this thread started.'));
-    expect(editor().textContent).toBe('Original changed .');
-  });
-
-  it('reopens and locates a persisted live anchor after reload', async () => {
-    const anchorText = 'Original paragraph.';
-    const anchoredThread: StreamThreadJSON = {
+  it('opens a persisted Sidenote from its marker and follows evidence back to the Stream', async () => {
+    const stored = sidenote({
       threadId: 'thread-restored',
       streamId: 'stream-restored',
-      title: 'Restored thread',
-      workingText: '',
-      anchorText,
+      anchors: [{
+        anchorId: 'anchor-restored',
+        threadId: 'thread-restored',
+        kind: 'stream_quote',
+        quote: 'Original paragraph.',
+        anchorSpanId: 'anchor-restored',
+        createdAt,
+      }],
       anchorSpanId: 'anchor-restored',
-      revision: 0,
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    };
+    });
     vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [anchoredThread] };
-      if (type === 'loadStreamThread') return { thread: anchoredThread };
+      if (type === 'loadStreamThread') return { thread: stored };
       if (type === 'saveRichStreamDocument') return { revision: 2 };
-      throw new Error(`Unexpected ${type}`);
+      throw new Error('Unexpected ' + type);
     }) as typeof bridge.sendAsync);
     await renderStream({
       ...stream,
@@ -751,114 +822,96 @@ describe('RichStreamEditor Stream threads', () => {
       spans: [{
         spanId: 'anchor-restored',
         start: 1,
-        end: 1 + anchorText.length,
+        end: 1 + 'Original paragraph.'.length,
         origin: 'thread',
         meta: JSON.stringify({ threadId: 'thread-restored' }),
-        textHash: fnv1a(anchorText),
-        createdAt: new Date(0).toISOString(),
+        textHash: fnv1a('Original paragraph.'),
+        createdAt,
       }],
     });
 
-    await click('Threads');
-    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
-    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    const marker = editor().querySelector('.sidenote-marker') as HTMLButtonElement;
+    expect(marker?.getAttribute('aria-label')).toBe('Open Sidenote');
     await act(async () => {
-      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      marker.click();
       await Promise.resolve();
     });
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-detail')).not.toBeNull());
 
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    await act(async () => {
+      (document.querySelector('.richtext-evidence') as HTMLElement).click();
+    });
     expect(scrollIntoView).toHaveBeenCalled();
-    expect(document.querySelector('.thread-anchor-warning')).toBeNull();
     expect(editor().querySelector('.richtext-provenance-thread')).toBeNull();
   });
 
-  it('places a saved thread note only after an explicit keyboard target as one undo step', async () => {
-    const savedThread: StreamThreadJSON = {
-      threadId: 'thread-insert',
-      streamId: stream.id,
-      title: 'Insert this',
-      workingText: 'Evidence *stays literal*',
-      anchorText: 'Original paragraph.',
-      revision: 1,
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    };
-    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [savedThread] };
-      if (type === 'loadStreamThread') return { thread: savedThread };
+  it('promotes current Sidenote writing below its quote with no backlink and one Undo', async () => {
+    const promotionStreamId = 'stream-promotion';
+    const stored = sidenote({ streamId: promotionStreamId });
+    await renderStream({
+      ...stream,
+      id: promotionStreamId,
+      document: { ...stream.document!, streamId: promotionStreamId },
+      spans: [{
+        spanId: 'span-1',
+        start: 1,
+        end: 1 + 'Original paragraph.'.length,
+        origin: 'thread',
+        meta: JSON.stringify({ threadId: stored.threadId }),
+        textHash: fnv1a('Original paragraph.'),
+        createdAt,
+      }],
+    });
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'listStreamThreads') return { threads: [stored] };
+      if (type === 'loadStreamThread') return { thread: stored };
       if (type === 'saveRichStreamDocument') return { revision: 2 };
-      throw new Error(`Unexpected ${type}`);
+      if (type === 'addStreamThreadAnchor') {
+        return { anchor: { ...(payload?.anchors as object[])[0], threadId: stored.threadId } };
+      }
+      throw new Error('Unexpected ' + type);
     }) as typeof bridge.sendAsync);
 
-    await click('Threads');
-    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+    await act(async () => root!.render(null));
+    await renderStream({
+      ...stream,
+      id: promotionStreamId,
+      document: { ...stream.document!, streamId: promotionStreamId },
+      spans: [{
+        spanId: 'span-1',
+        start: 1,
+        end: 1 + 'Original paragraph.'.length,
+        origin: 'thread',
+        meta: JSON.stringify({ threadId: stored.threadId }),
+        textHash: fnv1a('Original paragraph.'),
+        createdAt,
+      }],
+    });
+
+    await click('Sidenotes');
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-list-item')).not.toBeNull());
     await act(async () => {
-      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      (document.querySelector('.sidenote-list-item') as HTMLButtonElement).click();
       await Promise.resolve();
     });
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-promote-main')).not.toBeNull());
     await act(async () => {
-      (document.querySelector('.thread-note .thread-add-to-stream') as HTMLButtonElement).click();
+      (document.querySelector('.sidenote-promote-main') as HTMLButtonElement).click();
       await Promise.resolve();
     });
 
-    expect(document.querySelector('.thread-insertion-bar')?.textContent)
-      .toContain('Evidence *stays literal*');
-    expect(document.querySelector('.thread-insertion-bar')?.textContent)
-      .toContain('Click text to place below it');
-    expect(editor().getAttribute('contenteditable')).toBe('false');
-    await act(async () => {
-      editor().dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', bubbles: true, cancelable: true,
-      }));
-      await Promise.resolve();
-    });
-    expect(editor().textContent).toBe('Original paragraph.');
-    expect(document.querySelector('.thread-insertion-bar')?.textContent)
-      .toContain('Choose a position with ↑ or ↓ first');
-
-    await act(async () => {
-      editor().querySelector('p')!.dispatchEvent(new MouseEvent('mousemove', {
-        bubbles: true, cancelable: true,
-      }));
-      await Promise.resolve();
-    });
-    expect(editor().querySelector('p')?.classList.contains('thread-insertion-target')).toBe(true);
-    await act(async () => {
-      editor().dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true }));
-      await Promise.resolve();
-    });
-    expect(editor().querySelector('p')?.classList.contains('thread-insertion-target')).toBe(false);
-
-    await act(async () => {
-      editor().dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'ArrowDown', bubbles: true, cancelable: true,
-      }));
-      await Promise.resolve();
-    });
-    expect(editor().querySelector('p')?.classList.contains('thread-insertion-target')).toBe(true);
-    expect(document.querySelector('.thread-insertion-bar')?.textContent)
-      .toContain('Place after “Original paragraph.”');
-
-    await act(async () => {
-      editor().dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', bubbles: true, cancelable: true,
-      }));
-      await Promise.resolve();
-    });
-
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
-    const paragraphs = [...editor().querySelectorAll('p')].map((node) => node.textContent);
-    expect(paragraphs).toEqual([
-      'Original paragraph.',
-      'Evidence *stays literal* Thread',
-    ]);
-    const chip = editor().querySelector('a[href="ticker-thread://thread-insert"]');
-    expect(chip?.textContent).toBe('Thread');
-    await vi.waitFor(() => expect(vi.mocked(bridge.sendAsync).mock.calls
-      .some(([type, payload]) => type === 'saveRichStreamDocument'
-        && String(payload?.markdown).includes('ticker-thread://thread-insert'))).toBe(true));
+    await vi.waitFor(() => expect([...editor().querySelectorAll('p')].map((node) => node.textContent))
+      .toEqual(['Original paragraph.', 'Evidence stays rich']));
+    expect(editor().querySelector('a[href^="ticker-thread://"]')).toBeNull();
+    expect(vi.mocked(bridge.sendAsync)).toHaveBeenCalledWith(
+      'addStreamThreadAnchor',
+      expect.objectContaining({
+        streamId: promotionStreamId,
+        threadId: stored.threadId,
+        anchors: [expect.objectContaining({ kind: 'placement', anchorSpanId: expect.any(String) })],
+      }),
+    );
 
     await act(async () => {
       editor().dispatchEvent(new KeyboardEvent('keydown', {
@@ -866,147 +919,90 @@ describe('RichStreamEditor Stream threads', () => {
       }));
     });
     expect(editor().textContent).toBe('Original paragraph.');
-    expect(editor().querySelector('a[href^="ticker-thread://"]')).toBeNull();
   });
 
-  it('keeps an invalid target pending and Escape changes no Stream content', async () => {
-    const codeStreamId = 'stream-code-target';
-    const savedThread: StreamThreadJSON = {
-      threadId: 'thread-cancel',
-      streamId: codeStreamId,
-      title: 'Do not insert',
-      workingText: 'Pending note',
-      anchorText: 'Code',
-      revision: 1,
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    };
-    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [savedThread] };
-      if (type === 'loadStreamThread') return { thread: savedThread };
-      throw new Error(`Unexpected ${type}`);
-    }) as typeof bridge.sendAsync);
+  it('retries a failed Stream promotion without inserting a second copy', async () => {
+    const retryStreamId = 'stream-promotion-retry';
+    const stored = sidenote({ streamId: retryStreamId });
+    let saves = 0;
     await renderStream({
       ...stream,
-      id: codeStreamId,
-      document: {
-        ...stream.document!,
-        streamId: codeStreamId,
-        docJSON: docJSON('```swift\nlet x = 1\n```\n\nSafe paragraph.'),
-        markdown: '```swift\nlet x = 1\n```\n\nSafe paragraph.',
-      },
+      id: retryStreamId,
+      document: { ...stream.document!, streamId: retryStreamId },
+      spans: [{
+        spanId: 'span-1',
+        start: 1,
+        end: 1 + 'Original paragraph.'.length,
+        origin: 'thread',
+        meta: JSON.stringify({ threadId: stored.threadId }),
+        textHash: fnv1a('Original paragraph.'),
+        createdAt,
+      }],
     });
-    const before = editor().textContent;
-
-    await click('Threads');
-    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
-    await act(async () => {
-      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
-    await act(async () => {
-      (document.querySelector('.thread-note .thread-add-to-stream') as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
-    await vi.waitFor(() => expect(document.querySelector('.thread-insertion-bar')).not.toBeNull());
-    await act(async () => {
-      editor().querySelector('pre')!.dispatchEvent(new MouseEvent('mousedown', {
-        bubbles: true, cancelable: true, button: 0,
-      }));
-      await Promise.resolve();
-    });
-    expect(document.querySelector('.thread-insertion-bar')?.textContent).toContain('Choose a text paragraph');
-    expect(editor().textContent).toBe(before);
-
-    await act(async () => {
-      editor().dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'ArrowDown', bubbles: true, cancelable: true,
-      }));
-      await Promise.resolve();
-    });
-    expect(editor().querySelector('pre')?.classList.contains('thread-insertion-target')).toBe(false);
-    expect([...editor().querySelectorAll('p')].find((node) => node.textContent === 'Safe paragraph.')
-      ?.classList.contains('thread-insertion-target')).toBe(true);
-
-    await act(async () => {
-      window.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Escape', bubbles: true, cancelable: true,
-      }));
-      await Promise.resolve();
-    });
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
-    expect(document.querySelector('.thread-insertion-bar')).toBeNull();
-    expect(editor().textContent).toBe(before);
-    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'saveRichStreamDocument'))
-      .toBe(false);
-  });
-
-  it('keeps one visible insertion after save failure and Retry only saves', async () => {
-    const savedThread: StreamThreadJSON = {
-      threadId: 'thread-retry',
-      streamId: stream.id,
-      title: 'Retry insertion',
-      workingText: 'One copy only',
-      anchorText: 'Original paragraph.',
-      revision: 1,
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    };
-    let saves = 0;
-    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
-      if (type === 'listStreamThreads') return { threads: [savedThread] };
-      if (type === 'loadStreamThread') return { thread: savedThread };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'listStreamThreads') return { threads: [stored] };
+      if (type === 'loadStreamThread') return { thread: stored };
       if (type === 'saveRichStreamDocument') {
         saves += 1;
         if (saves === 1) throw new Error('offline');
         return { revision: 2 };
       }
-      throw new Error(`Unexpected ${type}`);
+      if (type === 'addStreamThreadAnchor') {
+        return { anchor: { ...(payload?.anchors as object[])[0], threadId: stored.threadId } };
+      }
+      throw new Error('Unexpected ' + type);
     }) as typeof bridge.sendAsync);
 
-    await click('Threads');
-    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+    await act(async () => root!.render(null));
+    await renderStream({
+      ...stream,
+      id: retryStreamId,
+      document: { ...stream.document!, streamId: retryStreamId },
+      spans: [{
+        spanId: 'span-1',
+        start: 1,
+        end: 1 + 'Original paragraph.'.length,
+        origin: 'thread',
+        meta: JSON.stringify({ threadId: stored.threadId }),
+        textHash: fnv1a('Original paragraph.'),
+        createdAt,
+      }],
+    });
+
+    await click('Sidenotes');
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-list-item')).not.toBeNull());
     await act(async () => {
-      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      (document.querySelector('.sidenote-list-item') as HTMLButtonElement).click();
       await Promise.resolve();
     });
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-promote-main')).not.toBeNull());
     await act(async () => {
-      (document.querySelector('.thread-note .thread-add-to-stream') as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
-    await vi.waitFor(() => expect(document.querySelector('.thread-insertion-bar')).not.toBeNull());
-    await act(async () => {
-      editor().querySelector('p')!.dispatchEvent(new MouseEvent('mousedown', {
-        bubbles: true, cancelable: true, button: 0,
-      }));
+      (document.querySelector('.sidenote-promote-main') as HTMLButtonElement).click();
       await Promise.resolve();
     });
 
-    await vi.waitFor(() => expect(document.querySelector('.thread-stream-save-warning')).not.toBeNull());
-    expect(editor().textContent?.match(/One copy only/g)).toHaveLength(1);
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-warning')?.textContent)
+      .toContain('Stream copy is visible but not saved'));
+    expect(editor().textContent?.match(/Evidence stays rich/g)).toHaveLength(1);
     await act(async () => {
-      (document.querySelector('.thread-stream-save-warning button') as HTMLButtonElement).click();
+      ([...document.querySelectorAll<HTMLButtonElement>('.sidenote-warning button')]
+        .find((button) => button.textContent === 'Retry Stream save')!).click();
       await Promise.resolve();
     });
-    await vi.waitFor(() => expect(document.querySelector('.thread-stream-save-warning')).toBeNull());
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-warning')).toBeNull());
     expect(saves).toBe(2);
-    expect(editor().textContent?.match(/One copy only/g)).toHaveLength(1);
+    expect(editor().textContent?.match(/Evidence stays rich/g)).toHaveLength(1);
   });
 
-  it('opens a persisted thread from its ordinary Stream backlink', async () => {
-    const linkedStreamId = 'stream-thread-link';
-    const linkedThread: StreamThreadJSON = {
+  it('still opens pre-redesign Sidenote backlinks', async () => {
+    const linkedStreamId = 'stream-sidenote-link';
+    const stored = sidenote({
       threadId: 'thread-open',
       streamId: linkedStreamId,
-      title: 'Opened from chip',
-      workingText: 'Still here',
+      title: 'Opened from old link',
       anchorText: 'Anchor',
-      revision: 1,
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    };
+      anchors: [],
+    });
     let liveView: EditorView | null = null;
     const updateState = EditorView.prototype.updateState;
     vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
@@ -1017,8 +1013,8 @@ describe('RichStreamEditor Stream threads', () => {
       updateState.call(this, state);
     });
     vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
-      if (type === 'loadStreamThread') return { thread: linkedThread };
-      throw new Error(`Unexpected ${type}`);
+      if (type === 'loadStreamThread') return { thread: stored };
+      throw new Error('Unexpected ' + type);
     }) as typeof bridge.sendAsync);
     await renderStream({
       ...stream,
@@ -1026,12 +1022,12 @@ describe('RichStreamEditor Stream threads', () => {
       document: {
         ...stream.document!,
         streamId: linkedStreamId,
-        docJSON: docJSON('[Thread](ticker-thread://thread-open)'),
-        markdown: '[Thread](ticker-thread://thread-open)',
+        docJSON: docJSON('[Sidenote](ticker-thread://thread-open)'),
+        markdown: '[Sidenote](ticker-thread://thread-open)',
       },
     });
 
-    await selectEditorText('Thread');
+    await selectEditorText('Sidenote');
     const linkPos = liveView!.state.selection.from + 1;
     await act(async () => {
       liveView!.someProp('handleClick', (handler) => handler(
@@ -1041,8 +1037,10 @@ describe('RichStreamEditor Stream threads', () => {
       ));
       await Promise.resolve();
     });
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
-    expect(document.querySelector('.thread-title-input')).toHaveProperty('value', 'Opened from chip');
+
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-detail')).not.toBeNull());
+    expect(document.querySelector('.sidenote-status-row')).toBeNull();
+    expect(document.querySelector('.sidenote-editor')?.textContent).toContain('Evidence stays rich');
     expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([
       'loadStreamThread',
       { streamId: linkedStreamId, threadId: 'thread-open' },
@@ -2629,7 +2627,7 @@ describe('RichStreamEditor PDF highlight links', () => {
     expect(liveView!.state.doc.textBetween(from, to)).toBe('Paper p.4');
   });
 
-  it('opens the thread when a PDF highlight belongs to a thread instead of Stream text', async () => {
+  it('opens the Sidenote when a PDF highlight belongs to one instead of Stream text', async () => {
     const pdfThread: StreamThreadJSON = {
       threadId: 'pdf-thread-1',
       streamId: stream.id,
@@ -2677,16 +2675,20 @@ describe('RichStreamEditor PDF highlight links', () => {
       await Promise.resolve();
     });
 
-    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
-    expect(document.querySelector('.thread-origin')?.textContent).toContain('Selected evidence.');
-    expect(document.querySelector('.thread-assistant-turn')?.textContent)
+    await vi.waitFor(() => expect(document.querySelector('.sidenote-detail')).not.toBeNull());
+    expect(document.querySelector('.richtext-evidence')?.textContent).toContain('Selected evidence.');
+    await act(async () => {
+      ([...document.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'AI history · 1')!).click();
+    });
+    expect(document.querySelector('.sidenote-history')?.textContent)
       .toContain('Keep the rail below 3.6 volts.');
     expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([
       'loadStreamThread',
       { streamId: stream.id, threadId: pdfThread.threadId },
     ]);
     expect(useToastStore.getState().toasts.map((toast) => toast.message))
-      .not.toContain('This highlight is no longer linked in the Stream.');
+      .not.toContain('This highlight is no longer linked to a Sidenote.');
   });
 
   it('requests removal from selected linked text and unlinks only after host confirmation', async () => {
