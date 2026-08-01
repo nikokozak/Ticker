@@ -6658,6 +6658,25 @@ final class StreamDocumentTests: XCTestCase {
             responseRaw: "Existing answer",
             createdAt: Date(timeIntervalSince1970: 5_001)
         )
+        let prototypeThread = StreamThread(
+            streamId: stream.id,
+            title: "Existing sidenote",
+            workingText: "Existing draft",
+            docJSON: #"{"type":"doc","content":[]}"#,
+            docFormatVersion: 1,
+            anchorText: "Existing passage",
+            anchorSpanId: "existing-span",
+            createdAt: Date(timeIntervalSince1970: 5_002),
+            updatedAt: Date(timeIntervalSince1970: 5_003)
+        )
+        let prototypeAnchor = StreamThreadAnchor(
+            anchorId: "existing-anchor",
+            threadId: prototypeThread.threadId,
+            kind: .streamQuote,
+            quote: prototypeThread.anchorText,
+            anchorSpanId: prototypeThread.anchorSpanId,
+            createdAt: prototypeThread.createdAt
+        )
 
         var service: PersistenceService? = try PersistenceService(
             databaseURL: dbURL,
@@ -6668,20 +6687,18 @@ final class StreamDocumentTests: XCTestCase {
         try service?.saveSource(source)
         try service?.savePDFHighlight(highlight)
         try service?.saveExchange(exchange)
+        try service?.createStreamThread(prototypeThread, anchors: [prototypeAnchor])
         service = nil
 
-        // Turn the fresh database into the exact pre-v28 shape while preserving
-        // representative released data. Reopening it must exercise v28 and v29.
+        // Turn the fresh database into the exact released v29 shape while preserving
+        // representative prototype data. Reopening it must run the real v30 migrator.
         var dbQueue: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
         try dbQueue?.write { db in
-            try db.execute(sql: "DROP TABLE stream_thread_anchors")
-            try db.execute(sql: "ALTER TABLE ai_exchanges DROP COLUMN thread_disposition")
-            try db.execute(sql: "DROP INDEX idx_ai_exchanges_thread")
-            try db.execute(sql: "ALTER TABLE ai_exchanges DROP COLUMN thread_id")
-            try db.execute(sql: "DROP TABLE stream_threads")
-            try db.execute(
-                sql: "DELETE FROM grdb_migrations WHERE identifier IN ('v28_stream_threads', 'v29_sidenote_documents')"
-            )
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN ephemeral")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN detached")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_end")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_start")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v30_conversation_anchors'")
         }
         dbQueue = nil
 
@@ -6695,7 +6712,24 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(try service?.loadSource(id: source.id)?.displayName, source.displayName)
         XCTAssertEqual(try service?.loadPDFHighlights(sourceId: source.id), [highlight])
         XCTAssertEqual(try service?.loadExchange(requestId: exchange.requestId), exchange)
-        XCTAssertTrue(try service?.loadStreamThreads(streamId: stream.id).isEmpty == true)
+        let migratedThread = try XCTUnwrap(service?.loadStreamThreads(streamId: stream.id).first)
+        XCTAssertEqual(migratedThread.threadId, prototypeThread.threadId)
+        XCTAssertEqual(migratedThread.title, prototypeThread.title)
+        XCTAssertEqual(migratedThread.workingText, prototypeThread.workingText)
+        XCTAssertEqual(migratedThread.docJSON, prototypeThread.docJSON)
+        XCTAssertEqual(migratedThread.docFormatVersion, prototypeThread.docFormatVersion)
+        XCTAssertEqual(migratedThread.anchorText, prototypeThread.anchorText)
+        XCTAssertNil(migratedThread.anchorStart)
+        XCTAssertNil(migratedThread.anchorEnd)
+        XCTAssertTrue(migratedThread.detached)
+        XCTAssertFalse(migratedThread.ephemeral)
+        XCTAssertEqual(
+            try service?.loadStreamThreadAnchors(
+                threadId: prototypeThread.threadId,
+                streamId: stream.id
+            ),
+            [prototypeAnchor]
+        )
         service = nil
 
         let backupURL = try XCTUnwrap(preMigrationBackups(nextTo: dbURL, fileManager: fileManager).first)
@@ -6707,15 +6741,34 @@ final class StreamDocumentTests: XCTestCase {
             )
             let exchangeColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(ai_exchanges)")
                 .map { (row: Row) -> String in row["name"] }
+            let threadColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(stream_threads)")
+                .map { (row: Row) -> String in row["name"] }
             let storedAnswer = try String.fetchOne(
                 db,
                 sql: "SELECT response_raw FROM ai_exchanges WHERE request_id = ?",
                 arguments: [exchange.requestId]
             )
+            let storedThreadTitle = try String.fetchOne(
+                db,
+                sql: "SELECT title FROM stream_threads WHERE thread_id = ?",
+                arguments: [prototypeThread.threadId.uuidString]
+            )
+            let migrations = try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
 
-            XCTAssertFalse(tables.contains("stream_threads"))
-            XCTAssertFalse(exchangeColumns.contains("thread_id"))
+            XCTAssertTrue(tables.contains("stream_threads"))
+            XCTAssertTrue(tables.contains("stream_thread_anchors"))
+            XCTAssertTrue(exchangeColumns.contains("thread_id"))
+            XCTAssertTrue(exchangeColumns.contains("thread_disposition"))
+            XCTAssertTrue(threadColumns.contains("doc_json"))
+            XCTAssertTrue(threadColumns.contains("doc_format_version"))
+            XCTAssertFalse(threadColumns.contains("anchor_start"))
+            XCTAssertFalse(threadColumns.contains("anchor_end"))
+            XCTAssertFalse(threadColumns.contains("detached"))
+            XCTAssertFalse(threadColumns.contains("ephemeral"))
+            XCTAssertTrue(migrations.contains("v29_sidenote_documents"))
+            XCTAssertFalse(migrations.contains("v30_conversation_anchors"))
             XCTAssertEqual(storedAnswer, exchange.responseRaw)
+            XCTAssertEqual(storedThreadTitle, prototypeThread.title)
         }
     }
 
