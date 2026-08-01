@@ -42,6 +42,23 @@ type AnchorMessage =
   | { kind: 'hover'; blockFrom: number | null };
 
 const conversationAnchorKey = new PluginKey<ConversationAnchorState>('tickerConversationAnchors');
+const pendingViewportRefreshes = new WeakSet<EditorView>();
+
+const requestFrame = (callback: FrameRequestCallback): number => (
+  typeof window.requestAnimationFrame === 'function'
+    ? window.requestAnimationFrame(callback)
+    : window.setTimeout(() => callback(performance.now()), 16)
+);
+
+const cancelFrame = (handle: number): void => {
+  if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(handle);
+  else window.clearTimeout(handle);
+};
+
+export function isConversationDecorationTransaction(tr: Transaction): boolean {
+  const meta = tr.getMeta(conversationAnchorKey) as AnchorMessage | undefined;
+  return !tr.docChanged && !tr.selectionSet && (meta?.kind === 'visible' || meta?.kind === 'hover');
+}
 
 export const setConversationAnchors = (
   tr: Transaction,
@@ -54,6 +71,19 @@ export const setConversationVisibleRanges = (
 ): Transaction => tr.setMeta(conversationAnchorKey, { kind: 'visible', ranges });
 
 export function refreshConversationViewport(view: EditorView): void {
+  if (pendingViewportRefreshes.has(view)) return;
+  pendingViewportRefreshes.add(view);
+  requestFrame(() => {
+    try {
+      applyConversationViewport(view);
+    } finally {
+      pendingViewportRefreshes.delete(view);
+    }
+  });
+}
+
+function applyConversationViewport(view: EditorView): void {
+  if (view.isDestroyed) return;
   const field = conversationAnchorKey.getState(view.state);
   if (!field) return;
   const editorRect = view.dom.getBoundingClientRect();
@@ -98,16 +128,16 @@ export function conversationRenderPosition(
   doc: ProseNode,
   anchor: ConversationAnchor,
 ): number | null {
-  if (anchor.detached || anchor.from >= anchor.to) return null;
+  if (anchor.from >= anchor.to) return null;
   return textBlockAt(doc, anchor.to - 1)?.to ?? null;
 }
 
 export function conversationAnchorText(doc: ProseNode, anchor: ConversationAnchor): string {
-  return anchor.detached ? '' : doc.textBetween(anchor.from, anchor.to, '\n', '\n');
+  return anchor.from >= anchor.to ? '' : doc.textBetween(anchor.from, anchor.to, '\n', '\n');
 }
 
 export function conversationAnchorTextForStorage(doc: ProseNode, anchor: ConversationAnchor): string {
-  return [...conversationAnchorText(doc, anchor)].slice(0, 200).join('');
+  return conversationAnchorText(doc, anchor).slice(0, 200);
 }
 
 export function hasConversationAnchorTextDrifted(
@@ -115,7 +145,7 @@ export function hasConversationAnchorTextDrifted(
   anchor: ConversationAnchor,
   originalText: string,
 ): boolean {
-  return anchor.detached || !conversationAnchorText(doc, anchor).includes(originalText);
+  return anchor.from >= anchor.to || !conversationAnchorText(doc, anchor).includes(originalText);
 }
 
 export function conversationAnchorFromJSON(json: ConversationAnchorJSON): ConversationAnchor {
@@ -129,7 +159,7 @@ export function conversationAnchorFromJSON(json: ConversationAnchorJSON): Conver
     threadId: json.threadId,
     from,
     to,
-    detached: json.detached || from < 0 || to <= from,
+    detached: to <= from,
   };
 }
 
@@ -138,7 +168,7 @@ export function conversationAnchorToJSON(anchor: ConversationAnchor): Conversati
     threadId: anchor.threadId,
     anchorStart: anchor.from,
     anchorEnd: anchor.to,
-    detached: anchor.detached,
+    detached: anchor.from >= anchor.to,
   };
 }
 
@@ -160,22 +190,24 @@ function textBlockAt(doc: ProseNode, rawPos: number): BlockRange | null {
 }
 
 function mapAnchor(anchor: ConversationAnchor, tr: Transaction): ConversationAnchor {
-  if (!tr.docChanged || anchor.detached) return anchor;
+  if (!tr.docChanged) return anchor;
   let { from, to } = anchor;
   for (const step of tr.steps) {
     const map = step.getMap();
+    const json = step.toJSON() as { from?: number; to?: number; structure?: boolean };
+    const splitsAtTrailingEdge = json.structure === true && json.from === to && json.to === to;
     from = map.map(from, -1);
-    to = map.map(to, 1);
+    to = map.map(to, splitsAtTrailingEdge ? -1 : 1);
   }
-  return { ...anchor, from, to, detached: to <= from };
+  return { ...anchor, from, to, detached: from >= to };
 }
 
 function validAnchors(anchors: ConversationAnchor[], doc: ProseNode): ConversationAnchor[] {
   return anchors.filter((anchor) => (
     anchor.from >= 0
     && anchor.to <= doc.content.size
-    && (anchor.detached ? anchor.from <= anchor.to : anchor.from < anchor.to)
-  ));
+    && anchor.from <= anchor.to
+  )).map((anchor) => ({ ...anchor, detached: anchor.from >= anchor.to }));
 }
 
 function mapRange(range: VisibleRange, tr: Transaction): VisibleRange {
@@ -236,6 +268,26 @@ export function conversationDecorationTargets(
 }
 
 export function conversationAnchorField(): Plugin<ConversationAnchorState> {
+  let hoverFrame: number | null = null;
+  let pendingHover: { view: EditorView; left: number; top: number } | { view: EditorView } | null = null;
+  const queueHover = (view: EditorView, point?: { left: number; top: number }): void => {
+    pendingHover = point ? { view, ...point } : { view };
+    if (hoverFrame !== null) return;
+    hoverFrame = requestFrame(() => {
+      const pending = pendingHover;
+      pendingHover = null;
+      hoverFrame = null;
+      if (!pending) return;
+      const found = 'left' in pending
+        ? pending.view.posAtCoords({ left: pending.left, top: pending.top })
+        : null;
+      const blockFrom = found ? textBlockAt(pending.view.state.doc, found.pos)?.from ?? null : null;
+      if (blockFrom !== conversationAnchorKey.getState(pending.view.state)?.hoveredBlockFrom) {
+        pending.view.dispatch(pending.view.state.tr.setMeta(conversationAnchorKey, { kind: 'hover', blockFrom }));
+      }
+    });
+  };
+
   return new Plugin<ConversationAnchorState>({
     key: conversationAnchorKey,
     state: {
@@ -287,17 +339,11 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
       },
       handleDOMEvents: {
         mousemove(view, event) {
-          const found = view.posAtCoords({ left: event.clientX, top: event.clientY });
-          const blockFrom = found ? textBlockAt(view.state.doc, found.pos)?.from ?? null : null;
-          if (blockFrom !== conversationAnchorKey.getState(view.state)?.hoveredBlockFrom) {
-            view.dispatch(view.state.tr.setMeta(conversationAnchorKey, { kind: 'hover', blockFrom }));
-          }
+          queueHover(view, { left: event.clientX, top: event.clientY });
           return false;
         },
         mouseleave(view) {
-          if (conversationAnchorKey.getState(view.state)?.hoveredBlockFrom !== null) {
-            view.dispatch(view.state.tr.setMeta(conversationAnchorKey, { kind: 'hover', blockFrom: null }));
-          }
+          queueHover(view);
           return false;
         },
         click() {
@@ -306,5 +352,12 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
         },
       },
     },
+    view: () => ({
+      destroy() {
+        if (hoverFrame !== null) cancelFrame(hoverFrame);
+        hoverFrame = null;
+        pendingHover = null;
+      },
+    }),
   });
 }

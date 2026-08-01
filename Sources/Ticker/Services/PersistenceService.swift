@@ -1242,6 +1242,7 @@ final class PersistenceService {
         )
     }
 
+    // ponytail: nil/partial anchor updates preserve omitted rows; delete this legacy-save landmine with StreamEditor.
     @discardableResult
     private func saveStreamDocument(
         streamId: UUID,
@@ -2119,8 +2120,10 @@ final class PersistenceService {
                     streamId.uuidString
                 ]
             )
-            guard db.changesCount == 1 else {
-                throw StreamThreadPersistenceError.threadNotFound
+            if db.changesCount != 1 {
+                DebugLog.log(
+                    "[Persistence] Skipped missing conversation anchor \(anchor.threadId) for stream \(streamId)"
+                )
             }
         }
     }

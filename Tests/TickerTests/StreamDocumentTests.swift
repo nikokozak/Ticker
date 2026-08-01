@@ -1888,7 +1888,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertFalse(migrated.ephemeral)
     }
 
-    func test_conversationAnchorsRoundTripAtomicallyWithDocumentSaveUsingUTF16Offsets() throws {
+    func test_conversationAnchorProseMirrorPositionsRoundTripWithDocumentAndSkipMissingThread() throws {
         try withTempPersistenceService { service in
             let stream = Stream(title: "Anchor save")
             try service.saveStream(stream)
@@ -1901,29 +1901,42 @@ final class StreamDocumentTests: XCTestCase {
                 ephemeral: true
             )
             try service.createStreamThread(thread)
+            // These are ProseMirror positions; Swift must only round-trip them.
             let update = ConversationAnchorUpdate(
                 threadId: thread.threadId,
-                anchorStart: 1,
-                anchorEnd: 3,
+                anchorStart: 2,
+                anchorEnd: 4,
                 detached: false
             )
+            let missing = ConversationAnchorUpdate(
+                threadId: UUID(),
+                anchorStart: 8,
+                anchorEnd: 13,
+                detached: false
+            )
+            let docJSON = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"a🙂b"}]}]}"#
 
             let revision = try service.saveStreamDocument(
                 streamId: stream.id,
-                docJSON: #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"a🙂b"}]}]}"#,
+                docJSON: docJSON,
                 docFormatVersion: 1,
                 markdown: "a🙂b",
                 baseRevision: initial.revision,
                 spans: [],
-                conversationAnchors: [update]
+                conversationAnchors: [missing, update]
             )
 
-            let loaded = try XCTUnwrap(service.loadConversationAnchors(streamId: stream.id).first)
-            XCTAssertEqual(loaded.anchorStart, 1)
-            XCTAssertEqual(loaded.anchorEnd, 3)
-            XCTAssertEqual(UTF16Offsets.substring("a🙂b", start: 1, end: 3), "🙂")
+            let anchors = try service.loadConversationAnchors(streamId: stream.id)
+            let loaded = try XCTUnwrap(anchors.first)
+            XCTAssertEqual(anchors.count, 1)
+            XCTAssertEqual(loaded.anchorStart, 2)
+            XCTAssertEqual(loaded.anchorEnd, 4)
             XCTAssertFalse(loaded.detached)
             XCTAssertTrue(loaded.ephemeral)
+            let document = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            XCTAssertEqual(document.docJSON, docJSON)
+            XCTAssertEqual(document.markdown, "a🙂b")
+            XCTAssertEqual(document.revision, revision)
 
             XCTAssertThrowsError(try service.saveStreamDocument(
                 streamId: stream.id,
@@ -1941,9 +1954,9 @@ final class StreamDocumentTests: XCTestCase {
             )) { error in
                 let conflict = error as? StreamDocumentRevisionConflict
                 XCTAssertEqual(conflict?.revision, revision)
-                XCTAssertEqual(conflict?.conversationAnchors.first?.anchorStart, 1)
+                XCTAssertEqual(conflict?.conversationAnchors.first?.anchorStart, 2)
             }
-            XCTAssertEqual(try service.loadConversationAnchors(streamId: stream.id).first?.anchorStart, 1)
+            XCTAssertEqual(try service.loadConversationAnchors(streamId: stream.id).first?.anchorStart, 2)
         }
     }
 

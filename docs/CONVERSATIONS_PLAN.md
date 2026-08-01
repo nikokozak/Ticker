@@ -64,7 +64,7 @@ sidecar data.
 
 ### Anchor lifecycle rules (verbatim; encode in tests)
 
-1. A conversation anchors to a contiguous UTF-16 range in the canonical document, initially the full
+1. A conversation anchors to a contiguous range of ProseMirror document positions, initially the full
    text of one block. The range maps through every transaction (same mapping discipline as provenance
    spans). The conversation renders after the **last block intersecting the range**.
 2. Block split inside the range: the range now spans both halves; render rule (1) keeps the
@@ -124,7 +124,7 @@ composer empty) collapses. Streaming renders progressively into the last AI turn
 
 ```sql
 -- v30_conversation_anchors
-ALTER TABLE stream_threads ADD COLUMN anchor_start INTEGER;   -- UTF-16 offset in canonical doc
+ALTER TABLE stream_threads ADD COLUMN anchor_start INTEGER;   -- ProseMirror doc position (opaque to Swift)
 ALTER TABLE stream_threads ADD COLUMN anchor_end   INTEGER;
 ALTER TABLE stream_threads ADD COLUMN detached     INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE stream_threads ADD COLUMN ephemeral    INTEGER NOT NULL DEFAULT 0;  -- /chat, D9

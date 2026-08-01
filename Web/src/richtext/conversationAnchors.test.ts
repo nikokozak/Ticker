@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { undo } from 'prosemirror-history';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRichTextEditor, type RichTextEditor } from './editor';
 import { parseMarkdown } from './markdown';
 import {
@@ -11,18 +12,20 @@ import {
   conversationRenderPosition,
   fullBlockConversationAnchor,
   hasConversationAnchorTextDrifted,
+  refreshConversationViewport,
   setConversationAnchors,
   setConversationVisibleRanges,
 } from './conversationAnchors';
 
 let editor: RichTextEditor | null = null;
 
-function open(markdown: string): RichTextEditor {
+function open(markdown: string, onUpdate?: () => void): RichTextEditor {
   const parent = document.createElement('div');
   document.body.appendChild(parent);
   editor = createRichTextEditor({
     parent,
     docJSON: JSON.stringify(parseMarkdown(markdown).toJSON()),
+    onUpdate,
   });
   return editor;
 }
@@ -50,7 +53,7 @@ afterEach(() => {
 });
 
 describe('conversation anchor lifecycle', () => {
-  it('rule 1: starts as the full UTF-16 block and renders after its last intersecting block', () => {
+  it('rule 1: starts as the full block in ProseMirror positions and renders after it', () => {
     const ed = open('A🙂B');
     const anchor = recordFullBlock(ed, '🙂');
 
@@ -69,6 +72,27 @@ describe('conversation anchor lifecycle', () => {
     expect(conversationAnchorText(ed.view.state.doc, anchor)).toBe('Alpha \nbeta');
     expect(conversationRenderPosition(ed.view.state.doc, anchor)).toBe(ed.view.state.doc.content.size);
     expect(anchor.detached).toBe(false);
+  });
+
+  it('does not grow across a split at the trailing edge or move its glyph', () => {
+    const ed = open('ABC');
+    const original = recordFullBlock(ed, 'ABC');
+    ed.view.dispatch(ed.view.state.tr.split(original.to));
+
+    const [anchor] = conversationAnchors(ed.view.state);
+    expect(anchor).toEqual(original);
+    expect(conversationRenderPosition(ed.view.state.doc, anchor)).toBe(ed.view.state.doc.child(0).nodeSize);
+    expect(conversationMarkerBlockPositions(ed.view.state.doc, [anchor])).toEqual(new Set([0]));
+  });
+
+  it('extends across plain text inserted at the trailing edge', () => {
+    const ed = open('ABC');
+    const original = recordFullBlock(ed, 'ABC');
+    ed.view.dispatch(ed.view.state.tr.insertText('D', original.to));
+
+    const [anchor] = conversationAnchors(ed.view.state);
+    expect(anchor.to).toBe(original.to + 1);
+    expect(conversationAnchorText(ed.view.state.doc, anchor)).toBe('ABCD');
   });
 
   it('rule 3: a merge keeps the range in the merged block', () => {
@@ -98,14 +122,25 @@ describe('conversation anchor lifecycle', () => {
     expect(conversationRenderPosition(ed.view.state.doc, conversationAnchors(ed.view.state)[0])).toBe(null);
   });
 
-  it('rule 5: stores at most 200 characters and detects changed anchor text', () => {
-    const ed = open(`${'a'.repeat(205)} end`);
-    const anchor = recordFullBlock(ed, 'end');
+  it('reattaches a detached anchor when undo restores its range', () => {
+    const ed = open('Delete me');
+    const original = recordFullBlock(ed, 'Delete');
+    ed.view.dispatch(ed.view.state.tr.delete(original.from, original.to));
+    expect(conversationAnchors(ed.view.state)[0].detached).toBe(true);
+
+    expect(undo(ed.view.state, (tr) => ed.view.dispatch(tr))).toBe(true);
+    expect(conversationAnchors(ed.view.state)).toEqual([original]);
+  });
+
+  it('rule 5: stores at most 200 UTF-16 code units and detects changed anchor text', () => {
+    const ed = open(`${'🙂'.repeat(101)}tail`);
+    const anchor = recordFullBlock(ed, 'tail');
     const stored = conversationAnchorTextForStorage(ed.view.state.doc, anchor);
-    expect([...stored]).toHaveLength(200);
+    expect(stored).toHaveLength(200);
+    expect([...stored]).toHaveLength(100);
     expect(hasConversationAnchorTextDrifted(ed.view.state.doc, anchor, stored)).toBe(false);
 
-    ed.view.dispatch(ed.view.state.tr.insertText('changed', anchor.from + 100, anchor.from + 105));
+    ed.view.dispatch(ed.view.state.tr.insertText('changed', anchor.from + 100, anchor.from + 102));
     expect(hasConversationAnchorTextDrifted(
       ed.view.state.doc,
       conversationAnchors(ed.view.state)[0],
@@ -148,4 +183,45 @@ it('renders one passive right glyph class and the current-block left line class'
   const block = ed.view.dom.querySelector('p');
   expect(block?.classList.contains('conversation-block-active')).toBe(true);
   expect(block?.classList.contains('conversation-block-anchored')).toBe(true);
+});
+
+it('coalesces viewport and hover work per animation frame and skips unchanged targets', () => {
+  const callbacks: FrameRequestCallback[] = [];
+  let nextFrame = 0;
+  const requestAnimationFrame = window.requestAnimationFrame;
+  window.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+    callbacks.push(callback);
+    nextFrame += 1;
+    return nextFrame;
+  });
+
+  try {
+    const onUpdate = vi.fn();
+    const ed = open('Visible block', onUpdate);
+    const dispatch = vi.spyOn(ed.view, 'dispatch');
+    refreshConversationViewport(ed.view);
+    refreshConversationViewport(ed.view);
+    expect(callbacks).toHaveLength(1);
+    callbacks.shift()!(0);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    refreshConversationViewport(ed.view);
+    refreshConversationViewport(ed.view);
+    callbacks.shift()!(0);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    vi.spyOn(ed.view, 'posAtCoords').mockReturnValue({ pos: 1, inside: 0 });
+    ed.view.dom.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 1, clientY: 1 }));
+    ed.view.dom.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 2, clientY: 2 }));
+    expect(callbacks).toHaveLength(1);
+    callbacks.shift()!(0);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    ed.view.dom.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 3, clientY: 3 }));
+    callbacks.shift()!(0);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  } finally {
+    window.requestAnimationFrame = requestAnimationFrame;
+  }
 });

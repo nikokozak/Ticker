@@ -36,6 +36,7 @@ final class ThreadMessageHandler: BridgeMessageHandler {
         }
         switch message.type {
         case "listConversations":
+            // ponytail: no caller until C3 wires the conversation surface.
             guard let streamId = decodeUUID(message.payload, key: "streamId") else {
                 respondWithError(callbackId, "Invalid listConversations payload")
                 return

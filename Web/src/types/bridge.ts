@@ -235,6 +235,7 @@ export function getExchange(requestId: string): Promise<{ exchange: AIExchangeJS
   return bridge.sendAsync('getExchange', { requestId });
 }
 
+// ponytail: no caller until C3 wires the conversation surface.
 export function listConversations(streamId: string): Promise<{ conversations: ConversationAnchorJSON[] }> {
   return bridge.sendAsync('listConversations', { streamId });
 }

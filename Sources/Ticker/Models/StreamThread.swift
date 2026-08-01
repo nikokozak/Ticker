@@ -49,6 +49,7 @@ struct StreamThread: Codable, Equatable, Identifiable {
     let anchorSpanId: String?
     let sourceId: UUID?
     let highlightId: UUID?
+    // ProseMirror doc positions (opaque to Swift).
     let anchorStart: Int?
     let anchorEnd: Int?
     let detached: Bool
@@ -100,6 +101,7 @@ struct StreamThread: Codable, Equatable, Identifiable {
 
 struct ConversationAnchor: Codable, Equatable {
     let threadId: UUID
+    // ProseMirror doc positions (opaque to Swift).
     let anchorStart: Int?
     let anchorEnd: Int?
     let anchorText: String
@@ -110,6 +112,7 @@ struct ConversationAnchor: Codable, Equatable {
 
 struct ConversationAnchorUpdate: Codable, Equatable {
     let threadId: UUID
+    // ProseMirror doc positions (opaque to Swift).
     let anchorStart: Int
     let anchorEnd: Int
     let detached: Bool

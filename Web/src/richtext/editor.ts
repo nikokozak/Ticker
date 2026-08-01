@@ -30,7 +30,7 @@ import {
 } from './commands';
 import { parseMarkdown, serializeMarkdown } from './markdown';
 import { aiWritingHighlight, setImageWidth } from './operations';
-import { conversationAnchorField } from './conversationAnchors';
+import { conversationAnchorField, isConversationDecorationTransaction } from './conversationAnchors';
 import { provenance } from './provenance';
 import { BREAK_ATTRIBUTES, MAX_IMAGE_WIDTH, MIN_IMAGE_WIDTH, tickerSchema } from './schema';
 
@@ -334,7 +334,7 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
       view.updateState(next);
       if (transaction.docChanged) onChange?.();
       onTransaction?.(transaction);
-      onUpdate?.();
+      if (!isConversationDecorationTransaction(transaction)) onUpdate?.();
     },
   });
 
