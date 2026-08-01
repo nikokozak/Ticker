@@ -59,6 +59,7 @@ import {
 import {
   aiWritingRange,
   insertImage,
+  promoteConversationMarkdown,
   removePDFHighlightLink,
   revealPDFHighlight,
   selectedPDFHighlight,
@@ -899,6 +900,28 @@ export function RichStreamEditor({
       anchorText,
     );
   }, []);
+
+  const promoteConversationTurn = useCallback((exchange: AIExchangeJSON) => {
+    const currentEditor = editorRef.current;
+    const surface = currentEditor && conversationSurface(currentEditor.view.state);
+    if (!currentEditor || !surface) return;
+    const inserted = promoteConversationMarkdown(
+      currentEditor.view,
+      conversationRenderPosition(currentEditor.view.state.doc, surface.anchor)
+        ?? currentEditor.view.state.doc.content.size,
+      exchange.responseRaw,
+      { requestId: exchange.requestId, model: exchange.model, verb: exchange.verb },
+    );
+    window.setTimeout(() => {
+      if (currentEditor.view.isDestroyed) return;
+      const highlighted = aiWritingRange(currentEditor.view.state);
+      if (highlighted?.from !== inserted.from || highlighted.to !== inserted.to) return;
+      currentEditor.view.dispatch(
+        setAIWritingRange(currentEditor.view.state.tr, null).setMeta('addToHistory', false),
+      );
+    }, 1_200);
+    addToast('Added to the Stream.', 'success');
+  }, [addToast]);
 
   const toggleConversationList = useCallback(async () => {
     if (showConversationList) {
@@ -2024,6 +2047,7 @@ export function RichStreamEditor({
           updateState={updateConversationLiveState}
           createThread={createPersistedConversation}
           hasDrifted={conversationHasDrifted}
+          onPromote={promoteConversationTurn}
           onCollapse={collapseConversation}
         />,
         conversationWidgetTarget,

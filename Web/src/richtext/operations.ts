@@ -4,6 +4,7 @@ import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import { Fragment, Slice, type Mark, type Node as ProseNode } from 'prosemirror-model';
 import { parseTickerPDFURL } from '../extensions/PDFHighlightLink';
 import { parseMarkdown } from './markdown';
+import { addProvenanceSpans, hashProvenanceText } from './provenance';
 import { ASSET_URL_PREFIX, isValidImageWidth, tickerSchema } from './schema';
 
 /**
@@ -145,6 +146,31 @@ export function streamAIMarkdown(view: EditorView, range: { from: number; to: nu
       return buffer;
     },
   };
+}
+
+/** Insert one conversation answer as blocks, with its AI provenance, in one undo step. */
+export function promoteConversationMarkdown(
+  view: EditorView,
+  pos: number,
+  markdown: string,
+  attribution: { requestId: string; model?: string | null; verb: string },
+): { from: number; to: number } {
+  const parsed = parseMarkdown(markdown);
+  if (parsed.childCount === 0) throw new Error('There is no conversation answer to add.');
+  const from = Math.max(0, Math.min(pos, view.state.doc.content.size));
+  const tr = view.state.tr.replace(from, from, new Slice(Fragment.from(parsed.content), 0, 0));
+  const inserted = { from, to: from + parsed.content.size };
+  addProvenanceSpans(setAIWritingRange(tr, inserted), [{
+    spanId: crypto.randomUUID(),
+    ...inserted,
+    origin: 'ai',
+    requestId: attribution.requestId,
+    meta: { model: attribution.model ?? null, verb: attribution.verb },
+    textHash: hashProvenanceText(tr.doc, inserted),
+    createdAt: Date.now(),
+  }]);
+  view.dispatch(tr.scrollIntoView());
+  return inserted;
 }
 
 /* Images ---------------------------------------------------------------- */

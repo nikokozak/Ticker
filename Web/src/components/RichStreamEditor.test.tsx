@@ -586,7 +586,7 @@ describe('RichStreamEditor inline conversations', () => {
     });
   });
 
-  it('opens a persisted glyph in place and restores its saved turns', async () => {
+  it('opens a saved turn and promotes it after the anchor with visible AI provenance', async () => {
     const updatedAt = new Date().toISOString();
     const anchored: Stream = {
       ...stream,
@@ -664,6 +664,18 @@ describe('RichStreamEditor inline conversations', () => {
     await act(async () => { editor().dispatchEvent(tab); });
     expect(tab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(document.querySelector('.conversation-composer'));
+
+    const promote = [...document.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === '↑ Add to Stream');
+    expect(promote).toBeDefined();
+    await act(async () => { promote!.click(); });
+    expect([...editor().querySelectorAll('p')].map((node) => node.textContent)).toEqual([
+      'Original paragraph.',
+      'Because.',
+      'Following paragraph.',
+    ]);
+    await toggleXray();
+    expect(document.querySelector('.richtext-provenance')?.textContent).toBe('Because.');
   });
 
   it('persists pin and unpin across conversation reloads', async () => {
