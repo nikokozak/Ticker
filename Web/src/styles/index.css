@@ -76,13 +76,15 @@
   --type-ui-title: 17px;
   --type-ui-display: 28px;
   --type-ui-line-height: 16px;
+  --type-list-preview: 14px;
+  --type-list-preview-line-height: 20px;
   --conversation-body: 15px;
   --conversation-line-height: 24px;
   --editor-body: 17px;
-  --editor-heading-1: 24px;
-  --editor-heading-2: 19px;
-  --editor-heading-3: 17px;
-  --editor-line-height: 28px;
+  --editor-heading-1: 1.4117647059em;
+  --editor-heading-2: 1.1176470588em;
+  --editor-heading-3: 1em;
+  --editor-line-height: 1.65;
 
   /* Compatibility aliases for existing component CSS */
   --color-bg: var(--bg);
@@ -207,9 +209,6 @@ body {
 }
 
 .stream-list-header {
-  position: sticky;
-  top: 0;
-  z-index: 10;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -297,7 +296,7 @@ body {
 }
 
 .stream-item:hover {
-  background: var(--color-surface);
+  background: var(--surface-hover);
 }
 
 .stream-item:active {
@@ -334,8 +333,8 @@ body {
   display: -webkit-box;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--type-list-preview);
+  line-height: var(--type-list-preview-line-height);
   color: var(--text-muted);
 }
 
@@ -856,7 +855,6 @@ body {
 }
 
 .stream-content {
-  --stream-end-scroll-space: clamp(120px, 24vh, 260px);
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
@@ -1319,21 +1317,21 @@ body {
 
 .document-editor-codemirror .cm-md-heading-1 {
   font-size: var(--editor-heading-1);
-  line-height: 32px;
+  line-height: 1.3333333333;
   font-weight: 600;
   letter-spacing: -0.015em;
 }
 
 .document-editor-codemirror .cm-md-heading-2 {
   font-size: var(--editor-heading-2);
-  line-height: 28px;
+  line-height: 1.4736842105;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
 .document-editor-codemirror .cm-md-heading-3 {
   font-size: var(--editor-heading-3);
-  line-height: 28px;
+  line-height: 1.6470588235;
   font-weight: 600;
 }
 
@@ -1523,7 +1521,6 @@ body {
   min-width: 120px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
-  box-shadow: var(--control-shadow);
 }
 
 .document-editor-codemirror .cm-md-image-resize-handle {

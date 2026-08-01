@@ -74,9 +74,9 @@
   margin-top: 0;
 }
 
-.richtext-editor .ProseMirror h1 { font-size: 24px; line-height: 32px; }
-.richtext-editor .ProseMirror h2 { font-size: 19px; line-height: 28px; }
-.richtext-editor .ProseMirror h3 { font-size: 17px; line-height: 28px; }
+.richtext-editor .ProseMirror h1 { font-size: var(--editor-heading-1); line-height: 1.3333333333; }
+.richtext-editor .ProseMirror h2 { font-size: var(--editor-heading-2); line-height: 1.4736842105; }
+.richtext-editor .ProseMirror h3 { font-size: var(--editor-heading-3); line-height: 1.6470588235; }
 .richtext-editor .ProseMirror h4,
 .richtext-editor .ProseMirror h5,
 .richtext-editor .ProseMirror h6 { font-size: 1em; }
