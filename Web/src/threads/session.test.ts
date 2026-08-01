@@ -19,18 +19,18 @@ describe('ThreadDraftSession', () => {
     let finishFirst!: (value: { conflict: boolean; thread: StreamThreadJSON }) => void;
     const save = vi.fn()
       .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
-      .mockResolvedValueOnce({ conflict: false, thread: thread({ revision: 4, workingText: 'Second' }) });
+      .mockResolvedValueOnce({ conflict: false, thread: thread({ revision: 4, title: 'Second' }) });
     const session = new ThreadDraftSession({ thread: thread(), save });
 
-    session.update({ title: 'Power budget', workingText: 'First' });
+    session.update({ title: 'First' });
     const flushing = session.saveNow();
     await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-    session.update({ title: 'Power budget', workingText: 'Second' });
-    finishFirst({ conflict: false, thread: thread({ revision: 3, workingText: 'First' }) });
+    session.update({ title: 'Second' });
+    finishFirst({ conflict: false, thread: thread({ revision: 3, title: 'First' }) });
 
     await expect(flushing).resolves.toBe(true);
     expect(save).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      workingText: 'Second',
+      title: 'Second',
       baseRevision: 3,
     }));
   });
@@ -45,9 +45,9 @@ describe('ThreadDraftSession', () => {
       onSaveStateChange: (state) => states.push(state),
     });
 
-    session.update({ title: 'Power budget', workingText: 'Local work' });
+    session.update({ title: 'Local work' });
     await expect(session.saveNow()).resolves.toBe(false);
-    session.update({ title: 'Power budget', workingText: 'Still local' });
+    session.update({ title: 'Still local' });
     await expect(session.saveNow()).resolves.toBe(false);
     expect(save).toHaveBeenCalledTimes(1);
     expect(states).toContain('conflict');
@@ -61,15 +61,15 @@ describe('ThreadDraftSession', () => {
       .mockResolvedValueOnce({ conflict: true, thread: stored })
       .mockResolvedValueOnce({
         conflict: false,
-        thread: thread({ revision: 8, workingText: 'Local work' }),
+        thread: thread({ revision: 8, title: 'Local work' }),
       });
     const session = new ThreadDraftSession({ thread: thread(), save });
 
-    session.update({ title: 'Power budget', workingText: 'Local work' });
+    session.update({ title: 'Local work' });
     await expect(session.saveNow()).resolves.toBe(false);
     await expect(session.keepLocal()).resolves.toBe(true);
     expect(save).toHaveBeenLastCalledWith(expect.objectContaining({
-      workingText: 'Local work',
+      title: 'Local work',
       baseRevision: 7,
     }));
   });
@@ -79,7 +79,7 @@ describe('ThreadDraftSession', () => {
     try {
       const save = vi.fn().mockRejectedValue(new Error('offline'));
       const session = new ThreadDraftSession({ thread: thread(), save });
-      session.update({ title: 'Power budget', workingText: 'Not yet stored' });
+      session.update({ title: 'Not yet stored' });
 
       await expect(session.saveNow()).resolves.toBe(false);
       expect(save).toHaveBeenCalledTimes(1);

@@ -13,7 +13,7 @@ import { fnv1a } from '../utils/fnv1a';
  * while editing, and would have to be recomputed on every keystroke. The stored
  * ProseMirror JSON recreates the same tree, so these positions survive reload.
  *
- * AI/source attribution is dropped as soon as its own text is edited. Sidenote
+ * AI/source attribution is dropped as soon as its own text is edited. Legacy thread
  * anchors are different: they mark a line of thought, so they map through edits and
  * retain the original hash to tell the caller whether the quoted wording is stale.
  */
@@ -89,7 +89,7 @@ function followSpan(span: ProvenanceSpan, tr: Transaction): ProvenanceSpan | nul
   for (const step of tr.steps) {
     const map = step.getMap();
     if (span.origin === 'thread') {
-      // A Sidenote stays attached to the thought as that thought is revised. The
+      // A legacy thread stays attached to the thought as that thought is revised. The
       // original hash still tells the UI that its quote is stale; only deleting
       // the passage entirely removes the marker.
       from = map.map(from, -1);
@@ -150,33 +150,6 @@ export function provenance(): Plugin<ProvenanceSpan[]> {
           class: `richtext-provenance richtext-provenance-${span.origin}`,
           'data-span-id': span.spanId,
         }));
-        const markers = new Map<number, { pos: number; threadIds: string[] }>();
-        for (const span of spans) {
-          const threadId = span.origin === 'thread' ? span.meta.threadId : undefined;
-          if (typeof threadId !== 'string' || !threadId) continue;
-          const $from = state.doc.resolve(Math.min(span.from, state.doc.content.size));
-          const blockStart = $from.depth > 0 ? $from.before(1) : span.from;
-          const marker = markers.get(blockStart) ?? { pos: span.from, threadIds: [] };
-          marker.pos = Math.min(marker.pos, span.from);
-          if (!marker.threadIds.includes(threadId)) marker.threadIds.push(threadId);
-          markers.set(blockStart, marker);
-        }
-        for (const [blockStart, { pos, threadIds }] of markers) {
-          decorations.push(Decoration.widget(pos, () => {
-            const marker = document.createElement('button');
-            marker.type = 'button';
-            marker.className = 'sidenote-marker';
-            marker.contentEditable = 'false';
-            marker.dataset.threadIds = threadIds.join(',');
-            marker.setAttribute(
-              'aria-label',
-              threadIds.length === 1 ? 'Open Sidenote' : `Open ${threadIds.length} Sidenotes`,
-            );
-            marker.title = marker.getAttribute('aria-label') ?? 'Open Sidenote';
-            if (threadIds.length > 1) marker.textContent = String(threadIds.length);
-            return marker;
-          }, { side: -1, key: `sidenote:${blockStart}:${threadIds.join(':')}` }));
-        }
         return DecorationSet.create(state.doc, decorations);
       },
     },

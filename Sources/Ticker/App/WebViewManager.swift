@@ -174,8 +174,7 @@ final class WebViewManager: NSObject {
         }
         pdfPaneController.onDiscussSelection = { [weak self] payload in
             guard let self else { return false }
-            // The highlight is provisional until Web creates or updates a Sidenote;
-            // ThreadMessageHandler persists both in one database transaction.
+            // The highlight is provisional; C0's web surface immediately removes it.
             self.sendPDFThreadRequested(payload)
             return true
         }

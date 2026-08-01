@@ -252,7 +252,7 @@ describe('spans never reach the document', () => {
     expect(ed.view.state.doc.textContent).toBe('One. The AI wrote this. Three.');
   });
 
-  it('restores a Sidenote anchor as a quiet marker instead of painted provenance', () => {
+  it('keeps a legacy thread anchor out of painted provenance', () => {
     const ed = open('One. Thread starting point. Three.');
     const anchor = spanFromJSON({
       spanId: 'thread-anchor',
@@ -267,24 +267,9 @@ describe('spans never reach the document', () => {
 
     expect(provenanceSpans(ed.view.state)[0]?.origin).toBe('thread');
     expect(ed.view.dom.querySelector('.richtext-provenance-thread')).toBe(null);
-    expect(ed.view.dom.querySelector('.sidenote-marker')?.getAttribute('aria-label')).toBe('Open Sidenote');
   });
 
-  it('uses one chooser marker when two Sidenotes start in the same block', () => {
-    const ed = open('First thought. Second thought.');
-    record(
-      ed,
-      span(ed, 'First thought.', { origin: 'thread', meta: { threadId: 'thread-1' } }),
-      span(ed, 'Second thought.', { origin: 'thread', meta: { threadId: 'thread-2' } }),
-    );
-
-    const markers = ed.view.dom.querySelectorAll('.sidenote-marker');
-    expect(markers).toHaveLength(1);
-    expect(markers[0]?.getAttribute('aria-label')).toBe('Open 2 Sidenotes');
-    expect((markers[0] as HTMLElement).dataset.threadIds).toBe('thread-1,thread-2');
-  });
-
-  it('keeps a Sidenote marker attached when the underlying thought is revised', () => {
+  it('keeps a legacy thread anchor mapped when the underlying thought is revised', () => {
     const ed = open('One. Starting point. Three.');
     const anchor = span(ed, 'Starting point.', {
       origin: 'thread',
@@ -297,7 +282,7 @@ describe('spans never reach the document', () => {
     expect(mapped).toBeDefined();
     expect(provenanceText(ed.view.state.doc, mapped)).toContain('revised Starting point.');
     expect(hashProvenanceText(ed.view.state.doc, mapped)).not.toBe(anchor.textHash);
-    expect(ed.view.dom.querySelector('.sidenote-marker')).not.toBe(null);
+    expect(ed.view.dom.querySelector('.richtext-provenance-thread')).toBe(null);
   });
 });
 

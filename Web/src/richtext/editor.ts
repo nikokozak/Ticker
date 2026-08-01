@@ -17,7 +17,7 @@ import {
 type ClipboardParseOptions = ParseOptions & {
   ruleFromNode?: (node: Node) => { ignore?: boolean } | null;
 };
-import { EditorState, Selection, type Command, type Transaction } from 'prosemirror-state';
+import { EditorState, type Command, type Transaction } from 'prosemirror-state';
 import { EditorView, type NodeView } from 'prosemirror-view';
 import {
   indentListItem,
@@ -78,7 +78,6 @@ export function sanitizeTickerClipboardSlice(slice: Slice): Slice {
     return [mark.type.create(attrs)];
   });
   const cleanNode = (node: ProseNode): ProseNode => {
-    if (node.type === tickerSchema.nodes.evidence) return cleanNode(evidenceAsBlockquote(node));
     const marks = cleanMarks(node.marks);
     if (node.type === tickerSchema.nodes.image && INTERNAL_URL.test(String(node.attrs.src))) {
       return tickerSchema.text(sanitizeInternalText(String(node.attrs.alt || 'Image')), marks);
@@ -90,26 +89,6 @@ export function sanitizeTickerClipboardSlice(slice: Slice): Slice {
   };
   const content: ProseNode[] = [];
   slice.content.forEach((node) => content.push(cleanNode(node)));
-  return new Slice(Fragment.fromArray(content), slice.openStart, slice.openEnd);
-}
-
-function evidenceAsBlockquote(node: ProseNode): ProseNode {
-  const text = String(node.attrs.quote ?? '');
-  const paragraph = tickerSchema.nodes.paragraph.create(null, text ? tickerSchema.text(text) : undefined);
-  return tickerSchema.nodes.blockquote.create(null, paragraph);
-}
-
-/** Evidence identity is Sidenote-only; every other editor receives a plain quote. */
-export function flattenEvidenceSlice(slice: Slice): Slice {
-  const flatten = (node: ProseNode): ProseNode => {
-    if (node.type === tickerSchema.nodes.evidence) return evidenceAsBlockquote(node);
-    if (node.isLeaf) return node;
-    const children: ProseNode[] = [];
-    node.forEach((child) => children.push(flatten(child)));
-    return node.copy(Fragment.fromArray(children));
-  };
-  const content: ProseNode[] = [];
-  slice.content.forEach((node) => content.push(flatten(node)));
   return new Slice(Fragment.fromArray(content), slice.openStart, slice.openEnd);
 }
 
@@ -132,13 +111,12 @@ function writeClipboard(view: EditorView, event: ClipboardEvent, cut: boolean): 
   return true;
 }
 
-function pasteInternalClipboard(view: EditorView, event: ClipboardEvent, allowEvidence: boolean): boolean {
+function pasteInternalClipboard(view: EditorView, event: ClipboardEvent): boolean {
   const token = event.clipboardData?.getData(INTERNAL_CLIPBOARD_TYPE);
   if (!token || token !== internalClipboard?.token) return false;
   event.preventDefault();
-  const slice = allowEvidence ? internalClipboard.slice : flattenEvidenceSlice(internalClipboard.slice);
   view.dispatch(view.state.tr
-    .replaceSelection(slice)
+    .replaceSelection(internalClipboard.slice)
     .scrollIntoView()
     .setMeta('paste', true)
     .setMeta('uiEvent', 'paste'));
@@ -170,8 +148,6 @@ export interface RichTextEditor {
   setDocumentJSON(docJSON: string): void;
   /** A derived markdown projection. Reading it must never rewrite the live document. */
   getMarkdownProjection(): string;
-  /** The current selection, or its owning top-level block, as ordinary markdown. */
-  getSelectionOrBlockMarkdown(): string;
   /** Insert a markdown fragment at the current selection as one undo step. */
   insertMarkdown(markdown: string): void;
   /**
@@ -179,16 +155,7 @@ export interface RichTextEditor {
    * report where it landed so metadata can be placed inside it.
    */
   appendMarkdown(markdown: string): { from: number; to: number };
-  /** Insert one immutable evidence quote after the current top-level block. */
-  appendEvidence(evidence: EvidenceBlock): void;
   destroy(): void;
-}
-
-export interface EvidenceBlock {
-  anchorId: string;
-  kind: string;
-  quote: string;
-  label: string;
 }
 
 export interface RichTextEditorOptions {
@@ -213,10 +180,6 @@ export interface RichTextEditorOptions {
    * can apply metadata to text that moved while an async host action was open.
    */
   onTransaction?: (transaction: Transaction) => void;
-  /** Evidence atoms are accepted only by the Sidenote editor. */
-  allowEvidence?: boolean;
-  onOpenEvidence?: (anchorId: string) => void;
-  onRemoveEvidence?: (anchorId: string) => boolean | void | Promise<boolean | void>;
 }
 
 /** The href of a link at this position, if there is one. */
@@ -323,78 +286,6 @@ function imageView(node: ProseNode, view: EditorView, getPos: () => number | und
   };
 }
 
-function evidenceView(
-  initialNode: ProseNode,
-  view: EditorView,
-  getPos: () => number | undefined,
-  onOpen?: (anchorId: string) => void,
-  onRemove?: (anchorId: string) => boolean | void | Promise<boolean | void>,
-): NodeView {
-  let node = initialNode;
-  const dom = document.createElement('aside');
-  dom.className = 'richtext-evidence';
-  dom.contentEditable = 'false';
-  dom.tabIndex = 0;
-  dom.setAttribute('role', 'button');
-
-  const label = document.createElement('span');
-  label.className = 'richtext-evidence-label';
-  const quote = document.createElement('blockquote');
-  quote.className = 'richtext-evidence-quote';
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.className = 'richtext-evidence-remove';
-  remove.setAttribute('aria-label', 'Remove quote from sidenote');
-  remove.textContent = '×';
-  dom.append(label, quote, remove);
-
-  const render = () => {
-    dom.dataset.anchorId = String(node.attrs.anchorId);
-    label.textContent = String(node.attrs.label || 'Stream');
-    quote.textContent = String(node.attrs.quote || '');
-    dom.setAttribute('aria-label', `${label.textContent}: ${quote.textContent}`);
-  };
-  const open = () => onOpen?.(String(node.attrs.anchorId));
-  dom.onclick = (event) => {
-    if (event.target !== remove) open();
-  };
-  dom.onkeydown = (event) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    open();
-  };
-  remove.onclick = async (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    remove.disabled = true;
-    try {
-      if (await onRemove?.(String(node.attrs.anchorId)) === false) return;
-      const pos = getPos();
-      if (pos === undefined) return;
-      view.dispatch(view.state.tr
-        .delete(pos, pos + node.nodeSize)
-        .setMeta('addToHistory', false)
-        .scrollIntoView());
-    } finally {
-      remove.disabled = false;
-    }
-  };
-  render();
-
-  return {
-    dom,
-    update(next) {
-      if (next.type !== tickerSchema.nodes.evidence) return false;
-      node = next;
-      render();
-      return true;
-    },
-    selectNode: () => dom.classList.add('is-selected'),
-    deselectNode: () => dom.classList.remove('is-selected'),
-    stopEvent: (event) => event.target === remove,
-  };
-}
-
 function stateFor(doc: ProseNode): EditorState {
   // Order matters: our keymap gets first refusal, then the stock bindings.
   return EditorState.create({
@@ -411,31 +302,18 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
     onOpenLink,
     onTransaction,
     onUpdate,
-    allowEvidence = false,
-    onOpenEvidence,
-    onRemoveEvidence,
   } = options;
   parent.classList.add('richtext-editor');
 
   const view = new EditorView(parent, {
     state: stateFor(tickerSchema.nodeFromJSON(JSON.parse(docJSON))),
     clipboardParser,
-    nodeViews: {
-      image: imageView,
-      evidence: (node, currentView, getPos) => evidenceView(
-        node,
-        currentView,
-        getPos,
-        onOpenEvidence,
-        onRemoveEvidence,
-      ),
-    },
+    nodeViews: { image: imageView },
     transformCopied: sanitizeTickerClipboardSlice,
-    transformPasted: allowEvidence ? undefined : flattenEvidenceSlice,
     handleDOMEvents: {
       copy: (current, event) => writeClipboard(current, event as ClipboardEvent, false),
       cut: (current, event) => writeClipboard(current, event as ClipboardEvent, true),
-      paste: (current, event) => pasteInternalClipboard(current, event as ClipboardEvent, allowEvidence),
+      paste: (current, event) => pasteInternalClipboard(current, event as ClipboardEvent),
     },
 
     /**
@@ -475,26 +353,6 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
       return serializeMarkdown(view.state.doc);
     },
 
-    getSelectionOrBlockMarkdown() {
-      const { doc, selection } = view.state;
-      if (!selection.empty) {
-        const selected = doc.cut(selection.from, selection.to);
-        const blocks: ProseNode[] = [];
-        selected.forEach((node) => {
-          if (node.type !== tickerSchema.nodes.evidence) blocks.push(node);
-        });
-        if (blocks.length) return serializeMarkdown(doc.type.create(null, blocks)).trim();
-      }
-      const selectedIndex = Math.min(selection.$head.index(0), doc.childCount - 1);
-      const indexes = [
-        ...Array.from({ length: doc.childCount - selectedIndex }, (_, offset) => selectedIndex + offset),
-        ...Array.from({ length: selectedIndex }, (_, offset) => selectedIndex - offset - 1),
-      ];
-      const block = indexes.map((index) => doc.child(index))
-        .find((node) => node.type !== tickerSchema.nodes.evidence);
-      return block ? serializeMarkdown(doc.type.create(null, block)).trim() : '';
-    },
-
     insertMarkdown(markdown: string) {
       const parsed = parseMarkdown(markdown);
       if (parsed.childCount === 0) return;
@@ -515,28 +373,6 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
       // inserted blocks keep their internal structure, so a position measured
       // inside the parsed fragment is this base plus that position.
       return { from: end, to: view.state.doc.content.size };
-    },
-
-    appendEvidence(evidence: EvidenceBlock) {
-      if (!allowEvidence) return;
-      const { doc, selection } = view.state;
-      const index = Math.min(selection.$head.index(0), doc.childCount - 1);
-      let insertionPos = 0;
-      for (let child = 0; child <= index; child += 1) insertionPos += doc.child(child).nodeSize;
-      const node = tickerSchema.nodes.evidence.create(evidence);
-      const content = insertionPos === doc.content.size
-        ? Fragment.fromArray([node, tickerSchema.nodes.paragraph.create()])
-        : Fragment.from(node);
-      const tr = view.state.tr.insert(insertionPos, content);
-      tr.setSelection(Selection.near(tr.doc.resolve(insertionPos + node.nodeSize), 1));
-      view.dispatch(tr.scrollIntoView());
-      window.requestAnimationFrame(() => {
-        const element = Array.from(view.dom.querySelectorAll<HTMLElement>('.richtext-evidence'))
-          .find((candidate) => candidate.dataset.anchorId === evidence.anchorId);
-        element?.scrollIntoView?.({ block: 'nearest' });
-        element?.classList.add('richtext-evidence--added');
-        window.setTimeout(() => element?.classList.remove('richtext-evidence--added'), 1_200);
-      });
     },
 
     destroy: () => view.destroy(),

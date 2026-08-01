@@ -90,7 +90,7 @@ export interface AIExchangeJSON {
 export interface StreamThreadAnchorJSON {
   anchorId: string;
   threadId: string;
-  kind: 'stream_quote' | 'pdf_quote' | 'placement';
+  kind: 'stream_quote' | 'pdf_quote';
   quote?: string;
   anchorSpanId?: string;
   sourceId?: string;

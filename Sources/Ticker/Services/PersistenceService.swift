@@ -1690,26 +1690,18 @@ final class PersistenceService {
         threadId: UUID,
         streamId: UUID,
         title: String,
-        workingText: String,
-        docJSON: String? = nil,
-        docFormatVersion: Int? = nil,
         baseRevision: Int
     ) throws -> StreamThread {
-        try Self.validateThreadDocument(docJSON, version: docFormatVersion)
         return try dbQueue.write { db in
             let updatedAt = Date()
             try db.execute(
                 sql: """
                     UPDATE stream_threads
-                    SET title = ?, working_text = ?, doc_json = ?, doc_format_version = ?,
-                        revision = revision + 1, updated_at = ?
+                    SET title = ?, revision = revision + 1, updated_at = ?
                     WHERE thread_id = ? AND stream_id = ? AND revision = ?
                 """,
                 arguments: [
                     title,
-                    workingText,
-                    docJSON,
-                    docFormatVersion,
                     updatedAt.timeIntervalSince1970,
                     threadId.uuidString,
                     streamId.uuidString,
@@ -1905,7 +1897,7 @@ final class PersistenceService {
         guard version == 1,
               let data = docJSON?.data(using: .utf8),
               (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
-            throw PersistenceError.encodingFailed("Invalid sidenote document")
+            throw PersistenceError.encodingFailed("Invalid legacy thread document")
         }
     }
 
@@ -1937,11 +1929,6 @@ final class PersistenceService {
         switch anchor.kind {
         case .streamQuote:
             guard anchor.quote != nil, anchor.sourceId == nil, anchor.highlightId == nil else {
-                throw StreamThreadPersistenceError.invalidAnchor
-            }
-        case .placement:
-            guard anchor.quote == nil, anchor.anchorSpanId?.isEmpty == false,
-                  anchor.sourceId == nil, anchor.highlightId == nil else {
                 throw StreamThreadPersistenceError.invalidAnchor
             }
         case .pdfQuote:
