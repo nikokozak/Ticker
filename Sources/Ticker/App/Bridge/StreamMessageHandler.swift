@@ -380,7 +380,7 @@ final class StreamMessageHandler: BridgeMessageHandler {
                   let origin = item["origin"] as? String,
                   let meta = metaString(item["meta"]),
                   let textHash = item["textHash"] as? String,
-                  let createdAt = dateValue(item["createdAt"]) else {
+                  let createdAt = Self.dateValue(item["createdAt"]) else {
                 dropped += 1
                 return nil
             }
@@ -432,9 +432,12 @@ final class StreamMessageHandler: BridgeMessageHandler {
         return string
     }
 
-    private func dateValue(_ value: Any?) -> Date? {
+    static func dateValue(_ value: Any?) -> Date? {
         if let string = value as? String {
-            return ISO8601DateFormatter().date(from: string)
+            let formatter = ISO8601DateFormatter()
+            if let date = formatter.date(from: string) { return date }
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter.date(from: string)
         }
         if let double = value as? Double {
             return Date(timeIntervalSince1970: double)

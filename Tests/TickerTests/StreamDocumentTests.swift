@@ -8,6 +8,14 @@ import XCTest
 
 @testable import Ticker
 
+final class BridgeDateParsingTests: XCTestCase {
+    func test_acceptsBrowserISODateWithFractionalSeconds() throws {
+        let date = try XCTUnwrap(StreamMessageHandler.dateValue("2026-07-31T20:28:18.123Z"))
+
+        XCTAssertEqual(date.timeIntervalSince1970, 1_785_529_698.123, accuracy: 0.001)
+    }
+}
+
 final class TickerURLCommandTests: XCTestCase {
     func test_parseAppendURL() throws {
         let url = try XCTUnwrap(URL(string: "ticker://append?stream=Notebook&text=hello%20world"))
