@@ -2380,10 +2380,12 @@ final class StreamDocumentTests: XCTestCase {
                 }
             )
             XCTAssertEqual(handler.handledTypes, [
+                "addStreamThreadAnchor",
                 "listConversations",
                 "createStreamThread",
                 "deleteStreamThread",
                 "loadStreamThread",
+                "removeStreamThreadAnchor",
                 "saveStreamThread"
             ])
 
@@ -2427,6 +2429,50 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(createdPayload["anchorEnd"] as? Int, 12)
             XCTAssertEqual(createdPayload["anchorText"] as? String, "Power budget")
             XCTAssertEqual((createdPayload["exchanges"] as? [[String: Any]])?.count, 0)
+
+            let pinnedAnchorPayload: [[String: Any]] = [[
+                "anchorId": "pinned-stream",
+                "kind": "stream_quote",
+                "quote": "Pinned passage",
+                "anchorSpanId": "pm:14:28"
+            ]]
+            await handler.handle(BridgeMessage(
+                type: "addStreamThreadAnchor",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(createdThreadId.uuidString),
+                    "anchors": AnyCodable(pinnedAnchorPayload)
+                ],
+                callbackId: "add-anchor"
+            ))
+            let addResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "add-anchor" }
+            )
+            let addedAnchor = try XCTUnwrap(addResponse.payload?["anchor"]?.value as? [String: Any])
+            XCTAssertEqual(addedAnchor["anchorStart"] as? Int, 14)
+            XCTAssertEqual(addedAnchor["anchorEnd"] as? Int, 28)
+            XCTAssertEqual(try service.loadStreamThreadAnchors(
+                threadId: createdThreadId,
+                streamId: stream.id
+            ).map(\.quote), ["Pinned passage"])
+
+            await handler.handle(BridgeMessage(
+                type: "removeStreamThreadAnchor",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(createdThreadId.uuidString),
+                    "anchorId": AnyCodable("pinned-stream")
+                ],
+                callbackId: "remove-anchor"
+            ))
+            let removeResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "remove-anchor" }
+            )
+            XCTAssertEqual(removeResponse.payload?["removed"]?.value as? Bool, true)
+            XCTAssertEqual(try service.loadStreamThreadAnchors(
+                threadId: createdThreadId,
+                streamId: stream.id
+            ), [])
 
             try service.saveExchange(AIExchange(
                 requestId: "conversation-turn",

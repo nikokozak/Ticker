@@ -181,7 +181,15 @@ enum StreamCodec {
             "createdAt": ISO8601DateFormatter().string(from: anchor.createdAt)
         ]
         if let quote = anchor.quote { payload["quote"] = quote }
-        if let anchorSpanId = anchor.anchorSpanId { payload["anchorSpanId"] = anchorSpanId }
+        if let anchorSpanId = anchor.anchorSpanId {
+            payload["anchorSpanId"] = anchorSpanId
+            // ponytail: encode PM positions in the frozen span-id column; add columns if pins become mapped ranges.
+            let parts = anchorSpanId.split(separator: ":")
+            if parts.count == 3, parts[0] == "pm", let from = Int(parts[1]), let to = Int(parts[2]) {
+                payload["anchorStart"] = from
+                payload["anchorEnd"] = to
+            }
+        }
         if let source {
             payload["sourceId"] = source.id.uuidString
             payload["sourceName"] = source.displayName

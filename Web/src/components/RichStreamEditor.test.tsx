@@ -12,6 +12,7 @@ import type {
   AIExchangeJSON,
   SourceReference,
   Stream,
+  StreamThreadJSON,
 } from '../types/models';
 import { DocumentSession } from '../richtext/session';
 import { parseMarkdown } from '../richtext/markdown';
@@ -661,6 +662,122 @@ describe('RichStreamEditor inline conversations', () => {
     await act(async () => { editor().dispatchEvent(tab); });
     expect(tab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(document.querySelector('.conversation-composer'));
+  });
+
+  it('persists pin and unpin across conversation reloads', async () => {
+    const updatedAt = new Date().toISOString();
+    const anchored: Stream = {
+      ...stream,
+      id: 'pinned-conversation-stream',
+      document: {
+        ...stream.document,
+        streamId: 'pinned-conversation-stream',
+        docJSON: docJSON('Original paragraph.\n\nFollowing paragraph.'),
+        markdown: 'Original paragraph.\n\nFollowing paragraph.',
+      },
+      conversationAnchors: [{
+        threadId: 'thread-pinned',
+        anchorStart: 1,
+        anchorEnd: 20,
+        anchorText: 'Original paragraph.',
+        detached: false,
+        ephemeral: false,
+        updatedAt,
+      }],
+    };
+    let persistedAnchors: NonNullable<StreamThreadJSON['anchors']> = [];
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'loadStreamThread') return {
+        thread: {
+          threadId: 'thread-pinned', streamId: anchored.id, title: 'Pinned', workingText: '',
+          anchorText: 'Original paragraph.', anchorStart: 1, anchorEnd: 20,
+          detached: false, ephemeral: false, revision: 0, createdAt: updatedAt, updatedAt,
+          exchanges: [], anchors: persistedAnchors,
+        },
+      };
+      if (type === 'addStreamThreadAnchor') {
+        const raw = (payload?.anchors as Array<Record<string, unknown>>)[0];
+        const anchor = { ...raw, threadId: 'thread-pinned', anchorStart: 22, anchorEnd: 42 } as NonNullable<StreamThreadJSON['anchors']>[number];
+        persistedAnchors = [anchor];
+        return { anchor };
+      }
+      if (type === 'removeStreamThreadAnchor') {
+        persistedAnchors = [];
+        return { removed: true };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+
+    const open = async () => {
+      const block = editor().querySelector('p') as HTMLParagraphElement;
+      await vi.waitFor(() => expect(block.classList.contains('conversation-block-anchored')).toBe(true));
+      vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+        left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
+        toJSON: () => ({}),
+      });
+      await act(async () => {
+        block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 320 }));
+        await Promise.resolve();
+      });
+      await vi.waitFor(() => expect(document.querySelector('.conversation-composer')).not.toBe(null));
+    };
+    const reload = async () => {
+      await act(async () => { root?.unmount(); });
+      root = createRoot(document.querySelector('#root')!);
+      await renderStream(anchored);
+      await open();
+    };
+
+    await renderStream(anchored);
+    await open();
+    let context = [...document.querySelectorAll('button')]
+      .find((button) => button.textContent?.trim() === '+ context') as HTMLButtonElement;
+    expect(context.disabled).toBe(true);
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfPaneStateChanged',
+        payload: {
+          visible: true,
+          streamId: anchored.id,
+          sourceId: 'source-1',
+          sourceName: 'manual.pdf',
+          shortTitle: 'Manual',
+          selection: {
+            highlightId: 'highlight-1', page: 4, quote: 'Selected PDF passage',
+            createdAt: updatedAt, rects: [{ page: 4, x: 1, y: 2, w: 3, h: 4 }],
+          },
+        },
+      });
+    });
+    await vi.waitFor(() => expect(context.disabled).toBe(false));
+    await act(async () => { context.click(); });
+    expect([...document.querySelectorAll('.conversation-context-menu button')]
+      .map((button) => button.textContent)).toEqual(['PDF selection']);
+    await act(async () => { context.click(); });
+
+    await selectEditorText('Following paragraph.');
+    context = [...document.querySelectorAll('button')]
+      .find((button) => button.textContent?.trim() === '+ context') as HTMLButtonElement;
+    await act(async () => { context.click(); });
+    await act(async () => {
+      ([...document.querySelectorAll('.conversation-context-menu button')]
+        .find((button) => button.textContent === 'Stream selection') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.conversation-pin')?.textContent)
+      .toContain('Following paragraph.'));
+
+    await reload();
+    await vi.waitFor(() => expect(document.querySelector('.conversation-pin')?.textContent)
+      .toContain('Following paragraph.'));
+    await act(async () => {
+      (document.querySelector('[aria-label="Remove pinned context"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.conversation-pin')).toBe(null));
+
+    await reload();
+    expect(document.querySelector('.conversation-pin')).toBe(null);
   });
 
   it('keeps send disabled until a persisted conversation loads successfully', async () => {

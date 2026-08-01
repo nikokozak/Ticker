@@ -339,6 +339,7 @@ final class PDFReaderPaneController: NSViewController {
     var onRevealHighlightInStream: (@MainActor (PDFHighlightRevealPayload) -> Void)?
     var onDeleteHighlight: (@MainActor (PDFHighlightRevealPayload) -> Bool)?
     var onPageChanged: ((UUID, Int) -> Void)?
+    var onSelectionChanged: (@MainActor (UUID, UUID, String, PDFHighlightRecord?) -> Void)?
     var highlightsProvider: ((UUID) -> [PDFHighlightRecord])?
     var sectionProvider: ((UUID, UUID, Int) throws -> PDFSectionDescriptor)?
     var onClose: (() -> Void)?
@@ -1515,10 +1516,12 @@ final class PDFReaderPaneController: NSViewController {
     @objc private func handlePDFPaneSelectionChanged() {
         guard !isAnchorPickMode else {
             setPDFSelectionActionsEnabled(false)
+            notifySelectionChanged(nil)
             return
         }
-        let selectedText = pdfPanePDFView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        setPDFSelectionActionsEnabled(!selectedText.isEmpty)
+        let payload = currentSelectionPayload()
+        setPDFSelectionActionsEnabled(payload != nil)
+        notifySelectionChanged(payload?.highlight)
     }
 
     @objc private func handlePDFPanePageChanged() {
@@ -1678,44 +1681,47 @@ final class PDFReaderPaneController: NSViewController {
     ) {
         exitAnchorPickMode(notifyCancelled: true)
 
-        guard let context = activePDFContext else {
+        guard activePDFContext != nil else {
             showPDFPaneMessage(missingPDFMessage)
             return
         }
-        guard let selection = pdfPanePDFView.currentSelection else {
+        guard pdfPanePDFView.currentSelection != nil else {
             showPDFPaneMessage(missingSelectionMessage)
             return
         }
-
-        let quote = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !quote.isEmpty else {
-            showPDFPaneMessage(missingSelectionMessage)
-            return
-        }
-
-        let rects = highlightRects(for: selection)
-        guard let firstRect = rects.first else {
+        guard let payload = currentSelectionPayload() else {
             showPDFPaneMessage(invalidSelectionMessage)
             return
         }
-
-        let highlight = PDFHighlightRecord(
-            id: UUID(),
-            sourceId: context.sourceId,
-            page: firstRect.page,
-            rects: rects,
-            quote: quote,
-            createdAt: Date()
-        )
-        let payload = PDFHighlightLinkPayload(
-            streamId: context.streamId,
-            sourceName: context.sourceName,
-            highlight: highlight
-        )
         guard action?(payload) == true else { return }
 
-        applyHighlight(highlight)
+        applyHighlight(payload.highlight)
         pdfPanePDFView.clearSelection()
+    }
+
+    private func currentSelectionPayload() -> PDFHighlightLinkPayload? {
+        guard let context = activePDFContext,
+              let selection = pdfPanePDFView.currentSelection else { return nil }
+        let quote = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rects = highlightRects(for: selection)
+        guard !quote.isEmpty, let firstRect = rects.first else { return nil }
+        return PDFHighlightLinkPayload(
+            streamId: context.streamId,
+            sourceName: context.sourceName,
+            highlight: PDFHighlightRecord(
+                id: UUID(),
+                sourceId: context.sourceId,
+                page: firstRect.page,
+                rects: rects,
+                quote: quote,
+                createdAt: Date()
+            )
+        )
+    }
+
+    private func notifySelectionChanged(_ highlight: PDFHighlightRecord?) {
+        guard let context = activePDFContext else { return }
+        onSelectionChanged?(context.streamId, context.sourceId, context.sourceName, highlight)
     }
 
     private func highlightRects(for selection: PDFSelection) -> [PDFHighlightRect] {

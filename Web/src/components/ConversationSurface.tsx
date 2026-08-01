@@ -1,6 +1,16 @@
-import { memo, useEffect, useRef, type KeyboardEvent } from 'react';
-import { bridge, loadStreamThread } from '../types/bridge';
-import type { AIExchangeJSON, SourceScope, StreamThreadJSON } from '../types/models';
+import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  addStreamThreadAnchor,
+  bridge,
+  loadStreamThread,
+  removeStreamThreadAnchor,
+} from '../types/bridge';
+import type {
+  AIExchangeJSON,
+  SourceScope,
+  StreamThreadAnchorJSON,
+  StreamThreadJSON,
+} from '../types/models';
 import { parseThreadAISentFacts } from '../threads/context';
 
 export interface ConversationActiveTurn {
@@ -48,12 +58,27 @@ interface ConversationSurfaceProps {
   anchorStart: number;
   anchorEnd: number;
   streamMarkdown: string;
+  contextOptions: ConversationContextOption[];
   focusComposer: boolean;
   state: ConversationLiveState;
   updateState: (key: string, updater: ConversationLiveStateUpdater) => void;
   createThread: (query: string) => Promise<StreamThreadJSON>;
   hasDrifted: (anchorText: string) => boolean;
   onCollapse: () => void;
+}
+
+export interface ConversationContextOption {
+  kind: 'stream_quote' | 'pdf_quote';
+  quote: string;
+  from?: number;
+  to?: number;
+  sourceId?: string;
+  sourceName?: string;
+  sourceShortTitle?: string;
+  highlightId?: string;
+  page?: number;
+  createdAt?: string;
+  rects?: Array<{ page: number; x: number; y: number; w: number; h: number }>;
 }
 
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
@@ -116,6 +141,7 @@ export function ConversationSurface({
   anchorStart,
   anchorEnd,
   streamMarkdown,
+  contextOptions,
   focusComposer,
   state,
   updateState,
@@ -124,6 +150,7 @@ export function ConversationSurface({
   onCollapse,
 }: ConversationSurfaceProps) {
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [showContextMenu, setShowContextMenu] = useState(false);
   const stateRef = useRef(state);
   const activeRequestId = useRef(state.active?.running ? state.active.requestId : null);
   stateRef.current = state;
@@ -267,6 +294,57 @@ export function ConversationSurface({
     loading: true,
     loadError: false,
   }));
+  const addContext = async (option: ConversationContextOption) => {
+    const thread = stateRef.current.thread;
+    if (!thread) return;
+    setShowContextMenu(false);
+    try {
+      const { anchor } = await addStreamThreadAnchor({
+        streamId,
+        threadId: thread.threadId,
+        anchor: {
+          anchorId: crypto.randomUUID(),
+          kind: option.kind,
+          quote: option.quote,
+          createdAt: option.createdAt ?? new Date().toISOString(),
+          ...(option.kind === 'stream_quote'
+            ? { anchorSpanId: `pm:${option.from}:${option.to}` }
+            : {
+              sourceId: option.sourceId,
+              highlightId: option.highlightId,
+              rects: option.rects,
+            }),
+        },
+      });
+      updateState(conversationKey, (current) => current.thread ? {
+        ...current,
+        thread: { ...current.thread, anchors: [...(current.thread.anchors ?? []), anchor] },
+      } : current);
+    } catch {
+      updateState(conversationKey, (current) => ({ ...current, error: 'Context could not be added.' }));
+    }
+  };
+  const removeContext = async (anchor: StreamThreadAnchorJSON) => {
+    const thread = stateRef.current.thread;
+    if (!thread) return;
+    try {
+      const { removed } = await removeStreamThreadAnchor({
+        streamId,
+        threadId: thread.threadId,
+        anchorId: anchor.anchorId,
+      });
+      if (!removed) return;
+      updateState(conversationKey, (current) => current.thread ? {
+        ...current,
+        thread: {
+          ...current.thread,
+          anchors: (current.thread.anchors ?? []).filter((item) => item.anchorId !== anchor.anchorId),
+        },
+      } : current);
+    } catch {
+      updateState(conversationKey, (current) => ({ ...current, error: 'Context could not be removed.' }));
+    }
+  };
   const originalAnchorText = state.thread?.anchorText ?? anchorText;
   const sendDisabled = !state.composer.trim() || state.loading || state.creating
     || Boolean(threadId && !state.thread);
@@ -300,7 +378,42 @@ export function ConversationSurface({
           </div>
         )}
         {state.error && <p className="conversation-error" role="alert">{state.error}</p>}
+        {(state.thread?.anchors?.length ?? 0) > 0 && (
+          <div className="conversation-pins" aria-label="Pinned context">
+            {state.thread!.anchors!.map((anchor) => (
+              <span className="conversation-pin" key={anchor.anchorId}>
+                {anchor.kind === 'pdf_quote'
+                  ? `${anchor.sourceShortTitle ?? anchor.sourceName ?? 'PDF'}${anchor.sourcePage ? ` p.${anchor.sourcePage}` : ''}`
+                  : anchor.quote}
+                <button type="button" aria-label="Remove pinned context" onClick={() => void removeContext(anchor)}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="conversation-composer-row">
+          <div className="conversation-context-picker">
+            <button
+              type="button"
+              className="conversation-context-button"
+              disabled={!state.thread || contextOptions.length === 0}
+              onClick={() => setShowContextMenu((visible) => !visible)}
+            >
+              + context
+            </button>
+            {showContextMenu && (
+              <div className="conversation-context-menu">
+                {contextOptions.map((option) => (
+                  <button
+                    type="button"
+                    key={`${option.kind}:${option.highlightId ?? `${option.from}:${option.to}`}`}
+                    onClick={() => void addContext(option)}
+                  >
+                    {option.kind === 'pdf_quote' ? 'PDF selection' : 'Stream selection'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <textarea
             ref={composerRef}
             className="conversation-composer"
