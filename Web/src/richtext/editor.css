@@ -152,6 +152,28 @@
   border-bottom-color: var(--color-accent);
 }
 
+.richtext-editor .ProseMirror a[href^='ticker-thread://'] {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05em 0.45em;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: var(--color-accent-soft);
+  font-family: var(--font-editor-sans);
+  font-size: 0.78em;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.richtext-editor .ProseMirror .thread-insertion-reveal {
+  animation: thread-insertion-reveal 1.6s ease-out;
+}
+
+@keyframes thread-insertion-reveal {
+  from { background: var(--color-accent-soft); }
+  to { background: transparent; }
+}
+
 .richtext-editor .ProseMirror u {
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;

@@ -33,6 +33,12 @@ export interface ThreadDrawerHandle {
   showThread: (thread: StreamThreadJSON) => Promise<boolean>;
 }
 
+export interface ThreadInsertionRequest {
+  kind: 'note' | 'ai';
+  text: string;
+  threadId: string;
+}
+
 interface ThreadDrawerProps {
   streamId: string;
   isOpen: boolean;
@@ -43,6 +49,9 @@ interface ThreadDrawerProps {
   onBeginAI?: () => boolean;
   onEndAI?: () => void;
   onOpenPDFDestination?: (url: string) => void;
+  onRequestInsertion?: (request: ThreadInsertionRequest) => void;
+  streamSaveErrorThreadId?: string | null;
+  onRetryStreamSave?: () => void;
 }
 
 interface PendingThreadAI {
@@ -89,7 +98,11 @@ function sourceURL(source: ThreadAISentFacts['sources'][number]): string {
       page: source.page,
     });
   }
-  return `ticker-pdf://${source.sourceId}`;
+  return `ticker-pdf://${source.sourceId}?page=1`;
+}
+
+function renderedExchangeMarkdown(exchange: AIExchangeJSON): string {
+  return swapCitationMarkers(exchange.responseRaw, manifestCitations(exchange.sourceManifest));
 }
 
 function SentContext({
@@ -142,8 +155,7 @@ function AIResponse({
   onOpenPDFDestination?: (url: string) => void;
 }) {
   const html = useMemo(() => {
-    const swapped = swapCitationMarkers(markdown, manifestCitations(sourceManifest));
-    return threadMarkdown.render(swapped);
+    return threadMarkdown.render(swapCitationMarkers(markdown, manifestCitations(sourceManifest)));
   }, [markdown, sourceManifest]);
 
   return (
@@ -169,9 +181,11 @@ function AIResponse({
 function ThreadExchange({
   exchange,
   onOpenPDFDestination,
+  onAddToStream,
 }: {
   exchange: AIExchangeJSON;
   onOpenPDFDestination?: (url: string) => void;
+  onAddToStream?: (text: string) => void;
 }) {
   const facts = parseThreadAISentFacts(exchange.sourceManifest);
   return (
@@ -187,6 +201,15 @@ function ThreadExchange({
           sourceManifest={exchange.sourceManifest}
           onOpenPDFDestination={onOpenPDFDestination}
         />
+        {onAddToStream && (
+          <button
+            type="button"
+            className="thread-add-to-stream"
+            onClick={() => onAddToStream(renderedExchangeMarkdown(exchange))}
+          >
+            Add to Stream
+          </button>
+        )}
       </div>
       {facts && <SentContext facts={facts} onOpenPDFDestination={onOpenPDFDestination} />}
     </article>
@@ -203,6 +226,9 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
   onBeginAI,
   onEndAI,
   onOpenPDFDestination,
+  onRequestInsertion,
+  streamSaveErrorThreadId,
+  onRetryStreamSave,
 }, ref) {
   const sessionRef = useRef<ThreadDraftSession | null>(null);
   const aiStartGenerationRef = useRef(0);
@@ -365,7 +391,6 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
     if (message.type === 'documentAIComplete') {
       const exchange = payload.exchange as AIExchangeJSON | undefined;
       activeRequestIdRef.current = null;
-      activePromptRef.current = null;
       releaseAI();
       if (!exchange || exchange.requestId !== requestId || exchange.threadId !== activeThread?.threadId) {
         setPendingAI((pending) => pending && {
@@ -374,6 +399,7 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
         });
         return;
       }
+      activePromptRef.current = null;
       setExchanges((current) => current.some((item) => item.requestId === exchange.requestId)
         ? current
         : [...current, exchange]);
@@ -382,7 +408,6 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
     }
     if (message.type === 'documentAIError') {
       activeRequestIdRef.current = null;
-      activePromptRef.current = null;
       releaseAI();
       const error = typeof payload.error === 'string' ? payload.error : 'AI request failed.';
       setPendingAI((pending) => pending && { ...pending, error });
@@ -460,6 +485,18 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
     addToast('Your local note was saved.', 'success');
   };
 
+  const requestInsertion = async (kind: ThreadInsertionRequest['kind'], text: string) => {
+    const thread = activeThread;
+    if (!thread || !text.trim() || !onRequestInsertion || activeRequestIdRef.current || preparingAI) return;
+    if (!await flush()) {
+      addToast('Save the thread before adding from it.', 'error');
+      return;
+    }
+    onRequestInsertion({ kind, text, threadId: thread.threadId });
+  };
+
+  const insertionBlocked = preparingAI || Boolean(pendingAI && !pendingAI.error);
+
   if (!isOpen) return null;
 
   return (
@@ -504,6 +541,13 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
             />
           </label>
 
+          {streamSaveErrorThreadId === activeThread.threadId && (
+            <div className="thread-stream-save-warning" role="alert">
+              <p>Added text is not saved.</p>
+              <button type="button" onClick={onRetryStreamSave}>Retry Save</button>
+            </div>
+          )}
+
           <section className="thread-origin" aria-labelledby="thread-origin-heading">
             <h3 id="thread-origin-heading">Started from</h3>
             <blockquote>{activeThread.anchorText || 'No starting passage.'}</blockquote>
@@ -526,6 +570,16 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
               placeholder="Write what you think, what is missing, or what to check next…"
               onChange={(event) => updateDraft(title, event.target.value)}
             />
+            {onRequestInsertion && (
+              <button
+                type="button"
+                className="thread-add-to-stream"
+                disabled={!workingText.trim() || insertionBlocked}
+                onClick={() => { void requestInsertion('note', workingText); }}
+              >
+                Add to Stream
+              </button>
+            )}
             {saveState === 'conflict' && (
               <div className="thread-save-warning" role="alert">
                 <p>This note changed elsewhere. Your local note is still here.</p>
@@ -547,6 +601,9 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
                 key={exchange.requestId}
                 exchange={exchange}
                 onOpenPDFDestination={onOpenPDFDestination}
+                onAddToStream={onRequestInsertion && !insertionBlocked
+                  ? (text) => { void requestInsertion('ai', text); }
+                  : undefined}
               />
             ))}
             {pendingAI && (
@@ -580,12 +637,21 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
                       type="button"
                       onClick={() => {
                         setPrompt(pendingAI.prompt);
+                        activePromptRef.current = null;
                         setPendingAI(null);
                       }}
                     >
                       Edit and try again
                     </button>
-                    <button type="button" onClick={() => setPendingAI(null)}>Dismiss</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        activePromptRef.current = null;
+                        setPendingAI(null);
+                      }}
+                    >
+                      Dismiss
+                    </button>
                   </div>
                 )}
               </article>

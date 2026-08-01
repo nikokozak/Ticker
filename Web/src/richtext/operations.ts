@@ -147,6 +147,128 @@ export function streamAIMarkdown(view: EditorView, range: { from: number; to: nu
   };
 }
 
+/* Thread insertion ------------------------------------------------------ */
+
+export type ThreadInsertionTarget =
+  | { kind: 'block'; pos: number }
+  | { kind: 'list'; pos: number; fallbackPos: number };
+
+export interface ThreadInsertionPayload {
+  kind: 'note' | 'ai';
+  text: string;
+  threadId: string;
+}
+
+/** Resolve a click inside text to an additive boundary after its owning block. */
+export function threadInsertionTarget(state: EditorState, pos: number): ThreadInsertionTarget | null {
+  if (pos < 0 || pos > state.doc.content.size) return null;
+  const $pos = state.doc.resolve(pos);
+  if ($pos.parent.type === tickerSchema.nodes.code_block) return null;
+
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if ($pos.node(depth).type === tickerSchema.nodes.list_item) {
+      let fallbackPos = $pos.after(depth - 1);
+      for (let ancestor = 1; ancestor < depth; ancestor += 1) {
+        const type = $pos.node(ancestor).type;
+        if (type === tickerSchema.nodes.bullet_list || type === tickerSchema.nodes.ordered_list) {
+          fallbackPos = $pos.after(ancestor);
+          break;
+        }
+      }
+      return { kind: 'list', pos: $pos.after(depth), fallbackPos };
+    }
+  }
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    const node = $pos.node(depth);
+    if (node.type === tickerSchema.nodes.paragraph || node.type === tickerSchema.nodes.heading) {
+      return { kind: 'block', pos: $pos.after(depth) };
+    }
+  }
+  return null;
+}
+
+function literalParagraphs(text: string): Fragment {
+  const paragraphs = text
+    .replace(/\r\n?/g, '\n')
+    .split(/\n+/)
+    .filter((line) => line.length > 0)
+    .map((line) => tickerSchema.nodes.paragraph.create(
+      null,
+      line ? tickerSchema.text(line) : undefined,
+    ));
+  return Fragment.fromArray(paragraphs);
+}
+
+function appendThreadLink(node: ProseNode, link: ProseNode): { node: ProseNode; appended: boolean } {
+  if (node.type === tickerSchema.nodes.paragraph) {
+    const spacer = node.content.size ? Fragment.from(tickerSchema.text(' ')) : Fragment.empty;
+    return { node: node.copy(node.content.append(spacer).append(Fragment.from(link))), appended: true };
+  }
+  for (let index = node.childCount - 1; index >= 0; index -= 1) {
+    const child = appendThreadLink(node.child(index), link);
+    if (!child.appended) continue;
+    const children: ProseNode[] = [];
+    node.forEach((candidate, _offset, childIndex) => {
+      children.push(childIndex === index ? child.node : candidate);
+    });
+    return { node: node.copy(Fragment.fromArray(children)), appended: true };
+  }
+  return { node, appended: false };
+}
+
+function withThreadLink(content: Fragment, threadId: string): Fragment {
+  const mark = tickerSchema.marks.link.create({
+    href: `ticker-thread://${encodeURIComponent(threadId)}`,
+    title: null,
+  });
+  const link = tickerSchema.text('Thread', [mark]);
+  const blocks: ProseNode[] = [];
+  content.forEach((node) => blocks.push(node));
+  const last = blocks[blocks.length - 1];
+  if (last) {
+    const appended = appendThreadLink(last, link);
+    blocks[blocks.length - 1] = appended.node;
+    if (appended.appended) return Fragment.fromArray(blocks);
+  }
+  blocks.push(tickerSchema.nodes.paragraph.create(null, link));
+  return Fragment.fromArray(blocks);
+}
+
+/** Add a thread result without changing any existing Stream block. */
+export function insertThreadWork(
+  view: EditorView,
+  target: ThreadInsertionTarget,
+  payload: ThreadInsertionPayload,
+): { from: number; to: number; blockPositions: number[] } {
+  const parsed = payload.kind === 'note'
+    ? literalParagraphs(payload.text)
+    : parseMarkdown(payload.text).content;
+  if (parsed.childCount === 0) throw new Error('There is no thread text to add.');
+
+  const linked = withThreadLink(parsed, payload.threadId);
+  const insertAsListItems = target.kind === 'list'
+    && Array.from({ length: linked.childCount }, (_, index) => linked.child(index))
+      .every((node) => node.type === tickerSchema.nodes.paragraph);
+  const insertionPos = target.kind === 'list' && !insertAsListItems ? target.fallbackPos : target.pos;
+  const blocks: ProseNode[] = [];
+  linked.forEach((node) => blocks.push(
+    insertAsListItems ? tickerSchema.nodes.list_item.createChecked(null, node) : node,
+  ));
+  const content = Fragment.fromArray(blocks);
+  const blockPositions: number[] = [];
+  let offset = 0;
+  for (const block of blocks) {
+    blockPositions.push(insertionPos + offset);
+    offset += block.nodeSize;
+  }
+
+  const tr = view.state.tr.replace(insertionPos, insertionPos, new Slice(content, 0, 0));
+  const to = insertionPos + content.size;
+  tr.setSelection(Selection.near(tr.doc.resolve(to), -1));
+  view.dispatch(tr.scrollIntoView());
+  return { from: insertionPos, to, blockPositions };
+}
+
 /* Images ---------------------------------------------------------------- */
 
 /**

@@ -28,7 +28,11 @@ import { ExchangeOverlay, type ExchangeManifestEntry } from './ExchangeOverlay';
 import { EyeIcon, XIcon } from './icons';
 import { Modal } from './Modal';
 import { SourcesModal } from './SourcesModal';
-import { ThreadDrawer, type ThreadDrawerHandle } from './ThreadDrawer';
+import {
+  ThreadDrawer,
+  type ThreadDrawerHandle,
+  type ThreadInsertionRequest,
+} from './ThreadDrawer';
 import {
   nextSourceScope,
   parsePDFSectionActionRequest,
@@ -38,12 +42,14 @@ import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
 import {
   aiWritingRange,
   insertImage,
+  insertThreadWork,
   removePDFHighlightLink,
   revealPDFHighlight,
   selectedPDFHighlight,
   selectText,
   setAIWritingRange,
   streamAIMarkdown,
+  threadInsertionTarget,
 } from '../richtext/operations';
 import { DocumentSession, type SaveState } from '../richtext/session';
 import {
@@ -104,6 +110,11 @@ interface RichStreamEditorProps {
 }
 
 const PDF_URL_PREFIX = 'ticker-pdf://';
+const THREAD_URL_PREFIX = 'ticker-thread://';
+
+interface PendingThreadInsertion extends ThreadInsertionRequest {
+  message: string;
+}
 
 function readBlobAsBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -211,6 +222,7 @@ export function RichStreamEditor({
   const selectionActionMenuRef = useRef<HTMLDivElement>(null);
   const threadDrawerRef = useRef<ThreadDrawerHandle>(null);
   const threadButtonRef = useRef<HTMLButtonElement>(null);
+  const pendingThreadInsertionRef = useRef<PendingThreadInsertion | null>(null);
   // ponytail: one stream-wide PDF AI lock; track host operation ids if concurrent
   // PDF jobs ever become a supported workflow.
   const pdfAIInFlightRef = useRef(false);
@@ -234,6 +246,8 @@ export function RichStreamEditor({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [showThreads, setShowThreads] = useState(false);
+  const [pendingThreadInsertion, setPendingThreadInsertion] = useState<PendingThreadInsertion | null>(null);
+  const [threadInsertionSaveFailed, setThreadInsertionSaveFailed] = useState<string | null>(null);
   const [threadCreating, setThreadCreating] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [sourceScope, setSourceScope] = useState<SourceScope>(stream.sourceScope ?? 'auto');
@@ -259,6 +273,13 @@ export function RichStreamEditor({
     } : null,
   });
 
+  const cancelThreadInsertion = useCallback((restoreDrawer = true) => {
+    const pending = pendingThreadInsertionRef.current;
+    pendingThreadInsertionRef.current = null;
+    setPendingThreadInsertion(null);
+    if (pending && restoreDrawer) setShowThreads(true);
+  }, []);
+
   const cancelDocumentAI = useCallback((notifyHost = true) => {
     const active = aiRequestRef.current;
     if (!active) {
@@ -282,12 +303,13 @@ export function RichStreamEditor({
   const flushAll = useCallback(async () => {
     cancelDocumentAI();
     threadDrawerRef.current?.cancelAI();
+    cancelThreadInsertion(false);
     const [documentSaved, threadSaved] = await Promise.all([
       sessionRef.current?.saveNow() ?? Promise.resolve(true),
       threadDrawerRef.current?.flush() ?? Promise.resolve(true),
     ]);
     return documentSaved && threadSaved;
-  }, [cancelDocumentAI]);
+  }, [cancelDocumentAI, cancelThreadInsertion]);
 
   useEffect(() => {
     onFlushAvailable?.(flushAll);
@@ -295,6 +317,10 @@ export function RichStreamEditor({
   }, [flushAll, onFlushAvailable]);
 
   const canStartAI = useCallback(() => {
+    if (pendingThreadInsertionRef.current) {
+      addToast('Add the pending thread item, or cancel it first.', 'info');
+      return false;
+    }
     if (!aiInFlightRef.current && !pdfAIInFlightRef.current && !threadAIInFlightRef.current) return true;
     addToast('Wait for the current AI operation to finish, or stop it first.', 'info');
     return false;
@@ -508,12 +534,45 @@ export function RichStreamEditor({
    * click was simply swallowed. Citations go to the PDF pane instead.
    */
   const openLink = useCallback((href: string) => {
+    if (href.startsWith(THREAD_URL_PREFIX)) {
+      const threadId = href.slice(THREAD_URL_PREFIX.length).split(/[?#]/, 1)[0];
+      if (!threadId) {
+        addToast('This thread link is damaged.', 'error');
+        return;
+      }
+      setShowThreads(true);
+      void threadDrawerRef.current?.openThread(threadId);
+      return;
+    }
     if (href.startsWith(PDF_URL_PREFIX)) {
       bridge.send({ type: 'openPdfDestination', payload: { streamId: stream.id, url: href } });
       return;
     }
     bridge.send({ type: 'openExternalURL', payload: { url: href } });
-  }, [stream.id]);
+  }, [addToast, stream.id]);
+
+  const beginThreadInsertion = useCallback((request: ThreadInsertionRequest) => {
+    if (aiInFlightRef.current || pdfAIInFlightRef.current || threadAIInFlightRef.current) {
+      addToast('Wait for the current AI operation to finish, or stop it first.', 'info');
+      return;
+    }
+    if (threadInsertionSaveFailed) {
+      addToast('Retry the unsaved Stream change before adding another item.', 'info');
+      return;
+    }
+    const pending: PendingThreadInsertion = {
+      ...request,
+      message: 'Click a line in the Stream to add it there · Esc cancels',
+    };
+    pendingThreadInsertionRef.current = pending;
+    setPendingThreadInsertion(pending);
+    hideSelectionMenu();
+    setShowThreads(false);
+  }, [addToast, hideSelectionMenu, threadInsertionSaveFailed]);
+
+  const retryThreadInsertionSave = useCallback(async () => {
+    if (await sessionRef.current?.saveNow()) setThreadInsertionSaveFailed(null);
+  }, []);
 
   const saveImageToAssets = useCallback(async (blob: Blob): Promise<string> => {
     const requestId = crypto.randomUUID();
@@ -757,6 +816,106 @@ export function RichStreamEditor({
   }, [editor, xray]);
 
   useEffect(() => {
+    if (!editor || !pendingThreadInsertion) return undefined;
+    const { view } = editor;
+    const previousEditable = view.props.editable;
+    view.setProps({ editable: () => false });
+
+    const refuse = (message = 'Choose a text line in the Stream') => {
+      const current = pendingThreadInsertionRef.current;
+      if (!current) return;
+      const refused = { ...current, message };
+      pendingThreadInsertionRef.current = refused;
+      setPendingThreadInsertion(refused);
+    };
+
+    const place = (event: MouseEvent) => {
+      const pending = pendingThreadInsertionRef.current;
+      if (!pending || event.button !== 0) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      const clicked = event.target instanceof Element ? event.target : null;
+      if (!clicked
+        || clicked.closest('a, pre, img, .richtext-image, .ProseMirror-selectednode')) {
+        refuse();
+        return;
+      }
+      const block = clicked.closest('p, h1, h2, h3, h4, h5, h6, li');
+      if (!block || !view.dom.contains(block)) {
+        refuse();
+        return;
+      }
+
+      let target;
+      try {
+        target = threadInsertionTarget(view.state, view.posAtDOM(block, 0));
+      } catch {
+        target = null;
+      }
+      if (!target) {
+        refuse();
+        return;
+      }
+
+      pendingThreadInsertionRef.current = null;
+      setPendingThreadInsertion(null);
+      let inserted: ReturnType<typeof insertThreadWork>;
+      try {
+        inserted = insertThreadWork(view, target, pending);
+      } catch {
+        const failed = { ...pending, message: 'This item could not be added. Choose another item.' };
+        pendingThreadInsertionRef.current = failed;
+        setPendingThreadInsertion(failed);
+        return;
+      }
+
+      const revealed = inserted.blockPositions
+        .map((pos) => view.nodeDOM(pos))
+        .map((node) => (node instanceof Element ? node : node?.parentElement))
+        .filter((node): node is Element => Boolean(node));
+      revealed.forEach((node) => node.classList.add('thread-insertion-reveal'));
+      window.setTimeout(() => {
+        revealed.forEach((node) => node.classList.remove('thread-insertion-reveal'));
+      }, 1_600);
+
+      setShowThreads(true);
+      void threadDrawerRef.current?.openThread(pending.threadId);
+      const session = sessionRef.current;
+      if (!session) {
+        setThreadInsertionSaveFailed(pending.threadId);
+        return;
+      }
+      void session.saveNow().then((saved) => {
+        if (saved) {
+          setThreadInsertionSaveFailed((threadId) => (
+            threadId === pending.threadId ? null : threadId
+          ));
+          return;
+        }
+        setThreadInsertionSaveFailed(pending.threadId);
+        setShowThreads(true);
+        void threadDrawerRef.current?.openThread(pending.threadId);
+      });
+    };
+
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      cancelThreadInsertion();
+    };
+
+    view.dom.addEventListener('mousedown', place, true);
+    window.addEventListener('keydown', escape, true);
+    return () => {
+      view.dom.removeEventListener('mousedown', place, true);
+      window.removeEventListener('keydown', escape, true);
+      view.setProps({ editable: previousEditable });
+    };
+  }, [cancelThreadInsertion, editor, pendingThreadInsertion]);
+
+  useEffect(() => {
     if (!editor || !xray) return undefined;
     let live = true;
     const inspect = (event: MouseEvent) => {
@@ -924,6 +1083,7 @@ export function RichStreamEditor({
    * and the page is left only if it actually landed.
    */
   const leave = useCallback(async () => {
+    cancelThreadInsertion(false);
     cancelDocumentAI();
     threadDrawerRef.current?.cancelAI();
     setLeaving(true);
@@ -934,7 +1094,7 @@ export function RichStreamEditor({
     if (documentSaved && threadSaved) return onBack();
     setLeaving(false);
     addToast('Your changes could not be saved, so this stream stayed open.', 'error');
-  }, [addToast, cancelDocumentAI, onBack]);
+  }, [addToast, cancelDocumentAI, cancelThreadInsertion, onBack]);
 
   const remove = useCallback(() => {
     deleting.current = true;
@@ -1490,6 +1650,7 @@ export function RichStreamEditor({
             aria-label="Threads"
             aria-pressed={showThreads}
             title="Threads"
+            disabled={Boolean(pendingThreadInsertion)}
             onClick={() => {
               if (showThreads) void threadDrawerRef.current?.close();
               else setShowThreads(true);
@@ -1773,6 +1934,12 @@ export function RichStreamEditor({
             ref={editorShellRef}
             className={`document-editor-shell ${xray ? 'richtext-xray' : ''}`}
           >
+            {pendingThreadInsertion && (
+              <div className="thread-insertion-bar" role="status" aria-live="polite">
+                <span>{pendingThreadInsertion.message}</span>
+                <button type="button" onClick={() => cancelThreadInsertion()}>Cancel</button>
+              </div>
+            )}
             <div ref={host} />
             {aiRunning && (
               <div
@@ -1811,6 +1978,9 @@ export function RichStreamEditor({
           onBeginAI={beginThreadAI}
           onEndAI={endThreadAI}
           onOpenPDFDestination={openLink}
+          onRequestInsertion={beginThreadInsertion}
+          streamSaveErrorThreadId={threadInsertionSaveFailed}
+          onRetryStreamSave={() => { void retryThreadInsertionSave(); }}
         />
       </div>
 

@@ -304,4 +304,89 @@ describe('ThreadDrawer', () => {
     expect(document.querySelector('.thread-assistant-turn')?.textContent).toContain('Current reply.');
     expect(document.querySelector('.thread-assistant-turn')?.textContent).not.toContain('Stale reply.');
   });
+
+  it('offers the saved note and citation-linked AI reply for explicit insertion', async () => {
+    const requestInsertion = vi.fn();
+    const exchange = {
+      requestId: 'request-1',
+      streamId: 'stream-1',
+      threadId: 'thread-1',
+      verb: 'thread',
+      userInput: 'What follows?',
+      responseRaw: 'Use this result. 【1|support】',
+      sourceManifest: JSON.stringify([{
+        n: 1,
+        sourceId: 'source-1',
+        chunkId: 'chunk-1',
+        page: 4,
+        shortTitle: 'Manual',
+      }]),
+      createdAt: new Date(0).toISOString(),
+    };
+    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
+      if (type === 'listStreamThreads') return { threads: [thread()] };
+      if (type === 'loadStreamThread') return { thread: thread({ exchanges: [exchange] }) };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+
+    await renderDrawer({ onRequestInsertion: requestInsertion });
+    await openListedThread();
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('.thread-add-to-stream')];
+    expect(buttons).toHaveLength(2);
+
+    await act(async () => {
+      buttons[0].click();
+      await Promise.resolve();
+    });
+    expect(requestInsertion).toHaveBeenCalledWith({
+      kind: 'note', text: 'Check sleep current.', threadId: 'thread-1',
+    });
+
+    await act(async () => {
+      buttons[1].click();
+      await Promise.resolve();
+    });
+    expect(requestInsertion).toHaveBeenLastCalledWith({
+      kind: 'ai',
+      text: 'Use this result. [p.4](ticker-pdf://source-1?page=4&chunk=chunk-1)',
+      threadId: 'thread-1',
+    });
+  });
+
+  it('opens a whole-source receipt by source id instead of treating it as a legacy highlight', async () => {
+    const openPDF = vi.fn();
+    const receipt = {
+      version: 1,
+      kind: 'threadAI',
+      requestId: 'request-1',
+      anchor: { kind: 'stream', text: 'Anchor' },
+      note: { sent: false, text: '' },
+      turns: { includedRequestIds: [], totalAtSend: 0 },
+      sourceContextMode: 'passthrough',
+      sources: [{ kind: 'wholeSource', sourceId: 'source-1', shortTitle: 'Manual' }],
+    };
+    const exchange = {
+      requestId: 'request-1',
+      streamId: 'stream-1',
+      threadId: 'thread-1',
+      verb: 'thread',
+      userInput: 'Read it',
+      responseRaw: 'Result.',
+      sourceManifest: JSON.stringify(receipt),
+      createdAt: new Date(0).toISOString(),
+    };
+    vi.spyOn(bridge, 'sendAsync').mockImplementation((async (type) => {
+      if (type === 'listStreamThreads') return { threads: [thread()] };
+      if (type === 'loadStreamThread') return { thread: thread({ exchanges: [exchange] }) };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+
+    await renderDrawer({ onOpenPDFDestination: openPDF });
+    await openListedThread();
+    await act(async () => {
+      ([...document.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Manual · whole source') as HTMLButtonElement).click();
+    });
+    expect(openPDF).toHaveBeenCalledWith('ticker-pdf://source-1?page=1');
+  });
 });

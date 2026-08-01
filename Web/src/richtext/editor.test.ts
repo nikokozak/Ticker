@@ -276,6 +276,18 @@ describe('copy and paste inside the editor', () => {
     return names;
   }
 
+  function clipboardEvent(type: 'copy' | 'paste', values = new Map<string, string>()) {
+    const event = new Event(type, { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        clearData: () => values.clear(),
+        getData: (format: string) => values.get(format) ?? '',
+        setData: (format: string, value: string) => { values.set(format, value); },
+      },
+    });
+    return { event, values };
+  }
+
   it('keeps formatting when a formatted phrase is copied', () => {
     const ed = open('a **bold** b');
     const clipboard = copy(ed, find(ed, 'bold'), after(ed, 'bold'));
@@ -324,6 +336,40 @@ describe('copy and paste inside the editor', () => {
     const clipboard = copy(ed, 0, ed.view.state.doc.firstChild?.nodeSize ?? 0);
     paste(ed, clipboard, after(ed, 'after'));
     expect(ed.getMarkdownProjection()).toBe('```ts\nconst x = 1;\n```\n\nafter\n\n```ts\nconst x = 1;\n```');
+  });
+
+  it('removes all Ticker-private addresses from standard clipboard forms', () => {
+    const ed = open([
+      '[Thread](ticker-thread://thread-1)',
+      '[PDF](ticker-pdf://source-1?page=2)',
+      'ticker://open/private',
+      '![Diagram](ticker-asset://stream/image.png)',
+      '[Web](https://example.test)',
+    ].join(' '));
+    const { dom, text } = ed.view.serializeForClipboard(
+      ed.view.state.doc.slice(0, ed.view.state.doc.content.size),
+    );
+    const html = (dom as HTMLElement).innerHTML;
+    expect(html).not.toMatch(/ticker(?:-[a-z]+)?:\/\//i);
+    expect(text).not.toMatch(/ticker(?:-[a-z]+)?:\/\//i);
+    expect(html).toContain('Thread');
+    expect(html).toContain('Diagram');
+    expect(html).toContain('https://example.test');
+  });
+
+  it('preserves private links for an in-app paste without putting them on the public clipboard', () => {
+    const ed = open('[Thread](ticker-thread://thread-1) then');
+    place(ed, find(ed, 'Thread'), after(ed, 'Thread'));
+    const clipboard = clipboardEvent('copy');
+    ed.view.dom.dispatchEvent(clipboard.event);
+    expect(clipboard.event.defaultPrevented).toBe(true);
+    expect(clipboard.values.get('text/html')).not.toContain('ticker-thread://');
+    expect(clipboard.values.get('text/plain')).not.toContain('ticker-thread://');
+    expect([...clipboard.values.values()].some((value) => value.includes('ticker-thread://'))).toBe(false);
+
+    place(ed, after(ed, 'then'));
+    ed.view.dom.dispatchEvent(clipboardEvent('paste', clipboard.values).event);
+    expect(ed.getMarkdownProjection().match(/ticker-thread:\/\/thread-1/g)).toHaveLength(2);
   });
 });
 

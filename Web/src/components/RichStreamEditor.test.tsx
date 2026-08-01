@@ -691,6 +691,237 @@ describe('RichStreamEditor Stream threads', () => {
     expect(document.querySelector('.thread-anchor-warning')).toBeNull();
     expect(editor().querySelector('.richtext-provenance-thread')).toBeNull();
   });
+
+  it('adds a saved thread note after the clicked block as one undo step', async () => {
+    const savedThread: StreamThreadJSON = {
+      threadId: 'thread-insert',
+      streamId: stream.id,
+      title: 'Insert this',
+      workingText: 'Evidence *stays literal*',
+      anchorText: 'Original paragraph.',
+      revision: 1,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'listStreamThreads') return { threads: [savedThread] };
+      if (type === 'loadStreamThread') return { thread: savedThread };
+      if (type === 'saveRichStreamDocument') return { revision: 2 };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+
+    await click('Threads');
+    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+    await act(async () => {
+      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    await act(async () => {
+      (document.querySelector('.thread-note .thread-add-to-stream') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector('.thread-insertion-bar')?.textContent)
+      .toContain('Click a line in the Stream');
+    expect(editor().getAttribute('contenteditable')).toBe('false');
+    await act(async () => {
+      editor().querySelector('p')!.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, button: 0,
+      }));
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    const paragraphs = [...editor().querySelectorAll('p')].map((node) => node.textContent);
+    expect(paragraphs).toEqual([
+      'Original paragraph.',
+      'Evidence *stays literal* Thread',
+    ]);
+    const chip = editor().querySelector('a[href="ticker-thread://thread-insert"]');
+    expect(chip?.textContent).toBe('Thread');
+    await vi.waitFor(() => expect(vi.mocked(bridge.sendAsync).mock.calls
+      .some(([type, payload]) => type === 'saveRichStreamDocument'
+        && String(payload?.markdown).includes('ticker-thread://thread-insert'))).toBe(true));
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editor().textContent).toBe('Original paragraph.');
+    expect(editor().querySelector('a[href^="ticker-thread://"]')).toBeNull();
+  });
+
+  it('keeps an invalid target pending and Escape changes no Stream content', async () => {
+    const codeStreamId = 'stream-code-target';
+    const savedThread: StreamThreadJSON = {
+      threadId: 'thread-cancel',
+      streamId: codeStreamId,
+      title: 'Do not insert',
+      workingText: 'Pending note',
+      anchorText: 'Code',
+      revision: 1,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'listStreamThreads') return { threads: [savedThread] };
+      if (type === 'loadStreamThread') return { thread: savedThread };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+    await renderStream({
+      ...stream,
+      id: codeStreamId,
+      document: {
+        ...stream.document!,
+        streamId: codeStreamId,
+        docJSON: docJSON('```swift\nlet x = 1\n```\n\nSafe paragraph.'),
+        markdown: '```swift\nlet x = 1\n```\n\nSafe paragraph.',
+      },
+    });
+    const before = editor().textContent;
+
+    await click('Threads');
+    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+    await act(async () => {
+      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    await act(async () => {
+      (document.querySelector('.thread-note .thread-add-to-stream') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-insertion-bar')).not.toBeNull());
+    await act(async () => {
+      editor().querySelector('pre')!.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, button: 0,
+      }));
+      await Promise.resolve();
+    });
+    expect(document.querySelector('.thread-insertion-bar')?.textContent).toContain('Choose a text line');
+    expect(editor().textContent).toBe(before);
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    expect(document.querySelector('.thread-insertion-bar')).toBeNull();
+    expect(editor().textContent).toBe(before);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'saveRichStreamDocument'))
+      .toBe(false);
+  });
+
+  it('keeps one visible insertion after save failure and Retry only saves', async () => {
+    const savedThread: StreamThreadJSON = {
+      threadId: 'thread-retry',
+      streamId: stream.id,
+      title: 'Retry insertion',
+      workingText: 'One copy only',
+      anchorText: 'Original paragraph.',
+      revision: 1,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    let saves = 0;
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'listStreamThreads') return { threads: [savedThread] };
+      if (type === 'loadStreamThread') return { thread: savedThread };
+      if (type === 'saveRichStreamDocument') {
+        saves += 1;
+        if (saves === 1) throw new Error('offline');
+        return { revision: 2 };
+      }
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+
+    await click('Threads');
+    await vi.waitFor(() => expect(document.querySelector('.thread-list-item')).not.toBeNull());
+    await act(async () => {
+      (document.querySelector('.thread-list-item') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    await act(async () => {
+      (document.querySelector('.thread-note .thread-add-to-stream') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-insertion-bar')).not.toBeNull());
+    await act(async () => {
+      editor().querySelector('p')!.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, button: 0,
+      }));
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.thread-stream-save-warning')).not.toBeNull());
+    expect(editor().textContent?.match(/One copy only/g)).toHaveLength(1);
+    await act(async () => {
+      (document.querySelector('.thread-stream-save-warning button') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-stream-save-warning')).toBeNull());
+    expect(saves).toBe(2);
+    expect(editor().textContent?.match(/One copy only/g)).toHaveLength(1);
+  });
+
+  it('opens a persisted thread from its ordinary Stream backlink', async () => {
+    const linkedStreamId = 'stream-thread-link';
+    const linkedThread: StreamThreadJSON = {
+      threadId: 'thread-open',
+      streamId: linkedStreamId,
+      title: 'Opened from chip',
+      workingText: 'Still here',
+      anchorText: 'Anchor',
+      revision: 1,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      updateState.call(this, state);
+    });
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'loadStreamThread') return { thread: linkedThread };
+      throw new Error(`Unexpected ${type}`);
+    }) as typeof bridge.sendAsync);
+    await renderStream({
+      ...stream,
+      id: linkedStreamId,
+      document: {
+        ...stream.document!,
+        streamId: linkedStreamId,
+        docJSON: docJSON('[Thread](ticker-thread://thread-open)'),
+        markdown: '[Thread](ticker-thread://thread-open)',
+      },
+    });
+
+    await selectEditorText('Thread');
+    const linkPos = liveView!.state.selection.from + 1;
+    await act(async () => {
+      liveView!.someProp('handleClick', (handler) => handler(
+        liveView!,
+        linkPos,
+        new MouseEvent('click', { bubbles: true, cancelable: true }),
+      ));
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.thread-detail')).not.toBeNull());
+    expect(document.querySelector('.thread-title-input')).toHaveProperty('value', 'Opened from chip');
+    expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([
+      'loadStreamThread',
+      { streamId: linkedStreamId, threadId: 'thread-open' },
+    ]);
+  });
 });
 
 describe('RichStreamEditor document AI', () => {

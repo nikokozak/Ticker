@@ -1,7 +1,14 @@
 import { baseKeymap, chainCommands, exitCode } from 'prosemirror-commands';
 import { history, redo, undo } from 'prosemirror-history';
 import { keymap } from 'prosemirror-keymap';
-import { DOMParser, Fragment, Slice, type ParseOptions, type Node as ProseNode } from 'prosemirror-model';
+import {
+  DOMParser,
+  Fragment,
+  Slice,
+  type Mark,
+  type ParseOptions,
+  type Node as ProseNode,
+} from 'prosemirror-model';
 
 /**
  * prosemirror-model accepts `ruleFromNode` as a parse option but does not declare
@@ -46,6 +53,75 @@ const insertHardBreak: Command = (state, dispatch) => {
   }
   return true;
 };
+
+const INTERNAL_CLIPBOARD_TYPE = 'application/x-ticker-clipboard';
+const INTERNAL_URL = /^ticker(?:-[a-z][a-z0-9-]*)?:\/\//i;
+const BARE_INTERNAL_URL = /ticker(?:-[a-z][a-z0-9-]*)?:\/\/[^\s<>\])]+/gi;
+let internalClipboard: { token: string; slice: Slice } | null = null;
+
+function sanitizeInternalText(value: string): string {
+  return value.replace(BARE_INTERNAL_URL, 'Ticker link');
+}
+
+function sanitizeAttributes(attrs: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(attrs).map(([key, value]) => [
+    key,
+    typeof value === 'string' ? sanitizeInternalText(value) : value,
+  ]));
+}
+
+/** Standard clipboard forms contain labels and text, never Ticker-private addresses. */
+export function sanitizeTickerClipboardSlice(slice: Slice): Slice {
+  const cleanMarks = (marks: readonly Mark[]) => marks.flatMap((mark) => {
+    if (mark.type === tickerSchema.marks.link && INTERNAL_URL.test(String(mark.attrs.href))) return [];
+    const attrs = sanitizeAttributes(mark.attrs);
+    return [mark.type.create(attrs)];
+  });
+  const cleanNode = (node: ProseNode): ProseNode => {
+    const marks = cleanMarks(node.marks);
+    if (node.type === tickerSchema.nodes.image && INTERNAL_URL.test(String(node.attrs.src))) {
+      return tickerSchema.text(sanitizeInternalText(String(node.attrs.alt || 'Image')), marks);
+    }
+    if (node.isText) return tickerSchema.text(sanitizeInternalText(node.text ?? ''), marks);
+    const children: ProseNode[] = [];
+    node.forEach((child) => children.push(cleanNode(child)));
+    return node.type.create(sanitizeAttributes(node.attrs), Fragment.fromArray(children), marks);
+  };
+  const content: ProseNode[] = [];
+  slice.content.forEach((node) => content.push(cleanNode(node)));
+  return new Slice(Fragment.fromArray(content), slice.openStart, slice.openEnd);
+}
+
+function writeClipboard(view: EditorView, event: ClipboardEvent, cut: boolean): boolean {
+  const data = event.clipboardData;
+  const selection = view.state.selection;
+  if (!data || selection.empty) return false;
+  const original = selection.content();
+  const serialized = view.serializeForClipboard(original);
+  const token = crypto.randomUUID();
+  internalClipboard = { token, slice: original };
+  event.preventDefault();
+  data.clearData();
+  data.setData('text/html', serialized.dom.innerHTML);
+  data.setData('text/plain', serialized.text);
+  data.setData(INTERNAL_CLIPBOARD_TYPE, token);
+  if (cut) {
+    view.dispatch(view.state.tr.deleteSelection().scrollIntoView().setMeta('uiEvent', 'cut'));
+  }
+  return true;
+}
+
+function pasteInternalClipboard(view: EditorView, event: ClipboardEvent): boolean {
+  const token = event.clipboardData?.getData(INTERNAL_CLIPBOARD_TYPE);
+  if (!token || token !== internalClipboard?.token) return false;
+  event.preventDefault();
+  view.dispatch(view.state.tr
+    .replaceSelection(internalClipboard.slice)
+    .scrollIntoView()
+    .setMeta('paste', true)
+    .setMeta('uiEvent', 'paste'));
+  return true;
+}
 
 function tickerKeymap() {
   return keymap({
@@ -226,6 +302,12 @@ export function createRichTextEditor(options: RichTextEditorOptions): RichTextEd
     state: stateFor(tickerSchema.nodeFromJSON(JSON.parse(docJSON))),
     clipboardParser,
     nodeViews: { image: imageView },
+    transformCopied: sanitizeTickerClipboardSlice,
+    handleDOMEvents: {
+      copy: (current, event) => writeClipboard(current, event as ClipboardEvent, false),
+      cut: (current, event) => writeClipboard(current, event as ClipboardEvent, true),
+      paste: (current, event) => pasteInternalClipboard(current, event as ClipboardEvent),
+    },
 
     /**
      * One plain click opens a link. The old editor made this ambiguous — the URL
