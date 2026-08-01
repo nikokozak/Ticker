@@ -1770,16 +1770,24 @@ final class StreamDocumentTests: XCTestCase {
             )
             XCTAssertEqual(
                 exchangeColumns,
-                ["request_id", "stream_id", "verb", "user_input", "source_manifest", "response_raw", "model", "created_at", "thread_id"]
+                [
+                    "request_id", "stream_id", "verb", "user_input", "source_manifest",
+                    "response_raw", "model", "created_at", "thread_id", "thread_disposition"
+                ]
             )
         }
     }
 
-    func test_v28MigrationCreatesStreamThreadSchema() throws {
+    func test_v29MigrationCreatesSidenoteDocumentAndAnchorSchema() throws {
         try withTempPersistenceServiceAndURL { _, dbURL, _ in
             let dbQueue = try DatabaseQueue(path: dbURL.path)
             let columns = try dbQueue.read { db in
                 try Row.fetchAll(db, sql: "PRAGMA table_info(stream_threads)").map { row -> String in
+                    row["name"]
+                }
+            }
+            let anchorColumns = try dbQueue.read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(stream_thread_anchors)").map { row -> String in
                     row["name"]
                 }
             }
@@ -1798,11 +1806,21 @@ final class StreamDocumentTests: XCTestCase {
                 columns,
                 [
                     "thread_id", "stream_id", "title", "working_text", "anchor_text",
-                    "anchor_span_id", "source_id", "highlight_id", "revision", "created_at", "updated_at"
+                    "anchor_span_id", "source_id", "highlight_id", "revision", "created_at", "updated_at",
+                    "doc_json", "doc_format_version"
+                ]
+            )
+            XCTAssertEqual(
+                anchorColumns,
+                [
+                    "anchor_id", "thread_id", "kind", "quote", "anchor_span_id",
+                    "source_id", "highlight_id", "created_at"
                 ]
             )
             XCTAssertTrue(indexes.contains("idx_stream_threads_stream_updated"))
             XCTAssertTrue(indexes.contains("idx_ai_exchanges_thread"))
+            XCTAssertTrue(indexes.contains("idx_stream_thread_anchors_thread"))
+            XCTAssertTrue(indexes.contains("idx_stream_thread_anchors_span"))
             XCTAssertEqual(threadForeignKey?["table"] as String?, "stream_threads")
             XCTAssertEqual(threadForeignKey?["on_delete"] as String?, "SET NULL")
         }
@@ -1906,6 +1924,117 @@ final class StreamDocumentTests: XCTestCase {
                 XCTAssertEqual(error as? StreamThreadPersistenceError, .threadNotFound)
             }
             XCTAssertNil(try service.loadExchange(requestId: "foreign-thread"))
+        }
+    }
+
+    func test_sidenoteDocumentAnchorsAndPendingAnswerRoundTripAndDeleteTogether() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Power research")
+            try service.saveStream(stream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Power Guide.pdf",
+                fileType: .pdf,
+                bookmarkData: Data("power".utf8),
+                status: .ready
+            )
+            try service.saveSource(source)
+
+            let threadId = UUID()
+            let highlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 7,
+                rects: [PDFHighlightRect(page: 7, x: 1, y: 2, w: 3, h: 4)],
+                quote: "Sleep current is 12 uA.",
+                createdAt: Date(timeIntervalSince1970: 7_000)
+            )
+            let streamAnchor = StreamThreadAnchor(
+                anchorId: "stream-anchor",
+                threadId: threadId,
+                kind: .streamQuote,
+                quote: "The battery must last six months.",
+                anchorSpanId: "stream-span",
+                createdAt: Date(timeIntervalSince1970: 7_001)
+            )
+            let pdfAnchor = StreamThreadAnchor(
+                anchorId: "pdf-anchor",
+                threadId: threadId,
+                kind: .pdfQuote,
+                quote: highlight.quote,
+                sourceId: source.id,
+                highlightId: highlight.id,
+                createdAt: Date(timeIntervalSince1970: 7_002)
+            )
+            let docJSON = #"{"type":"doc","content":[{"type":"paragraph"}]}"#
+            let thread = StreamThread(
+                threadId: threadId,
+                streamId: stream.id,
+                title: "Battery life",
+                workingText: "Battery life",
+                docJSON: docJSON,
+                docFormatVersion: 1,
+                anchorText: streamAnchor.quote ?? "",
+                anchorSpanId: streamAnchor.anchorSpanId
+            )
+
+            try service.createStreamThread(
+                thread,
+                anchors: [streamAnchor, pdfAnchor],
+                pdfHighlights: [highlight]
+            )
+            XCTAssertEqual(
+                try service.loadStreamThreadAnchors(threadId: threadId, streamId: stream.id),
+                [streamAnchor, pdfAnchor]
+            )
+            XCTAssertEqual(
+                try service.loadStreamThread(threadId: threadId, streamId: stream.id)?.docJSON,
+                docJSON
+            )
+
+            let exchange = AIExchange(
+                requestId: "sidenote-answer",
+                streamId: stream.id,
+                threadId: threadId,
+                verb: "ask",
+                userInput: "Can this meet the target?",
+                responseRaw: "Only in the lowest-power mode.",
+                threadDisposition: "pending"
+            )
+            try service.saveExchange(exchange)
+            try service.setThreadExchangeDisposition(
+                requestId: exchange.requestId,
+                threadId: threadId,
+                streamId: stream.id,
+                disposition: "kept"
+            )
+            XCTAssertEqual(try service.loadExchange(requestId: exchange.requestId)?.threadDisposition, "kept")
+
+            let replacement = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Decision"}]}]}"#
+            let saved = try service.saveStreamThread(
+                threadId: threadId,
+                streamId: stream.id,
+                title: "Decision",
+                workingText: "Decision",
+                docJSON: replacement,
+                docFormatVersion: 1,
+                baseRevision: 0
+            )
+            XCTAssertEqual(saved.docJSON, replacement)
+            XCTAssertThrowsError(try service.saveStreamThread(
+                threadId: threadId,
+                streamId: stream.id,
+                title: "Invalid",
+                workingText: "Invalid",
+                docJSON: "not json",
+                docFormatVersion: 1,
+                baseRevision: saved.revision
+            ))
+
+            XCTAssertEqual(try service.deleteStreamThread(threadId: threadId, streamId: stream.id), [highlight.id])
+            XCTAssertNil(try service.loadStreamThread(threadId: threadId, streamId: stream.id))
+            XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
+            XCTAssertTrue(try service.loadPDFHighlights(sourceId: source.id).isEmpty)
         }
     }
 
@@ -2017,7 +2146,14 @@ final class StreamDocumentTests: XCTestCase {
                 sourceId: source.id,
                 highlightId: highlight.id
             )
-            try service.createStreamThread(thread)
+            let anchor = StreamThreadAnchor(
+                threadId: thread.threadId,
+                kind: .pdfQuote,
+                quote: highlight.quote,
+                sourceId: source.id,
+                highlightId: highlight.id
+            )
+            try service.createStreamThread(thread, anchors: [anchor])
 
             try service.deleteSource(id: source.id)
 
@@ -2028,6 +2164,12 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertNil(loaded.sourceId)
             XCTAssertNil(loaded.highlightId)
             XCTAssertEqual(loaded.anchorText, highlight.quote)
+            let staleAnchor = try XCTUnwrap(
+                service.loadStreamThreadAnchors(threadId: thread.threadId, streamId: stream.id).first
+            )
+            XCTAssertEqual(staleAnchor.quote, highlight.quote)
+            XCTAssertNil(staleAnchor.sourceId)
+            XCTAssertNil(staleAnchor.highlightId)
         }
     }
 
@@ -6302,7 +6444,7 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_v28MigrationBacksUpAndPreservesProductionShapedDatabase() throws {
+    func test_sidenoteMigrationsBackUpAndPreserveProductionShapedDatabase() throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -6346,14 +6488,16 @@ final class StreamDocumentTests: XCTestCase {
         service = nil
 
         // Turn the fresh database into the exact pre-v28 shape while preserving
-        // representative released data. Reopening it must exercise only v28.
+        // representative released data. Reopening it must exercise v28 and v29.
         var dbQueue: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
         try dbQueue?.write { db in
+            try db.execute(sql: "DROP TABLE stream_thread_anchors")
+            try db.execute(sql: "ALTER TABLE ai_exchanges DROP COLUMN thread_disposition")
             try db.execute(sql: "DROP INDEX idx_ai_exchanges_thread")
             try db.execute(sql: "ALTER TABLE ai_exchanges DROP COLUMN thread_id")
             try db.execute(sql: "DROP TABLE stream_threads")
             try db.execute(
-                sql: "DELETE FROM grdb_migrations WHERE identifier = 'v28_stream_threads'"
+                sql: "DELETE FROM grdb_migrations WHERE identifier IN ('v28_stream_threads', 'v29_sidenote_documents')"
             )
         }
         dbQueue = nil

@@ -101,6 +101,9 @@ enum StreamCodec {
         if let threadId = exchange.threadId {
             payload["threadId"] = threadId.uuidString
         }
+        if let disposition = exchange.threadDisposition {
+            payload["threadDisposition"] = disposition
+        }
         return payload
     }
 
@@ -108,7 +111,8 @@ enum StreamCodec {
         _ thread: StreamThread,
         source: SourceReference?,
         highlight: PDFHighlightRecord?,
-        exchanges: [AIExchange]?
+        exchanges: [AIExchange]?,
+        anchors: [[String: Any]] = []
     ) -> [String: Any] {
         let formatter = ISO8601DateFormatter()
         var payload: [String: Any] = [
@@ -121,12 +125,42 @@ enum StreamCodec {
             "createdAt": formatter.string(from: thread.createdAt),
             "updatedAt": formatter.string(from: thread.updatedAt)
         ]
+        if let docJSON = thread.docJSON, let docFormatVersion = thread.docFormatVersion {
+            payload["docJSON"] = docJSON
+            payload["docFormatVersion"] = docFormatVersion
+        }
+        payload["anchors"] = anchors
         if let exchanges {
             payload["exchanges"] = exchanges.map(encodeExchange)
         }
         if let anchorSpanId = thread.anchorSpanId {
             payload["anchorSpanId"] = anchorSpanId
         }
+        if let source {
+            payload["sourceId"] = source.id.uuidString
+            payload["sourceName"] = source.displayName
+            payload["sourceShortTitle"] = source.shortTitle
+        }
+        if let highlight {
+            payload["highlightId"] = highlight.id.uuidString
+            payload["sourcePage"] = highlight.page
+        }
+        return payload
+    }
+
+    static func encodeThreadAnchor(
+        _ anchor: StreamThreadAnchor,
+        source: SourceReference?,
+        highlight: PDFHighlightRecord?
+    ) -> [String: Any] {
+        var payload: [String: Any] = [
+            "anchorId": anchor.anchorId,
+            "threadId": anchor.threadId.uuidString,
+            "kind": anchor.kind.rawValue,
+            "createdAt": ISO8601DateFormatter().string(from: anchor.createdAt)
+        ]
+        if let quote = anchor.quote { payload["quote"] = quote }
+        if let anchorSpanId = anchor.anchorSpanId { payload["anchorSpanId"] = anchorSpanId }
         if let source {
             payload["sourceId"] = source.id.uuidString
             payload["sourceName"] = source.displayName

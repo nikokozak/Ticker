@@ -676,6 +676,51 @@ final class PersistenceService {
             """)
         }
 
+        migrator.registerMigration("v29_sidenote_documents") { db in
+            try db.execute(sql: """
+                ALTER TABLE stream_threads ADD COLUMN doc_json TEXT;
+                ALTER TABLE stream_threads ADD COLUMN doc_format_version INTEGER
+                    CHECK ((doc_json IS NULL) = (doc_format_version IS NULL));
+                ALTER TABLE ai_exchanges ADD COLUMN thread_disposition TEXT
+                    CHECK (thread_disposition IS NULL OR
+                           thread_disposition IN ('pending', 'kept', 'discarded'));
+
+                CREATE TABLE stream_thread_anchors (
+                    anchor_id      TEXT PRIMARY KEY,
+                    thread_id      TEXT NOT NULL REFERENCES stream_threads(thread_id)
+                                   ON DELETE CASCADE,
+                    kind           TEXT NOT NULL CHECK
+                                   (kind IN ('stream_quote', 'pdf_quote', 'placement')),
+                    quote          TEXT,
+                    anchor_span_id TEXT,
+                    source_id      TEXT REFERENCES sources(id) ON DELETE SET NULL,
+                    highlight_id   TEXT REFERENCES pdf_highlights(id) ON DELETE SET NULL,
+                    created_at     DOUBLE NOT NULL,
+                    CHECK (
+                        (kind = 'pdf_quote' AND quote IS NOT NULL
+                         AND anchor_span_id IS NULL) OR
+                        (kind = 'stream_quote' AND quote IS NOT NULL
+                         AND source_id IS NULL AND highlight_id IS NULL) OR
+                        (kind = 'placement' AND quote IS NULL AND anchor_span_id IS NOT NULL
+                         AND source_id IS NULL AND highlight_id IS NULL)
+                    )
+                );
+                CREATE INDEX idx_stream_thread_anchors_thread
+                    ON stream_thread_anchors(thread_id, created_at);
+                CREATE INDEX idx_stream_thread_anchors_span
+                    ON stream_thread_anchors(anchor_span_id);
+
+                INSERT INTO stream_thread_anchors
+                    (anchor_id, thread_id, kind, quote, anchor_span_id,
+                     source_id, highlight_id, created_at)
+                SELECT thread_id || ':legacy', thread_id,
+                       CASE WHEN source_id IS NOT NULL AND highlight_id IS NOT NULL
+                            THEN 'pdf_quote' ELSE 'stream_quote' END,
+                       anchor_text, anchor_span_id, source_id, highlight_id, created_at
+                FROM stream_threads;
+            """)
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -1558,8 +1603,13 @@ final class PersistenceService {
     // MARK: - Thread Operations
 
     @discardableResult
-    func createStreamThread(_ thread: StreamThread) throws -> StreamThread {
-        try dbQueue.write { db in
+    func createStreamThread(
+        _ thread: StreamThread,
+        anchors: [StreamThreadAnchor] = [],
+        pdfHighlights: [PDFHighlightRecord] = []
+    ) throws -> StreamThread {
+        try Self.validateThreadDocument(thread.docJSON, version: thread.docFormatVersion)
+        return try dbQueue.write { db in
             guard try Row.fetchOne(
                 db,
                 sql: "SELECT id FROM streams WHERE id = ?",
@@ -1567,20 +1617,29 @@ final class PersistenceService {
             ) != nil else {
                 throw StreamThreadPersistenceError.streamNotFound
             }
+            for highlight in pdfHighlights {
+                try savePDFHighlight(highlight, db: db)
+            }
             try validateThreadReferences(thread, db: db)
+            for anchor in anchors {
+                try validateThreadAnchor(anchor, thread: thread, db: db)
+            }
 
             try db.execute(
                 sql: """
                     INSERT INTO stream_threads
-                        (thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
-                         source_id, highlight_id, revision, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (thread_id, stream_id, title, working_text, doc_json, doc_format_version,
+                         anchor_text, anchor_span_id, source_id, highlight_id,
+                         revision, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
                     thread.threadId.uuidString,
                     thread.streamId.uuidString,
                     thread.title,
                     thread.workingText,
+                    thread.docJSON,
+                    thread.docFormatVersion,
                     thread.anchorText,
                     thread.anchorSpanId,
                     thread.sourceId?.uuidString,
@@ -1590,6 +1649,9 @@ final class PersistenceService {
                     thread.updatedAt.timeIntervalSince1970
                 ]
             )
+            for anchor in anchors {
+                try insertThreadAnchor(anchor, db: db)
+            }
             try db.execute(
                 // Thread work is Stream activity, so it may move the Stream up in
                 // the list, but a restored/imported timestamp must never move it back.
@@ -1606,7 +1668,8 @@ final class PersistenceService {
                 db,
                 sql: """
                     SELECT thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
-                           source_id, highlight_id, revision, created_at, updated_at
+                           source_id, highlight_id, revision, created_at, updated_at,
+                           doc_json, doc_format_version
                     FROM stream_threads
                     WHERE stream_id = ?
                     ORDER BY updated_at DESC, thread_id
@@ -1628,19 +1691,25 @@ final class PersistenceService {
         streamId: UUID,
         title: String,
         workingText: String,
+        docJSON: String? = nil,
+        docFormatVersion: Int? = nil,
         baseRevision: Int
     ) throws -> StreamThread {
-        try dbQueue.write { db in
+        try Self.validateThreadDocument(docJSON, version: docFormatVersion)
+        return try dbQueue.write { db in
             let updatedAt = Date()
             try db.execute(
                 sql: """
                     UPDATE stream_threads
-                    SET title = ?, working_text = ?, revision = revision + 1, updated_at = ?
+                    SET title = ?, working_text = ?, doc_json = ?, doc_format_version = ?,
+                        revision = revision + 1, updated_at = ?
                     WHERE thread_id = ? AND stream_id = ? AND revision = ?
                 """,
                 arguments: [
                     title,
                     workingText,
+                    docJSON,
+                    docFormatVersion,
                     updatedAt.timeIntervalSince1970,
                     threadId.uuidString,
                     streamId.uuidString,
@@ -1675,13 +1744,132 @@ final class PersistenceService {
                 db,
                 sql: """
                     SELECT request_id, stream_id, thread_id, verb, user_input,
-                           source_manifest, response_raw, model, created_at
+                           source_manifest, response_raw, model, thread_disposition, created_at
                     FROM ai_exchanges
                     WHERE thread_id = ? AND stream_id = ?
                     ORDER BY created_at, request_id
                 """,
                 arguments: [threadId.uuidString, streamId.uuidString]
             ).compactMap(Self.decodeExchange)
+        }
+    }
+
+    func loadStreamThreadAnchors(threadId: UUID, streamId: UUID) throws -> [StreamThreadAnchor] {
+        try dbQueue.read { db in
+            guard try fetchStreamThread(threadId: threadId, streamId: streamId, db: db) != nil else {
+                throw StreamThreadPersistenceError.threadNotFound
+            }
+            return try fetchThreadAnchors(threadId: threadId, db: db)
+        }
+    }
+
+    @discardableResult
+    func addStreamThreadAnchor(
+        _ anchor: StreamThreadAnchor,
+        streamId: UUID,
+        pdfHighlight: PDFHighlightRecord? = nil
+    ) throws -> StreamThreadAnchor {
+        try dbQueue.write { db in
+            guard let thread = try fetchStreamThread(
+                threadId: anchor.threadId,
+                streamId: streamId,
+                db: db
+            ) else {
+                throw StreamThreadPersistenceError.threadNotFound
+            }
+            if let pdfHighlight {
+                try savePDFHighlight(pdfHighlight, db: db)
+            }
+            try validateThreadAnchor(anchor, thread: thread, db: db)
+            try insertThreadAnchor(anchor, db: db)
+            let updatedAt = anchor.createdAt.timeIntervalSince1970
+            try db.execute(
+                sql: "UPDATE stream_threads SET updated_at = MAX(updated_at, ?) WHERE thread_id = ?",
+                arguments: [updatedAt, anchor.threadId.uuidString]
+            )
+            try db.execute(
+                sql: "UPDATE streams SET updated_at = MAX(updated_at, ?) WHERE id = ?",
+                arguments: [updatedAt, streamId.uuidString]
+            )
+            return anchor
+        }
+    }
+
+    @discardableResult
+    func removeStreamThreadAnchor(
+        anchorId: String,
+        threadId: UUID,
+        streamId: UUID
+    ) throws -> Bool {
+        try dbQueue.write { db in
+            guard try fetchStreamThread(threadId: threadId, streamId: streamId, db: db) != nil else {
+                throw StreamThreadPersistenceError.threadNotFound
+            }
+            let highlightId = try String.fetchOne(
+                db,
+                sql: "SELECT highlight_id FROM stream_thread_anchors WHERE anchor_id = ? AND thread_id = ?",
+                arguments: [anchorId, threadId.uuidString]
+            )
+            try db.execute(
+                sql: "DELETE FROM stream_thread_anchors WHERE anchor_id = ? AND thread_id = ?",
+                arguments: [anchorId, threadId.uuidString]
+            )
+            let removed = db.changesCount > 0
+            if let highlightId, let id = UUID(uuidString: highlightId) {
+                try deleteUnreferencedThreadHighlight(id, db: db)
+            }
+            return removed
+        }
+    }
+
+    func deleteStreamThread(threadId: UUID, streamId: UUID) throws -> [UUID] {
+        try dbQueue.write { db in
+            guard try fetchStreamThread(threadId: threadId, streamId: streamId, db: db) != nil else {
+                throw StreamThreadPersistenceError.threadNotFound
+            }
+            let highlightIds = try String.fetchAll(
+                db,
+                sql: """
+                    SELECT highlight_id FROM stream_thread_anchors
+                    WHERE thread_id = ? AND highlight_id IS NOT NULL
+                """,
+                arguments: [threadId.uuidString]
+            ).compactMap(UUID.init(uuidString:))
+            try db.execute(
+                sql: "DELETE FROM ai_exchanges WHERE thread_id = ? AND stream_id = ?",
+                arguments: [threadId.uuidString, streamId.uuidString]
+            )
+            try db.execute(
+                sql: "DELETE FROM stream_threads WHERE thread_id = ? AND stream_id = ?",
+                arguments: [threadId.uuidString, streamId.uuidString]
+            )
+            for highlightId in highlightIds {
+                try deleteUnreferencedThreadHighlight(highlightId, db: db)
+            }
+            return highlightIds
+        }
+    }
+
+    func setThreadExchangeDisposition(
+        requestId: String,
+        threadId: UUID,
+        streamId: UUID,
+        disposition: String
+    ) throws {
+        guard ["pending", "kept", "discarded"].contains(disposition) else {
+            throw StreamThreadPersistenceError.invalidDisposition
+        }
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE ai_exchanges SET thread_disposition = ?
+                    WHERE request_id = ? AND thread_id = ? AND stream_id = ?
+                """,
+                arguments: [disposition, requestId, threadId.uuidString, streamId.uuidString]
+            )
+            guard db.changesCount == 1 else {
+                throw StreamThreadPersistenceError.exchangeOutsideThread
+            }
         }
     }
 
@@ -1712,12 +1900,135 @@ final class PersistenceService {
         }
     }
 
+    private static func validateThreadDocument(_ docJSON: String?, version: Int?) throws {
+        guard docJSON != nil || version != nil else { return }
+        guard version == 1,
+              let data = docJSON?.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
+            throw PersistenceError.encodingFailed("Invalid sidenote document")
+        }
+    }
+
+    private func deleteUnreferencedThreadHighlight(_ highlightId: UUID, db: Database) throws {
+        let referenced = try Bool.fetchOne(
+            db,
+            sql: """
+                SELECT EXISTS (
+                    SELECT 1 FROM stream_thread_anchors WHERE highlight_id = ?
+                    UNION ALL
+                    SELECT 1 FROM stream_threads WHERE highlight_id = ?
+                )
+            """,
+            arguments: [highlightId.uuidString, highlightId.uuidString]
+        ) ?? false
+        if !referenced {
+            try db.execute(sql: "DELETE FROM pdf_highlights WHERE id = ?", arguments: [highlightId.uuidString])
+        }
+    }
+
+    private func validateThreadAnchor(
+        _ anchor: StreamThreadAnchor,
+        thread: StreamThread,
+        db: Database
+    ) throws {
+        guard anchor.threadId == thread.threadId else {
+            throw StreamThreadPersistenceError.anchorOutsideThread
+        }
+        switch anchor.kind {
+        case .streamQuote:
+            guard anchor.quote != nil, anchor.sourceId == nil, anchor.highlightId == nil else {
+                throw StreamThreadPersistenceError.invalidAnchor
+            }
+        case .placement:
+            guard anchor.quote == nil, anchor.anchorSpanId?.isEmpty == false,
+                  anchor.sourceId == nil, anchor.highlightId == nil else {
+                throw StreamThreadPersistenceError.invalidAnchor
+            }
+        case .pdfQuote:
+            guard let sourceId = anchor.sourceId,
+                  let highlightId = anchor.highlightId,
+                  anchor.quote != nil,
+                  anchor.anchorSpanId == nil else {
+                throw StreamThreadPersistenceError.invalidAnchor
+            }
+            let sourceStreamId = try String.fetchOne(
+                db,
+                sql: "SELECT stream_id FROM sources WHERE id = ?",
+                arguments: [sourceId.uuidString]
+            )
+            guard sourceStreamId == thread.streamId.uuidString else {
+                throw StreamThreadPersistenceError.sourceOutsideStream
+            }
+            let highlightSourceId = try String.fetchOne(
+                db,
+                sql: "SELECT source_id FROM pdf_highlights WHERE id = ?",
+                arguments: [highlightId.uuidString]
+            )
+            guard highlightSourceId == sourceId.uuidString else {
+                throw StreamThreadPersistenceError.highlightOutsideSource
+            }
+        }
+    }
+
+    private func insertThreadAnchor(_ anchor: StreamThreadAnchor, db: Database) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO stream_thread_anchors
+                    (anchor_id, thread_id, kind, quote, anchor_span_id,
+                     source_id, highlight_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            arguments: [
+                anchor.anchorId,
+                anchor.threadId.uuidString,
+                anchor.kind.rawValue,
+                anchor.quote,
+                anchor.anchorSpanId,
+                anchor.sourceId?.uuidString,
+                anchor.highlightId?.uuidString,
+                anchor.createdAt.timeIntervalSince1970
+            ]
+        )
+    }
+
+    private func fetchThreadAnchors(threadId: UUID, db: Database) throws -> [StreamThreadAnchor] {
+        try Row.fetchAll(
+            db,
+            sql: """
+                SELECT anchor_id, thread_id, kind, quote, anchor_span_id,
+                       source_id, highlight_id, created_at
+                FROM stream_thread_anchors
+                WHERE thread_id = ?
+                ORDER BY created_at, anchor_id
+            """,
+            arguments: [threadId.uuidString]
+        ).compactMap { row in
+            guard let threadId = UUID(uuidString: row["thread_id"]),
+                  let kind = StreamThreadAnchorKind(rawValue: row["kind"]) else {
+                return nil
+            }
+            let sourceIdRaw: String? = row["source_id"]
+            let highlightIdRaw: String? = row["highlight_id"]
+            return StreamThreadAnchor(
+                anchorId: row["anchor_id"],
+                threadId: threadId,
+                kind: kind,
+                quote: row["quote"],
+                anchorSpanId: row["anchor_span_id"],
+                sourceId: sourceIdRaw.flatMap(UUID.init(uuidString:)),
+                highlightId: highlightIdRaw.flatMap(UUID.init(uuidString:)),
+                createdAt: Date(timeIntervalSince1970: row["created_at"])
+            )
+        }
+    }
+
     private func fetchStreamThread(threadId: UUID, streamId: UUID, db: Database) throws -> StreamThread? {
         try Row.fetchOne(
             db,
             sql: """
                 SELECT thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
-                       source_id, highlight_id, revision, created_at, updated_at
+                       source_id, highlight_id, revision, created_at, updated_at,
+                       doc_json, doc_format_version
                 FROM stream_threads
                 WHERE thread_id = ? AND stream_id = ?
             """,
@@ -1737,6 +2048,8 @@ final class PersistenceService {
             streamId: streamId,
             title: row["title"],
             workingText: row["working_text"],
+            docJSON: row["doc_json"],
+            docFormatVersion: row["doc_format_version"],
             anchorText: row["anchor_text"],
             anchorSpanId: row["anchor_span_id"],
             sourceId: sourceIdRaw.flatMap(UUID.init(uuidString:)),
@@ -1767,7 +2080,7 @@ final class PersistenceService {
                 db,
                 sql: """
                     SELECT request_id, stream_id, thread_id, verb, user_input,
-                           source_manifest, response_raw, model, created_at
+                           source_manifest, response_raw, model, thread_disposition, created_at
                     FROM ai_exchanges
                     WHERE request_id = ?
                 """,
@@ -1796,8 +2109,9 @@ final class PersistenceService {
         try db.execute(
             sql: """
                 INSERT INTO ai_exchanges
-                    (request_id, stream_id, thread_id, verb, user_input, source_manifest, response_raw, model, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (request_id, stream_id, thread_id, verb, user_input, source_manifest,
+                     response_raw, model, thread_disposition, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(request_id) DO UPDATE SET
                     stream_id = excluded.stream_id,
                     thread_id = excluded.thread_id,
@@ -1806,6 +2120,7 @@ final class PersistenceService {
                     source_manifest = excluded.source_manifest,
                     response_raw = excluded.response_raw,
                     model = excluded.model,
+                    thread_disposition = excluded.thread_disposition,
                     created_at = excluded.created_at
             """,
             arguments: [
@@ -1817,6 +2132,7 @@ final class PersistenceService {
                 exchange.sourceManifest,
                 exchange.responseRaw,
                 exchange.model,
+                exchange.threadDisposition,
                 exchange.createdAt.timeIntervalSince1970
             ]
         )
@@ -1848,6 +2164,7 @@ final class PersistenceService {
             sourceManifest: row["source_manifest"],
             responseRaw: row["response_raw"],
             model: row["model"],
+            threadDisposition: row["thread_disposition"],
             createdAt: Date(timeIntervalSince1970: row["created_at"])
         )
     }
@@ -2398,33 +2715,37 @@ final class PersistenceService {
     // MARK: - PDF Highlight Operations
 
     func savePDFHighlight(_ highlight: PDFHighlightRecord) throws {
+        try dbQueue.write { db in
+            try savePDFHighlight(highlight, db: db)
+        }
+    }
+
+    private func savePDFHighlight(_ highlight: PDFHighlightRecord, db: Database) throws {
         let rectsData = try JSONEncoder().encode(highlight.rects)
         guard let rectsJSON = String(data: rectsData, encoding: .utf8) else {
             throw PersistenceError.encodingFailed("Could not encode PDF highlight rects.")
         }
 
-        try dbQueue.write { db in
-            try db.execute(
-                sql: """
-                    INSERT INTO pdf_highlights (id, source_id, page, rects_json, quote, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        source_id = excluded.source_id,
-                        page = excluded.page,
-                        rects_json = excluded.rects_json,
-                        quote = excluded.quote,
-                        created_at = excluded.created_at
-                """,
-                arguments: [
-                    highlight.id.uuidString,
-                    highlight.sourceId.uuidString,
-                    highlight.page,
-                    rectsJSON,
-                    highlight.quote,
-                    Self.pdfHighlightDateFormatter.string(from: highlight.createdAt)
-                ]
-            )
-        }
+        try db.execute(
+            sql: """
+                INSERT INTO pdf_highlights (id, source_id, page, rects_json, quote, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    source_id = excluded.source_id,
+                    page = excluded.page,
+                    rects_json = excluded.rects_json,
+                    quote = excluded.quote,
+                    created_at = excluded.created_at
+            """,
+            arguments: [
+                highlight.id.uuidString,
+                highlight.sourceId.uuidString,
+                highlight.page,
+                rectsJSON,
+                highlight.quote,
+                Self.pdfHighlightDateFormatter.string(from: highlight.createdAt)
+            ]
+        )
     }
 
     @discardableResult

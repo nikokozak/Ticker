@@ -5,6 +5,7 @@ import type {
   ProvenanceSpanJSON,
   StreamAppendInboxJSON,
   StreamThreadJSON,
+  StreamThreadAnchorJSON,
 } from './models';
 
 /** Message structure for Swift ↔ JS communication */
@@ -74,6 +75,10 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'loadStreams',
   'listStreamThreads',
   'createStreamThread',
+  'addStreamThreadAnchor',
+  'removeStreamThreadAnchor',
+  'deleteStreamThread',
+  'setThreadExchangeDisposition',
   'loadStreamThread',
   'getExchange',
   'openExternalURL',
@@ -247,11 +252,26 @@ export function updateMarginNote(payload: UpdateMarginNotePayload): void {
 
 export interface CreateStreamThreadInput {
   streamId: string;
+  threadId?: string;
   title?: string;
+  workingText?: string;
+  docJSON?: string;
+  docFormatVersion?: number;
   anchorText: string;
   anchorSpanId?: string;
   sourceId?: string;
   highlightId?: string;
+  anchors?: Array<{
+    anchorId: string;
+    kind: StreamThreadAnchorJSON['kind'];
+    quote?: string;
+    anchorSpanId?: string;
+    sourceId?: string;
+    highlightId?: string;
+    createdAt?: string;
+    page?: number;
+    rects?: Array<{ page: number; x: number; y: number; w: number; h: number }>;
+  }>;
 }
 
 export function listStreamThreads(streamId: string): Promise<{ threads: StreamThreadJSON[] }> {
@@ -261,11 +281,16 @@ export function listStreamThreads(streamId: string): Promise<{ threads: StreamTh
 export function createStreamThread(input: CreateStreamThreadInput): Promise<{ thread: StreamThreadJSON }> {
   return bridge.sendAsync('createStreamThread', {
     streamId: input.streamId,
+    threadId: input.threadId ?? '',
     title: input.title ?? '',
+    workingText: input.workingText ?? '',
+    docJSON: input.docJSON,
+    docFormatVersion: input.docFormatVersion,
     anchorText: input.anchorText,
     anchorSpanId: input.anchorSpanId ?? '',
     sourceId: input.sourceId ?? '',
     highlightId: input.highlightId ?? '',
+    anchors: input.anchors ?? [],
   });
 }
 
@@ -281,6 +306,8 @@ export function saveStreamThread(input: {
   threadId: string;
   title: string;
   workingText: string;
+  docJSON?: string;
+  docFormatVersion?: number;
   baseRevision: number;
 }): Promise<{ conflict: boolean; thread: StreamThreadJSON }> {
   return bridge.sendAsync('saveStreamThread', {
@@ -288,7 +315,57 @@ export function saveStreamThread(input: {
     threadId: input.threadId,
     title: input.title,
     workingText: input.workingText,
+    docJSON: input.docJSON,
+    docFormatVersion: input.docFormatVersion,
     baseRevision: input.baseRevision,
+  });
+}
+
+export function addStreamThreadAnchor(input: {
+  streamId: string;
+  threadId: string;
+  anchor: NonNullable<CreateStreamThreadInput['anchors']>[number];
+}): Promise<{ anchor: StreamThreadAnchorJSON }> {
+  return bridge.sendAsync('addStreamThreadAnchor', {
+    streamId: input.streamId,
+    threadId: input.threadId,
+    anchors: [input.anchor],
+  });
+}
+
+export function removeStreamThreadAnchor(input: {
+  streamId: string;
+  threadId: string;
+  anchorId: string;
+}): Promise<{ removed: boolean }> {
+  return bridge.sendAsync('removeStreamThreadAnchor', {
+    streamId: input.streamId,
+    threadId: input.threadId,
+    anchorId: input.anchorId,
+  });
+}
+
+export function deleteStreamThread(input: {
+  streamId: string;
+  threadId: string;
+}): Promise<{ highlightIds: string[] }> {
+  return bridge.sendAsync('deleteStreamThread', {
+    streamId: input.streamId,
+    threadId: input.threadId,
+  });
+}
+
+export function setThreadExchangeDisposition(input: {
+  streamId: string;
+  threadId: string;
+  requestId: string;
+  disposition: 'pending' | 'kept' | 'discarded';
+}): Promise<{ saved: boolean }> {
+  return bridge.sendAsync('setThreadExchangeDisposition', {
+    streamId: input.streamId,
+    threadId: input.threadId,
+    requestId: input.requestId,
+    disposition: input.disposition,
   });
 }
 

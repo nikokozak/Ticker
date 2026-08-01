@@ -46,6 +46,7 @@ struct AIExchange: Codable, Equatable {
     let sourceManifest: String
     let responseRaw: String
     let model: String?
+    let threadDisposition: String?
     let createdAt: Date
 
     init(
@@ -57,6 +58,7 @@ struct AIExchange: Codable, Equatable {
         sourceManifest: String = "[]",
         responseRaw: String,
         model: String? = nil,
+        threadDisposition: String? = nil,
         createdAt: Date = Date()
     ) {
         self.requestId = requestId
@@ -67,6 +69,7 @@ struct AIExchange: Codable, Equatable {
         self.sourceManifest = sourceManifest
         self.responseRaw = responseRaw
         self.model = model
+        self.threadDisposition = threadDisposition
         self.createdAt = createdAt
     }
 }

@@ -213,6 +213,23 @@
       },
       "createStreamThread": {
         "requiredPayloadKeys": ["streamId", "title", "anchorText", "anchorSpanId", "sourceId", "highlightId"],
+        "optionalPayloadKeys": ["threadId", "workingText", "docJSON", "docFormatVersion", "anchors"],
+        "requiredCallbackId": true
+      },
+      "addStreamThreadAnchor": {
+        "requiredPayloadKeys": ["streamId", "threadId", "anchors"],
+        "requiredCallbackId": true
+      },
+      "removeStreamThreadAnchor": {
+        "requiredPayloadKeys": ["streamId", "threadId", "anchorId"],
+        "requiredCallbackId": true
+      },
+      "deleteStreamThread": {
+        "requiredPayloadKeys": ["streamId", "threadId"],
+        "requiredCallbackId": true
+      },
+      "setThreadExchangeDisposition": {
+        "requiredPayloadKeys": ["streamId", "threadId", "requestId", "disposition"],
         "requiredCallbackId": true
       },
       "loadStreamThread": {
@@ -279,6 +296,7 @@
       },
       "saveStreamThread": {
         "requiredPayloadKeys": ["streamId", "threadId", "title", "workingText", "baseRevision"],
+        "optionalPayloadKeys": ["docJSON", "docFormatVersion"],
         "requiredCallbackId": true
       },
       "saveScrollPosition": {

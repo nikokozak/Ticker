@@ -1,10 +1,51 @@
 import Foundation
 
+enum StreamThreadAnchorKind: String, Codable {
+    case streamQuote = "stream_quote"
+    case pdfQuote = "pdf_quote"
+    case placement
+}
+
+struct StreamThreadAnchor: Codable, Equatable, Identifiable {
+    let anchorId: String
+    let threadId: UUID
+    let kind: StreamThreadAnchorKind
+    let quote: String?
+    let anchorSpanId: String?
+    let sourceId: UUID?
+    let highlightId: UUID?
+    let createdAt: Date
+
+    var id: String { anchorId }
+
+    init(
+        anchorId: String = UUID().uuidString,
+        threadId: UUID,
+        kind: StreamThreadAnchorKind,
+        quote: String? = nil,
+        anchorSpanId: String? = nil,
+        sourceId: UUID? = nil,
+        highlightId: UUID? = nil,
+        createdAt: Date = Date()
+    ) {
+        self.anchorId = anchorId
+        self.threadId = threadId
+        self.kind = kind
+        self.quote = quote
+        self.anchorSpanId = anchorSpanId
+        self.sourceId = sourceId
+        self.highlightId = highlightId
+        self.createdAt = createdAt
+    }
+}
+
 struct StreamThread: Codable, Equatable, Identifiable {
     let threadId: UUID
     let streamId: UUID
     var title: String
     var workingText: String
+    var docJSON: String?
+    var docFormatVersion: Int?
     let anchorText: String
     let anchorSpanId: String?
     let sourceId: UUID?
@@ -20,6 +61,8 @@ struct StreamThread: Codable, Equatable, Identifiable {
         streamId: UUID,
         title: String = "",
         workingText: String = "",
+        docJSON: String? = nil,
+        docFormatVersion: Int? = nil,
         anchorText: String = "",
         anchorSpanId: String? = nil,
         sourceId: UUID? = nil,
@@ -32,6 +75,8 @@ struct StreamThread: Codable, Equatable, Identifiable {
         self.streamId = streamId
         self.title = title
         self.workingText = workingText
+        self.docJSON = docJSON
+        self.docFormatVersion = docFormatVersion
         self.anchorText = anchorText
         self.anchorSpanId = anchorSpanId
         self.sourceId = sourceId
@@ -51,6 +96,10 @@ enum StreamThreadPersistenceError: LocalizedError, Equatable {
     case threadNotFound
     case sourceOutsideStream
     case highlightOutsideSource
+    case anchorOutsideThread
+    case invalidAnchor
+    case exchangeOutsideThread
+    case invalidDisposition
 
     var errorDescription: String? {
         switch self {
@@ -62,6 +111,14 @@ enum StreamThreadPersistenceError: LocalizedError, Equatable {
             return "The source does not belong to this Stream."
         case .highlightOutsideSource:
             return "The PDF highlight does not belong to this source."
+        case .anchorOutsideThread:
+            return "The anchor does not belong to this sidenote."
+        case .invalidAnchor:
+            return "The sidenote anchor is invalid."
+        case .exchangeOutsideThread:
+            return "The AI answer does not belong to this sidenote."
+        case .invalidDisposition:
+            return "The AI answer state is invalid."
         }
     }
 }

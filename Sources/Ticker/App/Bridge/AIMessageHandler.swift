@@ -623,7 +623,8 @@ final class AIMessageHandler: BridgeMessageHandler {
                 userInput: query,
                 sourceManifest: facts.jsonString,
                 responseRaw: responseRaw,
-                model: selectedModel
+                model: selectedModel,
+                threadDisposition: "pending"
             )
             do {
                 try persistence.saveExchange(exchange)

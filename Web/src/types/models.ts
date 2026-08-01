@@ -83,7 +83,31 @@ export interface AIExchangeJSON {
   sourceManifest: string;
   responseRaw: string;
   model?: string | null;
+  threadDisposition?: 'pending' | 'kept' | 'discarded' | null;
   createdAt: string;
+}
+
+export interface StreamThreadAnchorJSON {
+  anchorId: string;
+  threadId: string;
+  kind: 'stream_quote' | 'pdf_quote' | 'placement';
+  quote?: string;
+  anchorSpanId?: string;
+  sourceId?: string;
+  sourceName?: string;
+  sourceShortTitle?: string;
+  highlightId?: string;
+  sourcePage?: number;
+  createdAt: string;
+}
+
+export interface ProvisionalPDFHighlightJSON {
+  highlightId: string;
+  sourceId: string;
+  page: number;
+  quote: string;
+  createdAt: string;
+  rects: Array<{ page: number; x: number; y: number; w: number; h: number }>;
 }
 
 export interface StreamThreadJSON {
@@ -91,6 +115,8 @@ export interface StreamThreadJSON {
   streamId: string;
   title: string;
   workingText: string;
+  docJSON?: string;
+  docFormatVersion?: number;
   anchorText: string;
   anchorSpanId?: string;
   sourceId?: string;
@@ -101,6 +127,7 @@ export interface StreamThreadJSON {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  anchors?: StreamThreadAnchorJSON[];
   exchanges?: AIExchangeJSON[];
 }
 
