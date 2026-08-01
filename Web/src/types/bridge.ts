@@ -254,6 +254,8 @@ export function createStreamThread(input: {
   anchorStart: number;
   anchorEnd: number;
   anchorText: string;
+  sourceId?: string;
+  highlightId?: string;
 }): Promise<{ thread: StreamThreadJSON }> {
   return bridge.sendAsync('createStreamThread', {
     streamId: input.streamId,
@@ -261,6 +263,8 @@ export function createStreamThread(input: {
     anchorStart: input.anchorStart,
     anchorEnd: input.anchorEnd,
     anchorText: input.anchorText,
+    sourceId: input.sourceId,
+    highlightId: input.highlightId,
   });
 }
 

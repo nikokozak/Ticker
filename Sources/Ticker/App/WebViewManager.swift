@@ -174,9 +174,19 @@ final class WebViewManager: NSObject {
         }
         pdfPaneController.onDiscussSelection = { [weak self] payload in
             guard let self else { return false }
-            // The highlight is provisional; C0's web surface immediately removes it.
-            self.sendPDFThreadRequested(payload)
-            return true
+            guard let persistence = self.persistence else {
+                self.sendSourceError("Could not save PDF highlight.")
+                return false
+            }
+            do {
+                try persistence.savePDFHighlight(payload.highlight)
+                self.sendPDFThreadRequested(payload)
+                return true
+            } catch {
+                DebugLog.log("[WebViewManager] Failed to save PDF highlight (\(DebugLog.errorSummary(error)))")
+                self.sendSourceError("Could not save PDF highlight.")
+                return false
+            }
         }
         pdfPaneController.onAnchorPlaced = { [weak self] payload in
             guard let self else { return false }

@@ -27,12 +27,14 @@ export function buildTickerPDFLinkURL(args: { sourceId: string; highlightId: str
 }
 
 export function buildPDFQuoteSnippet(args: { quote: string; linkLabel: string; linkURL: string }): string {
-  const quote = args.quote.trim().replace(/\s+/g, ' ');
+  const quote = args.quote.trim().replace(/\s+/g, ' ')
+    .replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, '\\$&');
   const linkLabel = args.linkLabel
     .replace(/\\/g, '\\\\')
     .replace(/\[/g, '\\[')
     .replace(/\]/g, '\\]');
-  return `\n${quote ? `> ${quote}\n` : ''}[${linkLabel}](${args.linkURL})\n`;
+  const link = `[${linkLabel}](${args.linkURL})`;
+  return `\n${quote ? `> ${quote} ${link}` : link}\n`;
 }
 
 export function beginPDFAnchorPick(streamId: string): void {

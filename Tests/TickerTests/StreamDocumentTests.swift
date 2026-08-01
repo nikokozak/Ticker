@@ -2373,6 +2373,23 @@ final class StreamDocumentTests: XCTestCase {
             let otherStream = Stream(title: "Other bridge stream")
             try service.saveStream(stream)
             try service.saveStream(otherStream)
+            let source = SourceReference(
+                streamId: stream.id,
+                displayName: "Paper.pdf",
+                fileType: .pdf,
+                bookmarkData: Data("paper".utf8),
+                status: .ready
+            )
+            try service.saveSource(source)
+            let highlight = PDFHighlightRecord(
+                id: UUID(),
+                sourceId: source.id,
+                page: 4,
+                rects: [PDFHighlightRect(page: 4, x: 1, y: 2, w: 3, h: 4)],
+                quote: "Quoted evidence",
+                createdAt: Date(timeIntervalSince1970: 6_000)
+            )
+            try service.savePDFHighlight(highlight)
             let docJSON = #"{"type":"doc","content":[{"type":"paragraph"}]}"#
             let thread = StreamThread(
                 streamId: stream.id,
@@ -2431,10 +2448,34 @@ final class StreamDocumentTests: XCTestCase {
                 type: "createStreamThread",
                 payload: [
                     "streamId": AnyCodable(stream.id.uuidString),
+                    "title": AnyCodable("Quoted evidence"),
+                    "anchorStart": AnyCodable(1),
+                    "anchorEnd": AnyCodable(20),
+                    "anchorText": AnyCodable("Quoted evidence Paper p.4"),
+                    "sourceId": AnyCodable(source.id.uuidString),
+                    "highlightId": AnyCodable(highlight.id.uuidString)
+                ],
+                callbackId: "create-pdf"
+            ))
+            let pdfCreateResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "create-pdf" }
+            )
+            let pdfThread = try XCTUnwrap(pdfCreateResponse.payload?["thread"]?.value as? [String: Any])
+            XCTAssertEqual(pdfThread["sourceId"] as? String, source.id.uuidString)
+            XCTAssertEqual(pdfThread["highlightId"] as? String, highlight.id.uuidString)
+            XCTAssertEqual(pdfThread["sourcePage"] as? Int, 4)
+            XCTAssertEqual((pdfThread["anchors"] as? [[String: Any]])?.count, 0)
+
+            await handler.handle(BridgeMessage(
+                type: "createStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
                     "title": AnyCodable("Does this hold?"),
                     "anchorStart": AnyCodable(1),
                     "anchorEnd": AnyCodable(12),
-                    "anchorText": AnyCodable("Power budget")
+                    "anchorText": AnyCodable("Power budget"),
+                    "sourceId": AnyCodable(NSNull()),
+                    "highlightId": AnyCodable(NSNull())
                 ],
                 callbackId: "create"
             ))

@@ -8,12 +8,14 @@ import {
   applyAIMarkdown,
   focusAtEnd,
   insertImage,
+  promoteConversationMarkdown,
   removePDFHighlightLink,
   selectedPDFHighlight,
   selectText,
   setImageWidth,
   streamAIMarkdown,
 } from './operations';
+import { provenanceSpans } from './provenance';
 
 /**
  * ProseMirror measures the DOM to scroll a selection into view, and jsdom
@@ -130,6 +132,48 @@ describe('applying what the AI wrote', () => {
     applyAIMarkdown(ed.view, find(ed, 'Two.'), 'AI text.');
     expect(ed.getMarkdownProjection()).toBe('One. AI text. Three.');
     expect(ed.getMarkdownProjection()).not.toMatch(/richtext-ai-written|<span/);
+  });
+});
+
+describe('promoting a conversation answer', () => {
+  it('isolates adjacent typing and undo removes both the promotion and its AI provenance', () => {
+    const ed = open('Anchor block.\n\nAfter.');
+    const before = ed.getDocumentJSON();
+    const anchor = find(ed, 'Anchor block.');
+    const inserted = promoteConversationMarkdown(
+      ed.view,
+      ed.view.state.doc.resolve(anchor.from).after(1),
+      'First **paragraph**.\n\nSecond [citation](https://example.test).',
+      {
+        requestId: 'conversation-request',
+        model: 'test-model',
+        verb: 'thread',
+        threadId: 'thread-1',
+      },
+    );
+
+    expect(ed.getMarkdownProjection()).toBe(
+      'Anchor block.\n\nFirst **paragraph**.\n\nSecond [citation](https://example.test).\n\nAfter.',
+    );
+    expect(provenanceSpans(ed.view.state)).toEqual([
+      expect.objectContaining({
+        from: inserted.from,
+        to: inserted.to,
+        origin: 'ai',
+        requestId: 'conversation-request',
+        meta: { model: 'test-model', verb: 'thread', threadId: 'thread-1' },
+      }),
+    ]);
+    const promoted = ed.getDocumentJSON();
+    const after = find(ed, 'After.');
+    ed.view.dispatch(ed.view.state.tr.insertText(' typed', after.to));
+
+    undo(ed);
+    expect(ed.getDocumentJSON()).toBe(promoted);
+    expect(provenanceSpans(ed.view.state)).toHaveLength(1);
+    undo(ed);
+    expect(ed.getDocumentJSON()).toBe(before);
+    expect(provenanceSpans(ed.view.state)).toEqual([]);
   });
 });
 

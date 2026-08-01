@@ -178,6 +178,7 @@
       },
       "createStreamThread": {
         "requiredPayloadKeys": ["streamId", "title", "anchorStart", "anchorEnd", "anchorText"],
+        "optionalPayloadKeys": ["sourceId", "highlightId"],
         "requiredCallbackId": true
       },
       "createStream": {

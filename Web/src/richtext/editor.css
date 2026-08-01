@@ -225,19 +225,24 @@
   color: var(--text-faint);
 }
 
-.conversation-turn-copy {
+.conversation-turn-controls {
+  display: flex;
+  gap: var(--space-2);
+  opacity: 0;
+}
+
+.conversation-turn-controls button {
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--text-muted);
   font: inherit;
   font-size: var(--type-ui-caption);
-  opacity: 0;
   cursor: pointer;
 }
 
-.conversation-turn:hover .conversation-turn-copy,
-.conversation-turn-copy:focus-visible {
+.conversation-turn:hover .conversation-turn-controls,
+.conversation-turn-controls:focus-within {
   opacity: 1;
 }
 

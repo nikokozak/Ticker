@@ -156,6 +156,20 @@ export function conversationRenderPosition(
   return textBlockAt(doc, anchor.to - 1)?.to ?? null;
 }
 
+/** Keep a surface outside a containing quote so the conversation is not quoted too. */
+export function conversationSurfacePosition(
+  doc: ProseNode,
+  anchor: ConversationAnchor,
+): number | null {
+  const fallback = conversationRenderPosition(doc, anchor);
+  if (fallback === null) return null;
+  const $to = doc.resolve(anchor.to - 1);
+  for (let depth = $to.depth; depth > 0; depth -= 1) {
+    if ($to.node(depth).type.name === 'blockquote') return $to.after(depth);
+  }
+  return fallback;
+}
+
 export function conversationAnchorText(doc: ProseNode, anchor: ConversationAnchor): string {
   return anchor.from >= anchor.to ? '' : doc.textBetween(anchor.from, anchor.to, '\n', '\n');
 }
@@ -367,7 +381,7 @@ export function conversationAnchorField(
         const field = conversationAnchorKey.getState(view.state);
         const surface = field?.surface;
         const position = surface && (surface.renderAt
-          ?? conversationRenderPosition(view.state.doc, surface.anchor));
+          ?? conversationSurfacePosition(view.state.doc, surface.anchor));
         if (position !== null && position !== undefined && view.state.selection.empty) {
           const block = textBlockAt(view.state.doc, view.state.selection.head);
           const direction = event.key === 'ArrowDown' && block?.to === position
@@ -409,7 +423,7 @@ export function conversationAnchorField(
         ));
         const surface = field.surface;
         const position = surface && (surface.renderAt
-          ?? conversationRenderPosition(state.doc, surface.anchor)
+          ?? conversationSurfacePosition(state.doc, surface.anchor)
           ?? state.doc.content.size);
         if (surface && position !== null) {
           decorations.push(Decoration.widget(position, () => {

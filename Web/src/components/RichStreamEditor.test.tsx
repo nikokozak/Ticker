@@ -2,6 +2,7 @@
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { EditorView } from 'prosemirror-view';
+import { TextSelection } from 'prosemirror-state';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bridge,
@@ -586,7 +587,7 @@ describe('RichStreamEditor inline conversations', () => {
     });
   });
 
-  it('opens a persisted glyph in place and restores its saved turns', async () => {
+  it('promotes saved turns in order with citation links and visible AI provenance', async () => {
     const updatedAt = new Date().toISOString();
     const anchored: Stream = {
       ...stream,
@@ -629,8 +630,23 @@ describe('RichStreamEditor inline conversations', () => {
               threadId: 'thread-existing',
               verb: 'thread',
               userInput: 'Why?',
+              sourceManifest: JSON.stringify([{
+                n: 1,
+                sourceId: 'source-1',
+                shortTitle: 'Paper',
+                page: 4,
+                chunkId: 'chunk-1',
+              }]),
+              responseRaw: 'Because.【1|"support"】',
+              createdAt: updatedAt,
+            }, {
+              requestId: 'exchange-2',
+              streamId: anchored.id,
+              threadId: 'thread-existing',
+              verb: 'thread',
+              userInput: 'And then?',
               sourceManifest: '[]',
-              responseRaw: 'Because.',
+              responseRaw: 'Second reply.',
               createdAt: updatedAt,
             }],
           },
@@ -664,6 +680,23 @@ describe('RichStreamEditor inline conversations', () => {
     await act(async () => { editor().dispatchEvent(tab); });
     expect(tab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(document.querySelector('.conversation-composer'));
+
+    const promote = [...document.querySelectorAll<HTMLButtonElement>('button')]
+      .filter((button) => button.textContent === '↑ Add to Stream');
+    expect(promote).toHaveLength(2);
+    await act(async () => { promote[0].click(); });
+    await act(async () => { promote[1].click(); });
+    expect([...editor().querySelectorAll('p')].map((node) => node.textContent)).toEqual([
+      'Original paragraph.',
+      'Because. p.4',
+      'Second reply.',
+      'Following paragraph.',
+    ]);
+    expect(editor().querySelector('a')?.getAttribute('href'))
+      .toBe('ticker-pdf://source-1?page=4&chunk=chunk-1&q=support');
+    await toggleXray();
+    expect([...document.querySelectorAll('.richtext-provenance')].map((node) => node.textContent))
+      .toEqual(['Because. ', 'p.4', 'Second reply.']);
   });
 
   it('persists pin and unpin across conversation reloads', async () => {
@@ -2751,12 +2784,79 @@ describe('RichStreamEditor PDF anchor placement', () => {
 });
 
 describe('RichStreamEditor PDF highlight links', () => {
-  it('cleans up a requested discussion while inline conversations are unavailable', async () => {
+  it('saves before create, undo detaches exactly, and redo keeps the conversation at document end', async () => {
+    const updatedAt = new Date().toISOString();
+    const quotedStream: Stream = {
+      ...stream,
+      id: 'quote-discuss-stream',
+      document: {
+        ...stream.document,
+        streamId: 'quote-discuss-stream',
+        docJSON: docJSON('First paragraph.\n\nLast paragraph.'),
+        markdown: 'First paragraph.\n\nLast paragraph.',
+      },
+    };
+    const beforeDocument = quotedStream.document!.docJSON!;
+    await renderStream(quotedStream);
+    await selectEditorText('First paragraph.');
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      updateState.call(this, state);
+    });
+    let pdfThread: StreamThreadJSON | undefined;
+    const bridgeOrder: string[] = [];
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      bridgeOrder.push(type);
+      if (type === 'loadStreamThread') return { thread: pdfThread! };
+      if (type === 'listConversations') return {
+        conversations: [{
+          threadId: 'pdf-thread',
+          anchorStart: null,
+          anchorEnd: null,
+          anchorText: 'A selected quote. Paper p.4',
+          detached: true,
+          ephemeral: false,
+          updatedAt,
+        }],
+      };
+      if (type !== 'createStreamThread') return { revision: 2 };
+      expect(editor().querySelector('blockquote')?.textContent)
+        .toBe('A selected quote. Paper p.4');
+      expect(bridgeOrder).toContain('saveRichStreamDocument');
+      expect(bridgeOrder.indexOf('saveRichStreamDocument')).toBeLessThan(
+        bridgeOrder.indexOf('createStreamThread'),
+      );
+      pdfThread = {
+          threadId: 'pdf-thread',
+          streamId: quotedStream.id,
+          title: String(payload?.title),
+          workingText: '',
+          anchorText: String(payload?.anchorText),
+          sourceId: String(payload?.sourceId),
+          highlightId: String(payload?.highlightId),
+          anchorStart: Number(payload?.anchorStart),
+          anchorEnd: Number(payload?.anchorEnd),
+          detached: false,
+          ephemeral: false,
+          revision: 0,
+          createdAt: updatedAt,
+          updatedAt,
+          anchors: [],
+          exchanges: [],
+      };
+      return { thread: pdfThread };
+    }) as typeof bridge.sendAsync);
+
     await act(async () => {
       bridge.receive({
         type: 'pdfThreadRequested',
         payload: {
-          streamId: stream.id,
+          streamId: quotedStream.id,
           sourceId: 'source-1',
           sourceName: 'paper.pdf',
           shortTitle: 'Paper',
@@ -2769,12 +2869,197 @@ describe('RichStreamEditor PDF highlight links', () => {
       });
     });
 
+    await vi.waitFor(() => expect(document.querySelector('.conversation-composer')).not.toBe(null));
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 20)); });
+    expect(document.activeElement).toBe(document.querySelector('.conversation-composer'));
+    expect([...editor().children].map((node) => node.tagName)).toEqual(['P', 'BLOCKQUOTE', 'DIV', 'P']);
+    expect(editor().children[0].textContent).toBe('First paragraph.');
+    expect(editor().querySelector('blockquote > p')?.textContent).toBe('A selected quote. Paper p.4');
+    expect(editor().querySelector('blockquote')?.nextElementSibling)
+      .toBe(document.querySelector('.conversation-widget-host'));
+    expect(editor().children[3].textContent).toBe('Last paragraph.');
+    const createCall = vi.mocked(bridge.sendAsync).mock.calls
+      .find(([type]) => type === 'createStreamThread');
+    expect(createCall?.[1]).toMatchObject({
+      streamId: quotedStream.id,
+      anchorText: 'A selected quote. Paper p.4',
+      sourceId: 'source-1',
+      highlightId: 'highlight-1',
+    });
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'addStreamThreadAnchor'))
+      .toBe(false);
+
+    let lastParagraph = -1;
+    liveView!.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === 'Last paragraph.') lastParagraph = pos;
+    });
+    await act(async () => {
+      liveView!.dispatch(liveView!.state.tr.setSelection(
+        TextSelection.create(liveView!.state.doc, lastParagraph, lastParagraph + 4),
+      ));
+      bridge.receive({
+        type: 'pdfPaneStateChanged',
+        payload: {
+          visible: true,
+          streamId: quotedStream.id,
+          sourceId: 'source-1',
+          sourceName: 'paper.pdf',
+          shortTitle: 'Paper',
+          selection: {
+            highlightId: 'highlight-1',
+            quote: 'A selected quote.',
+            page: 4,
+            createdAt: updatedAt,
+            rects: [],
+          },
+        },
+      });
+    });
+    const context = [...document.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === '+ context');
+    expect(context?.disabled).toBe(false);
+    await act(async () => { context!.click(); });
+    expect([...document.querySelectorAll('.conversation-context-menu button')]
+      .map((button) => button.textContent)).toEqual(['Stream selection']);
+
+    await act(async () => {
+      (document.querySelector('.conversation-rail') as HTMLButtonElement).click();
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    });
+    let linkPos = -1;
+    liveView!.state.doc.descendants((node, pos) => {
+      if (linkPos < 0 && node.isText && node.text === 'Paper p.4') linkPos = pos;
+    });
+    expect(linkPos).toBeGreaterThan(0);
+    await act(async () => {
+      const handled = liveView!.someProp('handleClick', (handler) => (
+        handler(liveView!, linkPos + 1, new MouseEvent('click'))
+      ));
+      expect(handled).toBe(true);
+    });
+    await vi.waitFor(() => expect(document.querySelector('.conversation-surface')).not.toBe(null));
+    expect(sent).toContainEqual({
+      type: 'openPdfDestination',
+      payload: {
+        streamId: quotedStream.id,
+        url: 'ticker-pdf://source-1?highlight=highlight-1&page=4',
+      },
+    });
+
+    await act(async () => {
+      (document.querySelector('.conversation-rail') as HTMLButtonElement).click();
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+      bridge.receive({
+        type: 'revealPdfHighlightInStream',
+        payload: {
+          streamId: quotedStream.id,
+          sourceId: 'source-1',
+          highlightId: 'highlight-1',
+        },
+      });
+    });
+    await vi.waitFor(() => expect(document.querySelector('.conversation-surface')).not.toBe(null));
+    expect(liveView).not.toBe(null);
+    expect(liveView!.state.doc.textBetween(
+      liveView!.state.selection.from,
+      liveView!.state.selection.to,
+    )).toBe('Paper p.4');
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editor().querySelector('blockquote')).toBe(null);
+    expect(JSON.stringify(liveView!.state.doc.toJSON())).toBe(beforeDocument);
+    expect(document.querySelector('.conversation-surface')).not.toBe(null);
+    expect(document.querySelector('.conversation-drift-note')?.textContent)
+      .toBe('The passage has changed since this conversation started.');
+    expect(vi.mocked(bridge.sendAsync).mock.calls.filter(([type]) => type === 'createStreamThread'))
+      .toHaveLength(1);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'deleteStreamThread'))
+      .toBe(false);
+    await vi.waitFor(() => {
+      const detachedSave = vi.mocked(bridge.sendAsync).mock.calls.find(([type, payload]) => (
+        type === 'saveRichStreamDocument'
+        && Array.isArray(payload?.conversationAnchors)
+        && payload.conversationAnchors.some((anchor) => (
+          anchor.threadId === 'pdf-thread' && anchor.detached === true
+        ))
+      ));
+      expect(detachedSave).toBeDefined();
+    });
+
+    const conversations = document.querySelector('.stream-overflow-action') as HTMLButtonElement;
+    await act(async () => {
+      conversations.click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(document.querySelector('.conversation-list-row')?.textContent).toContain('detached');
+    });
+    await act(async () => { conversations.click(); });
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editor().querySelector('blockquote')).not.toBe(null);
+    expect([...editor().children].map((node) => node.tagName)).toEqual(['P', 'BLOCKQUOTE', 'P', 'DIV']);
+    expect(editor().lastElementChild).toBe(document.querySelector('.conversation-widget-host'));
+  });
+
+  it('removes a persisted PDF highlight when quote creation cannot reach this editor', async () => {
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfThreadRequested',
+        payload: {
+          streamId: 'other-stream',
+          sourceId: 'source-1',
+          sourceName: 'paper.pdf',
+          shortTitle: 'Paper',
+          highlightId: 'wrong-stream-highlight',
+          page: 4,
+          quote: 'A selected quote.',
+        },
+      });
+    });
     expect(sent).toContainEqual({
       type: 'deletePdfHighlight',
-      payload: { streamId: stream.id, highlightId: 'highlight-1' },
+      payload: { streamId: 'other-stream', highlightId: 'wrong-stream-highlight' },
+    });
+
+    await renderStream({
+      ...stream,
+      id: 'unconverted-quote-stream',
+      document: {
+        ...stream.document,
+        streamId: 'unconverted-quote-stream',
+        docJSON: undefined,
+        docFormatVersion: undefined,
+      },
+    });
+    await act(async () => {
+      bridge.receive({
+        type: 'pdfThreadRequested',
+        payload: {
+          streamId: 'unconverted-quote-stream',
+          sourceId: 'source-1',
+          sourceName: 'paper.pdf',
+          shortTitle: 'Paper',
+          highlightId: 'missing-editor-highlight',
+          page: 4,
+          quote: 'A selected quote.',
+        },
+      });
+    });
+    expect(sent).toContainEqual({
+      type: 'deletePdfHighlight',
+      payload: { streamId: 'unconverted-quote-stream', highlightId: 'missing-editor-highlight' },
     });
     expect(useToastStore.getState().toasts.map((toast) => toast.message))
-      .toContain('Inline conversations are temporarily unavailable.');
+      .toContain("Couldn't add the quote");
   });
 
   it('inserts a linked PDF quote as one undo step', async () => {

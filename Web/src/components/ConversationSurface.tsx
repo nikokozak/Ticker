@@ -64,6 +64,7 @@ interface ConversationSurfaceProps {
   updateState: (key: string, updater: ConversationLiveStateUpdater) => void;
   createThread: (query: string) => Promise<StreamThreadJSON>;
   hasDrifted: (anchorText: string) => boolean;
+  onPromote: (exchange: AIExchangeJSON) => void;
   onCollapse: () => void;
 }
 
@@ -119,17 +120,26 @@ const Turn = memo(function Turn({
   who,
   text,
   receipt,
+  exchange,
+  onPromote,
 }: {
   who: 'You' | 'AI';
   text: string;
   receipt?: unknown;
+  exchange?: AIExchangeJSON;
+  onPromote?: (exchange: AIExchangeJSON) => void;
 }) {
   return (
     <div className={`conversation-turn conversation-turn--${who === 'You' ? 'you' : 'ai'}`}>
       <span className="conversation-turn-label">{who}</span>
       <div className="conversation-turn-text">{text}</div>
       {who === 'AI' && <ThreadContextDisclosure value={receipt} />}
-      <button type="button" className="conversation-turn-copy" onClick={() => copy(text)}>Copy</button>
+      <div className="conversation-turn-controls">
+        {exchange && onPromote && (
+          <button type="button" onClick={() => onPromote(exchange)}>↑ Add to Stream</button>
+        )}
+        <button type="button" onClick={() => copy(text)}>Copy</button>
+      </div>
     </div>
   );
 });
@@ -150,6 +160,7 @@ export function ConversationSurface({
   updateState,
   createThread,
   hasDrifted,
+  onPromote,
   onCollapse,
 }: ConversationSurfaceProps) {
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -185,9 +196,7 @@ export function ConversationSurface({
   }, [conversationKey, state.loading, state.thread, streamId, threadId, updateState]);
 
   useEffect(() => {
-    if (!focusComposer) return;
-    const frame = window.requestAnimationFrame(() => composerRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
+    if (focusComposer) composerRef.current?.focus();
   }, [focusComposer]);
 
   useEffect(() => bridge.onMessage((message) => {
@@ -367,7 +376,13 @@ export function ConversationSurface({
         {state.exchanges.map((exchange) => (
           <div className="conversation-exchange" key={exchange.requestId}>
             <Turn who="You" text={exchange.userInput} />
-            <Turn who="AI" text={exchange.responseRaw} receipt={exchange.sourceManifest} />
+            <Turn
+              who="AI"
+              text={exchange.responseRaw}
+              receipt={exchange.sourceManifest}
+              exchange={exchange}
+              onPromote={onPromote}
+            />
           </div>
         ))}
         {state.active && (

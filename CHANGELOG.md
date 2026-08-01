@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Changed
+- editor: add conversation reply promotion and PDF Quote & discuss (phase C5)
 - editor: add complete AI context, persistent pins, and receipts to inline conversations (phase C4)
 - editor: open block-anchored conversations inline with streaming replies (phase C3)
 - editor: add durable conversation anchors and passive gutter markers (phase C2)

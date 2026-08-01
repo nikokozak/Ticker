@@ -67,7 +67,8 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                   let anchorStart = payload["anchorStart"]?.intValue,
                   let anchorEnd = payload["anchorEnd"]?.intValue,
                   anchorStart >= 0,
-                  anchorEnd > anchorStart else {
+                  anchorEnd > anchorStart,
+                  let references = Self.decodePrimaryPDFReferences(payload) else {
                 respondWithError(callbackId, "Invalid createStreamThread payload")
                 return
             }
@@ -76,6 +77,8 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                     streamId: streamId,
                     title: title,
                     anchorText: anchorText,
+                    sourceId: references.sourceId,
+                    highlightId: references.highlightId,
                     anchorStart: anchorStart,
                     anchorEnd: anchorEnd
                 ))
@@ -311,6 +314,18 @@ final class ThreadMessageHandler: BridgeMessageHandler {
     private static func optionalString(_ value: Any?) -> String? {
         guard let value = value as? String, !value.isEmpty else { return nil }
         return value
+    }
+
+    private static func decodePrimaryPDFReferences(
+        _ payload: [String: AnyCodable]
+    ) -> (sourceId: UUID?, highlightId: UUID?)? {
+        let source = payload["sourceId"]?.value as? String
+        let highlight = payload["highlightId"]?.value as? String
+        guard (source == nil) == (highlight == nil) else { return nil }
+        guard let source, let highlight else { return (nil, nil) }
+        guard let sourceId = UUID(uuidString: source),
+              let highlightId = UUID(uuidString: highlight) else { return nil }
+        return (sourceId, highlightId)
     }
 
     private static func intValue(_ value: Any?) -> Int? {

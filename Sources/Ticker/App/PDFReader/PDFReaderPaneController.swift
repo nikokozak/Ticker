@@ -798,8 +798,8 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneDiscussButton.imageScaling = .scaleProportionallyDown
         pdfPaneDiscussButton.isBordered = true
         pdfPaneDiscussButton.showsBorderOnlyWhileMouseInside = true
-        pdfPaneDiscussButton.toolTip = "Discuss selected PDF text"
-        pdfPaneDiscussButton.setAccessibilityLabel("Discuss selected PDF text")
+        pdfPaneDiscussButton.toolTip = "Quote & discuss"
+        pdfPaneDiscussButton.setAccessibilityLabel("Quote & discuss")
         pdfPaneDiscussButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         pdfPaneDiscussButton.setContentHuggingPriority(.required, for: .horizontal)
         setPDFSelectionActionsEnabled(false)
@@ -1678,8 +1678,8 @@ final class PDFReaderPaneController: NSViewController {
     @objc private func handlePDFPaneDiscussSelection() {
         handlePDFPaneSelection(
             missingPDFMessage: "Open a PDF before starting a conversation.",
-            missingSelectionMessage: "Nothing is selected to discuss.",
-            invalidSelectionMessage: "That selection cannot start a conversation.",
+            missingSelectionMessage: "Select PDF text to Quote & discuss.",
+            invalidSelectionMessage: "That selection cannot be quoted and discussed.",
             action: onDiscussSelection
         )
     }

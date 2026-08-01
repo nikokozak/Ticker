@@ -11,6 +11,7 @@ import {
   conversationDecorationTargets,
   conversationMarkerBlockPositions,
   conversationRenderPosition,
+  conversationSurfacePosition,
   fullBlockConversationAnchor,
   hasConversationAnchorTextDrifted,
   refreshConversationViewport,
@@ -74,6 +75,15 @@ describe('conversation anchor lifecycle', () => {
     expect(anchor.to - anchor.from).toBe(4);
     expect(conversationAnchorText(ed.view.state.doc, anchor)).toBe('A🙂B');
     expect(conversationRenderPosition(ed.view.state.doc, anchor)).toBe(ed.view.state.doc.content.size);
+  });
+
+  it('renders a quote conversation after the blockquote container', () => {
+    const ed = open('> Quoted passage.\n\nAfter.');
+    const anchor = recordFullBlock(ed, 'Quoted passage.');
+    expect(conversationRenderPosition(ed.view.state.doc, anchor))
+      .toBeLessThan(conversationSurfacePosition(ed.view.state.doc, anchor)!);
+    expect(conversationSurfacePosition(ed.view.state.doc, anchor))
+      .toBe(ed.view.state.doc.child(0).nodeSize);
   });
 
   it('rule 2: a split spans both halves and renders after the second', () => {
