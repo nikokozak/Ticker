@@ -816,7 +816,7 @@ export function StreamEditor({
       effects: setPendingAppend.of(false),
       annotations: Transaction.addToHistory.of(false),
     });
-    // Don't stomp the pill if an in-editor AI request is also running.
+    // Don't stomp the status if an in-editor AI request is also running.
     if (!aiRequestRef.current) hideAiFeedback();
   }, [hideAiFeedback]);
 
@@ -2992,18 +2992,20 @@ export function StreamEditor({
           </h1>
         )}
         <div className="stream-header-actions">
-          <span
-            className={`stream-save-status stream-save-status--${saveState}`}
-            role="status"
-            aria-live="polite"
-            aria-label={saveState === 'saving' ? 'Saving' : saveState === 'error' ? 'Save failed' : 'Saved'}
-            title={saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}
-          >
-            <span className="stream-save-status-dot" aria-hidden="true" />
-            <span className="stream-save-status-label">
-              {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}
+          {saveState !== 'saved' && (
+            <span
+              className={`stream-save-status stream-save-status--${saveState}`}
+              role="status"
+              aria-live="polite"
+              aria-label={saveState === 'saving' ? 'Saving' : 'Save failed'}
+              title={saveState === 'saving' ? 'Saving…' : 'Save failed'}
+            >
+              <span className="stream-save-status-dot" aria-hidden="true" />
+              <span className="stream-save-status-label">
+                {saveState === 'saving' ? 'Saving…' : 'Save failed'}
+              </span>
             </span>
-          </span>
+          )}
           <button
             onClick={() => setIsProvenanceXrayVisible((value) => !value)}
             className={`stream-xray-button ${isProvenanceXrayVisible ? 'stream-xray-button--active' : ''}`}
@@ -3021,7 +3023,7 @@ export function StreamEditor({
             type="button"
             aria-label={`Sources, ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
           >
-            Sources · {sources.length}
+            {sources.length > 0 ? `Sources · ${sources.length}` : 'Sources'}
           </button>
           <details
             ref={streamOverflowMenuRef}
@@ -3532,7 +3534,7 @@ export function StreamEditor({
             />
             {aiFeedback.visible && (
               <div
-                className={`document-ai-status-pill document-ai-status-pill--${aiFeedback.kind}`}
+                className={`document-ai-status document-ai-status--${aiFeedback.kind}`}
                 role="status"
                 aria-live="polite"
               >

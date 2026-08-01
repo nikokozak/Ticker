@@ -149,10 +149,25 @@ afterEach(async () => {
   });
   useToastStore.getState().clearToasts();
   vi.restoreAllMocks();
+  Object.defineProperty(window, 'scrollY', { configurable: true, value: 0 });
   document.body.innerHTML = '';
 });
 
 describe('App stream loading', () => {
+  it('shows typographic list metadata and a hairline only after scrolling', async () => {
+    await boot();
+
+    const first = document.querySelector('.stream-item') as HTMLButtonElement;
+    expect(first.querySelector('.stream-meta')?.textContent).toMatch(/ago$/);
+    expect(first.textContent).not.toContain('word');
+    expect(first.textContent).not.toContain('source');
+    expect(first.textContent).not.toContain('open question');
+
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 1 });
+    await act(async () => { window.dispatchEvent(new Event('scroll')); });
+    expect(document.querySelector('.stream-list-header')?.classList.contains('stream-list-header--scrolled')).toBe(true);
+  });
+
   it('keeps the list recoverable while a stream load is pending', async () => {
     await boot();
     await selectStream();

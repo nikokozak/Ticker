@@ -654,34 +654,21 @@ function formatRelativeTime(dateString: string): string {
   if (diffMins < 1) return 'just now';
   if (diffMins < 60) return `${diffMins}m ago`;
   if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
-}
-
-function formatCompactCount(count: number): string {
-  if (count < 1000) {
-    return new Intl.NumberFormat().format(count);
-  }
-  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(count / 1000)}k`;
-}
-
-function formatStreamMetadata(stream: StreamSummary): string {
-  const segments = [formatRelativeTime(stream.updatedAt)];
-
-  if (stream.sourceCount === 1) {
-    segments.push(stream.sourceShortTitle ?? '1 source');
-  } else if (stream.sourceCount > 1) {
-    segments.push(`${stream.sourceCount} sources`);
-  }
-  segments.push(`${formatCompactCount(stream.wordCount)} ${stream.wordCount === 1 ? 'word' : 'words'}`);
-  if (stream.imageCount > 0) {
-    segments.push(`${stream.imageCount} ${stream.imageCount === 1 ? 'image' : 'images'}`);
-  }
-
-  return segments.join(' · ');
+  if (diffDays < 30) return `${diffDays}d ago`;
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+  return `${Math.floor(diffDays / 365)}y ago`;
 }
 
 function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSettings, onRetry }: StreamListViewProps) {
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const update = () => setScrolled(window.scrollY > 0);
+    update();
+    window.addEventListener('scroll', update, { passive: true });
+    return () => window.removeEventListener('scroll', update);
+  }, []);
+
   // Sort streams by updatedAt (most recent first)
   const sortedStreams = [...streams].sort((a, b) =>
     new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -689,7 +676,7 @@ function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSetti
 
   return (
     <div className="stream-list">
-      <header className="stream-list-header">
+      <header className={`stream-list-header ${scrolled ? 'stream-list-header--scrolled' : ''}`}>
         <h1>Streams</h1>
         <div className="stream-list-actions">
           <button onClick={onSettings} className="settings-button">
@@ -737,7 +724,7 @@ function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSetti
                 <span className="stream-preview">{stream.previewLine}</span>
               )}
               <span className="stream-meta">
-                {formatStreamMetadata(stream)}
+                {formatRelativeTime(stream.updatedAt)}
               </span>
             </button>
           ))
