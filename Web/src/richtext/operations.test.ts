@@ -8,13 +8,11 @@ import {
   applyAIMarkdown,
   focusAtEnd,
   insertImage,
-  insertSidenoteWork,
   removePDFHighlightLink,
   selectedPDFHighlight,
   selectText,
   setImageWidth,
   streamAIMarkdown,
-  sidenoteInsertionTarget,
 } from './operations';
 
 /**
@@ -60,13 +58,6 @@ function find(ed: RichTextEditor, text: string): { from: number; to: number } {
 
 function undo(ed: RichTextEditor): void {
   const event = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true });
-  ed.view.someProp('handleKeyDown', (handler) => handler(ed.view, event));
-}
-
-function redo(ed: RichTextEditor): void {
-  const event = new KeyboardEvent('keydown', {
-    key: 'z', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true,
-  });
   ed.view.someProp('handleKeyDown', (handler) => handler(ed.view, event));
 }
 
@@ -170,119 +161,6 @@ describe('images', () => {
     const pos = ed.view.state.doc.content.size - 2;
     setImageWidth(ed.view, pos, 5000);
     expect(ed.getMarkdownProjection()).toBe('![shot](ticker-asset://s/a.png)');
-  });
-});
-
-describe('adding Sidenote work to the Stream', () => {
-  it('adds parsed blocks after a paragraph without a visible backlink', () => {
-    const ed = open('Before this sentence ends.\n\nAfter.');
-    const inside = find(ed, 'sentence').from + 3;
-    const target = sidenoteInsertionTarget(ed.view.state, inside);
-    expect(target).toEqual({ kind: 'block', pos: ed.view.state.doc.child(0).nodeSize });
-
-    insertSidenoteWork(ed.view, target!, {
-      text: '**Finding**\n\n## Detail',
-      threadId: 'thread-1',
-    });
-
-    expect(ed.view.state.doc.child(0).textContent).toBe('Before this sentence ends.');
-    expect(ed.view.state.doc.child(1).textContent).toBe('Finding');
-    expect(ed.view.state.doc.child(2).textContent).toBe('Detail');
-    expect(ed.getMarkdownProjection()).not.toContain('ticker-thread://');
-  });
-
-  it('adds after a heading and keeps the heading byte-identical', () => {
-    const ed = open('## Hardware choices\n\nExisting text.');
-    const before = ed.view.state.doc.child(0).toJSON();
-    const target = sidenoteInsertionTarget(ed.view.state, find(ed, 'Hardware').from + 2);
-    insertSidenoteWork(ed.view, target!, {
-      text: 'New evidence.', threadId: 'thread-2',
-    });
-    expect(ed.view.state.doc.child(0).toJSON()).toEqual(before);
-    expect(ed.view.state.doc.child(1).textContent).toBe('New evidence.');
-  });
-
-  it('adds one sibling list item per payload block at the same depth', () => {
-    const ed = open('* One\n* Two stays intact\n* Three');
-    const target = sidenoteInsertionTarget(ed.view.state, find(ed, 'Two').from + 1);
-    expect(target?.kind).toBe('list');
-    insertSidenoteWork(ed.view, target!, {
-      text: 'First added\n\nSecond added', threadId: 'thread-3',
-    });
-
-    const list = ed.view.state.doc.firstChild!;
-    expect(list.childCount).toBe(5);
-    expect(Array.from({ length: list.childCount }, (_, index) => list.child(index).textContent))
-      .toEqual(['One', 'Two stays intact', 'First added', 'Second added', 'Three']);
-    expect(parseMarkdown(ed.getMarkdownProjection()).eq(ed.view.state.doc)).toBe(true);
-  });
-
-  const complexListPayloads = [
-    {
-      name: 'a paragraph and list',
-      markdown: 'Finding\n\n* First\n* Second',
-      insertedTypes: ['paragraph', 'bullet_list'],
-    },
-    {
-      name: 'a heading',
-      markdown: '## Finding\n\nDetails',
-      insertedTypes: ['heading', 'paragraph'],
-    },
-    {
-      name: 'a code block',
-      markdown: '```swift\nlet x = 1\n```\n\nDetails',
-      insertedTypes: ['code_block', 'paragraph'],
-    },
-  ];
-  for (const { name, markdown, insertedTypes } of complexListPayloads) {
-    it(`puts AI payload with ${name} after the enclosing list`, () => {
-      const ed = open('* One\n* Two stays intact\n* Three');
-      const target = sidenoteInsertionTarget(ed.view.state, find(ed, 'Two').from + 1);
-      insertSidenoteWork(ed.view, target!, {
-        text: markdown, threadId: 'thread-complex',
-      });
-
-      const originalList = ed.view.state.doc.firstChild!;
-      expect(originalList.type.name).toBe('bullet_list');
-      expect(originalList.childCount).toBe(3);
-      expect(Array.from({ length: originalList.childCount }, (_, index) => originalList.child(index).textContent))
-        .toEqual(['One', 'Two stays intact', 'Three']);
-      expect(Array.from({ length: insertedTypes.length }, (_, index) => ed.view.state.doc.child(index + 1).type.name))
-        .toEqual(insertedTypes);
-      expect(parseMarkdown(ed.getMarkdownProjection()).eq(ed.view.state.doc)).toBe(true);
-    });
-  }
-
-  it('keeps formatting and one Undo removes the whole promotion', () => {
-    const ed = open('Host paragraph.\n\nTail.');
-    const before = ed.getDocumentJSON();
-    const target = sidenoteInsertionTarget(ed.view.state, find(ed, 'Host').from);
-    insertSidenoteWork(ed.view, target!, {
-      text: '**Finding**\n\n* First\n* Second',
-      threadId: 'thread-4',
-    });
-    expect(ed.getMarkdownProjection()).toContain('**Finding**');
-    expect(ed.getMarkdownProjection()).toContain('* Second');
-    expect(parseMarkdown(ed.getMarkdownProjection()).eq(ed.view.state.doc)).toBe(true);
-    undo(ed);
-    expect(ed.getDocumentJSON()).toBe(before);
-    redo(ed);
-    expect(ed.getMarkdownProjection()).toContain('**Finding**');
-  });
-
-  it('can replace the quoted Stream passage', () => {
-    const ed = open('Before. Replace this passage. After.');
-    const range = find(ed, 'Replace this passage.');
-    insertSidenoteWork(ed.view, { kind: 'replace', ...range }, {
-      text: 'Resolved finding.', threadId: 'thread-5',
-    });
-    expect(ed.getMarkdownProjection()).toBe('Before. Resolved finding. After.');
-  });
-
-  it('refuses code blocks and non-text boundaries', () => {
-    const ed = open('```swift\nlet x = 1\n```\n\nText.');
-    expect(sidenoteInsertionTarget(ed.view.state, find(ed, 'let x').from)).toBeNull();
-    expect(sidenoteInsertionTarget(ed.view.state, 0)).toBeNull();
   });
 });
 

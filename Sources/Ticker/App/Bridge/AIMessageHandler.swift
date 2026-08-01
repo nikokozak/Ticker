@@ -524,7 +524,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                 type: "documentAIError",
                 payload: [
                     "requestId": AnyCodable(requestId),
-                    "error": AnyCodable("This Sidenote request is invalid."),
+                    "error": AnyCodable("This conversation request is invalid."),
                     "errorCode": AnyCodable("invalid_thread_request")
                 ]
             ))
@@ -547,7 +547,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                 type: "documentAIError",
                 payload: [
                     "requestId": AnyCodable(requestId),
-                    "error": AnyCodable("This Sidenote is no longer available in this Stream."),
+                    "error": AnyCodable("This conversation is no longer available in this Stream."),
                     "errorCode": AnyCodable("thread_unavailable")
                 ]
             ))
@@ -557,7 +557,6 @@ final class AIMessageHandler: BridgeMessageHandler {
         let sourceScopeRaw = payload["sourceScope"]?.value as? String
         let sourceScope = SourceScope(rawValue: sourceScopeRaw ?? "") ?? .auto
         let anchorQuotes = anchors
-            .filter { $0.kind != .placement }
             .compactMap(\.quote)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -565,7 +564,7 @@ final class AIMessageHandler: BridgeMessageHandler {
             .enumerated()
             .map { anchorQuotes.count > 1 ? "Evidence \($0.offset + 1):\n\($0.element)" : $0.element }
             .joined(separator: "\n\n")
-        // Canonical Sidenote Markdown already contains every immutable evidence
+        // A canonical legacy thread document already contains every immutable evidence
         // block. Sending the anchor bundle again makes the model weigh each quote
         // twice; legacy textarea rows still need the separate starting passage.
         let canonicalDraft = thread.docJSON != nil && thread.docFormatVersion == 1
@@ -654,7 +653,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                     type: "documentAIError",
                     payload: [
                         "requestId": AnyCodable(requestId),
-                        "error": AnyCodable("The proposal could not be saved, so it was not added to the Sidenote."),
+                        "error": AnyCodable("The proposal could not be saved to the conversation."),
                         "errorCode": AnyCodable("thread_save_failed")
                     ]
                 ))

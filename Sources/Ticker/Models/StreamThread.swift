@@ -3,7 +3,6 @@ import Foundation
 enum StreamThreadAnchorKind: String, Codable {
     case streamQuote = "stream_quote"
     case pdfQuote = "pdf_quote"
-    case placement
 }
 
 struct StreamThreadAnchor: Codable, Equatable, Identifiable {
@@ -112,11 +111,11 @@ enum StreamThreadPersistenceError: LocalizedError, Equatable {
         case .highlightOutsideSource:
             return "The PDF highlight does not belong to this source."
         case .anchorOutsideThread:
-            return "The anchor does not belong to this sidenote."
+            return "The anchor does not belong to this conversation."
         case .invalidAnchor:
-            return "The sidenote anchor is invalid."
+            return "The conversation anchor is invalid."
         case .exchangeOutsideThread:
-            return "The AI answer does not belong to this sidenote."
+            return "The AI answer does not belong to this conversation."
         case .invalidDisposition:
             return "The AI answer state is invalid."
         }

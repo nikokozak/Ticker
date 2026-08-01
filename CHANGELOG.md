@@ -5,7 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Changed
-- Replace Threads with compact Sidenotes: one editable evidence-backed draft, explicit AI proposals, direct one-step Stream placement, and quiet contextual markers.
+- editor: replace the thread drawer prototype with inline conversations (phase C0: drawer removed)
 - Quick Window now names the save destination and chat persistence in its footer, confirms saves during dismissal, and closes without discarding a draft.
 
 ## 2026.7.31

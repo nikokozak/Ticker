@@ -3,7 +3,7 @@ import { schema as base } from 'prosemirror-markdown';
 
 /**
  * Ticker's document model: prosemirror-markdown's CommonMark schema plus exactly
- * four extensions, each forced by a measurement rather than a guess.
+ * three extensions, each forced by a measurement rather than a guess.
  *
  *   soft_break   a single newline inside a paragraph is a markdown soft break and
  *                otherwise arrives as a SPACE, silently turning an authored line
@@ -16,9 +16,6 @@ import { schema as base } from 'prosemirror-markdown';
  *   image.width  `{width=N}` sits beside the image node as literal text, i.e.
  *                visible markup, which is the exact class of bug this rewrite
  *                exists to eliminate.
- *   evidence     an immutable quote inside a Sidenote. Its anchor identity stays
- *                in canonical JSON; markdown gets an ordinary blockquote.
- *
  * Everything else is deliberately absent. Citations are ordinary links carrying a
  * `ticker-pdf://` href — no citation node, no link subtype. Provenance spans and
  * margin notes stay external metadata and never become marks or nodes.
@@ -115,37 +112,6 @@ const underline: MarkSpec = {
   toDOM: (): DOMOutputSpec => ['u', 0],
 };
 
-const evidence: NodeSpec = {
-  group: 'block',
-  atom: true,
-  selectable: true,
-  attrs: {
-    anchorId: {},
-    kind: {},
-    quote: {},
-    label: { default: 'Stream' },
-  },
-  parseDOM: [{
-    tag: 'aside[data-ticker-evidence]',
-    getAttrs: (dom: HTMLElement) => ({
-      anchorId: dom.dataset.tickerEvidence ?? '',
-      kind: dom.dataset.evidenceKind ?? 'stream_quote',
-      quote: dom.querySelector('blockquote')?.textContent ?? '',
-      label: dom.querySelector('[data-evidence-label]')?.textContent ?? 'Stream',
-    }),
-  }],
-  toDOM: (node): DOMOutputSpec => [
-    'aside',
-    {
-      'data-ticker-evidence': node.attrs.anchorId,
-      'data-evidence-kind': node.attrs.kind,
-      class: 'richtext-evidence',
-    },
-    ['span', { 'data-evidence-label': 'true', class: 'richtext-evidence-label' }, node.attrs.label],
-    ['blockquote', { class: 'richtext-evidence-quote' }, node.attrs.quote],
-  ],
-};
-
 /**
  * A markdown code span is LITERAL — `` `<u>b</u>` `` shows the tags rather than
  * underlining anything — so inline code cannot also be bold, italic or underlined.
@@ -164,8 +130,7 @@ export const tickerSchema = new Schema({
   nodes: base.spec.nodes
     .update('image', image)
     .update('hard_break', hardBreak)
-    .addToEnd('soft_break', softBreak)
-    .addBefore('paragraph', 'evidence', evidence),
+    .addToEnd('soft_break', softBreak),
   // Before `em` so underline is the outermost mark, which fixes one canonical
   // nesting and keeps serialisation deterministic.
   marks: base.spec.marks.addBefore('em', 'underline', underline).update('code', code),

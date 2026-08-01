@@ -296,11 +296,6 @@ function imageMarkdown(node: ProseNode, state: MarkdownSerializerState): string 
 }
 
 export const tickerMarkdownSerializer = new MarkdownSerializer({
-  evidence: (state, node) => {
-    const quote = String(node.attrs.quote ?? '');
-    state.write(quote.split('\n').map((line) => `> ${line}`).join('\n'));
-    state.closeBlock(node);
-  },
   blockquote: (state, node) => state.wrapBlock('> ', null, node, () => state.renderContent(node)),
   code_block: (state, node) => {
     const params = node.attrs.params || '';

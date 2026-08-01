@@ -247,21 +247,6 @@ describe('6. unsupported syntax is preserved, never mangled', () => {
   });
 });
 
-describe('Sidenote evidence projection', () => {
-  it('exports an evidence atom as an ordinary attributed quote, never private metadata', () => {
-    const evidence = tickerSchema.nodes.evidence.create({
-      anchorId: 'anchor-private',
-      kind: 'pdf_quote',
-      quote: 'First line\nsecond line',
-      label: 'Power Guide.pdf · p. 7',
-    });
-    const markdown = serializeMarkdown(tickerSchema.nodes.doc.create(null, evidence));
-    expect(markdown).toBe('> First line\n> second line');
-    expect(markdown).not.toContain('anchor-private');
-    expect(parseMarkdown(markdown).firstChild?.type).toBe(tickerSchema.nodes.blockquote);
-  });
-});
-
 describe('7. serializer output always re-parses to the same document', () => {
   // The closure property, tested on EDITOR-CONSTRUCTED documents rather than parsed
   // ones — that is where it breaks. A soft break starts a new line, so text after

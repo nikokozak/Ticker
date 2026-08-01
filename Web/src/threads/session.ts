@@ -4,9 +4,6 @@ export type ThreadSaveState = 'saved' | 'saving' | 'error' | 'conflict';
 
 export interface ThreadDraft {
   title: string;
-  workingText: string;
-  docJSON?: string;
-  docFormatVersion?: number;
 }
 
 interface ThreadDraftSessionOptions {
@@ -15,9 +12,6 @@ interface ThreadDraftSessionOptions {
     streamId: string;
     threadId: string;
     title: string;
-    workingText: string;
-    docJSON?: string;
-    docFormatVersion?: number;
     baseRevision: number;
   }) => Promise<{ conflict: boolean; thread: StreamThreadJSON }>;
   autosaveDelay?: number;
@@ -27,7 +21,7 @@ interface ThreadDraftSessionOptions {
 const DEFAULT_AUTOSAVE_DELAY = 600;
 const MAX_FLUSH_PASSES = 5;
 
-/** Revision-checked ownership of the one editable note inside an open thread. */
+/** Revision-checked ownership of editable thread metadata. */
 export class ThreadDraftSession {
   private readonly options: Required<Pick<ThreadDraftSessionOptions, 'autosaveDelay'>>
     & ThreadDraftSessionOptions;
@@ -51,9 +45,6 @@ export class ThreadDraftSession {
     this.revision = options.thread.revision;
     this.saved = {
       title: options.thread.title,
-      workingText: options.thread.workingText,
-      docJSON: options.thread.docJSON,
-      docFormatVersion: options.thread.docFormatVersion,
     };
     this.draft = { ...this.saved };
   }
@@ -86,9 +77,6 @@ export class ThreadDraftSession {
     this.revision = thread.revision;
     this.saved = {
       title: thread.title,
-      workingText: thread.workingText,
-      docJSON: thread.docJSON,
-      docFormatVersion: thread.docFormatVersion,
     };
     this.draft = { ...this.saved };
     this.storedConflict = null;
@@ -103,9 +91,6 @@ export class ThreadDraftSession {
     this.revision = thread.revision;
     this.saved = {
       title: thread.title,
-      workingText: thread.workingText,
-      docJSON: thread.docJSON,
-      docFormatVersion: thread.docFormatVersion,
     };
     this.storedConflict = null;
     this.setState('saving');
@@ -118,10 +103,7 @@ export class ThreadDraftSession {
   }
 
   private isDirty(): boolean {
-    return this.draft.title !== this.saved.title
-      || this.draft.workingText !== this.saved.workingText
-      || this.draft.docJSON !== this.saved.docJSON
-      || this.draft.docFormatVersion !== this.saved.docFormatVersion;
+    return this.draft.title !== this.saved.title;
   }
 
   private async drain(): Promise<boolean> {
