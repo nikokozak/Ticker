@@ -160,6 +160,7 @@ final class QuickPanelManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var status: QuickPanelStatus?  // Temporary feedback and capture status.
+    @Published private(set) var saveConfirmation: String?
     @Published var ephemeralConversation = EphemeralConversation()
 
     // Stream selection
@@ -197,6 +198,7 @@ final class QuickPanelManager: ObservableObject {
     private var suppressedClipboardTextChangeCount: Int?
     private var clipboardContextExpiryWorkItem: DispatchWorkItem?
     private var presentationGeneration: Int = 0
+    private var preserveInputOnNextShow = false
     private static let clipboardContextLifetime: TimeInterval = 60
 
     // MARK: - Initialization
@@ -290,13 +292,13 @@ final class QuickPanelManager: ObservableObject {
                 capturedContext.contextText != context?.contextText
 
             if hasNewSelection {
-                // Update context in place, don't move the panel
+                // Update context in place without discarding a note already in flight.
                 self.context = capturedContext
-                resetState()
+                resetState(clearInput: false)
                 scheduleClipboardContextExpiry()
             } else {
                 // Same selection or no selection - toggle off
-                hide()
+                hide(preservingInput: true)
             }
             return
         }
@@ -333,7 +335,8 @@ final class QuickPanelManager: ObservableObject {
     private func show(with capturedContext: QuickPanelContext, showAccessibilityWarning: Bool) {
         presentationGeneration += 1
         self.context = capturedContext
-        resetState()
+        resetState(clearInput: !preserveInputOnNextShow)
+        preserveInputOnNextShow = false
 
         // Load available streams for picker
         loadAvailableStreams()
@@ -370,20 +373,21 @@ final class QuickPanelManager: ObservableObject {
     }
 
     /// Hide the quick panel
-    func hide() {
+    func hide(preservingInput: Bool = false, fadeDuration: TimeInterval = 0.08) {
         presentationGeneration += 1
         let generation = presentationGeneration
+        cancelStreaming(restoringPrompt: preservingInput)
+        let keepInput = preservingInput && !inputText.isEmpty
+        preserveInputOnNextShow = keepInput
         heightDebounceTimer?.invalidate()
         heightDebounceTimer = nil
         cancelClipboardContextExpiry()
-        // Cancel any in-flight streaming to avoid orphan AI calls
-        cancelStreaming()
 
         isVisible = false
 
         let finishHide = { [weak self] in
             guard let self, generation == self.presentationGeneration else { return }
-            self.resetState()
+            self.resetState(clearInput: !keepInput)
             self.context = nil
             self.status = nil
         }
@@ -393,24 +397,33 @@ final class QuickPanelManager: ObservableObject {
             return
         }
 
-        panel.fadeOut(completion: finishHide)
+        panel.fadeOut(duration: fadeDuration, completion: finishHide)
         // Note: ephemeralConversation is intentionally preserved so user can re-reference
     }
 
     /// Cancel any active streaming task
-    private func cancelStreaming() {
+    private func cancelStreaming(restoringPrompt: Bool = false) {
+        let interruptedPrompt = restoringPrompt ? ephemeralConversation.turns.last.flatMap { turn in
+            turn.role == .user ? turn.content : nil
+        } : nil
         streamingGeneration.invalidate()
         streamingTask?.cancel()
         streamingTask = nil
         ephemeralConversation.discardStreamingTurn()
+        if inputText.isEmpty, let interruptedPrompt {
+            inputText = interruptedPrompt
+        }
     }
 
     /// Reset state for new session
-    private func resetState() {
-        inputText = ""
+    private func resetState(clearInput: Bool = true) {
+        if clearInput {
+            inputText = ""
+        }
         isLoading = false
         error = nil
         status = nil
+        saveConfirmation = nil
     }
 
     private func logCapturedContext(_ capturedContext: QuickPanelContext) {
@@ -569,22 +582,11 @@ final class QuickPanelManager: ObservableObject {
 
     /// Handle Escape key
     func handleEscape() {
-        // First priority: cancel streaming and clear ephemeral conversation if active
-        if ephemeralConversation.isActive {
-            cancelStreaming()
-            ephemeralConversation.clear()
+        if ephemeralConversation.isStreaming {
+            cancelStreaming(restoringPrompt: true)
             return
         }
-
-        // Second: clear input/context
-        if !inputText.isEmpty || context?.hasContent == true {
-            inputText = ""
-            clearContext()
-            return
-        }
-
-        // Third: hide panel
-        hide()
+        hide(preservingInput: true)
     }
 
     /// Clear attached context
@@ -730,6 +732,7 @@ final class QuickPanelManager: ObservableObject {
 
     /// Add captured content and/or input to the active stream
     private func addToStream(triggerDocumentAI: Bool = false) async {
+        guard !isLoading else { return }
         guard let persistence = persistence else {
             error = "Persistence not configured"
             return
@@ -804,8 +807,11 @@ final class QuickPanelManager: ObservableObject {
             }
 
             isLoading = false
-            announceSave(to: streamId)
-            hide()
+            confirmSaveAndHide(
+                to: streamId,
+                fallbackDestination: isNewStream ? "Untitled" : nil,
+                developing: triggerDocumentAI
+            )
 
             if let aiPrompt, let aiRequestId {
                 if let orchestratorForAI, let documentMarkdownForAI {
@@ -981,10 +987,38 @@ final class QuickPanelManager: ObservableObject {
         QuickPanelMarkdownFormatter.nonEmptyTrimmed(text)
     }
 
+    static func saveConfirmationMessage(destination: String?, developing: Bool) -> String {
+        let trimmed = destination?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let saved = trimmed.flatMap { $0.isEmpty ? nil : "Saved to \($0)" } ?? "Saved"
+        return developing ? "\(saved) · developing…" : saved
+    }
+
+    private func destinationTitle(for streamId: UUID) -> String? {
+        availableStreams.first(where: { $0.id == streamId })?.title
+    }
+
+    private func confirmSaveAndHide(
+        to streamId: UUID,
+        fallbackDestination: String?,
+        developing: Bool
+    ) {
+        let message = Self.saveConfirmationMessage(
+            destination: destinationTitle(for: streamId) ?? fallbackDestination,
+            developing: developing
+        )
+        saveConfirmation = message
+        announce(message)
+        hide(fadeDuration: 0.18)
+    }
+
     private func announceSave(to streamId: UUID) {
-        let title = availableStreams.first(where: { $0.id == streamId })?.title
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let message = title.flatMap { $0.isEmpty ? nil : "Saved to \($0)" } ?? "Saved"
+        announce(Self.saveConfirmationMessage(
+            destination: destinationTitle(for: streamId),
+            developing: false
+        ))
+    }
+
+    private func announce(_ message: String) {
         NSAccessibility.post(
             element: NSApp as Any,
             notification: .announcementRequested,
@@ -1169,7 +1203,7 @@ final class QuickPanelManager: ObservableObject {
         let newPanel = QuickPanelWindow()
 
         newPanel.onDismiss = { [weak self] in
-            self?.hide()
+            self?.hide(preservingInput: true)
         }
         newPanel.onEscape = { [weak self] in
             self?.handleEscape()

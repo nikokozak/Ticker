@@ -93,13 +93,13 @@ If you hit SwiftPM/Sparkle artifact issues, run:
 Quick Panel is the fast capture surface (hotkey-driven) and has three distinct modes:
 
 - **Save** (`↵`): appends captured context and/or your input directly to the selected stream document, shows “Saved to <stream>”, then hides.
-- **AI + Save** (`⌘↵`): appends to the selected stream document, shows “Saved to <stream> — asking AI…”, then hides while the AI answer appends in the background.
-- **Ask (ephemeral)** (`⌥↵`): runs an in-memory chat turn that is **not** saved to the stream DB.
+- **Save + develop** (`⌘↵`): appends to the selected stream document, confirms the destination while hiding, then develops it with AI in the background.
+- **Chat here** (`⌥↵`): runs an in-memory chat turn that is **not** saved to the stream DB. Individual replies can still be saved explicitly.
 
 Cancellation / escape behavior:
-- `Esc` cancels streaming + clears the ephemeral chat (if active).
-- Otherwise `Esc` clears input/context; the next `Esc` hides the panel.
-- Clicking outside the panel hides it immediately.
+- During active AI streaming, `Esc` cancels the request and restores the prompt for editing.
+- Otherwise, `Esc` closes the panel in one press and keeps the typed draft for the next opening.
+- Clicking outside also closes the panel and keeps the typed draft. Context and conversations have their own clear buttons.
 
 ## Drag & drop (native → stream)
 

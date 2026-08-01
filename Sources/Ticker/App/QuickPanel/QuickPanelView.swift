@@ -315,9 +315,12 @@ struct QuickPanelView: View {
                     Image(systemName: "tray.and.arrow.down")
                         .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
                         .foregroundColor(QuickPanelStyle.textMuted)
-                    Text(selectedStreamTitle)
+                    Text("Save to")
                         .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
-                        .foregroundColor(QuickPanelStyle.textMuted)
+                        .foregroundColor(QuickPanelStyle.textSubtle)
+                    Text(selectedStreamTitle)
+                        .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, weight: .medium))
+                        .foregroundColor(QuickPanelStyle.text)
                         .lineLimit(1)
                     Image(systemName: isPickerExpanded ? "chevron.up" : "chevron.down")
                         .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .semibold))
@@ -410,7 +413,13 @@ struct QuickPanelView: View {
            let stream = manager.availableStreams.first(where: { $0.id == id }) {
             return stream.title
         }
-        return "Select stream..."
+        return "New Stream"
+    }
+
+    private var compactStreamTitle: String {
+        selectedStreamTitle.count > 24
+            ? "\(selectedStreamTitle.prefix(23))…"
+            : selectedStreamTitle
     }
 
     // MARK: - Ephemeral Conversation Response Area
@@ -576,23 +585,34 @@ struct QuickPanelView: View {
 
     // MARK: - Mode Hints Bar
 
+    @ViewBuilder
     private var modeHintsBar: some View {
-        HStack(spacing: Spacing.md) {
-            Text("↵  Save")
-                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
-
-            Text("⌘↵  Save & develop")
-                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
-
-            Text("⌥↵  Ask AI here")
-                .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
-
-            Spacer()
+        if let confirmation = manager.saveConfirmation {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize, weight: .semibold))
+                Text(confirmation)
+                    .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, weight: .medium))
+                    .lineLimit(1)
+                Spacer()
+            }
+            .foregroundColor(QuickPanelStyle.success)
+            .padding(.horizontal, Spacing.xs)
+            .accessibilityElement(children: .combine)
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Spacing.md) {
+                    Text("↵  Save to \(compactStreamTitle)")
+                    Text("⌘↵  Save + develop")
+                    Spacer(minLength: 0)
+                }
+                Text("⌥↵  Chat here (not saved) · Esc closes, draft kept")
+            }
+            .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
+            .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
+            .lineLimit(1)
+            .padding(.horizontal, Spacing.xs)
         }
-        .padding(.horizontal, Spacing.xs)
     }
 
     // MARK: - Error View

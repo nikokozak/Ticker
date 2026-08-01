@@ -761,6 +761,63 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func test_quickPanelEscapeKeepsDraftAndRestoresInterruptedPrompt() {
+        let manager = QuickPanelManager()
+        manager.inputText = "Unfinished capture"
+
+        manager.handleEscape()
+
+        XCTAssertEqual(manager.inputText, "Unfinished capture")
+
+        manager.inputText = ""
+        manager.ephemeralConversation = EphemeralConversation(
+            isStreaming: true,
+            currentResponse: "Partial answer",
+            turns: [ConversationTurn(role: .user, content: "Question to retry", contextIncluded: false)]
+        )
+
+        manager.handleEscape()
+
+        XCTAssertFalse(manager.ephemeralConversation.isStreaming)
+        XCTAssertEqual(manager.inputText, "Question to retry")
+    }
+
+    @MainActor
+    func test_quickPanelSaveConfirmationNamesDestinationAndBackgroundWork() {
+        XCTAssertEqual(
+            QuickPanelManager.saveConfirmationMessage(
+                destination: "PCB constraints",
+                developing: false
+            ),
+            "Saved to PCB constraints"
+        )
+        XCTAssertEqual(
+            QuickPanelManager.saveConfirmationMessage(
+                destination: "PCB constraints",
+                developing: true
+            ),
+            "Saved to PCB constraints · developing…"
+        )
+    }
+
+    @MainActor
+    func test_quickPanelIgnoresAnotherSubmitWhileSaving() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Inbox")
+            try service.saveStream(stream)
+            let manager = QuickPanelManager(persistence: service)
+            manager.loadAvailableStreams()
+            manager.inputText = "Only one copy"
+            manager.isLoading = true
+
+            await manager.handleEnter()
+
+            XCTAssertNil(try service.loadStreamDocument(streamId: stream.id))
+            XCTAssertEqual(manager.inputText, "Only one copy")
+        }
+    }
+
     func test_v14MigrationCreatesPDFHighlightsTable() throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
