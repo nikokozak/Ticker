@@ -19,6 +19,7 @@ const receiptV2 = {
   ...receipt,
   version: 2,
   anchor: { kind: 'stream', text: 'Start here.', from: 5, to: 16 },
+  streamDocument: { sent: true, charCount: 1200 },
   pinned: [{
     kind: 'stream_quote', quote: 'Pinned Stream text.', from: 30, to: 49,
   }, {
@@ -36,15 +37,30 @@ describe('thread AI context receipts', () => {
     });
     expect(parsed?.version).toBe(1);
     expect(parsed?.pinned).toEqual([]);
+    expect(parsed?.streamDocument).toBeUndefined();
   });
 
   it('parses v2 primary range and pinned context without weakening v1', () => {
     expect(parseThreadAISentFacts(receiptV2)).toMatchObject({
       version: 2,
       anchor: { text: 'Start here.', from: 5, to: 16 },
+      streamDocument: { sent: true, charCount: 1200 },
       pinned: receiptV2.pinned,
     });
-    expect(parseThreadAISentFacts({ ...receiptV2, pinned: [{ kind: 'stream_quote' }] })).toBe(null);
+    expect(parseThreadAISentFacts({
+      ...receiptV2,
+      pinned: [{ kind: 'stream_quote' }, receiptV2.pinned[1]],
+    })?.pinned).toEqual([receiptV2.pinned[1]]);
+    for (const invalidPosition of [null, '', false, []]) {
+      expect(parseThreadAISentFacts({
+        ...receiptV2,
+        anchor: { ...receiptV2.anchor, from: invalidPosition, to: 16 },
+      })).toBe(null);
+    }
+    expect(parseThreadAISentFacts({
+      ...receiptV2,
+      pinned: [{ kind: 'stream_quote', quote: 'Bad range', from: '', to: 4 }],
+    })?.pinned).toEqual([]);
   });
 
   it('keeps released citation-array manifests readable', () => {

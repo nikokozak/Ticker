@@ -74,6 +74,11 @@ struct ThreadAISentFacts: Codable, Equatable {
         let totalAtSend: Int
     }
 
+    struct StreamDocument: Codable, Equatable {
+        let sent: Bool
+        let charCount: Int
+    }
+
     struct Source: Codable, Equatable {
         let kind: String
         let n: Int?
@@ -98,6 +103,7 @@ struct ThreadAISentFacts: Codable, Equatable {
     let kind: String
     let requestId: String
     let anchor: Anchor
+    let streamDocument: StreamDocument
     let note: Note
     let turns: Turns
     let sourceContextMode: String
@@ -587,10 +593,9 @@ final class AIMessageHandler: BridgeMessageHandler {
         let streamMarkdown = payload["streamMarkdown"]?.value as? String ?? storedStreamMarkdown
         let anchorStart = payload["anchorStart"]?.intValue ?? thread.anchorStart
         let anchorEnd = payload["anchorEnd"]?.intValue ?? thread.anchorEnd
-        let pinnedContext = anchors.compactMap { anchor -> ThreadAIPinnedContext? in
-            guard let quote = anchor.quote, !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return nil
-            }
+        let pinnedAnchors = Self.sentPinnedAnchors(anchors, excluding: thread)
+        let pinnedContext = pinnedAnchors.compactMap { anchor -> ThreadAIPinnedContext? in
+            guard let quote = anchor.quote else { return nil }
             return ThreadAIPinnedContext(kind: anchor.kind, quote: quote)
         }
         let outboundQuery = TickerInternalURLSanitizer.sanitize(query)
@@ -611,7 +616,8 @@ final class AIMessageHandler: BridgeMessageHandler {
                 anchorText: sentAnchorContext,
                 anchorStart: anchorStart,
                 anchorEnd: anchorEnd,
-                anchors: anchors,
+                streamMarkdown: streamMarkdown,
+                anchors: pinnedAnchors,
                 receipt: receipt
             )
             sentFacts = facts
@@ -639,7 +645,8 @@ final class AIMessageHandler: BridgeMessageHandler {
                 anchorText: sentAnchorContext,
                 anchorStart: anchorStart,
                 anchorEnd: anchorEnd,
-                anchors: anchors,
+                streamMarkdown: streamMarkdown,
+                anchors: pinnedAnchors,
                 receipt: receipt
             )
             guard !responseRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -767,6 +774,7 @@ final class AIMessageHandler: BridgeMessageHandler {
         anchorText: String,
         anchorStart: Int?,
         anchorEnd: Int?,
+        streamMarkdown: String,
         anchors: [StreamThreadAnchor],
         receipt: ThreadAIRequestReceipt
     ) -> ThreadAISentFacts {
@@ -810,7 +818,7 @@ final class AIMessageHandler: BridgeMessageHandler {
         }
 
         let pinned = anchors.compactMap { anchor -> ThreadAISentFacts.Pinned? in
-            guard let quote = anchor.quote, !quote.isEmpty else { return nil }
+            guard let quote = anchor.quote else { return nil }
             var anchorSource: SourceReference?
             var anchorHighlight: PDFHighlightRecord?
             if let persistence, let sourceId = anchor.sourceId {
@@ -832,6 +840,7 @@ final class AIMessageHandler: BridgeMessageHandler {
             )
         }
 
+        let sentStreamDocument = AIOrchestrator.threadDocumentText(streamMarkdown)
         return ThreadAISentFacts(
             version: 2,
             kind: "threadAI",
@@ -846,6 +855,10 @@ final class AIMessageHandler: BridgeMessageHandler {
                 highlightId: thread.highlightId?.uuidString,
                 page: highlight?.page
             ),
+            streamDocument: ThreadAISentFacts.StreamDocument(
+                sent: !sentStreamDocument.isEmpty,
+                charCount: sentStreamDocument.count
+            ),
             note: ThreadAISentFacts.Note(
                 sent: false,
                 text: nil
@@ -858,6 +871,25 @@ final class AIMessageHandler: BridgeMessageHandler {
             sources: sources,
             pinned: pinned
         )
+    }
+
+    private static func sentPinnedAnchors(
+        _ anchors: [StreamThreadAnchor],
+        excluding thread: StreamThread
+    ) -> [StreamThreadAnchor] {
+        let primaryQuote = thread.anchorText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return anchors.filter { anchor in
+            guard let quote = anchor.quote,
+                  !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            if !primaryQuote.isEmpty,
+               quote.trimmingCharacters(in: .whitespacesAndNewlines) == primaryQuote { return false }
+            if let range = streamAnchorRange(anchor.anchorSpanId),
+               let primaryFrom = thread.anchorStart,
+               let primaryTo = thread.anchorEnd,
+               range.from == primaryFrom,
+               range.to == primaryTo { return false }
+            return true
+        }
     }
 
     private static func streamAnchorRange(_ value: String?) -> (from: Int, to: Int)? {

@@ -1629,7 +1629,10 @@ export function RichStreamEditor({
   const liveConversationSurface = editor ? conversationSurface(editor.view.state) : null;
   const streamSelection = editor?.view.state.selection;
   const conversationContextOptions = [
-    ...(editor && streamSelection && !streamSelection.empty ? [{
+    ...(editor && streamSelection && !streamSelection.empty
+      && (!liveConversationSurface
+        || streamSelection.to <= liveConversationSurface.anchor.from
+        || streamSelection.from >= liveConversationSurface.anchor.to) ? [{
       kind: 'stream_quote' as const,
       quote: editor.view.state.doc.textBetween(streamSelection.from, streamSelection.to, '\n', ''),
       from: streamSelection.from,

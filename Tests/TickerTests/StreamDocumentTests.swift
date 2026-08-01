@@ -1289,12 +1289,12 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(truncated.messages.map(\.content), prepared.request.messages.map(\.content))
     }
 
-    func test_conversationAIFramesPrimaryWholeStreamAndPinnedContextExactlyOnce() throws {
+    func test_conversationAIFramesAndSanitizesPrimaryStreamAndPinnedMaterial() throws {
         let pinnedQuote = "Pinned [link](ticker-pdf://private) verbatim."
         let prepared = try AIOrchestrator.prepareThreadRequest(
             query: "Check this",
             anchorText: "Primary block",
-            streamMarkdown: "Whole [Stream](ticker-thread://private)",
+            streamMarkdown: "Primary block\n\nWhole [Stream](ticker-thread://private)",
             pinnedContext: [ThreadAIPinnedContext(kind: .pdfQuote, quote: pinnedQuote)],
             priorTurns: [],
             sourceContext: nil
@@ -1303,9 +1303,11 @@ final class StreamDocumentTests: XCTestCase {
 
         XCTAssertTrue(content.contains("PRIMARY anchor block"))
         XCTAssertTrue(content.contains("<primary_anchor>\nPrimary block\n</primary_anchor>"))
-        XCTAssertTrue(content.contains("<stream_document>\nWhole Stream\n</stream_document>"))
+        XCTAssertTrue(content.contains("<stream_document>\nPrimary block\n\nWhole Stream\n</stream_document>"))
         XCTAssertTrue(content.contains("<pinned_context kind=\"pdf_quote\">\n\(pinnedQuote)\n</pinned_context>"))
         XCTAssertEqual(content.components(separatedBy: pinnedQuote).count - 1, 1)
+        let pinnedFrames = prepared.request.messages.filter { $0.content.contains("<pinned_context") }
+        XCTAssertFalse(pinnedFrames.contains { $0.content.contains("Primary block") })
     }
 
     func test_threadAIRequestRefusesOneTokenPastProtectedBoundary() throws {
@@ -1629,6 +1631,19 @@ final class StreamDocumentTests: XCTestCase {
                     threadId: thread.threadId,
                     kind: .streamQuote,
                     quote: "A second constraint."
+                ),
+                StreamThreadAnchor(
+                    anchorId: "anchor-range-duplicate",
+                    threadId: thread.threadId,
+                    kind: .streamQuote,
+                    quote: "Same primary range",
+                    anchorSpanId: "pm:1:58"
+                ),
+                StreamThreadAnchor(
+                    anchorId: "anchor-whitespace",
+                    threadId: thread.threadId,
+                    kind: .streamQuote,
+                    quote: " \n "
                 )
             ])
             let prior = AIExchange(
@@ -1654,7 +1669,7 @@ final class StreamDocumentTests: XCTestCase {
                     routedRetrievalQuery = retrievalQuery
                     XCTAssertEqual(anchorText, thread.anchorText)
                     XCTAssertEqual(streamMarkdown, "Stream stays unchanged.")
-                    XCTAssertEqual(pinned.map(\.quote), [thread.anchorText, "A second constraint."])
+                    XCTAssertEqual(pinned.map(\.quote), ["A second constraint."])
                     XCTAssertEqual(turns.map(\.requestId), [prior.requestId])
                     let receipt = ThreadAIRequestReceipt(
                         sourceContext: SourceContext(
@@ -1708,7 +1723,10 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(turns["includedRequestIds"] as? [String], [prior.requestId])
             XCTAssertEqual(turns["totalAtSend"] as? Int, 1)
             let pinned = try XCTUnwrap(receipt["pinned"] as? [[String: Any]])
-            XCTAssertEqual(pinned.map { $0["quote"] as? String }, [thread.anchorText, "A second constraint."])
+            XCTAssertEqual(pinned.map { $0["quote"] as? String }, ["A second constraint."])
+            let streamDocument = try XCTUnwrap(receipt["streamDocument"] as? [String: Any])
+            XCTAssertEqual(streamDocument["sent"] as? Bool, true)
+            XCTAssertEqual(streamDocument["charCount"] as? Int, "Stream stays unchanged.".count)
             let sources = try XCTUnwrap(receipt["sources"] as? [[String: Any]])
             XCTAssertEqual(sources.map { $0["sourceId"] as? String }, [sentSource.id.uuidString])
             XCTAssertFalse(sources.contains { $0["sourceId"] as? String == otherSource.id.uuidString })
@@ -1961,8 +1979,8 @@ final class StreamDocumentTests: XCTestCase {
 
             XCTAssertThrowsError(try service.saveStreamDocument(
                 streamId: stream.id,
-                docJSON: initial.docJSON,
-                docFormatVersion: initial.docFormatVersion,
+                docJSON: docJSON,
+                docFormatVersion: 1,
                 markdown: "stale",
                 baseRevision: initial.revision,
                 spans: [],

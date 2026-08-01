@@ -523,6 +523,7 @@ describe('RichStreamEditor inline conversations', () => {
       kind: 'threadAI',
       requestId,
       anchor: { kind: 'stream', text: 'Original paragraph.', from: 1, to: 20 },
+      streamDocument: { sent: true, charCount: 19 },
       note: { sent: false },
       turns: { includedRequestIds: [], totalAtSend: 0 },
       sourceContextMode: 'retrieved',
@@ -572,6 +573,7 @@ describe('RichStreamEditor inline conversations', () => {
     expect(disclosure.open).toBe(false);
     await act(async () => { (disclosure.querySelector('summary') as HTMLElement).click(); });
     expect(disclosure.textContent).toContain('Primary passage Original paragraph.');
+    expect(disclosure.textContent).toContain('Full stream document · 19 chars');
     expect(disclosure.textContent).toContain('Pinned Stream Pinned constraint.');
     expect(disclosure.textContent).toContain('Retrieved passages · Manual p.4');
     expect(disclosure.textContent).toContain('Prior turns 0 of 0');
@@ -732,6 +734,7 @@ describe('RichStreamEditor inline conversations', () => {
     await open();
     let context = [...document.querySelectorAll('button')]
       .find((button) => button.textContent?.trim() === '+ context') as HTMLButtonElement;
+    await selectEditorText('Original paragraph.');
     expect(context.disabled).toBe(true);
     await act(async () => {
       bridge.receive({

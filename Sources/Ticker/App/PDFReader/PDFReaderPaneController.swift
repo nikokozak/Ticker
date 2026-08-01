@@ -388,6 +388,13 @@ final class PDFReaderPaneController: NSViewController {
     private var pdfHighlightClickTracker: PDFHighlightClickTracker?
     private var anchorPickPreviousAcceptsMouseMovedEvents: Bool?
     private var pdfFindDebounceWorkItem: DispatchWorkItem?
+    private var pdfSelectionNotifyWorkItem: DispatchWorkItem?
+    private var pdfSelectionCache: (
+        sourceId: UUID,
+        quote: String,
+        rects: [PDFHighlightRect],
+        payload: PDFHighlightLinkPayload
+    )?
     private var pdfFindGeneration = 0
     private var pdfFindMatches: [PDFSelection] = []
     private var pdfFindCurrentIndex: Int?
@@ -401,6 +408,7 @@ final class PDFReaderPaneController: NSViewController {
     deinit {
         pdfFindDebounceWorkItem?.cancel()
         pdfPageSaveWorkItem?.cancel()
+        pdfSelectionNotifyWorkItem?.cancel()
         pdfPaneMessageWorkItem?.cancel()
         NotificationCenter.default.removeObserver(self)
         if let pdfHighlightActivationMonitor {
@@ -1494,6 +1502,9 @@ final class PDFReaderPaneController: NSViewController {
         exitAnchorPickMode(notifyCancelled: false)
         flushPDFPageSave()
         pdfPageSaveWorkItem?.cancel()
+        pdfSelectionNotifyWorkItem?.cancel()
+        pdfSelectionNotifyWorkItem = nil
+        pdfSelectionCache = nil
         pdfPaneMessageWorkItem?.cancel()
         pdfPaneTransientMessage = nil
         resetPDFFindState()
@@ -1516,12 +1527,12 @@ final class PDFReaderPaneController: NSViewController {
     @objc private func handlePDFPaneSelectionChanged() {
         guard !isAnchorPickMode else {
             setPDFSelectionActionsEnabled(false)
-            notifySelectionChanged(nil)
+            scheduleSelectionChanged(nil)
             return
         }
         let payload = currentSelectionPayload()
         setPDFSelectionActionsEnabled(payload != nil)
-        notifySelectionChanged(payload?.highlight)
+        scheduleSelectionChanged(payload?.highlight)
     }
 
     @objc private func handlePDFPanePageChanged() {
@@ -1701,11 +1712,23 @@ final class PDFReaderPaneController: NSViewController {
 
     private func currentSelectionPayload() -> PDFHighlightLinkPayload? {
         guard let context = activePDFContext,
-              let selection = pdfPanePDFView.currentSelection else { return nil }
+              let selection = pdfPanePDFView.currentSelection else {
+            pdfSelectionCache = nil
+            return nil
+        }
         let quote = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let rects = highlightRects(for: selection)
-        guard !quote.isEmpty, let firstRect = rects.first else { return nil }
-        return PDFHighlightLinkPayload(
+        guard !quote.isEmpty, let firstRect = rects.first else {
+            pdfSelectionCache = nil
+            return nil
+        }
+        if let cached = pdfSelectionCache,
+           cached.sourceId == context.sourceId,
+           cached.quote == quote,
+           cached.rects == rects {
+            return cached.payload
+        }
+        let payload = PDFHighlightLinkPayload(
             streamId: context.streamId,
             sourceName: context.sourceName,
             highlight: PDFHighlightRecord(
@@ -1717,6 +1740,18 @@ final class PDFReaderPaneController: NSViewController {
                 createdAt: Date()
             )
         )
+        pdfSelectionCache = (context.sourceId, quote, rects, payload)
+        return payload
+    }
+
+    private func scheduleSelectionChanged(_ highlight: PDFHighlightRecord?) {
+        pdfSelectionNotifyWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.pdfSelectionNotifyWorkItem = nil
+            self?.notifySelectionChanged(highlight)
+        }
+        pdfSelectionNotifyWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
     }
 
     private func notifySelectionChanged(_ highlight: PDFHighlightRecord?) {

@@ -95,6 +95,9 @@ function ThreadContextDisclosure({ value }: { value: unknown }) {
       <summary>What AI saw</summary>
       <div className="conversation-receipt-body">
         <p><span>Primary passage</span> {receipt.anchor.text || 'Unavailable'}</p>
+        {receipt.streamDocument && (
+          <p><span>Full stream document</span> · {receipt.streamDocument.charCount} chars</p>
+        )}
         {receipt.pinned.map((pin, index) => (
           <p key={`${pin.kind}:${index}`}>
             <span>{pin.kind === 'pdf_quote' ? 'Pinned PDF' : 'Pinned Stream'}</span> {pin.quote}

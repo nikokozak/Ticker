@@ -34,6 +34,7 @@ export interface ThreadAISentFacts {
     highlightId?: string;
     page?: number;
   };
+  streamDocument?: { sent: boolean; charCount: number };
   note: { sent: boolean; text?: string };
   turns: { includedRequestIds: string[]; totalAtSend: number };
   sourceContextMode: 'none' | 'passthrough' | 'retrieved' | 'unavailable';
@@ -79,8 +80,7 @@ function parseSource(value: unknown): ThreadAISourceFact | null {
 }
 
 function nonnegativeInteger(value: unknown): number | undefined {
-  const number = Number(value);
-  return Number.isInteger(number) && number >= 0 ? number : undefined;
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function parsePinned(value: unknown): ThreadAIPinnedFact | null {
@@ -112,6 +112,7 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
   const anchor = object(receipt?.anchor);
   const note = object(receipt?.note);
   const turns = object(receipt?.turns);
+  const streamDocument = object(receipt?.streamDocument);
   if ((receipt?.version !== 1 && receipt?.version !== 2)
     || receipt.kind !== 'threadAI' || !anchor || !note || !turns) return null;
   if (typeof receipt.requestId !== 'string' || typeof anchor.text !== 'string') return null;
@@ -129,12 +130,14 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
   const anchorTo = nonnegativeInteger(anchor.to);
   if ((anchorFrom === undefined) !== (anchorTo === undefined)
     || (anchorFrom !== undefined && anchorTo! < anchorFrom)) return null;
+  const streamCharCount = nonnegativeInteger(streamDocument?.charCount);
+  if (receipt.version === 2 && (!streamDocument
+    || typeof streamDocument.sent !== 'boolean'
+    || streamCharCount === undefined)) return null;
   const pinned = Array.isArray(receipt.pinned)
-    ? receipt.pinned.map(parsePinned)
+    ? receipt.pinned.flatMap((pin) => parsePinned(pin) ?? [])
     : [];
-  if (receipt.version === 2 && (!Array.isArray(receipt.pinned) || pinned.some((pin) => pin === null))) {
-    return null;
-  }
+  if (receipt.version === 2 && !Array.isArray(receipt.pinned)) return null;
 
   return {
     version: receipt.version,
@@ -150,6 +153,9 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
       highlightId: optionalString(anchor.highlightId),
       page: positiveInteger(anchor.page),
     },
+    streamDocument: receipt.version === 2
+      ? { sent: streamDocument!.sent as boolean, charCount: streamCharCount! }
+      : undefined,
     note: {
       sent: note.sent,
       text: optionalString(note.text),
@@ -159,7 +165,7 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
     sources: Array.isArray(receipt.sources)
       ? receipt.sources.flatMap((source) => parseSource(source) ?? [])
       : [],
-    pinned: pinned.flatMap((pin) => pin ?? []),
+    pinned,
   };
 }
 
