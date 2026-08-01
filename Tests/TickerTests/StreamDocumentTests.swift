@@ -1587,7 +1587,20 @@ final class StreamDocumentTests: XCTestCase {
                 workingText: "Check [saved link](ticker-thread://private-note).",
                 anchorText: "Read [the source](ticker-pdf://private-source?page=2)."
             )
-            try service.createStreamThread(thread)
+            try service.createStreamThread(thread, anchors: [
+                StreamThreadAnchor(
+                    anchorId: "anchor-1",
+                    threadId: thread.threadId,
+                    kind: .streamQuote,
+                    quote: thread.anchorText
+                ),
+                StreamThreadAnchor(
+                    anchorId: "anchor-2",
+                    threadId: thread.threadId,
+                    kind: .streamQuote,
+                    quote: "A second constraint."
+                )
+            ])
             let prior = AIExchange(
                 requestId: "prior-request",
                 streamId: stream.id,
@@ -1606,10 +1619,15 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
                 routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
-                routeThreadAI: { query, retrievalQuery, _, _, _, _, turns, onPrepared, onChunk, onComplete, _, onModelSelected in
+                routeThreadAI: { query, retrievalQuery, _, _, anchorText, workingText, turns, onPrepared, onChunk, onComplete, _, onModelSelected in
                     routedQuery = query
                     routedRetrievalQuery = retrievalQuery
-                    XCTAssertEqual(turns.map(\.requestId), [prior.requestId])
+                    XCTAssertEqual(
+                        anchorText,
+                        "Evidence 1:\n\(thread.anchorText)\n\nEvidence 2:\nA second constraint."
+                    )
+                    XCTAssertEqual(workingText, thread.workingText)
+                    XCTAssertTrue(turns.isEmpty)
                     let receipt = ThreadAIRequestReceipt(
                         sourceContext: SourceContext(
                             text: sentSource.extractedText ?? "",
@@ -1617,8 +1635,8 @@ final class StreamDocumentTests: XCTestCase {
                             mode: .passthrough,
                             sourceIds: [sentSource.id]
                         ),
-                        includedPriorRequestIds: [prior.requestId],
-                        totalPriorExchangeCount: 1
+                        includedPriorRequestIds: [],
+                        totalPriorExchangeCount: 0
                     )
                     onPrepared(receipt)
                     onModelSelected?("provider/model")
@@ -1652,12 +1670,16 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(receipt["version"] as? Int, 1)
             XCTAssertEqual(receipt["kind"] as? String, "threadAI")
             let anchor = try XCTUnwrap(receipt["anchor"] as? [String: Any])
-            XCTAssertEqual(anchor["text"] as? String, "Read the source.")
+            XCTAssertEqual(
+                anchor["text"] as? String,
+                "Evidence 1:\nRead the source.\n\nEvidence 2:\nA second constraint."
+            )
+            XCTAssertEqual(anchor["kind"] as? String, "mixed")
             let note = try XCTUnwrap(receipt["note"] as? [String: Any])
             XCTAssertEqual(note["text"] as? String, "Check saved link.")
             let turns = try XCTUnwrap(receipt["turns"] as? [String: Any])
-            XCTAssertEqual(turns["includedRequestIds"] as? [String], [prior.requestId])
-            XCTAssertEqual(turns["totalAtSend"] as? Int, 1)
+            XCTAssertEqual(turns["includedRequestIds"] as? [String], [])
+            XCTAssertEqual(turns["totalAtSend"] as? Int, 0)
             let sources = try XCTUnwrap(receipt["sources"] as? [[String: Any]])
             XCTAssertEqual(sources.map { $0["sourceId"] as? String }, [sentSource.id.uuidString])
             XCTAssertFalse(sources.contains { $0["sourceId"] as? String == otherSource.id.uuidString })

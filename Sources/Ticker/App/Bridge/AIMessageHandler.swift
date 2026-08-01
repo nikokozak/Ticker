@@ -524,7 +524,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                 type: "documentAIError",
                 payload: [
                     "requestId": AnyCodable(requestId),
-                    "error": AnyCodable("This thread request is invalid."),
+                    "error": AnyCodable("This Sidenote request is invalid."),
                     "errorCode": AnyCodable("invalid_thread_request")
                 ]
             ))
@@ -532,7 +532,7 @@ final class AIMessageHandler: BridgeMessageHandler {
         }
 
         let thread: StreamThread
-        let exchanges: [AIExchange]
+        let anchors: [StreamThreadAnchor]
         do {
             guard let storedThread = try persistence.loadStreamThread(
                 threadId: threadId,
@@ -541,13 +541,13 @@ final class AIMessageHandler: BridgeMessageHandler {
                 throw StreamThreadPersistenceError.threadNotFound
             }
             thread = storedThread
-            exchanges = try persistence.loadThreadExchanges(threadId: threadId, streamId: streamId)
+            anchors = try persistence.loadStreamThreadAnchors(threadId: threadId, streamId: streamId)
         } catch {
             sendToWeb(BridgeMessage(
                 type: "documentAIError",
                 payload: [
                     "requestId": AnyCodable(requestId),
-                    "error": AnyCodable("This thread is no longer available in this Stream."),
+                    "error": AnyCodable("This Sidenote is no longer available in this Stream."),
                     "errorCode": AnyCodable("thread_unavailable")
                 ]
             ))
@@ -556,15 +556,19 @@ final class AIMessageHandler: BridgeMessageHandler {
 
         let sourceScopeRaw = payload["sourceScope"]?.value as? String
         let sourceScope = SourceScope(rawValue: sourceScopeRaw ?? "") ?? .auto
-        let priorTurns = exchanges.map {
-            ThreadAIConversationTurn(
-                requestId: $0.requestId,
-                userInput: $0.userInput,
-                responseRaw: $0.responseRaw
-            )
-        }
+        let anchorQuotes = anchors
+            .filter { $0.kind != .placement }
+            .compactMap(\.quote)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let anchorContext = anchorQuotes
+            .enumerated()
+            .map { anchorQuotes.count > 1 ? "Evidence \($0.offset + 1):\n\($0.element)" : $0.element }
+            .joined(separator: "\n\n")
+        let sentAnchorContext = anchorContext.isEmpty ? thread.anchorText : anchorContext
+        let isCompositeAnchor = anchorQuotes.count > 1
         let outboundQuery = TickerInternalURLSanitizer.sanitize(query)
-        let retrievalQuery = [outboundQuery, thread.anchorText, thread.workingText]
+        let retrievalQuery = [outboundQuery, sentAnchorContext, thread.workingText]
             .map(TickerInternalURLSanitizer.sanitize)
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: "\n")
@@ -577,6 +581,8 @@ final class AIMessageHandler: BridgeMessageHandler {
             let facts = self.threadSentFacts(
                 requestId: requestId,
                 thread: thread,
+                anchorText: sentAnchorContext,
+                isCompositeAnchor: isCompositeAnchor,
                 receipt: receipt
             )
             sentFacts = facts
@@ -601,6 +607,8 @@ final class AIMessageHandler: BridgeMessageHandler {
             let facts = sentFacts ?? self.threadSentFacts(
                 requestId: requestId,
                 thread: thread,
+                anchorText: sentAnchorContext,
+                isCompositeAnchor: isCompositeAnchor,
                 receipt: receipt
             )
             guard !responseRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -642,7 +650,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                     type: "documentAIError",
                     payload: [
                         "requestId": AnyCodable(requestId),
-                        "error": AnyCodable("The reply could not be saved, so it was not added to the thread."),
+                        "error": AnyCodable("The proposal could not be saved, so it was not added to the Sidenote."),
                         "errorCode": AnyCodable("thread_save_failed")
                     ]
                 ))
@@ -701,9 +709,9 @@ final class AIMessageHandler: BridgeMessageHandler {
                 retrievalQuery,
                 streamId,
                 sourceScope,
-                thread.anchorText,
+                sentAnchorContext,
                 thread.workingText,
-                priorTurns,
+                [],
                 onPrepared,
                 onChunk,
                 onComplete,
@@ -724,6 +732,8 @@ final class AIMessageHandler: BridgeMessageHandler {
     private func threadSentFacts(
         requestId: String,
         thread: StreamThread,
+        anchorText: String,
+        isCompositeAnchor: Bool,
         receipt: ThreadAIRequestReceipt
     ) -> ThreadAISentFacts {
         var source: SourceReference?
@@ -773,12 +783,12 @@ final class AIMessageHandler: BridgeMessageHandler {
             kind: "threadAI",
             requestId: requestId,
             anchor: ThreadAISentFacts.Anchor(
-                kind: thread.sourceId == nil ? "stream" : "pdf",
-                text: TickerInternalURLSanitizer.sanitize(thread.anchorText),
-                sourceId: thread.sourceId?.uuidString,
-                sourceName: source?.shortTitle,
-                highlightId: thread.highlightId?.uuidString,
-                page: highlight?.page
+                kind: isCompositeAnchor ? "mixed" : thread.sourceId == nil ? "stream" : "pdf",
+                text: TickerInternalURLSanitizer.sanitize(anchorText),
+                sourceId: isCompositeAnchor ? nil : thread.sourceId?.uuidString,
+                sourceName: isCompositeAnchor ? nil : source?.shortTitle,
+                highlightId: isCompositeAnchor ? nil : thread.highlightId?.uuidString,
+                page: isCompositeAnchor ? nil : highlight?.page
             ),
             note: ThreadAISentFacts.Note(
                 sent: !cleanNote.isEmpty,

@@ -789,8 +789,8 @@ final class PDFReaderPaneController: NSViewController {
         pdfPaneDiscussButton.imageScaling = .scaleProportionallyDown
         pdfPaneDiscussButton.isBordered = true
         pdfPaneDiscussButton.showsBorderOnlyWhileMouseInside = true
-        pdfPaneDiscussButton.toolTip = "Start a thread from selected text"
-        pdfPaneDiscussButton.setAccessibilityLabel("Discuss selected PDF text")
+        pdfPaneDiscussButton.toolTip = "Start or add to a Sidenote"
+        pdfPaneDiscussButton.setAccessibilityLabel("Add selected PDF text to a Sidenote")
         pdfPaneDiscussButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         pdfPaneDiscussButton.setContentHuggingPriority(.required, for: .horizontal)
         setPDFSelectionActionsEnabled(false)
@@ -1663,9 +1663,9 @@ final class PDFReaderPaneController: NSViewController {
 
     @objc private func handlePDFPaneDiscussSelection() {
         handlePDFPaneSelection(
-            missingPDFMessage: "Open a PDF before starting a thread.",
+            missingPDFMessage: "Open a PDF before starting a Sidenote.",
             missingSelectionMessage: "Nothing is selected to discuss.",
-            invalidSelectionMessage: "That selection cannot start a thread.",
+            invalidSelectionMessage: "That selection cannot start a Sidenote.",
             action: onDiscussSelection
         )
     }

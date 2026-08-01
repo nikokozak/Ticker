@@ -174,19 +174,10 @@ final class WebViewManager: NSObject {
         }
         pdfPaneController.onDiscussSelection = { [weak self] payload in
             guard let self else { return false }
-            guard let persistence = self.persistence else {
-                self.sendSourceError("Could not start a thread from that PDF selection.")
-                return false
-            }
-            do {
-                try persistence.savePDFHighlight(payload.highlight)
-                self.sendPDFThreadRequested(payload)
-                return true
-            } catch {
-                DebugLog.log("[WebViewManager] Failed to save PDF thread highlight (\(DebugLog.errorSummary(error)))")
-                self.sendSourceError("Could not start a thread from that PDF selection.")
-                return false
-            }
+            // The highlight is provisional until Web creates or updates a Sidenote;
+            // ThreadMessageHandler persists both in one database transaction.
+            self.sendPDFThreadRequested(payload)
+            return true
         }
         pdfPaneController.onAnchorPlaced = { [weak self] payload in
             guard let self else { return false }
@@ -417,7 +408,17 @@ final class WebViewManager: NSObject {
                 "shortTitle": AnyCodable(SourceShortTitle.derive(displayName: payload.sourceName)),
                 "highlightId": AnyCodable(payload.highlight.id.uuidString),
                 "page": AnyCodable(payload.highlight.page),
-                "quote": AnyCodable(payload.highlight.quote)
+                "quote": AnyCodable(payload.highlight.quote),
+                "createdAt": AnyCodable(ISO8601DateFormatter().string(from: payload.highlight.createdAt)),
+                "rects": AnyCodable(payload.highlight.rects.map { rect in
+                    [
+                        "page": rect.page,
+                        "x": rect.x,
+                        "y": rect.y,
+                        "w": rect.w,
+                        "h": rect.h
+                    ]
+                })
             ]
         ))
     }

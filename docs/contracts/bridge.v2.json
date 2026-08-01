@@ -69,7 +69,7 @@
         "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page", "quote"]
       },
       "pdfThreadRequested": {
-        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page", "quote"]
+        "requiredPayloadKeys": ["streamId", "sourceId", "sourceName", "shortTitle", "highlightId", "page", "quote", "createdAt", "rects"]
       },
       "pdfHighlightDeleted": {
         "requiredPayloadKeys": ["streamId", "highlightId"]
