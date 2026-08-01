@@ -1644,31 +1644,68 @@ body {
 }
 
 .thread-insertion-bar {
-  position: sticky;
-  z-index: 6;
-  top: var(--spacing-md);
+  position: fixed;
+  z-index: 940;
+  left: 50%;
+  bottom: var(--space-5);
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-md);
-  width: min(36rem, calc(100% - var(--spacing-xl)));
-  margin: var(--spacing-md) auto calc(0px - var(--space-6));
-  padding: var(--spacing-sm) var(--spacing-md);
+  box-sizing: border-box;
+  width: min(52rem, calc(100vw - var(--space-6)));
+  min-height: 52px;
+  padding: var(--spacing-sm) var(--spacing-lg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-elevated);
-  box-shadow: var(--control-shadow);
+  box-shadow: var(--overlay-shadow);
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
 }
 
+.thread-insertion-excerpt {
+  min-width: 0;
+  flex: 1 1 45%;
+  overflow: hidden;
+  color: var(--color-text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-insertion-guidance {
+  flex: 0 1 auto;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
 .thread-insertion-bar button {
+  flex: 0 0 auto;
   border: 0;
   background: transparent;
   color: var(--color-accent);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+}
+
+@media (max-width: 680px) {
+  .thread-insertion-bar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .thread-insertion-excerpt {
+    flex-basis: calc(100% - var(--space-8));
+  }
+
+  .thread-insertion-guidance {
+    order: 3;
+    flex-basis: 100%;
+    white-space: normal;
+  }
 }
 
 .document-editor-shell.cm-prepaint {

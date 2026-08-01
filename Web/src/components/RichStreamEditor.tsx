@@ -113,8 +113,11 @@ interface RichStreamEditorProps {
 const PDF_URL_PREFIX = 'ticker-pdf://';
 const THREAD_URL_PREFIX = 'ticker-thread://';
 
-interface PendingThreadInsertion extends ThreadInsertionRequest {
-  message: string;
+type PendingThreadInsertion = ThreadInsertionRequest;
+
+function insertionExcerpt(text: string, limit = 64): string {
+  const singleLine = text.replace(/\s+/g, ' ').trim();
+  return singleLine.length > limit ? `${singleLine.slice(0, limit - 1)}…` : singleLine;
 }
 
 function readBlobAsBase64(blob: Blob): Promise<string> {
@@ -255,6 +258,7 @@ export function RichStreamEditor({
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const [showThreads, setShowThreads] = useState(false);
   const [pendingThreadInsertion, setPendingThreadInsertion] = useState<PendingThreadInsertion | null>(null);
+  const [threadInsertionGuidance, setThreadInsertionGuidance] = useState('');
   const [threadInsertionSaveFailed, setThreadInsertionSaveFailed] = useState<string | null>(null);
   const [threadCreating, setThreadCreating] = useState(false);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
@@ -568,12 +572,10 @@ export function RichStreamEditor({
       addToast('Retry the unsaved Stream change before adding another item.', 'info');
       return;
     }
-    const pending: PendingThreadInsertion = {
-      ...request,
-      message: 'Click a line in the Stream to add it there · Esc cancels',
-    };
+    const pending: PendingThreadInsertion = request;
     pendingThreadInsertionRef.current = pending;
     setPendingThreadInsertion(pending);
+    setThreadInsertionGuidance('Click text to place below it, or use ↑↓ then Return');
     hideSelectionMenu();
     setShowThreads(false);
   }, [addToast, hideSelectionMenu, threadInsertionSaveFailed]);
@@ -896,54 +898,71 @@ export function RichStreamEditor({
     if (!editor || !pendingThreadInsertion) return undefined;
     const { view } = editor;
     const previousEditable = view.props.editable;
+    const previousTabIndex = view.dom.getAttribute('tabindex');
+    let activeBlock: HTMLElement | null = null;
     view.setProps({ editable: () => false });
+    view.dom.setAttribute('tabindex', '0');
+    window.getSelection()?.removeAllRanges();
+    view.dom.focus({ preventScroll: true });
 
-    const refuse = (message = 'Choose a text line in the Stream') => {
-      const current = pendingThreadInsertionRef.current;
-      if (!current) return;
-      const refused = { ...current, message };
-      pendingThreadInsertionRef.current = refused;
-      setPendingThreadInsertion(refused);
+    const refuse = (message = 'Choose a text paragraph in the Stream') => {
+      if (pendingThreadInsertionRef.current) setThreadInsertionGuidance(message);
     };
 
-    const place = (event: MouseEvent) => {
-      const pending = pendingThreadInsertionRef.current;
-      if (!pending || event.button !== 0) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-
-      const clicked = event.target instanceof Element ? event.target : null;
+    const candidateFor = (eventTarget: EventTarget | null) => {
+      const clicked = eventTarget instanceof Element ? eventTarget : null;
       if (!clicked
-        || clicked.closest('a, pre, img, .richtext-image, .ProseMirror-selectednode')) {
-        refuse();
-        return;
-      }
-      const block = clicked.closest('p, h1, h2, h3, h4, h5, h6, li');
-      if (!block || !view.dom.contains(block)) {
-        refuse();
-        return;
-      }
-
-      let target;
+        || clicked.closest('a, pre, img, .richtext-image, .ProseMirror-selectednode')) return null;
+      const closest = clicked.closest<HTMLElement>('p, h1, h2, h3, h4, h5, h6, li');
+      if (!closest || !view.dom.contains(closest)) return null;
+      const block = closest.closest<HTMLElement>('li') ?? closest;
       try {
-        target = threadInsertionTarget(view.state, view.posAtDOM(block, 0));
+        const target = threadInsertionTarget(view.state, view.posAtDOM(block, 0));
+        return target ? { block, target } : null;
       } catch {
-        target = null;
+        return null;
       }
-      if (!target) {
-        refuse();
-        return;
+    };
+
+    const candidates = () => {
+      const available: Array<NonNullable<ReturnType<typeof candidateFor>>> = [];
+      const seen = new Set<HTMLElement>();
+      for (const block of view.dom.querySelectorAll<HTMLElement>('p, h1, h2, h3, h4, h5, h6, li')) {
+        const candidate = candidateFor(block);
+        if (!candidate || seen.has(candidate.block)) continue;
+        seen.add(candidate.block);
+        available.push(candidate);
       }
+      return available;
+    };
+
+    const showTarget = (block: HTMLElement | null) => {
+      if (activeBlock === block) return;
+      activeBlock?.classList.remove('thread-insertion-target');
+      activeBlock = block;
+      activeBlock?.classList.add('thread-insertion-target');
+      if (block) {
+        setThreadInsertionGuidance(
+          `Place after “${insertionExcerpt(block.textContent ?? '', 42)}” · Return to confirm`,
+        );
+      }
+    };
+
+    const commit = (target: Exclude<ReturnType<typeof threadInsertionTarget>, null>) => {
+      const pending = pendingThreadInsertionRef.current;
+      if (!pending) return;
 
       pendingThreadInsertionRef.current = null;
       setPendingThreadInsertion(null);
+      activeBlock?.classList.remove('thread-insertion-target');
+      activeBlock = null;
       let inserted: ReturnType<typeof insertThreadWork>;
       try {
         inserted = insertThreadWork(view, target, pending);
       } catch {
-        const failed = { ...pending, message: 'This item could not be added. Choose another item.' };
-        pendingThreadInsertionRef.current = failed;
-        setPendingThreadInsertion(failed);
+        pendingThreadInsertionRef.current = pending;
+        setPendingThreadInsertion(pending);
+        setThreadInsertionGuidance('This item could not be added. Choose another position.');
         return;
       }
 
@@ -976,6 +995,51 @@ export function RichStreamEditor({
       });
     };
 
+    const point = (event: MouseEvent) => {
+      showTarget(candidateFor(event.target)?.block ?? null);
+    };
+
+    const place = (event: MouseEvent) => {
+      if (!pendingThreadInsertionRef.current || event.button !== 0) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const candidate = candidateFor(event.target);
+      if (!candidate) {
+        showTarget(null);
+        refuse();
+        return;
+      }
+      commit(candidate.target);
+    };
+
+    const chooseWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const candidate = activeBlock ? candidateFor(activeBlock) : null;
+        if (candidate) commit(candidate.target);
+        else refuse('Choose a position with ↑ or ↓ first');
+        return;
+      }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const available = candidates();
+      if (!available.length) {
+        refuse('There is no available insertion position in this Stream');
+        return;
+      }
+      const currentIndex = available.findIndex(({ block }) => block === activeBlock);
+      const nextIndex = currentIndex < 0
+        ? (event.key === 'ArrowDown' ? 0 : available.length - 1)
+        : Math.max(0, Math.min(
+          available.length - 1,
+          currentIndex + (event.key === 'ArrowDown' ? 1 : -1),
+        ));
+      showTarget(available[nextIndex].block);
+      available[nextIndex].block.scrollIntoView({ block: 'nearest' });
+    };
+
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
@@ -983,11 +1047,18 @@ export function RichStreamEditor({
       cancelThreadInsertion();
     };
 
+    view.dom.addEventListener('mousemove', point, true);
     view.dom.addEventListener('mousedown', place, true);
+    view.dom.addEventListener('keydown', chooseWithKeyboard, true);
     window.addEventListener('keydown', escape, true);
     return () => {
+      activeBlock?.classList.remove('thread-insertion-target');
+      view.dom.removeEventListener('mousemove', point, true);
       view.dom.removeEventListener('mousedown', place, true);
+      view.dom.removeEventListener('keydown', chooseWithKeyboard, true);
       window.removeEventListener('keydown', escape, true);
+      if (previousTabIndex === null) view.dom.removeAttribute('tabindex');
+      else view.dom.setAttribute('tabindex', previousTabIndex);
       view.setProps({ editable: previousEditable });
     };
   }, [cancelThreadInsertion, editor, pendingThreadInsertion]);
@@ -2044,13 +2115,16 @@ export function RichStreamEditor({
             ref={editorShellRef}
             className={`document-editor-shell ${xray ? 'richtext-xray' : ''}`}
           >
+            <div ref={host} />
             {pendingThreadInsertion && (
-              <div className="thread-insertion-bar" role="status" aria-live="polite">
-                <span>{pendingThreadInsertion.message}</span>
+              <div className="thread-insertion-bar" role="status" aria-live="assertive">
+                <span className="thread-insertion-excerpt" title={pendingThreadInsertion.text}>
+                  “{insertionExcerpt(pendingThreadInsertion.text)}”
+                </span>
+                <span className="thread-insertion-guidance">{threadInsertionGuidance}</span>
                 <button type="button" onClick={() => cancelThreadInsertion()}>Cancel</button>
               </div>
             )}
-            <div ref={host} />
             {aiRunning && (
               <div
                 className="document-ai-status-pill"

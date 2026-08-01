@@ -4,6 +4,9 @@ All notable user-facing changes to Ticker are documented here.
 
 ## Unreleased
 
+### Changed
+- Adding a Thread note or AI reply now keeps the carried text visible, previews the exact insertion point, and requires an explicit click or keyboard target before changing the Stream.
+
 ## 2026.7.31
 
 ### Added

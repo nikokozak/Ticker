@@ -773,7 +773,7 @@ describe('RichStreamEditor Stream threads', () => {
     expect(editor().querySelector('.richtext-provenance-thread')).toBeNull();
   });
 
-  it('adds a saved thread note after the clicked block as one undo step', async () => {
+  it('places a saved thread note only after an explicit keyboard target as one undo step', async () => {
     const savedThread: StreamThreadJSON = {
       threadId: 'thread-insert',
       streamId: stream.id,
@@ -804,11 +804,46 @@ describe('RichStreamEditor Stream threads', () => {
     });
 
     expect(document.querySelector('.thread-insertion-bar')?.textContent)
-      .toContain('Click a line in the Stream');
+      .toContain('Evidence *stays literal*');
+    expect(document.querySelector('.thread-insertion-bar')?.textContent)
+      .toContain('Click text to place below it');
     expect(editor().getAttribute('contenteditable')).toBe('false');
     await act(async () => {
-      editor().querySelector('p')!.dispatchEvent(new MouseEvent('mousedown', {
-        bubbles: true, cancelable: true, button: 0,
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    expect(editor().textContent).toBe('Original paragraph.');
+    expect(document.querySelector('.thread-insertion-bar')?.textContent)
+      .toContain('Choose a position with ↑ or ↓ first');
+
+    await act(async () => {
+      editor().querySelector('p')!.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    expect(editor().querySelector('p')?.classList.contains('thread-insertion-target')).toBe(true);
+    await act(async () => {
+      editor().dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    expect(editor().querySelector('p')?.classList.contains('thread-insertion-target')).toBe(false);
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowDown', bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    expect(editor().querySelector('p')?.classList.contains('thread-insertion-target')).toBe(true);
+    expect(document.querySelector('.thread-insertion-bar')?.textContent)
+      .toContain('Place after “Original paragraph.”');
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', bubbles: true, cancelable: true,
       }));
       await Promise.resolve();
     });
@@ -881,8 +916,18 @@ describe('RichStreamEditor Stream threads', () => {
       }));
       await Promise.resolve();
     });
-    expect(document.querySelector('.thread-insertion-bar')?.textContent).toContain('Choose a text line');
+    expect(document.querySelector('.thread-insertion-bar')?.textContent).toContain('Choose a text paragraph');
     expect(editor().textContent).toBe(before);
+
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowDown', bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    expect(editor().querySelector('pre')?.classList.contains('thread-insertion-target')).toBe(false);
+    expect([...editor().querySelectorAll('p')].find((node) => node.textContent === 'Safe paragraph.')
+      ?.classList.contains('thread-insertion-target')).toBe(true);
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', {
