@@ -158,6 +158,10 @@
       "deletePdfHighlight": {
         "requiredPayloadKeys": ["streamId", "highlightId"]
       },
+      "deleteStreamThread": {
+        "requiredPayloadKeys": ["streamId", "threadId"],
+        "requiredCallbackId": true
+      },
       "cancelDocumentAI": {
         "requiredPayloadKeys": ["requestId"]
       },

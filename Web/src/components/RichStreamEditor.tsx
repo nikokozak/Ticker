@@ -12,7 +12,9 @@ import { TextSelection, type Command, type Transaction } from 'prosemirror-state
 import {
   bridge,
   createStreamThread,
+  deleteStreamThread,
   getExchange,
+  listConversations,
   type DocumentAIVerb,
   type SourceTitlePayload,
   type StreamDocumentConflictPayload,
@@ -83,6 +85,7 @@ import {
   type PendingPDFAnchorSelection,
 } from '../utils/pdfAnchorSelection';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
+import { formatRelativeTime } from '../utils/relativeTime';
 import {
   activeFormats,
   toggleBlockquote,
@@ -167,6 +170,7 @@ interface ExpandedConversation {
   key: string;
   threadId?: string;
   anchor?: ConversationAnchor;
+  renderAt?: number;
   anchorText: string;
   focusComposer: boolean;
 }
@@ -255,6 +259,12 @@ export function RichStreamEditor({
   const [editorVersion, redraw] = useState(0);
   const [expandedConversation, setExpandedConversation] = useState<ExpandedConversation | null>(null);
   const [conversationWidgetTarget, setConversationWidgetTarget] = useState<HTMLElement | null>(null);
+  const [conversationRecords, setConversationRecords] = useState<ConversationAnchorJSON[]>(
+    stream.conversationAnchors ?? [],
+  );
+  const [showConversationList, setShowConversationList] = useState(false);
+  const [conversationListLoading, setConversationListLoading] = useState(false);
+  const [conversationListError, setConversationListError] = useState(false);
   const addToast = useToastStore((state) => state.addToast);
   const { sources, setSources } = useBridgeMessages({
     streamId: stream.id,
@@ -473,7 +483,7 @@ export function RichStreamEditor({
     const open = conversationSurface(view.state);
     if (open && conversationRenderPosition(view.state.doc, open.anchor)
       === conversationRenderPosition(view.state.doc, anchor)) {
-      collapseConversation();
+      document.querySelector<HTMLButtonElement>('.conversation-rail')?.click();
       return;
     }
     const key = `draft:${crypto.randomUUID()}`;
@@ -484,7 +494,7 @@ export function RichStreamEditor({
       anchorText: conversationAnchorTextForStorage(view.state.doc, draft),
       focusComposer: true,
     });
-  }, [collapseConversation]);
+  }, []);
 
   // Which formatting buttons are lit depends on the SELECTION, so the menu has to
   // redraw on every transaction and not only on edits.
@@ -735,7 +745,9 @@ export function RichStreamEditor({
   ]);
 
   useEffect(() => {
-    conversationRecordsRef.current = stream.conversationAnchors ?? [];
+    const records = stream.conversationAnchors ?? [];
+    conversationRecordsRef.current = records;
+    setConversationRecords(records);
   }, [stream.conversationAnchors]);
 
   const createPersistedConversation = useCallback(async (query: string): Promise<StreamThreadJSON> => {
@@ -766,7 +778,7 @@ export function RichStreamEditor({
         anchor: persisted,
       }));
     }
-    conversationRecordsRef.current = [
+    const records = [
       ...conversationRecordsRef.current.filter((record) => record.threadId !== thread.threadId),
       {
         threadId: thread.threadId,
@@ -778,6 +790,8 @@ export function RichStreamEditor({
         updatedAt: thread.updatedAt,
       },
     ];
+    conversationRecordsRef.current = records;
+    setConversationRecords(records);
     sessionRef.current?.documentChanged();
     return thread;
   }, [stream.id]);
@@ -791,6 +805,83 @@ export function RichStreamEditor({
       anchorText,
     );
   }, []);
+
+  const toggleConversationList = useCallback(async () => {
+    if (showConversationList) {
+      setShowConversationList(false);
+      return;
+    }
+    setShowConversationList(true);
+    setConversationListLoading(true);
+    setConversationListError(false);
+    try {
+      const { conversations } = await listConversations(stream.id);
+      conversationRecordsRef.current = conversations;
+      setConversationRecords(conversations);
+    } catch {
+      setConversationListError(true);
+    } finally {
+      setConversationListLoading(false);
+    }
+  }, [showConversationList, stream.id]);
+
+  const openConversationFromList = useCallback((record: ConversationAnchorJSON) => {
+    const liveEditor = editorRef.current;
+    if (!liveEditor) return;
+    const anchor = conversationAnchors(liveEditor.view.state)
+      .find((candidate) => candidate.threadId === record.threadId);
+    if (anchor && !record.detached) {
+      setExpandedConversation({
+        key: `thread:${record.threadId}`,
+        threadId: record.threadId,
+        anchorText: record.anchorText,
+        focusComposer: false,
+      });
+      window.requestAnimationFrame(() => {
+        const target = liveEditor.view.domAtPos(anchor.from).node;
+        (target instanceof Element ? target : target.parentElement)?.scrollIntoView({ block: 'center' });
+      });
+    } else {
+      const position = liveEditor.view.state.doc.content.size;
+      // ponytail: detached conversations render at document end; add archive
+      // positioning only if detached browsing grows beyond this plain list.
+      setExpandedConversation({
+        key: `thread:${record.threadId}`,
+        threadId: record.threadId,
+        anchor: { threadId: record.threadId, from: position, to: position, detached: true },
+        renderAt: position,
+        anchorText: record.anchorText,
+        focusComposer: false,
+      });
+      window.requestAnimationFrame(() => liveEditor.view.dom.lastElementChild?.scrollIntoView({ block: 'center' }));
+    }
+    setShowConversationList(false);
+    if (streamOverflowMenuRef.current) streamOverflowMenuRef.current.open = false;
+  }, []);
+
+  const deleteConversation = useCallback(async (record: ConversationAnchorJSON) => {
+    if (!window.confirm('Delete this conversation?')) return;
+    try {
+      await deleteStreamThread({ streamId: stream.id, threadId: record.threadId });
+      const records = conversationRecordsRef.current
+        .filter((candidate) => candidate.threadId !== record.threadId);
+      conversationRecordsRef.current = records;
+      setConversationRecords(records);
+      const liveEditor = editorRef.current;
+      const deletingOpenConversation = liveEditor
+        && conversationSurface(liveEditor.view.state)?.anchor.threadId === record.threadId;
+      if (liveEditor) {
+        liveEditor.view.dispatch(setConversationAnchors(
+          liveEditor.view.state.tr,
+          conversationAnchors(liveEditor.view.state)
+            .filter((anchor) => anchor.threadId !== record.threadId),
+        ));
+      }
+      if (deletingOpenConversation) collapseConversation();
+    } catch {
+      addToast('This conversation could not be deleted.', 'error');
+    }
+  }, [addToast, collapseConversation, stream.id]);
 
   useLayoutEffect(() => {
     if (!editor) return;
@@ -810,6 +901,7 @@ export function RichStreamEditor({
       editor.view.dispatch(setConversationSurface(editor.view.state.tr, {
         key: expandedConversation.key,
         anchor,
+        renderAt: expandedConversation.renderAt,
       }));
       surface = conversationSurface(editor.view.state);
     }
@@ -1598,7 +1690,48 @@ export function RichStreamEditor({
             <summary title="More stream actions" aria-label="More stream actions">
               <span aria-hidden="true">•••</span>
             </summary>
-            <div className="stream-overflow-panel">
+            <div className={`stream-overflow-panel ${showConversationList ? 'stream-overflow-panel--conversations' : ''}`}>
+              <button
+                type="button"
+                className="stream-overflow-action"
+                aria-expanded={showConversationList}
+                onClick={() => void toggleConversationList()}
+              >
+                Conversations
+              </button>
+              {showConversationList && (
+                <div className="conversation-list" aria-label="Conversations">
+                  {conversationListLoading && <p>Loading…</p>}
+                  {conversationListError && <p>Conversations could not be loaded.</p>}
+                  {!conversationListLoading && !conversationListError && conversationRecords.length === 0 && (
+                    <p>No conversations yet.</p>
+                  )}
+                  {conversationRecords.map((record) => (
+                    <div className="conversation-list-row" key={record.threadId}>
+                      <button
+                        type="button"
+                        className="conversation-list-open"
+                        onClick={() => openConversationFromList(record)}
+                      >
+                        <span className="conversation-list-title">
+                          {record.anchorText.split(/\r?\n/, 1)[0] || 'Conversation'}
+                        </span>
+                        <span className="conversation-list-meta">
+                          {formatRelativeTime(record.updatedAt)}{record.detached ? ' · detached' : ''}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="conversation-list-delete"
+                        aria-label="Delete conversation"
+                        onClick={() => void deleteConversation(record)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <button
                 type="button"
                 className="stream-overflow-delete"

@@ -343,7 +343,7 @@ describe('RichStreamEditor chrome parity', () => {
     expect(document.querySelector('.stream-xray-button')?.textContent).toBe('');
     expect(document.querySelector('.stream-overflow-menu')).not.toBe(null);
     expect([...document.querySelectorAll('.stream-overflow-panel button')]
-      .map((button) => button.textContent?.trim())).toEqual(['Delete stream…']);
+      .map((button) => button.textContent?.trim())).toEqual(['Conversations', 'Delete stream…']);
     expect(document.querySelector('.delete-button')).toBe(null);
     expect(document.querySelector('.stream-format-bar')).toBe(null);
     expect(document.querySelector('.selection-action-menu')).toBe(null);
@@ -449,6 +449,8 @@ describe('RichStreamEditor inline conversations', () => {
   it('collapses an unsent draft without creating a row or leaving a glyph', async () => {
     const composer = await openDraftConversation();
     await vi.waitFor(() => expect(document.activeElement).toBe(composer));
+    expect(composer.tabIndex).toBe(0);
+    expect((composer.closest('.conversation-widget-host') as HTMLElement).contentEditable).toBe('false');
     expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
 
     await act(async () => {
@@ -513,6 +515,14 @@ describe('RichStreamEditor inline conversations', () => {
       bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'It streams.' } });
     });
     expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams.');
+    await act(async () => {
+      (document.querySelector('.conversation-stop') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(sent).toContainEqual({
+      type: 'cancelDocumentAI',
+      payload: { requestId },
+    });
 
     await act(async () => {
       bridge.receive({
@@ -599,6 +609,7 @@ describe('RichStreamEditor inline conversations', () => {
     });
     const scroller = document.querySelector('.stream-content') as HTMLElement;
     scroller.scrollTop = 37;
+    editor().focus();
     await act(async () => {
       block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 320 }));
       await Promise.resolve();
@@ -607,6 +618,89 @@ describe('RichStreamEditor inline conversations', () => {
     await vi.waitFor(() => expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('Because.'));
     expect(scroller.scrollTop).toBe(37);
     expect(document.querySelectorAll('.conversation-widget-host')).toHaveLength(1);
+    expect(document.activeElement).toBe(editor());
+  });
+
+  it('lists, opens, and deletes a detached conversation from header overflow', async () => {
+    const updatedAt = new Date().toISOString();
+    const record = {
+      threadId: 'thread-detached',
+      anchorStart: null,
+      anchorEnd: null,
+      anchorText: 'Original passage',
+      detached: true,
+      ephemeral: false,
+      updatedAt,
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'listConversations') return { conversations: [record] };
+      if (type === 'loadStreamThread') {
+        return {
+          thread: {
+            threadId: record.threadId,
+            streamId: stream.id,
+            title: 'Detached question',
+            workingText: '',
+            anchorText: record.anchorText,
+            detached: true,
+            ephemeral: false,
+            revision: 0,
+            createdAt: updatedAt,
+            updatedAt,
+            exchanges: [{
+              requestId: 'detached-exchange',
+              streamId: stream.id,
+              threadId: record.threadId,
+              verb: 'thread',
+              userInput: 'Where did it go?',
+              sourceManifest: '[]',
+              responseRaw: 'The passage was removed.',
+              createdAt: updatedAt,
+            }],
+          },
+        };
+      }
+      if (type === 'deleteStreamThread') return { highlightIds: [] };
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+
+    const conversations = document.querySelector('.stream-overflow-action') as HTMLButtonElement;
+    await act(async () => {
+      conversations.click();
+      await Promise.resolve();
+    });
+    const row = await vi.waitFor(() => {
+      const found = document.querySelector('.conversation-list-row');
+      expect(found?.textContent).toContain('Original passage');
+      expect(found?.textContent).toContain('detached');
+      return found!;
+    });
+    await act(async () => {
+      (row.querySelector('.conversation-list-open') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(document.querySelector('.conversation-turn--ai')?.textContent)
+        .toContain('The passage was removed.');
+    });
+    expect(document.querySelector('.conversation-drift-note')?.textContent)
+      .toBe('The passage has changed since this conversation started.');
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await act(async () => {
+      conversations.click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.conversation-list-delete')).not.toBe(null));
+    await act(async () => {
+      (document.querySelector('.conversation-list-delete') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([
+      'deleteStreamThread',
+      { streamId: stream.id, threadId: record.threadId },
+    ]);
+    expect(document.querySelector('.conversation-list-row')).toBe(null);
   });
 });
 

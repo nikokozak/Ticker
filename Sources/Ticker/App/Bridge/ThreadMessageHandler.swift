@@ -5,6 +5,7 @@ final class ThreadMessageHandler: BridgeMessageHandler {
     let handledTypes: Set<String> = [
         "listConversations",
         "createStreamThread",
+        "deleteStreamThread",
         "loadStreamThread",
         "saveStreamThread"
     ]
@@ -41,7 +42,6 @@ final class ThreadMessageHandler: BridgeMessageHandler {
         }
         switch message.type {
         case "listConversations":
-            // ponytail: no caller until C3 wires the conversation surface.
             guard let streamId = decodeUUID(message.payload, key: "streamId") else {
                 respondWithError(callbackId, "Invalid listConversations payload")
                 return
@@ -100,6 +100,25 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 }
                 respond(callbackId, [
                     "thread": AnyCodable(try encodeThread(thread))
+                ])
+            } catch {
+                respondWithError(callbackId, error.localizedDescription)
+            }
+
+        case "deleteStreamThread":
+            guard let payload = message.payload,
+                  let streamId = decodeUUID(payload, key: "streamId"),
+                  let threadId = decodeUUID(payload, key: "threadId") else {
+                respondWithError(callbackId, "Invalid deleteStreamThread payload")
+                return
+            }
+            do {
+                let highlightIds = try persistence.deleteStreamThread(
+                    threadId: threadId,
+                    streamId: streamId
+                )
+                respond(callbackId, [
+                    "highlightIds": AnyCodable(highlightIds.map(\.uuidString))
                 ])
             } catch {
                 respondWithError(callbackId, error.localizedDescription)

@@ -40,6 +40,7 @@ interface ConversationAnchorState {
 export interface ConversationSurfaceState {
   key: string;
   anchor: ConversationAnchor;
+  renderAt?: number;
 }
 
 export interface ConversationAnchorFieldOptions {
@@ -338,7 +339,13 @@ export function conversationAnchorField(
             : tr.mapping.map(current.hoveredBlockFrom, -1),
           surface: current.surface === null
             ? null
-            : { ...current.surface, anchor: mapAnchor(current.surface.anchor, tr) },
+            : {
+              ...current.surface,
+              anchor: mapAnchor(current.surface.anchor, tr),
+              renderAt: current.surface.renderAt === undefined
+                ? undefined
+                : tr.mapping.map(current.surface.renderAt, -1),
+            },
         };
         const meta = tr.getMeta(conversationAnchorKey) as AnchorMessage | undefined;
         if (!meta) return mapped;
@@ -372,7 +379,8 @@ export function conversationAnchorField(
           { class: [target.left && 'conversation-block-active', target.right && 'conversation-block-anchored'].filter(Boolean).join(' ') },
         ));
         const surface = field.surface;
-        const position = surface && conversationRenderPosition(state.doc, surface.anchor);
+        const position = surface && (surface.renderAt
+          ?? conversationRenderPosition(state.doc, surface.anchor));
         if (surface && position !== null) {
           decorations.push(Decoration.widget(position, () => {
             const host = document.createElement('div');

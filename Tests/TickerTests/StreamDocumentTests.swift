@@ -2361,6 +2361,7 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(handler.handledTypes, [
                 "listConversations",
                 "createStreamThread",
+                "deleteStreamThread",
                 "loadStreamThread",
                 "saveStreamThread"
             ])
@@ -2429,6 +2430,20 @@ final class StreamDocumentTests: XCTestCase {
             let exchanges = try XCTUnwrap(loadedPayload["exchanges"] as? [[String: Any]])
             XCTAssertEqual(exchanges.map { $0["requestId"] as? String }, ["conversation-turn"])
             XCTAssertEqual(exchanges.first?["responseRaw"] as? String, "Yes.")
+
+            await handler.handle(BridgeMessage(
+                type: "deleteStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(createdThreadId.uuidString)
+                ],
+                callbackId: "delete"
+            ))
+            let deleteResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "delete" }
+            )
+            XCTAssertEqual(deleteResponse.payload?["highlightIds"]?.value as? [String], [])
+            XCTAssertNil(try service.loadStreamThread(threadId: createdThreadId, streamId: stream.id))
 
             await handler.handle(BridgeMessage(
                 type: "saveStreamThread",
