@@ -256,6 +256,9 @@ export function createStreamThread(input: {
   anchorText: string;
   sourceId?: string;
   highlightId?: string;
+  ephemeral?: boolean;
+  detached?: boolean;
+  profile?: 'research';
 }): Promise<{ thread: StreamThreadJSON }> {
   return bridge.sendAsync('createStreamThread', {
     streamId: input.streamId,
@@ -265,6 +268,9 @@ export function createStreamThread(input: {
     anchorText: input.anchorText,
     sourceId: input.sourceId,
     highlightId: input.highlightId,
+    ephemeral: input.ephemeral,
+    detached: input.detached,
+    profile: input.profile,
   });
 }
 
@@ -311,6 +317,17 @@ export function deleteStreamThread(input: {
   });
 }
 
+export function deleteEphemeralThread(input: {
+  streamId: string;
+  threadId: string;
+}): Promise<{ highlightIds: string[] }> {
+  return bridge.sendAsync('deleteStreamThread', {
+    streamId: input.streamId,
+    threadId: input.threadId,
+    ephemeralOnly: true,
+  });
+}
+
 export function updateMarginNote(payload: UpdateMarginNotePayload): void {
   bridge.send({
     type: 'updateMarginNote',
@@ -326,12 +343,14 @@ export function saveStreamThread(input: {
   threadId: string;
   title: string;
   baseRevision: number;
+  ephemeral?: boolean;
 }): Promise<{ conflict: boolean; thread: StreamThreadJSON }> {
   return bridge.sendAsync('saveStreamThread', {
     streamId: input.streamId,
     threadId: input.threadId,
     title: input.title,
     baseRevision: input.baseRevision,
+    ephemeral: input.ephemeral,
   });
 }
 

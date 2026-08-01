@@ -109,6 +109,7 @@ struct ThreadAISentFacts: Codable, Equatable {
     let sourceContextMode: String
     let sources: [Source]
     let pinned: [Pinned]
+    let profile: String?
 
     var jsonString: String {
         let encoder = JSONEncoder()
@@ -135,6 +136,7 @@ typealias ThreadAIRoute = (
     _ streamMarkdown: String,
     _ pinnedContext: [ThreadAIPinnedContext],
     _ priorTurns: [ThreadAIConversationTurn],
+    _ researchProfile: Bool,
     _ onPrepared: @escaping (ThreadAIRequestReceipt) -> Void,
     _ onChunk: @escaping (String) -> Void,
     _ onComplete: @escaping (ThreadAIRequestReceipt) -> Void,
@@ -271,7 +273,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                 onModelSelected: onModelSelected
             )
         }
-        self.routeThreadAI = { [orchestrator = container.orchestrator] query, retrievalQuery, streamId, sourceScope, anchorText, streamMarkdown, pinnedContext, priorTurns, onPrepared, onChunk, onComplete, onError, onModelSelected in
+        self.routeThreadAI = { [orchestrator = container.orchestrator] query, retrievalQuery, streamId, sourceScope, anchorText, streamMarkdown, pinnedContext, priorTurns, researchProfile, onPrepared, onChunk, onComplete, onError, onModelSelected in
             await orchestrator.routeThread(
                 query: query,
                 retrievalQuery: retrievalQuery,
@@ -281,6 +283,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                 streamMarkdown: streamMarkdown,
                 pinnedContext: pinnedContext,
                 priorTurns: priorTurns,
+                researchProfile: researchProfile,
                 onPrepared: onPrepared,
                 onChunk: onChunk,
                 onComplete: onComplete,
@@ -311,7 +314,7 @@ final class AIMessageHandler: BridgeMessageHandler {
             _ onError: @escaping (Error) -> Void,
             _ onModelSelected: ((String) -> Void)?
         ) async -> Void,
-        routeThreadAI: @escaping ThreadAIRoute = { _, _, _, _, _, _, _, _, _, _, _, onError, _ in
+        routeThreadAI: @escaping ThreadAIRoute = { _, _, _, _, _, _, _, _, _, _, _, _, onError, _ in
             onError(OrchestratorError.noProviderAvailable)
         }
     ) {
@@ -588,6 +591,18 @@ final class AIMessageHandler: BridgeMessageHandler {
 
         let sourceScopeRaw = payload["sourceScope"]?.value as? String
         let sourceScope = SourceScope(rawValue: sourceScopeRaw ?? "") ?? .auto
+        let profile = payload["profile"]?.value as? String
+        guard profile == nil || profile == "research" else {
+            sendToWeb(BridgeMessage(
+                type: "documentAIError",
+                payload: [
+                    "requestId": AnyCodable(requestId),
+                    "error": AnyCodable("This conversation profile is invalid."),
+                    "errorCode": AnyCodable("invalid_thread_request")
+                ]
+            ))
+            return
+        }
         let sentAnchorContext = (payload["context"]?.value as? String ?? thread.anchorText)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let streamMarkdown = payload["streamMarkdown"]?.value as? String ?? storedStreamMarkdown
@@ -618,7 +633,8 @@ final class AIMessageHandler: BridgeMessageHandler {
                 anchorEnd: anchorEnd,
                 streamMarkdown: streamMarkdown,
                 anchors: pinnedAnchors,
-                receipt: receipt
+                receipt: receipt,
+                profile: profile
             )
             sentFacts = facts
             self.sendToWeb(BridgeMessage(
@@ -647,7 +663,8 @@ final class AIMessageHandler: BridgeMessageHandler {
                 anchorEnd: anchorEnd,
                 streamMarkdown: streamMarkdown,
                 anchors: pinnedAnchors,
-                receipt: receipt
+                receipt: receipt,
+                profile: profile
             )
             guard !responseRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 self.sendToWeb(BridgeMessage(
@@ -751,6 +768,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                 streamMarkdown,
                 pinnedContext,
                 priorTurns,
+                profile == "research",
                 onPrepared,
                 onChunk,
                 onComplete,
@@ -776,7 +794,8 @@ final class AIMessageHandler: BridgeMessageHandler {
         anchorEnd: Int?,
         streamMarkdown: String,
         anchors: [StreamThreadAnchor],
-        receipt: ThreadAIRequestReceipt
+        receipt: ThreadAIRequestReceipt,
+        profile: String?
     ) -> ThreadAISentFacts {
         var source: SourceReference?
         var highlight: PDFHighlightRecord?
@@ -869,7 +888,8 @@ final class AIMessageHandler: BridgeMessageHandler {
             ),
             sourceContextMode: Self.sourceContextMode(receipt.sourceContext),
             sources: sources,
-            pinned: pinned
+            pinned: pinned,
+            profile: profile
         )
     }
 

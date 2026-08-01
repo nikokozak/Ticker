@@ -30,6 +30,7 @@ export interface ConversationLiveState {
   loading: boolean;
   loadError: boolean;
   creating: boolean;
+  keeping: boolean;
   closing: boolean;
   error: string | null;
 }
@@ -42,6 +43,7 @@ export const initialConversationLiveState = (threadId?: string): ConversationLiv
   loading: Boolean(threadId),
   loadError: false,
   creating: false,
+  keeping: false,
   closing: false,
   error: null,
 });
@@ -60,11 +62,18 @@ interface ConversationSurfaceProps {
   streamMarkdown: string;
   contextOptions: ConversationContextOption[];
   focusComposer: boolean;
+  ephemeral: boolean;
+  profile?: 'research';
   state: ConversationLiveState;
   updateState: (key: string, updater: ConversationLiveStateUpdater) => void;
-  createThread: (query: string) => Promise<StreamThreadJSON>;
+  createThread: (
+    query: string,
+    ephemeral: boolean,
+    profile?: 'research',
+  ) => Promise<StreamThreadJSON>;
   hasDrifted: (anchorText: string) => boolean;
   onPromote: (exchange: AIExchangeJSON) => void;
+  onKeep: () => void;
   onCollapse: () => void;
 }
 
@@ -104,6 +113,7 @@ function ThreadContextDisclosure({ value }: { value: unknown }) {
             <span>{pin.kind === 'pdf_quote' ? 'Pinned PDF' : 'Pinned Stream'}</span> {pin.quote}
           </p>
         ))}
+        {receipt.profile === 'research' && <p><span>Research profile</span></p>}
         <p>
           <span>Sources</span> {retrieval}
           {receipt.sources.length > 0
@@ -156,11 +166,14 @@ export function ConversationSurface({
   streamMarkdown,
   contextOptions,
   focusComposer,
+  ephemeral,
+  profile,
   state,
   updateState,
   createThread,
   hasDrifted,
   onPromote,
+  onKeep,
   onCollapse,
 }: ConversationSurfaceProps) {
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -253,7 +266,7 @@ export function ConversationSurface({
     if (!current && !threadId) {
       updateState(conversationKey, (value) => ({ ...value, creating: true, error: null }));
       try {
-        current = await createThread(query);
+        current = await createThread(query, ephemeral, profile);
         updateState(conversationKey, (value) => ({ ...value, thread: current!, creating: false }));
       } catch {
         updateState(conversationKey, (value) => ({
@@ -273,6 +286,7 @@ export function ConversationSurface({
       error: null,
       active: { requestId, userInput: query, response: '', running: true },
     }));
+    const researchProfile = current.profile === 'research' || profile === 'research';
     bridge.send({
       type: 'thinkDocument',
       payload: {
@@ -287,6 +301,7 @@ export function ConversationSurface({
         imageURLs: [],
         sourceScope,
         verb: 'develop',
+        profile: researchProfile ? 'research' : undefined,
       },
     });
   };
@@ -364,6 +379,18 @@ export function ConversationSurface({
     <section className={`conversation-surface ${state.closing ? 'conversation-surface--closing' : ''}`}>
       <button type="button" className="conversation-rail" aria-label="Collapse conversation" onClick={onCollapse} />
       <div className="conversation-content">
+        {ephemeral && (
+          <div className="conversation-header">
+            <button
+              type="button"
+              className="conversation-keep"
+              disabled={state.keeping || state.creating}
+              onClick={onKeep}
+            >
+              Keep
+            </button>
+          </div>
+        )}
         {hasDrifted(originalAnchorText) && (
           <p className="conversation-drift-note">The passage has changed since this conversation started.</p>
         )}

@@ -63,12 +63,19 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                   let streamId = decodeUUID(payload, key: "streamId"),
                   let title = payload["title"]?.value as? String,
                   let anchorText = payload["anchorText"]?.value as? String,
-                  !anchorText.isEmpty,
                   let anchorStart = payload["anchorStart"]?.intValue,
                   let anchorEnd = payload["anchorEnd"]?.intValue,
                   anchorStart >= 0,
-                  anchorEnd > anchorStart,
+                  anchorEnd >= anchorStart,
                   let references = Self.decodePrimaryPDFReferences(payload) else {
+                respondWithError(callbackId, "Invalid createStreamThread payload")
+                return
+            }
+            let detached = payload["detached"]?.value as? Bool ?? (anchorStart == anchorEnd)
+            let profile = payload["profile"]?.value as? String
+            guard detached == (anchorStart == anchorEnd),
+                  detached || !anchorText.isEmpty,
+                  profile == nil || profile == "research" else {
                 respondWithError(callbackId, "Invalid createStreamThread payload")
                 return
             }
@@ -80,7 +87,10 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                     sourceId: references.sourceId,
                     highlightId: references.highlightId,
                     anchorStart: anchorStart,
-                    anchorEnd: anchorEnd
+                    anchorEnd: anchorEnd,
+                    detached: detached,
+                    ephemeral: payload["ephemeral"]?.value as? Bool ?? false,
+                    profile: profile
                 ))
                 respond(callbackId, [
                     "thread": AnyCodable(try encodeThread(thread))
@@ -159,10 +169,9 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 return
             }
             do {
-                let highlightIds = try persistence.deleteStreamThread(
-                    threadId: threadId,
-                    streamId: streamId
-                )
+                let highlightIds = payload["ephemeralOnly"]?.value as? Bool == true
+                    ? try persistence.deleteEphemeralThread(threadId: threadId, streamId: streamId)
+                    : try persistence.deleteStreamThread(threadId: threadId, streamId: streamId)
                 respond(callbackId, [
                     "highlightIds": AnyCodable(highlightIds.map(\.uuidString))
                 ])
@@ -185,7 +194,8 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                     threadId: threadId,
                     streamId: streamId,
                     title: title,
-                    baseRevision: baseRevision
+                    baseRevision: baseRevision,
+                    ephemeral: payload["ephemeral"]?.value as? Bool
                 )
                 respond(callbackId, [
                     "conflict": AnyCodable(false),

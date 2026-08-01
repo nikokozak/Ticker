@@ -733,6 +733,13 @@ final class PersistenceService {
             """)
         }
 
+        migrator.registerMigration("v31_conversation_profiles") { db in
+            try db.execute(sql: """
+                ALTER TABLE stream_threads ADD COLUMN profile TEXT
+                    CHECK (profile IS NULL OR profile = 'research');
+            """)
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -1663,9 +1670,9 @@ final class PersistenceService {
                     INSERT INTO stream_threads
                         (thread_id, stream_id, title, working_text, doc_json, doc_format_version,
                          anchor_text, anchor_span_id, source_id, highlight_id,
-                         anchor_start, anchor_end, detached, ephemeral,
+                         anchor_start, anchor_end, detached, ephemeral, profile,
                          revision, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
                     thread.threadId.uuidString,
@@ -1682,6 +1689,7 @@ final class PersistenceService {
                     thread.anchorEnd,
                     thread.detached,
                     thread.ephemeral,
+                    thread.profile,
                     thread.revision,
                     thread.createdAt.timeIntervalSince1970,
                     thread.updatedAt.timeIntervalSince1970
@@ -1707,7 +1715,8 @@ final class PersistenceService {
                 sql: """
                     SELECT thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
                            source_id, highlight_id, revision, created_at, updated_at,
-                           doc_json, doc_format_version, anchor_start, anchor_end, detached, ephemeral
+                           doc_json, doc_format_version, anchor_start, anchor_end, detached, ephemeral,
+                           profile
                     FROM stream_threads
                     WHERE stream_id = ?
                     ORDER BY updated_at DESC, thread_id
@@ -1734,18 +1743,21 @@ final class PersistenceService {
         threadId: UUID,
         streamId: UUID,
         title: String,
-        baseRevision: Int
+        baseRevision: Int,
+        ephemeral: Bool? = nil
     ) throws -> StreamThread {
         return try dbQueue.write { db in
             let updatedAt = Date()
             try db.execute(
                 sql: """
                     UPDATE stream_threads
-                    SET title = ?, revision = revision + 1, updated_at = ?
+                    SET title = ?, ephemeral = COALESCE(?, ephemeral),
+                        revision = revision + 1, updated_at = ?
                     WHERE thread_id = ? AND stream_id = ? AND revision = ?
                 """,
                 arguments: [
                     title,
+                    ephemeral,
                     updatedAt.timeIntervalSince1970,
                     threadId.uuidString,
                     streamId.uuidString,
@@ -1863,27 +1875,65 @@ final class PersistenceService {
             guard try fetchStreamThread(threadId: threadId, streamId: streamId, db: db) != nil else {
                 throw StreamThreadPersistenceError.threadNotFound
             }
-            let highlightIds = try String.fetchAll(
-                db,
-                sql: """
-                    SELECT highlight_id FROM stream_thread_anchors
-                    WHERE thread_id = ? AND highlight_id IS NOT NULL
-                """,
-                arguments: [threadId.uuidString]
-            ).compactMap(UUID.init(uuidString:))
-            try db.execute(
-                sql: "DELETE FROM ai_exchanges WHERE thread_id = ? AND stream_id = ?",
-                arguments: [threadId.uuidString, streamId.uuidString]
-            )
-            try db.execute(
-                sql: "DELETE FROM stream_threads WHERE thread_id = ? AND stream_id = ?",
-                arguments: [threadId.uuidString, streamId.uuidString]
-            )
-            for highlightId in highlightIds {
-                try deleteUnreferencedThreadHighlight(highlightId, db: db)
-            }
-            return highlightIds
+            return try deleteStreamThreadRows(threadId: threadId, streamId: streamId, db: db)
         }
+    }
+
+    func deleteEphemeralThread(threadId: UUID, streamId: UUID) throws -> [UUID] {
+        try dbQueue.write { db in
+            let ephemeral = try Bool.fetchOne(
+                db,
+                sql: "SELECT ephemeral FROM stream_threads WHERE thread_id = ? AND stream_id = ?",
+                arguments: [threadId.uuidString, streamId.uuidString]
+            )
+            guard ephemeral == true else {
+                DebugLog.log("[Persistence] Skipped automatic deletion of kept conversation \(threadId)")
+                return []
+            }
+            return try deleteStreamThreadRows(threadId: threadId, streamId: streamId, db: db)
+        }
+    }
+
+    @discardableResult
+    func deleteEphemeralThreads(streamId: UUID) throws -> Int {
+        try dbQueue.write { db in
+            let threadIds = try String.fetchAll(
+                db,
+                sql: "SELECT thread_id FROM stream_threads WHERE stream_id = ? AND ephemeral = 1",
+                arguments: [streamId.uuidString]
+            ).compactMap(UUID.init(uuidString:))
+            for threadId in threadIds {
+                _ = try deleteStreamThreadRows(threadId: threadId, streamId: streamId, db: db)
+            }
+            return threadIds.count
+        }
+    }
+
+    private func deleteStreamThreadRows(
+        threadId: UUID,
+        streamId: UUID,
+        db: Database
+    ) throws -> [UUID] {
+        let highlightIds = try String.fetchAll(
+            db,
+            sql: """
+                SELECT highlight_id FROM stream_thread_anchors
+                WHERE thread_id = ? AND highlight_id IS NOT NULL
+            """,
+            arguments: [threadId.uuidString]
+        ).compactMap(UUID.init(uuidString:))
+        try db.execute(
+            sql: "DELETE FROM ai_exchanges WHERE thread_id = ? AND stream_id = ?",
+            arguments: [threadId.uuidString, streamId.uuidString]
+        )
+        try db.execute(
+            sql: "DELETE FROM stream_threads WHERE thread_id = ? AND stream_id = ?",
+            arguments: [threadId.uuidString, streamId.uuidString]
+        )
+        for highlightId in highlightIds {
+            try deleteUnreferencedThreadHighlight(highlightId, db: db)
+        }
+        return highlightIds
     }
 
     func setThreadExchangeDisposition(
@@ -2059,7 +2109,8 @@ final class PersistenceService {
             sql: """
                 SELECT thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
                        source_id, highlight_id, revision, created_at, updated_at,
-                       doc_json, doc_format_version, anchor_start, anchor_end, detached, ephemeral
+                       doc_json, doc_format_version, anchor_start, anchor_end, detached, ephemeral,
+                       profile
                 FROM stream_threads
                 WHERE thread_id = ? AND stream_id = ?
             """,
@@ -2150,6 +2201,7 @@ final class PersistenceService {
             anchorEnd: row["anchor_end"],
             detached: row["detached"],
             ephemeral: row["ephemeral"],
+            profile: row["profile"],
             revision: row["revision"],
             createdAt: Date(timeIntervalSince1970: row["created_at"]),
             updatedAt: Date(timeIntervalSince1970: row["updated_at"])

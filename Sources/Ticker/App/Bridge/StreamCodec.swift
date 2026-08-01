@@ -142,6 +142,9 @@ enum StreamCodec {
             "createdAt": formatter.string(from: thread.createdAt),
             "updatedAt": formatter.string(from: thread.updatedAt)
         ]
+        if let profile = thread.profile {
+            payload["profile"] = profile
+        }
         if let docJSON = thread.docJSON, let docFormatVersion = thread.docFormatVersion {
             payload["docJSON"] = docJSON
             payload["docFormatVersion"] = docFormatVersion

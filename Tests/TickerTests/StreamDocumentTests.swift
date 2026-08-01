@@ -1310,6 +1310,20 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertFalse(pinnedFrames.contains { $0.content.contains("Primary block") })
     }
 
+    func test_researchConversationUsesResearchPrompt() throws {
+        let prepared = try AIOrchestrator.prepareThreadRequest(
+            query: "Investigate this",
+            anchorText: "Primary block",
+            streamMarkdown: "Whole stream",
+            priorTurns: [],
+            sourceContext: nil,
+            researchProfile: true
+        )
+
+        XCTAssertEqual(prepared.request.systemPrompt, Prompts.threadResearch)
+        XCTAssertTrue(prepared.request.systemPrompt.contains("web_search"))
+    }
+
     func test_threadAIRequestRefusesOneTokenPastProtectedBoundary() throws {
         let fitted = try AIOrchestrator.prepareThreadRequest(
             query: "Question",
@@ -1578,7 +1592,7 @@ final class StreamDocumentTests: XCTestCase {
     }
 
     @MainActor
-    func test_conversationAISendsFullContextAndPersistsVersion2ReceiptWithoutChangingStream() async throws {
+    func test_researchConversationPersistsProfileInVersion2ReceiptWithoutChangingStream() async throws {
         try await withTempPersistenceService { service in
             let stream = Stream(title: "Thread AI")
             try service.saveStream(stream)
@@ -1664,13 +1678,14 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
                 routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
-                routeThreadAI: { query, retrievalQuery, _, _, anchorText, streamMarkdown, pinned, turns, onPrepared, onChunk, onComplete, _, onModelSelected in
+                routeThreadAI: { query, retrievalQuery, _, _, anchorText, streamMarkdown, pinned, turns, researchProfile, onPrepared, onChunk, onComplete, _, onModelSelected in
                     routedQuery = query
                     routedRetrievalQuery = retrievalQuery
                     XCTAssertEqual(anchorText, thread.anchorText)
                     XCTAssertEqual(streamMarkdown, "Stream stays unchanged.")
                     XCTAssertEqual(pinned.map(\.quote), ["A second constraint."])
                     XCTAssertEqual(turns.map(\.requestId), [prior.requestId])
+                    XCTAssertTrue(researchProfile)
                     let receipt = ThreadAIRequestReceipt(
                         sourceContext: SourceContext(
                             text: sentSource.extractedText ?? "",
@@ -1695,6 +1710,7 @@ final class StreamDocumentTests: XCTestCase {
                 "threadId": AnyCodable(thread.threadId.uuidString),
                 "query": AnyCodable(rawPrompt),
                 "sourceScope": AnyCodable("auto"),
+                "profile": AnyCodable("research"),
                 "imageURLs": AnyCodable([])
             ]))
 
@@ -1712,6 +1728,7 @@ final class StreamDocumentTests: XCTestCase {
             let receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
             XCTAssertEqual(receipt["version"] as? Int, 2)
             XCTAssertEqual(receipt["kind"] as? String, "threadAI")
+            XCTAssertEqual(receipt["profile"] as? String, "research")
             let anchor = try XCTUnwrap(receipt["anchor"] as? [String: Any])
             XCTAssertEqual(anchor["text"] as? String, "Read the source.")
             XCTAssertEqual(anchor["kind"] as? String, "stream")
@@ -1752,7 +1769,7 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
                 routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
-                routeThreadAI: { _, _, _, _, _, _, _, _, _, _, _, onError, _ in
+                routeThreadAI: { _, _, _, _, _, _, _, _, _, _, _, _, onError, _ in
                     onError(ThreadAIRequestError.contextTooLarge(
                         largestBlock: "Your note",
                         protectedTokens: 98_000,
@@ -1847,7 +1864,7 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_v30MigrationCreatesConversationAnchorColumns() throws {
+    func test_v31MigrationCreatesConversationColumns() throws {
         try withTempPersistenceServiceAndURL { _, dbURL, _ in
             let dbQueue = try DatabaseQueue(path: dbURL.path)
             let columns = try dbQueue.read { db in
@@ -1876,7 +1893,8 @@ final class StreamDocumentTests: XCTestCase {
                 [
                     "thread_id", "stream_id", "title", "working_text", "anchor_text",
                     "anchor_span_id", "source_id", "highlight_id", "revision", "created_at", "updated_at",
-                    "doc_json", "doc_format_version", "anchor_start", "anchor_end", "detached", "ephemeral"
+                    "doc_json", "doc_format_version", "anchor_start", "anchor_end", "detached", "ephemeral",
+                    "profile"
                 ]
             )
             XCTAssertEqual(
@@ -1910,11 +1928,13 @@ final class StreamDocumentTests: XCTestCase {
 
         var fixtureDB: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
         try fixtureDB?.write { db in
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN profile")
             try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN ephemeral")
             try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN detached")
             try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_end")
             try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_start")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v30_conversation_anchors'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v31_conversation_profiles'")
         }
         fixtureDB = nil
 
@@ -1925,6 +1945,10 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertNil(migrated.anchorEnd)
         XCTAssertTrue(migrated.detached)
         XCTAssertFalse(migrated.ephemeral)
+        XCTAssertNil(try service?.loadStreamThread(
+            threadId: thread.threadId,
+            streamId: stream.id
+        )?.profile)
     }
 
     func test_conversationAnchorProseMirrorPositionsRoundTripWithDocumentAndSkipMissingThread() throws {
@@ -2195,6 +2219,100 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertNil(try service.loadStreamThread(threadId: threadId, streamId: stream.id))
             XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
             XCTAssertTrue(try service.loadPDFHighlights(sourceId: source.id).isEmpty)
+        }
+    }
+
+    func test_ephemeralConversationDeletionRemovesThreadAndExchangesTransactionally() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Scratch chat")
+            try service.saveStream(stream)
+            let thread = StreamThread(
+                streamId: stream.id,
+                title: "Think out loud",
+                anchorText: "Scratch premise",
+                anchorStart: 1,
+                anchorEnd: 16,
+                ephemeral: true
+            )
+            let exchange = AIExchange(
+                requestId: "ephemeral-answer",
+                streamId: stream.id,
+                threadId: thread.threadId,
+                verb: "thread",
+                userInput: "What if?",
+                responseRaw: "Try it."
+            )
+            try service.createStreamThread(thread)
+            try service.saveExchange(exchange)
+
+            XCTAssertEqual(try service.deleteEphemeralThread(
+                threadId: thread.threadId,
+                streamId: stream.id
+            ), [])
+            XCTAssertNil(try service.loadStreamThread(threadId: thread.threadId, streamId: stream.id))
+            XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
+        }
+    }
+
+    func test_nonEphemeralConversationIsNeverAutomaticallyDeleted() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Kept chat")
+            try service.saveStream(stream)
+            let thread = StreamThread(
+                streamId: stream.id,
+                anchorText: "Kept premise",
+                anchorStart: 1,
+                anchorEnd: 13,
+                ephemeral: true
+            )
+            let exchange = AIExchange(
+                requestId: "kept-answer",
+                streamId: stream.id,
+                threadId: thread.threadId,
+                verb: "thread",
+                userInput: "Keep this?",
+                responseRaw: "Yes."
+            )
+            try service.createStreamThread(thread)
+            try service.saveExchange(exchange)
+            _ = try service.saveStreamThread(
+                threadId: thread.threadId,
+                streamId: stream.id,
+                title: thread.title,
+                baseRevision: 0,
+                ephemeral: false
+            )
+
+            XCTAssertEqual(try service.deleteEphemeralThread(
+                threadId: thread.threadId,
+                streamId: stream.id
+            ), [])
+            XCTAssertNotNil(try service.loadStreamThread(threadId: thread.threadId, streamId: stream.id))
+            XCTAssertNotNil(try service.loadExchange(requestId: exchange.requestId))
+        }
+    }
+
+    func test_streamOpenSweepRemovesOnlyEphemeralConversationsAndExchanges() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Crash recovery")
+            try service.saveStream(stream)
+            let scratch = StreamThread(streamId: stream.id, ephemeral: true)
+            let kept = StreamThread(streamId: stream.id)
+            try service.createStreamThread(scratch)
+            try service.createStreamThread(kept)
+            try service.saveExchange(AIExchange(
+                requestId: "scratch-exchange",
+                streamId: stream.id,
+                threadId: scratch.threadId,
+                verb: "thread",
+                userInput: "Scratch",
+                responseRaw: "Temporary"
+            ))
+
+            XCTAssertEqual(try service.deleteEphemeralThreads(streamId: stream.id), 1)
+            XCTAssertNil(try service.loadStreamThread(threadId: scratch.threadId, streamId: stream.id))
+            XCTAssertNil(try service.loadExchange(requestId: "scratch-exchange"))
+            XCTAssertNotNil(try service.loadStreamThread(threadId: kept.threadId, streamId: stream.id))
         }
     }
 
@@ -2475,7 +2593,9 @@ final class StreamDocumentTests: XCTestCase {
                     "anchorEnd": AnyCodable(12),
                     "anchorText": AnyCodable("Power budget"),
                     "sourceId": AnyCodable(NSNull()),
-                    "highlightId": AnyCodable(NSNull())
+                    "highlightId": AnyCodable(NSNull()),
+                    "ephemeral": AnyCodable(true),
+                    "profile": AnyCodable("research")
                 ],
                 callbackId: "create"
             ))
@@ -2487,7 +2607,35 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(createdPayload["anchorStart"] as? Int, 1)
             XCTAssertEqual(createdPayload["anchorEnd"] as? Int, 12)
             XCTAssertEqual(createdPayload["anchorText"] as? String, "Power budget")
+            XCTAssertEqual(createdPayload["ephemeral"] as? Bool, true)
+            XCTAssertEqual(createdPayload["profile"] as? String, "research")
             XCTAssertEqual((createdPayload["exchanges"] as? [[String: Any]])?.count, 0)
+
+            await handler.handle(BridgeMessage(
+                type: "createStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "title": AnyCodable("Document start"),
+                    "anchorStart": AnyCodable(0),
+                    "anchorEnd": AnyCodable(0),
+                    "anchorText": AnyCodable(""),
+                    "detached": AnyCodable(true),
+                    "ephemeral": AnyCodable(true)
+                ],
+                callbackId: "create-detached"
+            ))
+            let detachedResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "create-detached" }
+            )
+            let detachedPayload = try XCTUnwrap(detachedResponse.payload?["thread"]?.value as? [String: Any])
+            XCTAssertEqual(detachedPayload["anchorStart"] as? Int, 0)
+            XCTAssertEqual(detachedPayload["anchorEnd"] as? Int, 0)
+            XCTAssertEqual(detachedPayload["detached"] as? Bool, true)
+            XCTAssertEqual(detachedPayload["ephemeral"] as? Bool, true)
+            let detachedThreadId = try XCTUnwrap(UUID(
+                uuidString: detachedPayload["threadId"] as? String ?? ""
+            ))
+            _ = try service.deleteStreamThread(threadId: detachedThreadId, streamId: stream.id)
 
             let pinnedAnchorPayload: [[String: Any]] = [[
                 "anchorId": "pinned-stream",
@@ -2554,6 +2702,7 @@ final class StreamDocumentTests: XCTestCase {
             )
             let loadedPayload = try XCTUnwrap(loadResponse.payload?["thread"]?.value as? [String: Any])
             let exchanges = try XCTUnwrap(loadedPayload["exchanges"] as? [[String: Any]])
+            XCTAssertEqual(loadedPayload["profile"] as? String, "research")
             XCTAssertEqual(exchanges.map { $0["requestId"] as? String }, ["conversation-turn"])
             XCTAssertEqual(exchanges.first?["responseRaw"] as? String, "Yes.")
 
@@ -2577,7 +2726,8 @@ final class StreamDocumentTests: XCTestCase {
                     "streamId": AnyCodable(stream.id.uuidString),
                     "threadId": AnyCodable(thread.threadId.uuidString),
                     "title": AnyCodable("Power budget"),
-                    "baseRevision": AnyCodable(0)
+                    "baseRevision": AnyCodable(0),
+                    "ephemeral": AnyCodable(false)
                 ],
                 callbackId: "save"
             ))
@@ -2590,8 +2740,23 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(savedPayload["workingText"] as? String, thread.workingText)
             XCTAssertEqual(savedPayload["docJSON"] as? String, docJSON)
             XCTAssertEqual(savedPayload["revision"] as? Int, 1)
+            XCTAssertEqual(savedPayload["ephemeral"] as? Bool, false)
             XCTAssertNotNil(savedPayload["anchors"] as? [[String: Any]])
             XCTAssertNotNil(savedPayload["exchanges"] as? [[String: Any]])
+
+            await handler.handle(BridgeMessage(
+                type: "deleteStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(thread.threadId.uuidString),
+                    "ephemeralOnly": AnyCodable(true)
+                ],
+                callbackId: "guarded-delete"
+            ))
+            XCTAssertNotNil(recorder.messages(ofType: "callback").first {
+                $0.callbackId == "guarded-delete"
+            })
+            XCTAssertNotNil(try service.loadStreamThread(threadId: thread.threadId, streamId: stream.id))
 
             await handler.handle(BridgeMessage(
                 type: "saveStreamThread",
@@ -6732,14 +6897,16 @@ final class StreamDocumentTests: XCTestCase {
         service = nil
 
         // Turn the fresh database into the exact released v29 shape while preserving
-        // representative prototype data. Reopening it must run the real v30 migrator.
+        // representative prototype data. Reopening it must run the real migrator.
         var dbQueue: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
         try dbQueue?.write { db in
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN profile")
             try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN ephemeral")
             try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN detached")
             try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_end")
             try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_start")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v30_conversation_anchors'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v31_conversation_profiles'")
         }
         dbQueue = nil
 
@@ -6764,6 +6931,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertNil(migratedThread.anchorEnd)
         XCTAssertTrue(migratedThread.detached)
         XCTAssertFalse(migratedThread.ephemeral)
+        XCTAssertNil(migratedThread.profile)
         XCTAssertEqual(
             try service?.loadStreamThreadAnchors(
                 threadId: prototypeThread.threadId,
@@ -6806,8 +6974,10 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertFalse(threadColumns.contains("anchor_end"))
             XCTAssertFalse(threadColumns.contains("detached"))
             XCTAssertFalse(threadColumns.contains("ephemeral"))
+            XCTAssertFalse(threadColumns.contains("profile"))
             XCTAssertTrue(migrations.contains("v29_sidenote_documents"))
             XCTAssertFalse(migrations.contains("v30_conversation_anchors"))
+            XCTAssertFalse(migrations.contains("v31_conversation_profiles"))
             XCTAssertEqual(storedAnswer, exchange.responseRaw)
             XCTAssertEqual(storedThreadTitle, prototypeThread.title)
         }

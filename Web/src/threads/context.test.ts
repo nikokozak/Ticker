@@ -26,6 +26,7 @@ const receiptV2 = {
     kind: 'pdf_quote', quote: 'Pinned PDF text.', sourceId: 'source-2',
     sourceName: 'Datasheet', highlightId: 'highlight-2', page: 12,
   }],
+  profile: 'research',
 };
 
 describe('thread AI context receipts', () => {
@@ -46,6 +47,7 @@ describe('thread AI context receipts', () => {
       anchor: { text: 'Start here.', from: 5, to: 16 },
       streamDocument: { sent: true, charCount: 1200 },
       pinned: receiptV2.pinned,
+      profile: 'research',
     });
     expect(parseThreadAISentFacts({
       ...receiptV2,
@@ -61,6 +63,7 @@ describe('thread AI context receipts', () => {
       ...receiptV2,
       pinned: [{ kind: 'stream_quote', quote: 'Bad range', from: '', to: 4 }],
     })?.pinned).toEqual([]);
+    expect(parseThreadAISentFacts({ ...receiptV2, profile: 'unknown' })).toBe(null);
   });
 
   it('keeps released citation-array manifests readable', () => {

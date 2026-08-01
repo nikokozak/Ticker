@@ -54,6 +54,7 @@ struct StreamThread: Codable, Equatable, Identifiable {
     let anchorEnd: Int?
     let detached: Bool
     let ephemeral: Bool
+    let profile: String?
     let revision: Int
     let createdAt: Date
     let updatedAt: Date
@@ -75,6 +76,7 @@ struct StreamThread: Codable, Equatable, Identifiable {
         anchorEnd: Int? = nil,
         detached: Bool = false,
         ephemeral: Bool = false,
+        profile: String? = nil,
         revision: Int = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -93,6 +95,7 @@ struct StreamThread: Codable, Equatable, Identifiable {
         self.anchorEnd = anchorEnd
         self.detached = detached
         self.ephemeral = ephemeral
+        self.profile = profile
         self.revision = revision
         self.createdAt = createdAt
         self.updatedAt = updatedAt
