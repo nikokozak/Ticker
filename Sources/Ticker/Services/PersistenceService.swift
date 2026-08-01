@@ -46,6 +46,7 @@ struct StreamDocumentRevisionConflict: Error {
     let markdown: String
     let revision: Int
     let spans: [ProvenanceSpan]
+    let conversationAnchors: [ConversationAnchor]
     let pendingAppends: [PendingStreamAppend]
     let appendInbox: [StreamAppendInboxEntry]
 }
@@ -721,6 +722,16 @@ final class PersistenceService {
             """)
         }
 
+        migrator.registerMigration("v30_conversation_anchors") { db in
+            try db.execute(sql: """
+                ALTER TABLE stream_threads ADD COLUMN anchor_start INTEGER;
+                ALTER TABLE stream_threads ADD COLUMN anchor_end   INTEGER;
+                ALTER TABLE stream_threads ADD COLUMN detached     INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE stream_threads ADD COLUMN ephemeral    INTEGER NOT NULL DEFAULT 0;
+                UPDATE stream_threads SET detached = 1;
+            """)
+        }
+
         if didDatabaseExistOnInit {
             let hasPendingMigrations = try dbQueue.read { db in
                 try !migrator.hasCompletedMigrations(db)
@@ -1208,6 +1219,7 @@ final class PersistenceService {
         markdown: String,
         baseRevision: Int,
         spans: [ProvenanceSpan],
+        conversationAnchors: [ConversationAnchorUpdate] = [],
         resolvedPendingThrough: Int? = nil,
         consumedInboxThrough: Int? = nil
     ) throws -> Int {
@@ -1221,6 +1233,7 @@ final class PersistenceService {
             markdown: markdown,
             baseRevision: baseRevision,
             spans: Optional(spans),
+            conversationAnchors: conversationAnchors,
             resolvedPendingThrough: resolvedPendingThrough,
             consumedInboxThrough: consumedInboxThrough,
             canonicalDocument: (docJSON, docFormatVersion)
@@ -1233,6 +1246,7 @@ final class PersistenceService {
         markdown: String,
         baseRevision: Int,
         spans: [ProvenanceSpan]?,
+        conversationAnchors: [ConversationAnchorUpdate]? = nil,
         resolvedPendingThrough: Int? = nil,
         consumedInboxThrough: Int? = nil,
         canonicalDocument: (json: String, version: Int)? = nil
@@ -1257,6 +1271,7 @@ final class PersistenceService {
                         markdown: currentMarkdown,
                         revision: currentRevision,
                         spans: try fetchSpans(streamId: streamId, db: db),
+                        conversationAnchors: try fetchConversationAnchors(streamId: streamId, db: db),
                         pendingAppends: try fetchPendingAppends(streamId: streamId, db: db),
                         appendInbox: try fetchAppendInbox(streamId: streamId, db: db)
                     )
@@ -1322,6 +1337,13 @@ final class PersistenceService {
                     )
                     try deleteOrphanExchanges(streamId: streamId, db: db)
                 }
+                if let conversationAnchors {
+                    try updateConversationAnchors(
+                        streamId: streamId,
+                        anchors: conversationAnchors,
+                        db: db
+                    )
+                }
 
                 return newRevision
             }
@@ -1334,6 +1356,7 @@ final class PersistenceService {
                     markdown: "",
                     revision: 0,
                     spans: [],
+                    conversationAnchors: [],
                     pendingAppends: try fetchPendingAppends(streamId: streamId, db: db),
                     appendInbox: try fetchAppendInbox(streamId: streamId, db: db)
                 )
@@ -1394,6 +1417,13 @@ final class PersistenceService {
                     db: db
                 )
                 try deleteOrphanExchanges(streamId: streamId, db: db)
+            }
+            if let conversationAnchors {
+                try updateConversationAnchors(
+                    streamId: streamId,
+                    anchors: conversationAnchors,
+                    db: db
+                )
             }
 
             return newRevision
@@ -1630,8 +1660,9 @@ final class PersistenceService {
                     INSERT INTO stream_threads
                         (thread_id, stream_id, title, working_text, doc_json, doc_format_version,
                          anchor_text, anchor_span_id, source_id, highlight_id,
+                         anchor_start, anchor_end, detached, ephemeral,
                          revision, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
                     thread.threadId.uuidString,
@@ -1644,6 +1675,10 @@ final class PersistenceService {
                     thread.anchorSpanId,
                     thread.sourceId?.uuidString,
                     thread.highlightId?.uuidString,
+                    thread.anchorStart,
+                    thread.anchorEnd,
+                    thread.detached,
+                    thread.ephemeral,
                     thread.revision,
                     thread.createdAt.timeIntervalSince1970,
                     thread.updatedAt.timeIntervalSince1970
@@ -1669,7 +1704,7 @@ final class PersistenceService {
                 sql: """
                     SELECT thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
                            source_id, highlight_id, revision, created_at, updated_at,
-                           doc_json, doc_format_version
+                           doc_json, doc_format_version, anchor_start, anchor_end, detached, ephemeral
                     FROM stream_threads
                     WHERE stream_id = ?
                     ORDER BY updated_at DESC, thread_id
@@ -1682,6 +1717,12 @@ final class PersistenceService {
     func loadStreamThread(threadId: UUID, streamId: UUID) throws -> StreamThread? {
         try dbQueue.read { db in
             try fetchStreamThread(threadId: threadId, streamId: streamId, db: db)
+        }
+    }
+
+    func loadConversationAnchors(streamId: UUID) throws -> [ConversationAnchor] {
+        try dbQueue.read { db in
+            try fetchConversationAnchors(streamId: streamId, db: db)
         }
     }
 
@@ -2015,12 +2056,71 @@ final class PersistenceService {
             sql: """
                 SELECT thread_id, stream_id, title, working_text, anchor_text, anchor_span_id,
                        source_id, highlight_id, revision, created_at, updated_at,
-                       doc_json, doc_format_version
+                       doc_json, doc_format_version, anchor_start, anchor_end, detached, ephemeral
                 FROM stream_threads
                 WHERE thread_id = ? AND stream_id = ?
             """,
             arguments: [threadId.uuidString, streamId.uuidString]
         ).flatMap(Self.decodeStreamThread)
+    }
+
+    private func fetchConversationAnchors(streamId: UUID, db: Database) throws -> [ConversationAnchor] {
+        try Row.fetchAll(
+            db,
+            sql: """
+                SELECT thread_id, anchor_start, anchor_end, anchor_text,
+                       detached, ephemeral, updated_at
+                FROM stream_threads
+                WHERE stream_id = ?
+                ORDER BY updated_at DESC, thread_id
+            """,
+            arguments: [streamId.uuidString]
+        ).compactMap { row in
+            guard let threadId = UUID(uuidString: row["thread_id"]) else { return nil }
+            return ConversationAnchor(
+                threadId: threadId,
+                anchorStart: row["anchor_start"],
+                anchorEnd: row["anchor_end"],
+                anchorText: row["anchor_text"],
+                detached: row["detached"],
+                ephemeral: row["ephemeral"],
+                updatedAt: Date(timeIntervalSince1970: row["updated_at"])
+            )
+        }
+    }
+
+    private func updateConversationAnchors(
+        streamId: UUID,
+        anchors: [ConversationAnchorUpdate],
+        db: Database
+    ) throws {
+        guard Set(anchors.map(\.threadId)).count == anchors.count else {
+            throw StreamThreadPersistenceError.invalidAnchor
+        }
+        for anchor in anchors {
+            guard anchor.anchorStart >= 0,
+                  anchor.anchorEnd >= anchor.anchorStart,
+                  anchor.detached || anchor.anchorEnd > anchor.anchorStart else {
+                throw StreamThreadPersistenceError.invalidAnchor
+            }
+            try db.execute(
+                sql: """
+                    UPDATE stream_threads
+                    SET anchor_start = ?, anchor_end = ?, detached = ?
+                    WHERE thread_id = ? AND stream_id = ?
+                """,
+                arguments: [
+                    anchor.anchorStart,
+                    anchor.anchorEnd,
+                    anchor.detached,
+                    anchor.threadId.uuidString,
+                    streamId.uuidString
+                ]
+            )
+            guard db.changesCount == 1 else {
+                throw StreamThreadPersistenceError.threadNotFound
+            }
+        }
     }
 
     private static func decodeStreamThread(_ row: Row) -> StreamThread? {
@@ -2041,6 +2141,10 @@ final class PersistenceService {
             anchorSpanId: row["anchor_span_id"],
             sourceId: sourceIdRaw.flatMap(UUID.init(uuidString:)),
             highlightId: highlightIdRaw.flatMap(UUID.init(uuidString:)),
+            anchorStart: row["anchor_start"],
+            anchorEnd: row["anchor_end"],
+            detached: row["detached"],
+            ephemeral: row["ephemeral"],
             revision: row["revision"],
             createdAt: Date(timeIntervalSince1970: row["created_at"]),
             updatedAt: Date(timeIntervalSince1970: row["updated_at"])

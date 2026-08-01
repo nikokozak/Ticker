@@ -1808,7 +1808,7 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
-    func test_v29MigrationCreatesSidenoteDocumentAndAnchorSchema() throws {
+    func test_v30MigrationCreatesConversationAnchorColumns() throws {
         try withTempPersistenceServiceAndURL { _, dbURL, _ in
             let dbQueue = try DatabaseQueue(path: dbURL.path)
             let columns = try dbQueue.read { db in
@@ -1837,7 +1837,7 @@ final class StreamDocumentTests: XCTestCase {
                 [
                     "thread_id", "stream_id", "title", "working_text", "anchor_text",
                     "anchor_span_id", "source_id", "highlight_id", "revision", "created_at", "updated_at",
-                    "doc_json", "doc_format_version"
+                    "doc_json", "doc_format_version", "anchor_start", "anchor_end", "detached", "ephemeral"
                 ]
             )
             XCTAssertEqual(
@@ -1853,6 +1853,97 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertTrue(indexes.contains("idx_stream_thread_anchors_span"))
             XCTAssertEqual(threadForeignKey?["table"] as String?, "stream_threads")
             XCTAssertEqual(threadForeignKey?["on_delete"] as String?, "SET NULL")
+        }
+    }
+
+    func test_v30MigrationDetachesPrototypeThreadRows() throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+        let dbURL = tempDir.appendingPathComponent("ticker.db")
+        var service: PersistenceService? = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        let stream = Stream(title: "Prototype migration")
+        try service?.saveStream(stream)
+        let thread = StreamThread(streamId: stream.id, anchorText: "Prototype anchor")
+        try service?.createStreamThread(thread)
+        service = nil
+
+        var fixtureDB: DatabaseQueue? = try DatabaseQueue(path: dbURL.path)
+        try fixtureDB?.write { db in
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN ephemeral")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN detached")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_end")
+            try db.execute(sql: "ALTER TABLE stream_threads DROP COLUMN anchor_start")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v30_conversation_anchors'")
+        }
+        fixtureDB = nil
+
+        service = try PersistenceService(databaseURL: dbURL, fileManager: fileManager)
+        let migrated = try XCTUnwrap(service?.loadConversationAnchors(streamId: stream.id).first)
+        XCTAssertEqual(migrated.threadId, thread.threadId)
+        XCTAssertNil(migrated.anchorStart)
+        XCTAssertNil(migrated.anchorEnd)
+        XCTAssertTrue(migrated.detached)
+        XCTAssertFalse(migrated.ephemeral)
+    }
+
+    func test_conversationAnchorsRoundTripAtomicallyWithDocumentSaveUsingUTF16Offsets() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Anchor save")
+            try service.saveStream(stream)
+            let initial = try service.loadOrCreateStreamDocument(streamId: stream.id)
+            let thread = StreamThread(
+                streamId: stream.id,
+                anchorText: "🙂",
+                anchorStart: 1,
+                anchorEnd: 3,
+                ephemeral: true
+            )
+            try service.createStreamThread(thread)
+            let update = ConversationAnchorUpdate(
+                threadId: thread.threadId,
+                anchorStart: 1,
+                anchorEnd: 3,
+                detached: false
+            )
+
+            let revision = try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"a🙂b"}]}]}"#,
+                docFormatVersion: 1,
+                markdown: "a🙂b",
+                baseRevision: initial.revision,
+                spans: [],
+                conversationAnchors: [update]
+            )
+
+            let loaded = try XCTUnwrap(service.loadConversationAnchors(streamId: stream.id).first)
+            XCTAssertEqual(loaded.anchorStart, 1)
+            XCTAssertEqual(loaded.anchorEnd, 3)
+            XCTAssertEqual(UTF16Offsets.substring("a🙂b", start: 1, end: 3), "🙂")
+            XCTAssertFalse(loaded.detached)
+            XCTAssertTrue(loaded.ephemeral)
+
+            XCTAssertThrowsError(try service.saveStreamDocument(
+                streamId: stream.id,
+                docJSON: initial.docJSON,
+                docFormatVersion: initial.docFormatVersion,
+                markdown: "stale",
+                baseRevision: initial.revision,
+                spans: [],
+                conversationAnchors: [ConversationAnchorUpdate(
+                    threadId: thread.threadId,
+                    anchorStart: 0,
+                    anchorEnd: 0,
+                    detached: true
+                )]
+            )) { error in
+                let conflict = error as? StreamDocumentRevisionConflict
+                XCTAssertEqual(conflict?.revision, revision)
+                XCTAssertEqual(conflict?.conversationAnchors.first?.anchorStart, 1)
+            }
+            XCTAssertEqual(try service.loadConversationAnchors(streamId: stream.id).first?.anchorStart, 1)
         }
     }
 
