@@ -80,7 +80,8 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                     sourceId: references.sourceId,
                     highlightId: references.highlightId,
                     anchorStart: anchorStart,
-                    anchorEnd: anchorEnd
+                    anchorEnd: anchorEnd,
+                    ephemeral: payload["ephemeral"]?.value as? Bool ?? false
                 ))
                 respond(callbackId, [
                     "thread": AnyCodable(try encodeThread(thread))
@@ -185,7 +186,8 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                     threadId: threadId,
                     streamId: streamId,
                     title: title,
-                    baseRevision: baseRevision
+                    baseRevision: baseRevision,
+                    ephemeral: payload["ephemeral"]?.value as? Bool
                 )
                 respond(callbackId, [
                     "conflict": AnyCodable(false),

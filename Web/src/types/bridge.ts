@@ -256,6 +256,7 @@ export function createStreamThread(input: {
   anchorText: string;
   sourceId?: string;
   highlightId?: string;
+  ephemeral?: boolean;
 }): Promise<{ thread: StreamThreadJSON }> {
   return bridge.sendAsync('createStreamThread', {
     streamId: input.streamId,
@@ -265,6 +266,7 @@ export function createStreamThread(input: {
     anchorText: input.anchorText,
     sourceId: input.sourceId,
     highlightId: input.highlightId,
+    ephemeral: input.ephemeral,
   });
 }
 
@@ -326,12 +328,14 @@ export function saveStreamThread(input: {
   threadId: string;
   title: string;
   baseRevision: number;
+  ephemeral?: boolean;
 }): Promise<{ conflict: boolean; thread: StreamThreadJSON }> {
   return bridge.sendAsync('saveStreamThread', {
     streamId: input.streamId,
     threadId: input.threadId,
     title: input.title,
     baseRevision: input.baseRevision,
+    ephemeral: input.ephemeral,
   });
 }
 

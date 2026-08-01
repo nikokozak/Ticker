@@ -178,7 +178,7 @@
       },
       "createStreamThread": {
         "requiredPayloadKeys": ["streamId", "title", "anchorStart", "anchorEnd", "anchorText"],
-        "optionalPayloadKeys": ["sourceId", "highlightId"],
+        "optionalPayloadKeys": ["sourceId", "highlightId", "ephemeral"],
         "requiredCallbackId": true
       },
       "createStream": {
@@ -292,6 +292,7 @@
       },
       "saveStreamThread": {
         "requiredPayloadKeys": ["streamId", "threadId", "title", "baseRevision"],
+        "optionalPayloadKeys": ["ephemeral"],
         "requiredCallbackId": true
       },
       "saveScrollPosition": {

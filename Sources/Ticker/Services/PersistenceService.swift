@@ -1734,18 +1734,21 @@ final class PersistenceService {
         threadId: UUID,
         streamId: UUID,
         title: String,
-        baseRevision: Int
+        baseRevision: Int,
+        ephemeral: Bool? = nil
     ) throws -> StreamThread {
         return try dbQueue.write { db in
             let updatedAt = Date()
             try db.execute(
                 sql: """
                     UPDATE stream_threads
-                    SET title = ?, revision = revision + 1, updated_at = ?
+                    SET title = ?, ephemeral = COALESCE(?, ephemeral),
+                        revision = revision + 1, updated_at = ?
                     WHERE thread_id = ? AND stream_id = ? AND revision = ?
                 """,
                 arguments: [
                     title,
+                    ephemeral,
                     updatedAt.timeIntervalSince1970,
                     threadId.uuidString,
                     streamId.uuidString,

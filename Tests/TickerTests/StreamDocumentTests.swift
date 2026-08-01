@@ -2198,6 +2198,38 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_ephemeralConversationDeletionRemovesThreadAndExchangesTransactionally() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Scratch chat")
+            try service.saveStream(stream)
+            let thread = StreamThread(
+                streamId: stream.id,
+                title: "Think out loud",
+                anchorText: "Scratch premise",
+                anchorStart: 1,
+                anchorEnd: 16,
+                ephemeral: true
+            )
+            let exchange = AIExchange(
+                requestId: "ephemeral-answer",
+                streamId: stream.id,
+                threadId: thread.threadId,
+                verb: "thread",
+                userInput: "What if?",
+                responseRaw: "Try it."
+            )
+            try service.createStreamThread(thread)
+            try service.saveExchange(exchange)
+
+            XCTAssertEqual(try service.deleteStreamThread(
+                threadId: thread.threadId,
+                streamId: stream.id
+            ), [])
+            XCTAssertNil(try service.loadStreamThread(threadId: thread.threadId, streamId: stream.id))
+            XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
+        }
+    }
+
     func test_streamThreadRejectsSourceAndHighlightOutsideItsStream() throws {
         try withTempPersistenceService { service in
             let firstStream = Stream(title: "First")
@@ -2475,7 +2507,8 @@ final class StreamDocumentTests: XCTestCase {
                     "anchorEnd": AnyCodable(12),
                     "anchorText": AnyCodable("Power budget"),
                     "sourceId": AnyCodable(NSNull()),
-                    "highlightId": AnyCodable(NSNull())
+                    "highlightId": AnyCodable(NSNull()),
+                    "ephemeral": AnyCodable(true)
                 ],
                 callbackId: "create"
             ))
@@ -2487,6 +2520,7 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(createdPayload["anchorStart"] as? Int, 1)
             XCTAssertEqual(createdPayload["anchorEnd"] as? Int, 12)
             XCTAssertEqual(createdPayload["anchorText"] as? String, "Power budget")
+            XCTAssertEqual(createdPayload["ephemeral"] as? Bool, true)
             XCTAssertEqual((createdPayload["exchanges"] as? [[String: Any]])?.count, 0)
 
             let pinnedAnchorPayload: [[String: Any]] = [[
@@ -2577,7 +2611,8 @@ final class StreamDocumentTests: XCTestCase {
                     "streamId": AnyCodable(stream.id.uuidString),
                     "threadId": AnyCodable(thread.threadId.uuidString),
                     "title": AnyCodable("Power budget"),
-                    "baseRevision": AnyCodable(0)
+                    "baseRevision": AnyCodable(0),
+                    "ephemeral": AnyCodable(false)
                 ],
                 callbackId: "save"
             ))
@@ -2590,6 +2625,7 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(savedPayload["workingText"] as? String, thread.workingText)
             XCTAssertEqual(savedPayload["docJSON"] as? String, docJSON)
             XCTAssertEqual(savedPayload["revision"] as? Int, 1)
+            XCTAssertEqual(savedPayload["ephemeral"] as? Bool, false)
             XCTAssertNotNil(savedPayload["anchors"] as? [[String: Any]])
             XCTAssertNotNil(savedPayload["exchanges"] as? [[String: Any]])
 
