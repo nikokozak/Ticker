@@ -204,6 +204,7 @@ final class AIOrchestrator {
         streamMarkdown: String,
         pinnedContext: [ThreadAIPinnedContext],
         priorTurns: [ThreadAIConversationTurn],
+        researchProfile: Bool,
         onPrepared: @escaping (ThreadAIRequestReceipt) -> Void,
         onChunk: @escaping (String) -> Void,
         onComplete: @escaping (ThreadAIRequestReceipt) -> Void,
@@ -238,7 +239,8 @@ final class AIOrchestrator {
                 streamMarkdown: streamMarkdown,
                 pinnedContext: pinnedContext,
                 priorTurns: priorTurns,
-                sourceContext: sourceContext
+                sourceContext: sourceContext,
+                researchProfile: researchProfile
             )
             onPrepared(prepared.receipt)
             await proxyService.stream(
@@ -283,6 +285,7 @@ final class AIOrchestrator {
         pinnedContext: [ThreadAIPinnedContext] = [],
         priorTurns: [ThreadAIConversationTurn],
         sourceContext: SourceContext?,
+        researchProfile: Bool = false,
         tokenBudget: Int = LLMRequest.defaultTokenBudget
     ) throws -> PreparedThreadAIRequest {
         let cleanAnchor = TickerInternalURLSanitizer.sanitize(anchorText)
@@ -326,7 +329,7 @@ final class AIOrchestrator {
             if includeSources { messages.append(contentsOf: sourceMessages) }
             messages.append(prompt)
             return LLMRequest(
-                systemPrompt: Prompts.threadConversation,
+                systemPrompt: researchProfile ? Prompts.threadResearch : Prompts.threadConversation,
                 messages: messages,
                 temperature: 0.7,
                 maxTokens: 2048

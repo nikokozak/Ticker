@@ -40,6 +40,7 @@ export interface ThreadAISentFacts {
   sourceContextMode: 'none' | 'passthrough' | 'retrieved' | 'unavailable';
   sources: ThreadAISourceFact[];
   pinned: ThreadAIPinnedFact[];
+  profile?: 'research';
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -138,6 +139,7 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
     ? receipt.pinned.flatMap((pin) => parsePinned(pin) ?? [])
     : [];
   if (receipt.version === 2 && !Array.isArray(receipt.pinned)) return null;
+  if (receipt.profile !== undefined && receipt.profile !== 'research') return null;
 
   return {
     version: receipt.version,
@@ -166,6 +168,7 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
       ? receipt.sources.flatMap((source) => parseSource(source) ?? [])
       : [],
     pinned,
+    profile: receipt.profile,
   };
 }
 

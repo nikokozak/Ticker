@@ -15,6 +15,7 @@ import {
   deleteStreamThread,
   getExchange,
   listConversations,
+  saveStreamThread,
   type DocumentAIVerb,
   type SourceTitlePayload,
   type StreamDocumentConflictPayload,
@@ -194,6 +195,39 @@ interface ExpandedConversation {
   renderAt?: number;
   anchorText: string;
   focusComposer: boolean;
+  ephemeral?: boolean;
+  profile?: 'research';
+}
+
+type SlashCommand = 'chat' | 'research';
+
+interface SlashMenuState {
+  left: number;
+  top: number;
+  selected: number;
+}
+
+const SLASH_COMMANDS: Array<{ command: SlashCommand; description: string }> = [
+  { command: 'chat', description: 'think out loud, saved only if you keep it' },
+  { command: 'research', description: 'ask with sources and web search' },
+];
+
+function slashCommandInput(view: RichTextEditor['view']) {
+  const { selection } = view.state;
+  const { $head } = selection;
+  if (!selection.empty || $head.parent.type.name !== 'paragraph') return null;
+  const text = $head.parent.textContent;
+  if ($head.parentOffset !== text.length) return null;
+  const match = /^\/([a-z]*)(?:\s(.*))?$/.exec(text);
+  if (!match) return null;
+  const commandName = match[1];
+  if (commandName && !SLASH_COMMANDS.some(({ command }) => command.startsWith(commandName))) return null;
+  return {
+    from: $head.before(),
+    to: $head.after(),
+    commandName,
+    draft: match[2] ?? '',
+  };
 }
 
 type ConversationLiveStateUpdater = (current: ConversationLiveState) => ConversationLiveState;
@@ -249,10 +283,14 @@ export function RichStreamEditor({
   // PDF jobs ever become a supported workflow.
   const pdfAIInFlightRef = useRef(false);
   const consumedPendingSourceRef = useRef<string | null>(null);
-  const conversationRecordsRef = useRef<ConversationAnchorJSON[]>(stream.conversationAnchors ?? []);
+  const conversationRecordsRef = useRef<ConversationAnchorJSON[]>(
+    (stream.conversationAnchors ?? []).filter((record) => !record.ephemeral),
+  );
   const expandedConversationRef = useRef<ExpandedConversation | null>(null);
   const conversationLiveStatesRef = useRef<Record<string, ConversationLiveState>>({});
   const conversationCollapseTimerRef = useRef<number>();
+  const slashArmedRef = useRef(false);
+  const slashMenuRef = useRef<SlashMenuState | null>(null);
 
   const [editor, setEditor] = useState<RichTextEditor | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('saved');
@@ -288,12 +326,14 @@ export function RichStreamEditor({
   const [conversationLiveStates, setConversationLiveStates] = useState<Record<string, ConversationLiveState>>({});
   const [conversationWidgetTarget, setConversationWidgetTarget] = useState<HTMLElement | null>(null);
   const [conversationRecords, setConversationRecords] = useState<ConversationAnchorJSON[]>(
-    stream.conversationAnchors ?? [],
+    (stream.conversationAnchors ?? []).filter((record) => !record.ephemeral),
   );
   const [showConversationList, setShowConversationList] = useState(false);
   const [conversationListLoading, setConversationListLoading] = useState(false);
   const [conversationListError, setConversationListError] = useState(false);
   const [conversationPendingDelete, setConversationPendingDelete] = useState<ConversationAnchorJSON | null>(null);
+  const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
+  slashMenuRef.current = slashMenu;
   const addToast = useToastStore((state) => state.addToast);
   const { sources, setSources } = useBridgeMessages({
     streamId: stream.id,
@@ -325,16 +365,6 @@ export function RichStreamEditor({
     setAIDetail(null);
     setSourceIndexNotice(null);
   }, []);
-
-  const flushAll = useCallback(async () => {
-    cancelDocumentAI();
-    return sessionRef.current?.saveNow() ?? Promise.resolve(true);
-  }, [cancelDocumentAI]);
-
-  useEffect(() => {
-    onFlushAvailable?.(flushAll);
-    return () => onFlushAvailable?.(null);
-  }, [flushAll, onFlushAvailable]);
 
   useEffect(() => {
     if (saveState === 'saving') {
@@ -512,6 +542,104 @@ export function RichStreamEditor({
     if (updateUI) setConversationLiveStates(next);
   }, []);
 
+  const discardEphemeralConversation = useCallback(async (key: string): Promise<boolean> => {
+    const thread = conversationLiveStatesRef.current[key]?.thread;
+    if (!thread?.ephemeral) return true;
+    try {
+      await deleteStreamThread({ streamId: stream.id, threadId: thread.threadId });
+      const records = conversationRecordsRef.current.filter((record) => record.threadId !== thread.threadId);
+      conversationRecordsRef.current = records;
+      setConversationRecords(records);
+      updateConversationLiveState(key, (current) => ({
+        ...current,
+        thread: null,
+        exchanges: [],
+        active: null,
+      }));
+      return true;
+    } catch {
+      updateConversationLiveState(key, (current) => ({
+        ...current,
+        error: 'This chat could not be discarded.',
+      }));
+      return false;
+    }
+  }, [stream.id, updateConversationLiveState]);
+
+  const keepExpandedConversation = useCallback(async (): Promise<boolean> => {
+    const expanded = expandedConversationRef.current;
+    if (!expanded?.ephemeral) return true;
+    const current = conversationLiveStatesRef.current[expanded.key];
+    let thread = current?.thread;
+    try {
+      if (thread) {
+        const saved = await saveStreamThread({
+          streamId: stream.id,
+          threadId: thread.threadId,
+          title: thread.title,
+          baseRevision: thread.revision,
+          ephemeral: false,
+        });
+        thread = saved.thread;
+        if (thread.ephemeral) throw new Error('Keep conflicted');
+        updateConversationLiveState(expanded.key, (state) => ({ ...state, thread }));
+      }
+      const kept = { ...expanded, ephemeral: false };
+      expandedConversationRef.current = kept;
+      setExpandedConversation(kept);
+      const liveEditor = editorRef.current;
+      const surface = liveEditor && conversationSurface(liveEditor.view.state);
+      if (thread && liveEditor && surface?.key === expanded.key) {
+        const anchor = { ...surface.anchor, threadId: thread.threadId };
+        liveEditor.view.dispatch(setConversationAnchors(liveEditor.view.state.tr, [
+          ...conversationAnchors(liveEditor.view.state)
+            .filter((candidate) => candidate.threadId !== thread!.threadId),
+          anchor,
+        ]));
+        const records = [
+          ...conversationRecordsRef.current.filter((record) => record.threadId !== thread!.threadId),
+          {
+            threadId: thread.threadId,
+            anchorStart: anchor.from,
+            anchorEnd: anchor.to,
+            anchorText: thread.anchorText,
+            detached: anchor.from >= anchor.to,
+            ephemeral: false,
+            updatedAt: thread.updatedAt,
+          },
+        ];
+        conversationRecordsRef.current = records;
+        setConversationRecords(records);
+        sessionRef.current?.documentChanged();
+      }
+      return true;
+    } catch {
+      updateConversationLiveState(expanded.key, (state) => ({
+        ...state,
+        error: 'This chat could not be kept.',
+      }));
+      return false;
+    }
+  }, [stream.id, updateConversationLiveState]);
+
+  const discardExpandedEphemeralConversation = useCallback(async (): Promise<boolean> => {
+    const expanded = expandedConversationRef.current;
+    return expanded?.ephemeral ? discardEphemeralConversation(expanded.key) : true;
+  }, [discardEphemeralConversation]);
+
+  const flushAll = useCallback(async () => {
+    cancelDocumentAI();
+    const expanded = expandedConversationRef.current;
+    if (expanded) cancelConversationRequest(expanded.key);
+    if (!await discardExpandedEphemeralConversation()) return false;
+    return sessionRef.current?.saveNow() ?? Promise.resolve(true);
+  }, [cancelConversationRequest, cancelDocumentAI, discardExpandedEphemeralConversation]);
+
+  useEffect(() => {
+    onFlushAvailable?.(flushAll);
+    return () => onFlushAvailable?.(null);
+  }, [flushAll, onFlushAvailable]);
+
   const expandConversation = useCallback((next: ExpandedConversation) => {
     const current = expandedConversationRef.current;
     if (current?.key !== next.key) {
@@ -526,12 +654,13 @@ export function RichStreamEditor({
     setExpandedConversation(next);
   }, [cancelConversationRequest, ensureConversationLiveState]);
 
-  const collapseConversation = useCallback(() => {
+  const collapseConversation = useCallback(async () => {
     const expanded = expandedConversationRef.current;
     if (!expanded || conversationCollapseTimerRef.current !== undefined) return;
     const currentEditor = editorRef.current;
     const anchor = currentEditor && conversationSurface(currentEditor.view.state)?.anchor;
     cancelConversationRequest(expanded.key);
+    if (!await discardEphemeralConversation(expanded.key)) return;
     updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: true }));
     conversationCollapseTimerRef.current = window.setTimeout(() => {
       conversationCollapseTimerRef.current = undefined;
@@ -550,7 +679,7 @@ export function RichStreamEditor({
         currentEditor.view.focus();
       });
     }, 150);
-  }, [cancelConversationRequest, updateConversationLiveState]);
+  }, [cancelConversationRequest, discardEphemeralConversation, updateConversationLiveState]);
 
   useEffect(() => () => {
     if (conversationCollapseTimerRef.current !== undefined) {
@@ -559,7 +688,12 @@ export function RichStreamEditor({
     for (const key of Object.keys(conversationLiveStatesRef.current)) {
       cancelConversationRequest(key, false);
     }
-  }, [cancelConversationRequest]);
+    const expanded = expandedConversationRef.current;
+    const thread = expanded && conversationLiveStatesRef.current[expanded.key]?.thread;
+    if (expanded?.ephemeral && thread?.ephemeral) {
+      void deleteStreamThread({ streamId: stream.id, threadId: thread.threadId }).catch(() => undefined);
+    }
+  }, [cancelConversationRequest, stream.id]);
 
   const openConversationFromGlyph = useCallback((threadId: string) => {
     const view = editorRef.current?.view;
@@ -605,13 +739,74 @@ export function RichStreamEditor({
     });
   }, [collapseConversation, expandConversation]);
 
+  const updateSlashMenu = useCallback(() => {
+    const view = editorRef.current?.view;
+    const input = view && slashCommandInput(view);
+    if (!view || !input) {
+      slashArmedRef.current = false;
+      if (slashMenuRef.current) {
+        slashMenuRef.current = null;
+        setSlashMenu(null);
+      }
+      return;
+    }
+    if (!slashArmedRef.current && !slashMenuRef.current) return;
+    slashArmedRef.current = false;
+    let coords = { left: 0, bottom: 0 };
+    try {
+      coords = view.coordsAtPos(view.state.selection.head);
+    } catch {
+      // jsdom and first WebKit layout can have no caret rectangle yet.
+    }
+    const matched = input.commandName
+      ? SLASH_COMMANDS.findIndex(({ command }) => command.startsWith(input.commandName))
+      : -1;
+    const next = {
+      left: coords.left,
+      top: coords.bottom + 6,
+      selected: matched >= 0 ? matched : slashMenuRef.current?.selected ?? 0,
+    };
+    slashMenuRef.current = next;
+    setSlashMenu(next);
+  }, []);
+
+  const runSlashCommand = useCallback((command: SlashCommand) => {
+    const view = editorRef.current?.view;
+    const input = view && slashCommandInput(view);
+    if (!view || !input) return;
+    const key = `slash:${crypto.randomUUID()}`;
+    const previous = input.from > 0
+      ? fullBlockConversationAnchor(view.state.doc, input.from - 1, key)
+      : null;
+    view.dispatch(view.state.tr.delete(input.from, input.to).setMeta('addToHistory', false));
+    const anchor = previous ?? {
+      threadId: key,
+      from: view.state.doc.content.size,
+      to: view.state.doc.content.size,
+      detached: true,
+    };
+    slashMenuRef.current = null;
+    setSlashMenu(null);
+    updateConversationLiveState(key, (current) => ({ ...current, composer: input.draft }));
+    expandConversation({
+      key,
+      anchor,
+      renderAt: anchor.detached ? view.state.doc.content.size : undefined,
+      anchorText: conversationAnchorTextForStorage(view.state.doc, anchor),
+      focusComposer: true,
+      ephemeral: command === 'chat',
+      profile: command === 'research' ? 'research' : undefined,
+    });
+  }, [expandConversation, updateConversationLiveState]);
+
   // Which formatting buttons are lit depends on the SELECTION, so the menu has to
   // redraw on every transaction and not only on edits.
   const onUpdate = useCallback(() => {
     redraw((n) => n + 1);
     updateSelectionMenu();
+    updateSlashMenu();
     if (editorRef.current) refreshConversationViewport(editorRef.current.view);
-  }, [updateSelectionMenu]);
+  }, [updateSelectionMenu, updateSlashMenu]);
 
   useLayoutEffect(() => {
     if (!selectionMenu.visible) return;
@@ -739,7 +934,9 @@ export function RichStreamEditor({
       editor: created,
       revision: stream.document?.revision ?? 0,
       spans: (stream.spans ?? []).map(spanFromJSON),
-      conversationAnchors: (stream.conversationAnchors ?? []).map(conversationAnchorFromJSON),
+      conversationAnchors: (stream.conversationAnchors ?? [])
+        .filter((record) => !record.ephemeral)
+        .map(conversationAnchorFromJSON),
       pendingAppends: decodePendingAppends(stream.pendingAppends),
       inboxAppends: stream.appendInbox ?? [],
       transport: {
@@ -862,7 +1059,7 @@ export function RichStreamEditor({
   ]);
 
   useEffect(() => {
-    const records = stream.conversationAnchors ?? [];
+    const records = (stream.conversationAnchors ?? []).filter((record) => !record.ephemeral);
     conversationRecordsRef.current = records;
     setConversationRecords(records);
   }, [stream.conversationAnchors]);
@@ -871,11 +1068,12 @@ export function RichStreamEditor({
     currentSurface: { key: string; anchor: ConversationAnchor },
     title: string,
     pdf?: { sourceId: string; highlightId: string },
+    ephemeral = false,
   ): Promise<StreamThreadJSON> => {
     const currentEditor = editorRef.current;
     if (!currentEditor) throw new Error('Conversation closed');
     const anchorText = conversationAnchorTextForStorage(currentEditor.view.state.doc, currentSurface.anchor);
-    if (!anchorText) throw new Error('Anchor deleted');
+    if (!anchorText && !currentSurface.anchor.detached) throw new Error('Anchor deleted');
     const { thread } = await createStreamThread({
       streamId: stream.id,
       title,
@@ -884,6 +1082,8 @@ export function RichStreamEditor({
       anchorText,
       sourceId: pdf?.sourceId,
       highlightId: pdf?.highlightId,
+      detached: currentSurface.anchor.detached,
+      ephemeral,
     });
 
     const liveEditor = editorRef.current;
@@ -898,7 +1098,9 @@ export function RichStreamEditor({
     const anchors = conversationAnchors(liveEditor.view.state)
       .filter((anchor) => anchor.threadId !== thread.threadId
         && anchor.threadId !== currentSurface.anchor.threadId);
-    liveEditor.view.dispatch(setConversationAnchors(liveEditor.view.state.tr, [...anchors, persisted]));
+    if (!thread.ephemeral) {
+      liveEditor.view.dispatch(setConversationAnchors(liveEditor.view.state.tr, [...anchors, persisted]));
+    }
     if (liveSurface?.key === currentSurface.key) {
       liveEditor.view.dispatch(setConversationSurface(liveEditor.view.state.tr, {
         key: currentSurface.key,
@@ -911,29 +1113,34 @@ export function RichStreamEditor({
         setExpandedConversation(next);
       }
     }
-    const records = [
-      ...conversationRecordsRef.current.filter((record) => record.threadId !== thread.threadId),
-      {
-        threadId: thread.threadId,
-        anchorStart: persisted.from,
-        anchorEnd: persisted.to,
-        anchorText,
-        detached: persisted.detached,
-        ephemeral: false,
-        updatedAt: thread.updatedAt,
-      },
-    ];
-    conversationRecordsRef.current = records;
-    setConversationRecords(records);
-    sessionRef.current?.documentChanged();
+    if (!thread.ephemeral) {
+      const records = [
+        ...conversationRecordsRef.current.filter((record) => record.threadId !== thread.threadId),
+        {
+          threadId: thread.threadId,
+          anchorStart: persisted.from,
+          anchorEnd: persisted.to,
+          anchorText,
+          detached: persisted.detached,
+          ephemeral: false,
+          updatedAt: thread.updatedAt,
+        },
+      ];
+      conversationRecordsRef.current = records;
+      setConversationRecords(records);
+      sessionRef.current?.documentChanged();
+    }
     return thread;
   }, [stream.id]);
 
-  const createPersistedConversation = useCallback(async (query: string): Promise<StreamThreadJSON> => {
+  const createPersistedConversation = useCallback(async (
+    query: string,
+    ephemeral: boolean,
+  ): Promise<StreamThreadJSON> => {
     const currentEditor = editorRef.current;
     const currentSurface = currentEditor && conversationSurface(currentEditor.view.state);
     if (!currentSurface) throw new Error('Conversation closed');
-    return persistConversation(currentSurface, query.split(/\r?\n/, 1)[0]);
+    return persistConversation(currentSurface, query.split(/\r?\n/, 1)[0], undefined, ephemeral);
   }, [persistConversation]);
 
   const conversationHasDrifted = useCallback((anchorText: string) => {
@@ -946,7 +1153,8 @@ export function RichStreamEditor({
     );
   }, []);
 
-  const promoteConversationTurn = useCallback((exchange: AIExchangeJSON) => {
+  const promoteConversationTurn = useCallback(async (exchange: AIExchangeJSON) => {
+    if (expandedConversationRef.current?.ephemeral && !await keepExpandedConversation()) return;
     const currentEditor = editorRef.current;
     const surface = currentEditor && conversationSurface(currentEditor.view.state);
     if (!currentEditor || !surface) return;
@@ -981,7 +1189,7 @@ export function RichStreamEditor({
     } catch {
       addToast("Couldn't add the reply.", 'error');
     }
-  }, [addToast]);
+  }, [addToast, keepExpandedConversation]);
 
   const discardPDFQuote = useCallback((streamId: unknown, highlightId: unknown) => {
     if (typeof highlightId === 'string') {
@@ -1074,8 +1282,9 @@ export function RichStreamEditor({
     setConversationListError(false);
     try {
       const { conversations } = await listConversations(stream.id);
-      conversationRecordsRef.current = conversations;
-      setConversationRecords(conversations);
+      const kept = conversations.filter((record) => !record.ephemeral);
+      conversationRecordsRef.current = kept;
+      setConversationRecords(kept);
     } catch {
       setConversationListError(true);
     } finally {
@@ -1233,6 +1442,42 @@ export function RichStreamEditor({
   useEffect(() => {
     editor?.view.dom.parentElement?.classList.toggle('richtext-xray', xray);
   }, [editor, xray]);
+
+  useEffect(() => {
+    if (!editor) return undefined;
+    const keydown = (event: KeyboardEvent) => {
+      const menu = slashMenuRef.current;
+      if (menu) {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          const direction = event.key === 'ArrowDown' ? 1 : -1;
+          const next = {
+            ...menu,
+            selected: (menu.selected + direction + SLASH_COMMANDS.length) % SLASH_COMMANDS.length,
+          };
+          slashMenuRef.current = next;
+          setSlashMenu(next);
+        } else if (event.key === 'Enter') {
+          event.preventDefault();
+          runSlashCommand(SLASH_COMMANDS[menu.selected].command);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          slashMenuRef.current = null;
+          setSlashMenu(null);
+        }
+        return;
+      }
+      const { selection } = editor.view.state;
+      if (event.key === '/'
+        && selection.empty
+        && selection.$head.parent.type.name === 'paragraph'
+        && selection.$head.parent.content.size === 0) {
+        slashArmedRef.current = true;
+      }
+    };
+    editor.view.dom.addEventListener('keydown', keydown, true);
+    return () => editor.view.dom.removeEventListener('keydown', keydown, true);
+  }, [editor, runSlashCommand]);
 
   useEffect(() => {
     if (!editor || !xray) return undefined;
@@ -1407,12 +1652,25 @@ export function RichStreamEditor({
    */
   const leave = useCallback(async () => {
     cancelDocumentAI();
+    const expanded = expandedConversationRef.current;
+    if (expanded) cancelConversationRequest(expanded.key);
     setLeaving(true);
+    if (!await discardExpandedEphemeralConversation()) {
+      setLeaving(false);
+      addToast('This chat could not be discarded, so the stream stayed open.', 'error');
+      return;
+    }
     const documentSaved = await (sessionRef.current?.destroy() ?? Promise.resolve(true));
     if (documentSaved) return onBack();
     setLeaving(false);
     addToast('Your changes could not be saved, so this stream stayed open.', 'error');
-  }, [addToast, cancelDocumentAI, onBack]);
+  }, [
+    addToast,
+    cancelConversationRequest,
+    cancelDocumentAI,
+    discardExpandedEphemeralConversation,
+    onBack,
+  ]);
 
   const remove = useCallback(() => {
     deleting.current = true;
@@ -1703,7 +1961,9 @@ export function RichStreamEditor({
         markdown: String(conflict?.markdown ?? ''),
         revision: Number(conflict?.revision),
         spans: conflict?.spans?.map(spanFromJSON),
-        conversationAnchors: conflict?.conversationAnchors?.map(conversationAnchorFromJSON),
+        conversationAnchors: conflict?.conversationAnchors
+          ?.filter((record) => !record.ephemeral)
+          .map(conversationAnchorFromJSON),
         pendingAppends: decodePendingAppends(
           Array.isArray(conflict?.pendingAppends) ? conflict.pendingAppends : [],
         ),
@@ -1762,7 +2022,9 @@ export function RichStreamEditor({
       markdown: document.markdown,
       revision: document.revision,
       spans: (stream.spans ?? []).map(spanFromJSON),
-      conversationAnchors: (stream.conversationAnchors ?? []).map(conversationAnchorFromJSON),
+      conversationAnchors: (stream.conversationAnchors ?? [])
+        .filter((record) => !record.ephemeral)
+        .map(conversationAnchorFromJSON),
       // The reloaded document brings its own rows. Without them the session could
       // never let the store forget another one, and a row that outlives the
       // revision it was recorded at can never be replayed.
@@ -1935,6 +2197,10 @@ export function RichStreamEditor({
       onPointerDownCapture={(event) => {
         const menu = streamOverflowMenuRef.current;
         if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+        if (slashMenuRef.current && !(event.target as Element).closest?.('.slash-command-menu')) {
+          slashMenuRef.current = null;
+          setSlashMenu(null);
+        }
       }}
       onKeyDownCapture={(event) => {
         if (event.key === 'Escape' && streamOverflowMenuRef.current?.open) {
@@ -2212,16 +2478,42 @@ export function RichStreamEditor({
           streamMarkdown={editor?.getMarkdownProjection() ?? stream.document.markdown}
           contextOptions={conversationContextOptions}
           focusComposer={expandedConversation.focusComposer}
+          ephemeral={expandedConversation.ephemeral === true}
+          profile={expandedConversation.profile}
           state={conversationLiveStates[expandedConversation.key]
             ?? initialConversationLiveState(expandedConversation.threadId)}
           updateState={updateConversationLiveState}
           createThread={createPersistedConversation}
           hasDrifted={conversationHasDrifted}
           onPromote={promoteConversationTurn}
+          onKeep={() => { void keepExpandedConversation(); }}
           onCollapse={collapseConversation}
         />,
         conversationWidgetTarget,
         expandedConversation.key,
+      )}
+
+      {slashMenu && (
+        <div
+          className="slash-command-menu"
+          role="listbox"
+          aria-label="Slash commands"
+          style={{ left: `${slashMenu.left}px`, top: `${slashMenu.top}px` }}
+        >
+          {SLASH_COMMANDS.map((item, index) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={index === slashMenu.selected}
+              className={index === slashMenu.selected ? 'slash-command-item--selected' : ''}
+              key={item.command}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => runSlashCommand(item.command)}
+            >
+              <span>{item.command}</span> — {item.description}
+            </button>
+          ))}
+        </div>
       )}
 
       {formats && selectionMenu.visible && (

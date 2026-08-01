@@ -257,6 +257,7 @@ export function createStreamThread(input: {
   sourceId?: string;
   highlightId?: string;
   ephemeral?: boolean;
+  detached?: boolean;
 }): Promise<{ thread: StreamThreadJSON }> {
   return bridge.sendAsync('createStreamThread', {
     streamId: input.streamId,
@@ -267,6 +268,7 @@ export function createStreamThread(input: {
     sourceId: input.sourceId,
     highlightId: input.highlightId,
     ephemeral: input.ephemeral,
+    detached: input.detached,
   });
 }
 

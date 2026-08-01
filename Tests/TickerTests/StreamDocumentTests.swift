@@ -1310,6 +1310,20 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertFalse(pinnedFrames.contains { $0.content.contains("Primary block") })
     }
 
+    func test_researchConversationUsesResearchPrompt() throws {
+        let prepared = try AIOrchestrator.prepareThreadRequest(
+            query: "Investigate this",
+            anchorText: "Primary block",
+            streamMarkdown: "Whole stream",
+            priorTurns: [],
+            sourceContext: nil,
+            researchProfile: true
+        )
+
+        XCTAssertEqual(prepared.request.systemPrompt, Prompts.threadResearch)
+        XCTAssertTrue(prepared.request.systemPrompt.contains("web_search"))
+    }
+
     func test_threadAIRequestRefusesOneTokenPastProtectedBoundary() throws {
         let fitted = try AIOrchestrator.prepareThreadRequest(
             query: "Question",
@@ -1578,7 +1592,7 @@ final class StreamDocumentTests: XCTestCase {
     }
 
     @MainActor
-    func test_conversationAISendsFullContextAndPersistsVersion2ReceiptWithoutChangingStream() async throws {
+    func test_researchConversationPersistsProfileInVersion2ReceiptWithoutChangingStream() async throws {
         try await withTempPersistenceService { service in
             let stream = Stream(title: "Thread AI")
             try service.saveStream(stream)
@@ -1664,13 +1678,14 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
                 routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
-                routeThreadAI: { query, retrievalQuery, _, _, anchorText, streamMarkdown, pinned, turns, onPrepared, onChunk, onComplete, _, onModelSelected in
+                routeThreadAI: { query, retrievalQuery, _, _, anchorText, streamMarkdown, pinned, turns, researchProfile, onPrepared, onChunk, onComplete, _, onModelSelected in
                     routedQuery = query
                     routedRetrievalQuery = retrievalQuery
                     XCTAssertEqual(anchorText, thread.anchorText)
                     XCTAssertEqual(streamMarkdown, "Stream stays unchanged.")
                     XCTAssertEqual(pinned.map(\.quote), ["A second constraint."])
                     XCTAssertEqual(turns.map(\.requestId), [prior.requestId])
+                    XCTAssertTrue(researchProfile)
                     let receipt = ThreadAIRequestReceipt(
                         sourceContext: SourceContext(
                             text: sentSource.extractedText ?? "",
@@ -1695,6 +1710,7 @@ final class StreamDocumentTests: XCTestCase {
                 "threadId": AnyCodable(thread.threadId.uuidString),
                 "query": AnyCodable(rawPrompt),
                 "sourceScope": AnyCodable("auto"),
+                "profile": AnyCodable("research"),
                 "imageURLs": AnyCodable([])
             ]))
 
@@ -1712,6 +1728,7 @@ final class StreamDocumentTests: XCTestCase {
             let receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
             XCTAssertEqual(receipt["version"] as? Int, 2)
             XCTAssertEqual(receipt["kind"] as? String, "threadAI")
+            XCTAssertEqual(receipt["profile"] as? String, "research")
             let anchor = try XCTUnwrap(receipt["anchor"] as? [String: Any])
             XCTAssertEqual(anchor["text"] as? String, "Read the source.")
             XCTAssertEqual(anchor["kind"] as? String, "stream")
@@ -1752,7 +1769,7 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
                 routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
-                routeThreadAI: { _, _, _, _, _, _, _, _, _, _, _, onError, _ in
+                routeThreadAI: { _, _, _, _, _, _, _, _, _, _, _, _, onError, _ in
                     onError(ThreadAIRequestError.contextTooLarge(
                         largestBlock: "Your note",
                         protectedTokens: 98_000,
@@ -2522,6 +2539,32 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(createdPayload["anchorText"] as? String, "Power budget")
             XCTAssertEqual(createdPayload["ephemeral"] as? Bool, true)
             XCTAssertEqual((createdPayload["exchanges"] as? [[String: Any]])?.count, 0)
+
+            await handler.handle(BridgeMessage(
+                type: "createStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "title": AnyCodable("Document start"),
+                    "anchorStart": AnyCodable(0),
+                    "anchorEnd": AnyCodable(0),
+                    "anchorText": AnyCodable(""),
+                    "detached": AnyCodable(true),
+                    "ephemeral": AnyCodable(true)
+                ],
+                callbackId: "create-detached"
+            ))
+            let detachedResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "create-detached" }
+            )
+            let detachedPayload = try XCTUnwrap(detachedResponse.payload?["thread"]?.value as? [String: Any])
+            XCTAssertEqual(detachedPayload["anchorStart"] as? Int, 0)
+            XCTAssertEqual(detachedPayload["anchorEnd"] as? Int, 0)
+            XCTAssertEqual(detachedPayload["detached"] as? Bool, true)
+            XCTAssertEqual(detachedPayload["ephemeral"] as? Bool, true)
+            let detachedThreadId = try XCTUnwrap(UUID(
+                uuidString: detachedPayload["threadId"] as? String ?? ""
+            ))
+            _ = try service.deleteStreamThread(threadId: detachedThreadId, streamId: stream.id)
 
             let pinnedAnchorPayload: [[String: Any]] = [[
                 "anchorId": "pinned-stream",

@@ -63,12 +63,16 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                   let streamId = decodeUUID(payload, key: "streamId"),
                   let title = payload["title"]?.value as? String,
                   let anchorText = payload["anchorText"]?.value as? String,
-                  !anchorText.isEmpty,
                   let anchorStart = payload["anchorStart"]?.intValue,
                   let anchorEnd = payload["anchorEnd"]?.intValue,
                   anchorStart >= 0,
-                  anchorEnd > anchorStart,
+                  anchorEnd >= anchorStart,
                   let references = Self.decodePrimaryPDFReferences(payload) else {
+                respondWithError(callbackId, "Invalid createStreamThread payload")
+                return
+            }
+            let detached = payload["detached"]?.value as? Bool ?? (anchorStart == anchorEnd)
+            guard detached == (anchorStart == anchorEnd), detached || !anchorText.isEmpty else {
                 respondWithError(callbackId, "Invalid createStreamThread payload")
                 return
             }
@@ -81,6 +85,7 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                     highlightId: references.highlightId,
                     anchorStart: anchorStart,
                     anchorEnd: anchorEnd,
+                    detached: detached,
                     ephemeral: payload["ephemeral"]?.value as? Bool ?? false
                 ))
                 respond(callbackId, [

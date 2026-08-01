@@ -178,7 +178,7 @@
       },
       "createStreamThread": {
         "requiredPayloadKeys": ["streamId", "title", "anchorStart", "anchorEnd", "anchorText"],
-        "optionalPayloadKeys": ["sourceId", "highlightId", "ephemeral"],
+        "optionalPayloadKeys": ["sourceId", "highlightId", "ephemeral", "detached"],
         "requiredCallbackId": true
       },
       "createStream": {
@@ -316,7 +316,7 @@
       },
       "thinkDocument": {
         "requiredPayloadKeys": ["requestId", "streamId", "query", "imageURLs"],
-        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId", "threadId", "anchorStart", "anchorEnd", "streamMarkdown"]
+        "optionalPayloadKeys": ["context", "sourceScope", "verb", "parentRequestId", "threadId", "anchorStart", "anchorEnd", "streamMarkdown", "profile"]
       },
       "updateMarginNote": {
         "requiredPayloadKeys": ["noteId", "status"]
