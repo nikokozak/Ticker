@@ -196,9 +196,7 @@ export function ConversationSurface({
   }, [conversationKey, state.loading, state.thread, streamId, threadId, updateState]);
 
   useEffect(() => {
-    if (!focusComposer) return;
-    const frame = window.requestAnimationFrame(() => composerRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
+    if (focusComposer) composerRef.current?.focus();
   }, [focusComposer]);
 
   useEffect(() => bridge.onMessage((message) => {

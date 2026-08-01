@@ -32,7 +32,8 @@ export function buildPDFQuoteSnippet(args: { quote: string; linkLabel: string; l
     .replace(/\\/g, '\\\\')
     .replace(/\[/g, '\\[')
     .replace(/\]/g, '\\]');
-  return `\n${quote ? `> ${quote}\n` : ''}[${linkLabel}](${args.linkURL})\n`;
+  const link = `[${linkLabel}](${args.linkURL})`;
+  return `\n${quote ? `> ${quote} ${link}` : link}\n`;
 }
 
 export function beginPDFAnchorPick(streamId: string): void {

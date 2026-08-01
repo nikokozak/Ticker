@@ -37,7 +37,7 @@ describe('pdf anchor selection helpers', () => {
       linkLabel: 'Guide \\ [draft] p.7',
       linkURL: 'ticker-pdf://source?highlight=h1&page=7',
     })).toBe(
-      '\n> A wrapped PDF quote.\n[Guide \\\\ \\[draft\\] p.7](ticker-pdf://source?highlight=h1&page=7)\n'
+      '\n> A wrapped PDF quote. [Guide \\\\ \\[draft\\] p.7](ticker-pdf://source?highlight=h1&page=7)\n'
     );
   });
 });

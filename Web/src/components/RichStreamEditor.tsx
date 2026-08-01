@@ -43,13 +43,16 @@ import {
   type PDFSectionActionRequest,
 } from './StreamEditor';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
+import { parseTickerPDFURL } from '../extensions/PDFHighlightLink';
 import {
   conversationAnchorFromJSON,
   conversationAnchorText,
   conversationAnchorTextForStorage,
   conversationAnchors,
   conversationRenderPosition,
+  conversationSurfacePosition,
   conversationSurface,
+  fullBlockConversationAnchor,
   hasConversationAnchorTextDrifted,
   refreshConversationViewport,
   setConversationAnchors,
@@ -59,6 +62,8 @@ import {
 import {
   aiWritingRange,
   insertImage,
+  insertMarkdownBlocks,
+  pdfHighlightRange,
   promoteConversationMarkdown,
   removePDFHighlightLink,
   revealPDFHighlight,
@@ -233,6 +238,7 @@ export function RichStreamEditor({
   const aiRequestRef = useRef<ActiveDocumentAI | null>(null);
   const aiInFlightRef = useRef(false);
   const pendingPDFAnchorSelectionRef = useRef<PendingPDFAnchorSelection | null>(null);
+  const lastEditorCursorRef = useRef<number | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const streamOverflowMenuRef = useRef<HTMLDetailsElement>(null);
@@ -566,6 +572,18 @@ export function RichStreamEditor({
     });
   }, [expandConversation]);
 
+  const revealPDFConversation = useCallback((sourceId: string, highlightId: string) => {
+    const view = editorRef.current?.view;
+    if (!view) return false;
+    const range = pdfHighlightRange(view.state, sourceId, highlightId);
+    if (!range || !revealPDFHighlight(view, sourceId, highlightId)) return false;
+    const anchor = conversationAnchors(view.state).find((candidate) => (
+      range.from < candidate.to && range.to > candidate.from
+    ));
+    if (anchor) openConversationFromGlyph(anchor.threadId);
+    return true;
+  }, [openConversationFromGlyph]);
+
   const createConversationAtBlock = useCallback((anchor: ConversationAnchor) => {
     const view = editorRef.current?.view;
     if (!view) return;
@@ -626,6 +644,10 @@ export function RichStreamEditor({
     if (pendingPDF) {
       pendingPDFAnchorSelectionRef.current = mapPendingPDFAnchorSelection(pendingPDF, mapper);
     }
+    if (transaction.selectionSet) lastEditorCursorRef.current = transaction.selection.head;
+    else if (transaction.docChanged && lastEditorCursorRef.current !== null) {
+      lastEditorCursorRef.current = transaction.mapping.map(lastEditorCursorRef.current, 1);
+    }
   }, []);
 
   /**
@@ -636,10 +658,14 @@ export function RichStreamEditor({
   const openLink = useCallback((href: string) => {
     if (href.startsWith(PDF_URL_PREFIX)) {
       bridge.send({ type: 'openPdfDestination', payload: { streamId: stream.id, url: href } });
+      const destination = parseTickerPDFURL(href);
+      if (destination?.sourceId && destination.highlightId) {
+        revealPDFConversation(destination.sourceId, destination.highlightId);
+      }
       return;
     }
     bridge.send({ type: 'openExternalURL', payload: { url: href } });
-  }, [stream.id]);
+  }, [revealPDFConversation, stream.id]);
 
   const saveImageToAssets = useCallback(async (blob: Blob): Promise<string> => {
     const requestId = crypto.randomUUID();
@@ -839,27 +865,37 @@ export function RichStreamEditor({
     setConversationRecords(records);
   }, [stream.conversationAnchors]);
 
-  const createPersistedConversation = useCallback(async (query: string): Promise<StreamThreadJSON> => {
+  const persistConversation = useCallback(async (
+    currentSurface: { key: string; anchor: ConversationAnchor },
+    title: string,
+    pdf?: { sourceId: string; highlightId: string },
+  ): Promise<StreamThreadJSON> => {
     const currentEditor = editorRef.current;
-    const currentSurface = currentEditor && conversationSurface(currentEditor.view.state);
-    if (!currentEditor || !currentSurface) throw new Error('Conversation closed');
+    if (!currentEditor) throw new Error('Conversation closed');
     const anchorText = conversationAnchorTextForStorage(currentEditor.view.state.doc, currentSurface.anchor);
     if (!anchorText) throw new Error('Anchor deleted');
     const { thread } = await createStreamThread({
       streamId: stream.id,
-      title: query.split(/\r?\n/, 1)[0],
+      title,
       anchorStart: currentSurface.anchor.from,
       anchorEnd: currentSurface.anchor.to,
       anchorText,
+      sourceId: pdf?.sourceId,
+      highlightId: pdf?.highlightId,
     });
 
     const liveEditor = editorRef.current;
     if (!liveEditor || liveEditor.view.isDestroyed) return thread;
     const liveSurface = conversationSurface(liveEditor.view.state);
-    const mapped = liveSurface?.key === currentSurface.key ? liveSurface.anchor : currentSurface.anchor;
+    const mapped = liveSurface?.key === currentSurface.key
+      ? liveSurface.anchor
+      : conversationAnchors(liveEditor.view.state)
+        .find((anchor) => anchor.threadId === currentSurface.anchor.threadId)
+        ?? currentSurface.anchor;
     const persisted = { ...mapped, threadId: thread.threadId, detached: mapped.from >= mapped.to };
     const anchors = conversationAnchors(liveEditor.view.state)
-      .filter((anchor) => anchor.threadId !== thread.threadId);
+      .filter((anchor) => anchor.threadId !== thread.threadId
+        && anchor.threadId !== currentSurface.anchor.threadId);
     liveEditor.view.dispatch(setConversationAnchors(liveEditor.view.state.tr, [...anchors, persisted]));
     if (liveSurface?.key === currentSurface.key) {
       liveEditor.view.dispatch(setConversationSurface(liveEditor.view.state.tr, {
@@ -880,7 +916,7 @@ export function RichStreamEditor({
         anchorStart: persisted.from,
         anchorEnd: persisted.to,
         anchorText,
-        detached: false,
+        detached: persisted.detached,
         ephemeral: false,
         updatedAt: thread.updatedAt,
       },
@@ -890,6 +926,13 @@ export function RichStreamEditor({
     sessionRef.current?.documentChanged();
     return thread;
   }, [stream.id]);
+
+  const createPersistedConversation = useCallback(async (query: string): Promise<StreamThreadJSON> => {
+    const currentEditor = editorRef.current;
+    const currentSurface = currentEditor && conversationSurface(currentEditor.view.state);
+    if (!currentSurface) throw new Error('Conversation closed');
+    return persistConversation(currentSurface, query.split(/\r?\n/, 1)[0]);
+  }, [persistConversation]);
 
   const conversationHasDrifted = useCallback((anchorText: string) => {
     const currentEditor = editorRef.current;
@@ -907,7 +950,7 @@ export function RichStreamEditor({
     if (!currentEditor || !surface) return;
     const inserted = promoteConversationMarkdown(
       currentEditor.view,
-      conversationRenderPosition(currentEditor.view.state.doc, surface.anchor)
+      conversationSurfacePosition(currentEditor.view.state.doc, surface.anchor)
         ?? currentEditor.view.state.doc.content.size,
       exchange.responseRaw,
       { requestId: exchange.requestId, model: exchange.model, verb: exchange.verb },
@@ -922,6 +965,73 @@ export function RichStreamEditor({
     }, 1_200);
     addToast('Added to the Stream.', 'success');
   }, [addToast]);
+
+  const quoteAndDiscussPDF = useCallback(async (selection: {
+    sourceId: string;
+    sourceName: string;
+    shortTitle: string;
+    highlightId: string;
+    page: number;
+    quote: string;
+  }) => {
+    const currentEditor = editorRef.current;
+    if (!currentEditor) return;
+    const { view } = currentEditor;
+    const cursor = lastEditorCursorRef.current;
+    const cursorAnchor = cursor === null
+      ? null
+      : fullBlockConversationAnchor(view.state.doc, cursor, '');
+    const insertAt = cursorAnchor
+      ? conversationSurfacePosition(view.state.doc, cursorAnchor) ?? view.state.doc.content.size
+      : view.state.doc.content.size;
+    const linkURL = buildTickerPDFLinkURL(selection);
+    const inserted = insertMarkdownBlocks(view, insertAt, buildPDFQuoteSnippet({
+      quote: selection.quote,
+      linkLabel: `${selection.shortTitle || selection.sourceName || 'PDF'} p.${selection.page}`,
+      linkURL,
+    }));
+    const key = `pdf:${crypto.randomUUID()}`;
+    const anchor = fullBlockConversationAnchor(view.state.doc, inserted.from + 2, key);
+    if (!anchor) {
+      addToast('The PDF quote was added, but its conversation could not be anchored.', 'warning');
+      return;
+    }
+    view.dispatch(setConversationAnchors(view.state.tr, [...conversationAnchors(view.state), anchor]));
+    view.dispatch(setConversationSurface(view.state.tr, { key, anchor }));
+
+    try {
+      const thread = await persistConversation(
+        { key, anchor },
+        selection.quote.slice(0, 80),
+        { sourceId: selection.sourceId, highlightId: selection.highlightId },
+      );
+      updateConversationLiveState(key, (current) => ({
+        ...current,
+        thread,
+        exchanges: thread.exchanges ?? [],
+        loading: false,
+      }));
+      expandConversation({
+        key,
+        threadId: thread.threadId,
+        anchorText: thread.anchorText,
+        focusComposer: true,
+      });
+      addToast('Added PDF quote and opened a conversation.', 'success');
+    } catch {
+      const liveEditor = editorRef.current;
+      if (liveEditor && !liveEditor.view.isDestroyed) {
+        liveEditor.view.dispatch(setConversationAnchors(
+          liveEditor.view.state.tr,
+          conversationAnchors(liveEditor.view.state).filter((item) => item.threadId !== key),
+        ));
+        if (conversationSurface(liveEditor.view.state)?.key === key) {
+          liveEditor.view.dispatch(setConversationSurface(liveEditor.view.state.tr, null));
+        }
+      }
+      addToast('The PDF quote was added, but its conversation could not be created.', 'error');
+    }
+  }, [addToast, expandConversation, persistConversation, updateConversationLiveState]);
 
   const toggleConversationList = useCallback(async () => {
     if (showConversationList) {
@@ -1333,15 +1443,21 @@ export function RichStreamEditor({
 
     if (message.type === 'pdfThreadRequested') {
       if (payload?.streamId !== stream.id) return;
-      // ponytail: C0 has no conversation surface; C3 replaces this cleanup path.
+      const sourceId = payload.sourceId;
+      const sourceName = payload.sourceName;
+      const shortTitle = payload.shortTitle;
       const highlightId = payload.highlightId;
-      if (typeof highlightId === 'string' && highlightId) {
-        bridge.send({
-          type: 'deletePdfHighlight',
-          payload: { streamId: stream.id, highlightId },
-        });
-      }
-      addToast('Inline conversations are temporarily unavailable.', 'info');
+      const quote = payload.quote;
+      const page = Number(payload.page);
+      if (typeof sourceId !== 'string'
+        || typeof sourceName !== 'string'
+        || typeof shortTitle !== 'string'
+        || typeof highlightId !== 'string'
+        || typeof quote !== 'string'
+        || !quote.trim()
+        || !Number.isInteger(page)
+        || page < 1) return;
+      void quoteAndDiscussPDF({ sourceId, sourceName, shortTitle, highlightId, page, quote });
       return;
     }
 
@@ -1359,7 +1475,7 @@ export function RichStreamEditor({
       const sourceId = payload.sourceId;
       const highlightId = payload.highlightId;
       if (typeof sourceId !== 'string' || typeof highlightId !== 'string') return;
-      if (!revealPDFHighlight(editorRef.current!.view, sourceId, highlightId)) {
+      if (!revealPDFConversation(sourceId, highlightId)) {
         addToast('This PDF highlight is not linked in the Stream.', 'warning');
         return;
       }
@@ -1568,6 +1684,8 @@ export function RichStreamEditor({
     canStartAI,
     cancelDocumentAI,
     flushAll,
+    quoteAndDiscussPDF,
+    revealPDFConversation,
     startPDFSectionAI,
     stream.id,
   ]);

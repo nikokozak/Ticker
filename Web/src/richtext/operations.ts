@@ -155,11 +155,7 @@ export function promoteConversationMarkdown(
   markdown: string,
   attribution: { requestId: string; model?: string | null; verb: string },
 ): { from: number; to: number } {
-  const parsed = parseMarkdown(markdown);
-  if (parsed.childCount === 0) throw new Error('There is no conversation answer to add.');
-  const from = Math.max(0, Math.min(pos, view.state.doc.content.size));
-  const tr = view.state.tr.replace(from, from, new Slice(Fragment.from(parsed.content), 0, 0));
-  const inserted = { from, to: from + parsed.content.size };
+  const { tr, inserted } = markdownBlockInsertion(view, pos, markdown);
   addProvenanceSpans(setAIWritingRange(tr, inserted), [{
     spanId: crypto.randomUUID(),
     ...inserted,
@@ -169,6 +165,27 @@ export function promoteConversationMarkdown(
     textHash: hashProvenanceText(tr.doc, inserted),
     createdAt: Date.now(),
   }]);
+  view.dispatch(tr.scrollIntoView());
+  return inserted;
+}
+
+function markdownBlockInsertion(view: EditorView, pos: number, markdown: string) {
+  const parsed = parseMarkdown(markdown);
+  if (parsed.childCount === 0) throw new Error('There is no content to add.');
+  const from = Math.max(0, Math.min(pos, view.state.doc.content.size));
+  return {
+    tr: view.state.tr.replace(from, from, new Slice(Fragment.from(parsed.content), 0, 0)),
+    inserted: { from, to: from + parsed.content.size },
+  };
+}
+
+/** Insert explicit user-authored markdown as intact blocks in one undo step. */
+export function insertMarkdownBlocks(
+  view: EditorView,
+  pos: number,
+  markdown: string,
+): { from: number; to: number } {
+  const { tr, inserted } = markdownBlockInsertion(view, pos, markdown);
   view.dispatch(tr.scrollIntoView());
   return inserted;
 }
@@ -302,6 +319,21 @@ export interface SelectedPDFHighlight {
   sourceId?: string;
 }
 
+/** The first document link for a persisted PDF highlight. */
+export function pdfHighlightRange(
+  state: EditorState,
+  sourceId: string,
+  highlightId: string,
+): { from: number; to: number } | null {
+  let found: { from: number; to: number } | null = null;
+  state.doc.descendants((node, pos) => {
+    if (found || !pdfHighlightMark(node, highlightId, sourceId)) return !found;
+    found = { from: pos, to: pos + node.nodeSize };
+    return false;
+  });
+  return found;
+}
+
 /** The one persisted PDF highlight touched by the current selection, if any. */
 export function selectedPDFHighlight(state: EditorState): SelectedPDFHighlight | null {
   const { from, to, empty } = state.selection;
@@ -353,20 +385,11 @@ export function revealPDFHighlight(
   sourceId: string,
   highlightId: string,
 ): boolean {
-  let from = -1;
-  let to = -1;
-
-  view.state.doc.descendants((node, pos) => {
-    if (from >= 0 || !pdfHighlightMark(node, highlightId, sourceId)) return from < 0;
-    from = pos;
-    to = pos + node.nodeSize;
-    return false;
-  });
-
-  if (from < 0) return false;
+  const range = pdfHighlightRange(view.state, sourceId, highlightId);
+  if (!range) return false;
   view.dispatch(
     view.state.tr
-      .setSelection(TextSelection.create(view.state.doc, from, to))
+      .setSelection(TextSelection.create(view.state.doc, range.from, range.to))
       .setMeta('addToHistory', false)
       .scrollIntoView(),
   );
