@@ -136,6 +136,8 @@ enum StreamCodec {
             "title": thread.title,
             "workingText": thread.workingText,
             "anchorText": thread.anchorText,
+            "detached": thread.detached,
+            "ephemeral": thread.ephemeral,
             "revision": thread.revision,
             "createdAt": formatter.string(from: thread.createdAt),
             "updatedAt": formatter.string(from: thread.updatedAt)
@@ -143,6 +145,10 @@ enum StreamCodec {
         if let docJSON = thread.docJSON, let docFormatVersion = thread.docFormatVersion {
             payload["docJSON"] = docJSON
             payload["docFormatVersion"] = docFormatVersion
+        }
+        if let anchorStart = thread.anchorStart, let anchorEnd = thread.anchorEnd {
+            payload["anchorStart"] = anchorStart
+            payload["anchorEnd"] = anchorEnd
         }
         payload["anchors"] = anchors
         if let exchanges {

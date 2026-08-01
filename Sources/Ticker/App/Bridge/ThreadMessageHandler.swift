@@ -2,7 +2,12 @@ import Foundation
 
 @MainActor
 final class ThreadMessageHandler: BridgeMessageHandler {
-    let handledTypes: Set<String> = ["listConversations", "saveStreamThread"]
+    let handledTypes: Set<String> = [
+        "listConversations",
+        "createStreamThread",
+        "loadStreamThread",
+        "saveStreamThread"
+    ]
 
     private let persistence: PersistenceService
     private let sendToWeb: (BridgeMessage) -> Void
@@ -51,6 +56,55 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 respondWithError(callbackId, error.localizedDescription)
             }
 
+        case "createStreamThread":
+            guard let payload = message.payload,
+                  let streamId = decodeUUID(payload, key: "streamId"),
+                  let title = payload["title"]?.value as? String,
+                  let anchorText = payload["anchorText"]?.value as? String,
+                  !anchorText.isEmpty,
+                  let anchorStart = payload["anchorStart"]?.intValue,
+                  let anchorEnd = payload["anchorEnd"]?.intValue,
+                  anchorStart >= 0,
+                  anchorEnd > anchorStart else {
+                respondWithError(callbackId, "Invalid createStreamThread payload")
+                return
+            }
+            do {
+                let thread = try persistence.createStreamThread(StreamThread(
+                    streamId: streamId,
+                    title: title,
+                    anchorText: anchorText,
+                    anchorStart: anchorStart,
+                    anchorEnd: anchorEnd
+                ))
+                respond(callbackId, [
+                    "thread": AnyCodable(try encodeThread(thread))
+                ])
+            } catch {
+                respondWithError(callbackId, error.localizedDescription)
+            }
+
+        case "loadStreamThread":
+            guard let payload = message.payload,
+                  let streamId = decodeUUID(payload, key: "streamId"),
+                  let threadId = decodeUUID(payload, key: "threadId") else {
+                respondWithError(callbackId, "Invalid loadStreamThread payload")
+                return
+            }
+            do {
+                guard let thread = try persistence.loadStreamThread(
+                    threadId: threadId,
+                    streamId: streamId
+                ) else {
+                    throw StreamThreadPersistenceError.threadNotFound
+                }
+                respond(callbackId, [
+                    "thread": AnyCodable(try encodeThread(thread))
+                ])
+            } catch {
+                respondWithError(callbackId, error.localizedDescription)
+            }
+
         case "saveStreamThread":
             guard let payload = message.payload,
                   let streamId = decodeUUID(payload, key: "streamId"),
@@ -70,23 +124,17 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 )
                 respond(callbackId, [
                     "conflict": AnyCodable(false),
-                    "thread": AnyCodable(StreamCodec.encodeThread(
-                        thread,
-                        source: nil,
-                        highlight: nil,
-                        exchanges: nil
-                    ))
+                    "thread": AnyCodable(try encodeThread(thread))
                 ])
             } catch let conflict as StreamThreadRevisionConflict {
-                respond(callbackId, [
-                    "conflict": AnyCodable(true),
-                    "thread": AnyCodable(StreamCodec.encodeThread(
-                        conflict.current,
-                        source: nil,
-                        highlight: nil,
-                        exchanges: nil
-                    ))
-                ])
+                do {
+                    respond(callbackId, [
+                        "conflict": AnyCodable(true),
+                        "thread": AnyCodable(try encodeThread(conflict.current))
+                    ])
+                } catch {
+                    respondWithError(callbackId, error.localizedDescription)
+                }
             } catch {
                 respondWithError(callbackId, error.localizedDescription)
             }
@@ -94,6 +142,38 @@ final class ThreadMessageHandler: BridgeMessageHandler {
         default:
             sendBridgeError(message.type, "Unsupported thread message")
         }
+    }
+
+    private func encodeThread(_ thread: StreamThread) throws -> [String: Any] {
+        let source = try thread.sourceId.flatMap { try persistence.loadSource(id: $0) }
+        let highlight = try source.flatMap { source in
+            try thread.highlightId.flatMap {
+                try persistence.loadPDFHighlight(id: $0, sourceId: source.id)
+            }
+        }
+        let exchanges = try persistence.loadThreadExchanges(
+            threadId: thread.threadId,
+            streamId: thread.streamId
+        )
+        let anchors = try persistence.loadStreamThreadAnchors(
+            threadId: thread.threadId,
+            streamId: thread.streamId
+        ).map { anchor in
+            let anchorSource = try anchor.sourceId.flatMap { try persistence.loadSource(id: $0) }
+            let anchorHighlight = try anchorSource.flatMap { source in
+                try anchor.highlightId.flatMap {
+                    try persistence.loadPDFHighlight(id: $0, sourceId: source.id)
+                }
+            }
+            return StreamCodec.encodeThreadAnchor(anchor, source: anchorSource, highlight: anchorHighlight)
+        }
+        return StreamCodec.encodeThread(
+            thread,
+            source: source,
+            highlight: highlight,
+            exchanges: exchanges,
+            anchors: anchors
+        )
     }
 
     private func respond(_ callbackId: String, _ payload: [String: AnyCodable]) {

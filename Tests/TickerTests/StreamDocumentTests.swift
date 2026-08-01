@@ -2328,7 +2328,7 @@ final class StreamDocumentTests: XCTestCase {
     }
 
     @MainActor
-    func test_threadBridgeSavesTitleWithRevisionCheck() async throws {
+    func test_threadBridgeCreatesLoadsAndSavesConversations() async throws {
         try await withTempPersistenceService { service in
             let stream = Stream(title: "Bridge conversations")
             let otherStream = Stream(title: "Other bridge stream")
@@ -2358,7 +2358,12 @@ final class StreamDocumentTests: XCTestCase {
                     ]))
                 }
             )
-            XCTAssertEqual(handler.handledTypes, ["listConversations", "saveStreamThread"])
+            XCTAssertEqual(handler.handledTypes, [
+                "listConversations",
+                "createStreamThread",
+                "loadStreamThread",
+                "saveStreamThread"
+            ])
 
             await handler.handle(BridgeMessage(
                 type: "listConversations",
@@ -2381,6 +2386,51 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertNotNil(conversations[0]["updatedAt"] as? String)
 
             await handler.handle(BridgeMessage(
+                type: "createStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "title": AnyCodable("Does this hold?"),
+                    "anchorStart": AnyCodable(1),
+                    "anchorEnd": AnyCodable(12),
+                    "anchorText": AnyCodable("Power budget")
+                ],
+                callbackId: "create"
+            ))
+            let createResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "create" }
+            )
+            let createdPayload = try XCTUnwrap(createResponse.payload?["thread"]?.value as? [String: Any])
+            let createdThreadId = try XCTUnwrap(UUID(uuidString: createdPayload["threadId"] as? String ?? ""))
+            XCTAssertEqual(createdPayload["anchorStart"] as? Int, 1)
+            XCTAssertEqual(createdPayload["anchorEnd"] as? Int, 12)
+            XCTAssertEqual(createdPayload["anchorText"] as? String, "Power budget")
+            XCTAssertEqual((createdPayload["exchanges"] as? [[String: Any]])?.count, 0)
+
+            try service.saveExchange(AIExchange(
+                requestId: "conversation-turn",
+                streamId: stream.id,
+                threadId: createdThreadId,
+                verb: "thread",
+                userInput: "Does this hold?",
+                responseRaw: "Yes."
+            ))
+            await handler.handle(BridgeMessage(
+                type: "loadStreamThread",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "threadId": AnyCodable(createdThreadId.uuidString)
+                ],
+                callbackId: "load"
+            ))
+            let loadResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "load" }
+            )
+            let loadedPayload = try XCTUnwrap(loadResponse.payload?["thread"]?.value as? [String: Any])
+            let exchanges = try XCTUnwrap(loadedPayload["exchanges"] as? [[String: Any]])
+            XCTAssertEqual(exchanges.map { $0["requestId"] as? String }, ["conversation-turn"])
+            XCTAssertEqual(exchanges.first?["responseRaw"] as? String, "Yes.")
+
+            await handler.handle(BridgeMessage(
                 type: "saveStreamThread",
                 payload: [
                     "streamId": AnyCodable(stream.id.uuidString),
@@ -2399,6 +2449,8 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(savedPayload["workingText"] as? String, thread.workingText)
             XCTAssertEqual(savedPayload["docJSON"] as? String, docJSON)
             XCTAssertEqual(savedPayload["revision"] as? Int, 1)
+            XCTAssertNotNil(savedPayload["anchors"] as? [[String: Any]])
+            XCTAssertNotNil(savedPayload["exchanges"] as? [[String: Any]])
 
             await handler.handle(BridgeMessage(
                 type: "saveStreamThread",
@@ -2417,6 +2469,8 @@ final class StreamDocumentTests: XCTestCase {
             let conflictPayload = try XCTUnwrap(conflictResponse.payload?["thread"]?.value as? [String: Any])
             XCTAssertEqual(conflictPayload["title"] as? String, "Power budget")
             XCTAssertEqual(conflictPayload["workingText"] as? String, thread.workingText)
+            XCTAssertNotNil(conflictPayload["anchors"] as? [[String: Any]])
+            XCTAssertNotNil(conflictPayload["exchanges"] as? [[String: Any]])
 
             await handler.handle(BridgeMessage(
                 type: "saveStreamThread",

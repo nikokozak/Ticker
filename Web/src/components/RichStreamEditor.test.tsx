@@ -141,6 +141,33 @@ async function enterPrompt(value: string) {
   });
 }
 
+async function openDraftConversation(): Promise<HTMLTextAreaElement> {
+  const block = editor().querySelector('p') as HTMLParagraphElement;
+  await vi.waitFor(() => expect(block.classList.contains('conversation-block-active')).toBe(true));
+  vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+    left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
+    toJSON: () => ({}),
+  });
+  await act(async () => {
+    block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 0 }));
+    await Promise.resolve();
+  });
+  const composer = await vi.waitFor(() => {
+    const found = document.querySelector('.conversation-composer') as HTMLTextAreaElement | null;
+    expect(found).not.toBe(null);
+    return found!;
+  });
+  return composer;
+}
+
+async function enterConversationMessage(input: HTMLTextAreaElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await Promise.resolve();
+  });
+}
+
 function activeRequestId(): string {
   const messages = sent.filter((candidate) => candidate.type === 'thinkDocument');
   const message = messages[messages.length - 1];
@@ -415,6 +442,171 @@ describe('RichStreamEditor chrome parity', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('RichStreamEditor inline conversations', () => {
+  it('collapses an unsent draft without creating a row or leaving a glyph', async () => {
+    const composer = await openDraftConversation();
+    await vi.waitFor(() => expect(document.activeElement).toBe(composer));
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    });
+
+    expect(document.querySelector('.conversation-surface')).toBe(null);
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+    expect(editor().querySelector('p')?.classList.contains('conversation-block-anchored')).toBe(false);
+    await vi.waitFor(() => expect(document.activeElement).toBe(editor()));
+  });
+
+  it('creates on first send, streams the AI turn, and keeps the widget out of the document save', async () => {
+    const createdAt = new Date(0).toISOString();
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'createStreamThread') {
+        return {
+          thread: {
+            threadId: 'thread-created',
+            streamId: stream.id,
+            title: String(payload?.title),
+            workingText: '',
+            anchorText: String(payload?.anchorText),
+            anchorStart: Number(payload?.anchorStart),
+            anchorEnd: Number(payload?.anchorEnd),
+            detached: false,
+            ephemeral: false,
+            revision: 0,
+            createdAt,
+            updatedAt: createdAt,
+            exchanges: [],
+          },
+        };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    const composer = await openDraftConversation();
+    await enterConversationMessage(composer, 'Does this hold?');
+
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(sent.some((message) => message.type === 'thinkDocument')).toBe(true));
+
+    const createCall = vi.mocked(bridge.sendAsync).mock.calls
+      .find(([type]) => type === 'createStreamThread');
+    expect(createCall?.[1]).toMatchObject({
+      streamId: stream.id,
+      title: 'Does this hold?',
+      anchorText: 'Original paragraph.',
+    });
+    expect(Number(createCall?.[1]?.anchorEnd)).toBeGreaterThan(Number(createCall?.[1]?.anchorStart));
+    expect(editor().querySelector('p')?.classList.contains('conversation-block-anchored')).toBe(true);
+    expect(document.querySelector('.conversation-stop')).not.toBe(null);
+
+    const requestId = String(sent.find((message) => message.type === 'thinkDocument')?.payload?.requestId);
+    await act(async () => {
+      bridge.receive({ type: 'documentAIChunk', payload: { requestId, chunk: 'It streams.' } });
+    });
+    expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams.');
+
+    await act(async () => {
+      bridge.receive({
+        type: 'documentAIComplete',
+        payload: {
+          requestId,
+          exchange: {
+            requestId,
+            streamId: stream.id,
+            threadId: 'thread-created',
+            verb: 'thread',
+            userInput: 'Does this hold?',
+            sourceManifest: '[]',
+            responseRaw: 'It streams.',
+            createdAt,
+          },
+        },
+      });
+    });
+    expect(document.querySelector('.conversation-stop')).toBe(null);
+    expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('It streams.');
+
+    await vi.waitFor(() => {
+      const save = vi.mocked(bridge.sendAsync).mock.calls
+        .find(([type]) => type === 'saveRichStreamDocument');
+      expect(save?.[1]?.docJSON).not.toContain('Does this hold?');
+      expect(save?.[1]?.docJSON).not.toContain('It streams.');
+    });
+  });
+
+  it('opens a persisted glyph in place and restores its saved turns', async () => {
+    const updatedAt = new Date().toISOString();
+    const anchored: Stream = {
+      ...stream,
+      id: 'conversation-stream',
+      document: { ...stream.document, streamId: 'conversation-stream' },
+      conversationAnchors: [{
+        threadId: 'thread-existing',
+        anchorStart: 1,
+        anchorEnd: 20,
+        anchorText: 'Original paragraph.',
+        detached: false,
+        ephemeral: false,
+        updatedAt,
+      }],
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'loadStreamThread') {
+        return {
+          thread: {
+            threadId: 'thread-existing',
+            streamId: anchored.id,
+            title: 'Why?',
+            workingText: '',
+            anchorText: 'Original paragraph.',
+            anchorStart: 1,
+            anchorEnd: 20,
+            detached: false,
+            ephemeral: false,
+            revision: 0,
+            createdAt: updatedAt,
+            updatedAt,
+            exchanges: [{
+              requestId: 'exchange-1',
+              streamId: anchored.id,
+              threadId: 'thread-existing',
+              verb: 'thread',
+              userInput: 'Why?',
+              sourceManifest: '[]',
+              responseRaw: 'Because.',
+              createdAt: updatedAt,
+            }],
+          },
+        };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    await renderStream(anchored);
+    const block = editor().querySelector('p') as HTMLParagraphElement;
+    await vi.waitFor(() => expect(block.classList.contains('conversation-block-anchored')).toBe(true));
+    vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+      left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
+      toJSON: () => ({}),
+    });
+    const scroller = document.querySelector('.stream-content') as HTMLElement;
+    scroller.scrollTop = 37;
+    await act(async () => {
+      block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 320 }));
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.conversation-turn--ai')?.textContent).toContain('Because.'));
+    expect(scroller.scrollTop).toBe(37);
+    expect(document.querySelectorAll('.conversation-widget-host')).toHaveLength(1);
   });
 });
 

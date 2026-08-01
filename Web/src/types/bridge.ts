@@ -62,6 +62,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'cancelDocumentAI',
   'cancelAIOperation',
   'clearProxyDeviceKey',
+  'createStreamThread',
   'createStream',
   'deleteStream',
   'editorFlushed',
@@ -72,6 +73,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'loadSettings',
   'loadStorageState',
   'listConversations',
+  'loadStreamThread',
   'loadStream',
   'loadStreams',
   'getExchange',
@@ -238,6 +240,29 @@ export function getExchange(requestId: string): Promise<{ exchange: AIExchangeJS
 // ponytail: no caller until C3 wires the conversation surface.
 export function listConversations(streamId: string): Promise<{ conversations: ConversationAnchorJSON[] }> {
   return bridge.sendAsync('listConversations', { streamId });
+}
+
+export function createStreamThread(input: {
+  streamId: string;
+  title: string;
+  anchorStart: number;
+  anchorEnd: number;
+  anchorText: string;
+}): Promise<{ thread: StreamThreadJSON }> {
+  return bridge.sendAsync('createStreamThread', {
+    streamId: input.streamId,
+    title: input.title,
+    anchorStart: input.anchorStart,
+    anchorEnd: input.anchorEnd,
+    anchorText: input.anchorText,
+  });
+}
+
+export function loadStreamThread(
+  streamId: string,
+  threadId: string,
+): Promise<{ thread: StreamThreadJSON }> {
+  return bridge.sendAsync('loadStreamThread', { streamId, threadId });
 }
 
 export function updateMarginNote(payload: UpdateMarginNotePayload): void {

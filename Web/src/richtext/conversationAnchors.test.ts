@@ -14,18 +14,25 @@ import {
   hasConversationAnchorTextDrifted,
   refreshConversationViewport,
   setConversationAnchors,
+  setConversationSurface,
   setConversationVisibleRanges,
+  type ConversationAnchorFieldOptions,
 } from './conversationAnchors';
 
 let editor: RichTextEditor | null = null;
 
-function open(markdown: string, onUpdate?: () => void): RichTextEditor {
+function open(
+  markdown: string,
+  onUpdate?: () => void,
+  conversations?: ConversationAnchorFieldOptions,
+): RichTextEditor {
   const parent = document.createElement('div');
   document.body.appendChild(parent);
   editor = createRichTextEditor({
     parent,
     docJSON: JSON.stringify(parseMarkdown(markdown).toJSON()),
     onUpdate,
+    conversations,
   });
   return editor;
 }
@@ -183,6 +190,34 @@ it('renders one passive right glyph class and the current-block left line class'
   const block = ed.view.dom.querySelector('p');
   expect(block?.classList.contains('conversation-block-active')).toBe(true);
   expect(block?.classList.contains('conversation-block-anchored')).toBe(true);
+});
+
+it('routes gutter clicks and mounts only one caret-excluded block widget', () => {
+  const onCreate = vi.fn();
+  const onOpen = vi.fn();
+  const ed = open('Visible block', undefined, { onCreate, onOpen });
+  const anchor = fullBlockConversationAnchor(ed.view.state.doc, 1, 'one')!;
+  ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor]));
+  ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{ from: anchor.from, to: anchor.to }]));
+  const block = ed.view.dom.querySelector('p')!;
+  vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+    left: 10, right: 110, top: 0, bottom: 28, width: 100, height: 28, x: 10, y: 0,
+    toJSON: () => ({}),
+  });
+
+  block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 0 }));
+  expect(onCreate).toHaveBeenCalledWith({ ...anchor, threadId: '' });
+  block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 120 }));
+  expect(onOpen).toHaveBeenCalledWith('one');
+
+  const before = ed.getDocumentJSON();
+  ed.view.dispatch(setConversationSurface(ed.view.state.tr, { key: 'first', anchor }));
+  ed.view.dispatch(setConversationSurface(ed.view.state.tr, { key: 'second', anchor }));
+  const widgets = ed.view.dom.querySelectorAll<HTMLElement>('[data-conversation-widget]');
+  expect(widgets).toHaveLength(1);
+  expect(widgets[0].dataset.conversationWidget).toBe('second');
+  expect(widgets[0].contentEditable).toBe('false');
+  expect(ed.getDocumentJSON()).toBe(before);
 });
 
 it('coalesces viewport and hover work per animation frame and skips unchanged targets', () => {

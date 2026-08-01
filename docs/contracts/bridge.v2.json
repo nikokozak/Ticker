@@ -168,6 +168,10 @@
         "requiredPayloadKeys": [],
         "requiredCallbackId": true
       },
+      "createStreamThread": {
+        "requiredPayloadKeys": ["streamId", "title", "anchorStart", "anchorEnd", "anchorText"],
+        "requiredCallbackId": true
+      },
       "createStream": {
         "requiredPayloadKeys": []
       },
@@ -202,6 +206,10 @@
       },
       "listConversations": {
         "requiredPayloadKeys": ["streamId"],
+        "requiredCallbackId": true
+      },
+      "loadStreamThread": {
+        "requiredPayloadKeys": ["streamId", "threadId"],
         "requiredCallbackId": true
       },
       "loadStream": {
