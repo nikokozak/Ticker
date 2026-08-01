@@ -6,6 +6,7 @@ All notable user-facing changes to Ticker are documented here.
 
 ### Changed
 - Adding a Thread note or AI reply now keeps the carried text visible, previews the exact insertion point, and requires an explicit click or keyboard target before changing the Stream.
+- Stream and Thread chrome now hides idle status noise, uses plain-language AI source controls, and keeps provider details out of the writing workflow.
 
 ## 2026.7.31
 

@@ -58,7 +58,6 @@ interface PendingThreadAI {
   requestId: string;
   prompt: string;
   response: string;
-  model?: string;
   sentContext?: ThreadAISentFacts;
   error?: string;
 }
@@ -82,6 +81,19 @@ const SAVE_LABEL: Record<ThreadSaveState, string> = {
 
 function displayTitle(thread: StreamThreadJSON): string {
   return thread.title.trim() || 'Untitled thread';
+}
+
+function relativeTime(value: string, now = Date.now()): string {
+  const seconds = Math.round((Date.parse(value) - now) / 1_000);
+  if (!Number.isFinite(seconds)) return 'Unknown time';
+  const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+  const absolute = Math.abs(seconds);
+  if (absolute < 60) return formatter.format(seconds, 'second');
+  if (absolute < 3_600) return formatter.format(Math.round(seconds / 60), 'minute');
+  if (absolute < 86_400) return formatter.format(Math.round(seconds / 3_600), 'hour');
+  if (absolute < 2_592_000) return formatter.format(Math.round(seconds / 86_400), 'day');
+  if (absolute < 31_536_000) return formatter.format(Math.round(seconds / 2_592_000), 'month');
+  return formatter.format(Math.round(seconds / 31_536_000), 'year');
 }
 
 function sourceLabel(thread: StreamThreadJSON): string | null {
@@ -124,13 +136,15 @@ function SentContext({
   const included = facts.turns.includedRequestIds.length;
   return (
     <details className="thread-sent-context">
-      <summary>Sent with this prompt</summary>
+      <summary>What the AI used</summary>
       <div>
         <h4>Started from</h4>
         <blockquote>{facts.anchor.text || 'No starting passage.'}</blockquote>
         <h4>My note</h4>
         {facts.note.sent ? <p>{facts.note.text}</p> : <p>Not sent (empty).</p>}
-        <p>Previous turns: {included} of {facts.turns.totalAtSend}</p>
+        {facts.turns.totalAtSend > 0 && (
+          <p>Previous turns: {included} of {facts.turns.totalAtSend}</p>
+        )}
         <h4>Sources</h4>
         {facts.sources.length > 0 ? (
           <div className="thread-sent-sources">
@@ -204,7 +218,7 @@ function ThreadExchange({
         <p>{exchange.userInput}</p>
       </div>
       <div className="thread-assistant-turn">
-        <span>AI{exchange.model ? ` · ${exchange.model}` : ''}</span>
+        <span>AI</span>
         <AIResponse
           markdown={exchange.responseRaw}
           sourceManifest={exchange.sourceManifest}
@@ -216,7 +230,7 @@ function ThreadExchange({
             className="thread-add-to-stream"
             onClick={() => onAddToStream(renderedExchangeMarkdown(exchange))}
           >
-            Add to Stream
+            Place in Stream…
           </button>
         )}
       </div>
@@ -380,12 +394,6 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
       const sentContext = parseThreadAISentFacts(payload.sentContext);
       if (sentContext) setPendingAI((pending) => (
         pending?.requestId === requestId ? { ...pending, sentContext } : pending
-      ));
-      return;
-    }
-    if (message.type === 'documentModelSelected' && typeof payload.modelId === 'string') {
-      setPendingAI((pending) => (
-        pending?.requestId === requestId ? { ...pending, model: payload.modelId as string } : pending
       ));
       return;
     }
@@ -572,7 +580,9 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
               ) : <p>{sourceLabel(activeThread)}</p>
             )}
             {anchorChanged && (
-              <p className="thread-anchor-warning" role="status">The original passage changed.</p>
+              <p className="thread-anchor-warning" role="status">
+                The Stream text has changed since this thread started.
+              </p>
             )}
           </section>
 
@@ -596,7 +606,7 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
                 disabled={!workingText.trim() || insertionBlocked}
                 onClick={() => { void requestInsertion('note', workingText); }}
               >
-                Add to Stream
+                Place in Stream…
               </button>
             )}
             {saveState === 'conflict' && (
@@ -632,7 +642,7 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
                   <p>{pendingAI.prompt}</p>
                 </div>
                 <div className="thread-assistant-turn">
-                  <span>AI{pendingAI.model ? ` · ${pendingAI.model}` : ''}</span>
+                  <span>AI</span>
                   {pendingAI.response ? (
                     <AIResponse
                       markdown={pendingAI.response}
@@ -735,7 +745,9 @@ export const ThreadDrawer = forwardRef<ThreadDrawerHandle, ThreadDrawerProps>(fu
               <strong>{displayTitle(thread)}</strong>
               <span className="thread-list-anchor">{thread.anchorText || 'No starting passage'}</span>
               {sourceLabel(thread) && <span className="thread-list-source">{sourceLabel(thread)}</span>}
-              <time dateTime={thread.updatedAt}>{new Date(thread.updatedAt).toLocaleString()}</time>
+              <time dateTime={thread.updatedAt} title={new Date(thread.updatedAt).toLocaleString()}>
+                {relativeTime(thread.updatedAt)}
+              </time>
             </button>
           ))}
         </div>

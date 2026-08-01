@@ -14,9 +14,9 @@ describe('formatSourceIndexStatusLine', () => {
     expect(formatSourceIndexStatusLine({ status: 'ready', pageCount: 3 })).toBe('3 pages · indexed');
   });
 
-  it('adds the private suffix when AI exclusion is enabled', () => {
+  it('says exactly when AI exclusion is enabled', () => {
     expect(formatSourceIndexStatusLine({ status: 'ready', pageCount: 274, aiExcluded: true })).toBe(
-      '274 pages · indexed · private'
+      '274 pages · indexed · excluded from AI'
     );
   });
 

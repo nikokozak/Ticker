@@ -721,7 +721,7 @@ describe('RichStreamEditor Stream threads', () => {
     });
 
     await vi.waitFor(() => expect(document.querySelector('.thread-anchor-warning')?.textContent)
-      .toBe('The original passage changed.'));
+      .toBe('The Stream text has changed since this thread started.'));
     expect(editor().textContent).toBe('Original changed .');
   });
 
@@ -2372,7 +2372,7 @@ describe('RichStreamEditor PDF section AI', () => {
       });
     });
 
-    expect(document.querySelector('.stream-sources-button')?.textContent).toBe('Sources · 0');
+    expect(document.querySelector('.stream-sources-button')?.textContent).toBe('Sources');
     expect(document.querySelector('.stream-header')?.textContent).not.toContain('paper.pdf');
     expect(document.querySelector('.stream-header')?.textContent).not.toContain('PDF · Paper');
     expect(editor().textContent).toBe('Original paragraph.');

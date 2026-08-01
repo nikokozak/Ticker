@@ -91,6 +91,7 @@ describe('ThreadDrawer', () => {
     await renderDrawer();
     expect(document.querySelector('.thread-list-anchor')?.textContent)
       .toBe('The MCU may draw too much power.');
+    expect(document.querySelector('.thread-list-item time')?.textContent).toMatch(/years ago/);
     await openListedThread();
 
     await act(async () => {
@@ -228,8 +229,12 @@ describe('ThreadDrawer', () => {
 
     expect(document.querySelector('.thread-assistant-turn')?.textContent)
       .toContain('Use the lower-power part.');
+    expect(document.querySelector('.thread-assistant-turn')?.textContent)
+      .not.toContain('provider/model');
     expect(document.querySelector('.thread-sent-context')?.textContent)
-      .toContain('Previous turns: 0 of 0');
+      .toContain('What the AI used');
+    expect(document.querySelector('.thread-sent-context')?.textContent)
+      .not.toContain('Previous turns: 0 of 0');
     expect(sent.some((message) => message.type === 'saveRichStreamDocument')).toBe(false);
     expect(sent.some((message) => message.type === 'saveStreamDocument')).toBe(false);
     expect(endAI).toHaveBeenCalledTimes(1);

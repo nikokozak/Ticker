@@ -42,7 +42,7 @@ enum PDFSectionContextError: LocalizedError, Equatable {
         case .notPDF:
             return "Section actions require a PDF source."
         case .sourceExcluded:
-            return "This source is Private for AI. Allow AI access before using section actions."
+            return "This source is excluded from AI. Include it from Sources before using section actions."
         case .indexing:
             return "This PDF is still indexing. Try the section action again shortly."
         case .noReadableText:

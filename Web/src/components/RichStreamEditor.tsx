@@ -1804,22 +1804,24 @@ export function RichStreamEditor({
           </h1>
         )}
         <div className="stream-header-actions">
-          <span
-            className={`stream-save-status stream-save-status--${saveState}`}
-            role="status"
-            aria-live="polite"
-            aria-label={SAVE_LABEL[saveState]}
-            title={SAVE_LABEL[saveState]}
-          >
-            <span className="stream-save-status-dot" aria-hidden="true" />
-            <span className="stream-save-status-label">{SAVE_LABEL[saveState]}</span>
-          </span>
+          {saveState !== 'saved' && (
+            <span
+              className={`stream-save-status stream-save-status--${saveState}`}
+              role="status"
+              aria-live="polite"
+              aria-label={SAVE_LABEL[saveState]}
+              title={SAVE_LABEL[saveState]}
+            >
+              <span className="stream-save-status-dot" aria-hidden="true" />
+              <span className="stream-save-status-label">{SAVE_LABEL[saveState]}</span>
+            </span>
+          )}
           <button
             onClick={() => setXray((value) => !value)}
             className={`stream-xray-button ${xray ? 'stream-xray-button--active' : ''}`}
-            title="Toggle provenance x-ray"
+            title={xray ? 'Hide where text came from' : 'Show where text came from'}
             type="button"
-            aria-label="Toggle provenance x-ray"
+            aria-label={xray ? 'Hide where text came from' : 'Show where text came from'}
             aria-pressed={xray}
           >
             <EyeIcon size={16} />
@@ -1846,7 +1848,7 @@ export function RichStreamEditor({
             title="Sources"
             onClick={() => setShowSourcesModal(true)}
           >
-            Sources · {sources.length}
+            {sources.length > 0 ? `Sources · ${sources.length}` : 'Sources'}
           </button>
           <details
             ref={streamOverflowMenuRef}
@@ -1991,6 +1993,16 @@ export function RichStreamEditor({
             {formatButton('B', formats.bold, toggleBold, 'Bold ⌘B')}
             {formatButton('I', formats.italic, toggleItalic, 'Italic ⌘I')}
             {formatButton('U', formats.underline, toggleUnderline, 'Underline ⌘U')}
+            <button
+              type="button"
+              className="selection-action-button selection-action-button--text selection-action-button--thread"
+              aria-label="Start thread"
+              disabled={threadCreating}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => { void startStreamThread(); }}
+            >
+              Start thread
+            </button>
             <div className="selection-action-submenu">
               <button
                 type="button"
@@ -2018,16 +2030,6 @@ export function RichStreamEditor({
                 More ▾
               </button>
             </div>
-            <button
-              type="button"
-              className="selection-action-button selection-action-button--text"
-              aria-label="Start thread"
-              disabled={threadCreating}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => { void startStreamThread(); }}
-            >
-              Start thread
-            </button>
             {canAnchorSelection && (
               <button
                 type="button"

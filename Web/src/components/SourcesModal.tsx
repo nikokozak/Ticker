@@ -47,7 +47,7 @@ export function formatSourceIndexStatusLine({
   }
 
   if (!aiExcluded) return line;
-  return line ? `${line} · private` : 'private';
+  return line ? `${line} · excluded from AI` : 'excluded from AI';
 }
 
 function canRetryIndexing(status: SourceIndexStatus): boolean {
@@ -372,13 +372,15 @@ const SourceItem = forwardRef<HTMLDivElement, SourceItemProps>(
                 source.aiExcluded ? 'sources-modal-private-toggle--active' : '',
               ].join(' ')}
               aria-pressed={source.aiExcluded}
-              title="Private: never sent to AI. Stays on this device."
+              title={source.aiExcluded
+                ? 'AI cannot use this source. Click to include it.'
+                : 'AI can use this source. Click to exclude it.'}
               onClick={(event) => {
                 event.stopPropagation();
                 onToggleAIExclusion();
               }}
             >
-              Private
+              {source.aiExcluded ? 'Excluded from AI' : 'Available to AI'}
             </button>
           </div>
         </div>

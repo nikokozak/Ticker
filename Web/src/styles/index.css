@@ -972,8 +972,6 @@ body {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
 }
 
 .thread-title-input,
@@ -1062,6 +1060,10 @@ body {
 .thread-save-state--error,
 .thread-save-state--conflict {
   color: var(--color-error);
+}
+
+.thread-save-state--saved {
+  display: none;
 }
 
 .thread-save-warning {
@@ -1222,7 +1224,6 @@ body {
 .thread-sent-context h4 {
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
-  text-transform: uppercase;
 }
 
 .thread-sent-context blockquote {
@@ -1279,7 +1280,6 @@ body {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   font-weight: 600;
-  text-transform: uppercase;
 }
 
 .thread-prompt textarea {
@@ -1461,6 +1461,13 @@ body {
 
 .selection-action-button--ai {
   color: var(--color-accent);
+}
+
+.selection-action-button--thread {
+  margin-left: var(--space-1);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-weight: 600;
 }
 
 .selection-action-button--active {
