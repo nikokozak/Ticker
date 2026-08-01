@@ -9,6 +9,12 @@ import { addProvenanceSpans, hashProvenanceText, provenanceSpans, spanFromJSON, 
 import { fnv1a } from '../utils/fnv1a';
 import type { PendingAppend } from './pendingAppends';
 import type { InboxAppend } from './inbox';
+import {
+  conversationAnchors,
+  fullBlockConversationAnchor,
+  type ConversationAnchor,
+  type ConversationAnchorUpdateJSON,
+} from './conversationAnchors';
 
 /**
  * These are the rules that corrupt a user's notes when they are wrong, so they are
@@ -33,6 +39,7 @@ interface Harness {
     markdown: string;
     baseRevision: number;
     spans: ProvenanceSpanJSON[];
+    conversationAnchors: ConversationAnchorUpdateJSON[];
     resolvedPendingThrough?: number;
     consumedInboxThrough?: number;
   }>;
@@ -48,6 +55,7 @@ function open(
   spans: ProvenanceSpan[] = [],
   pendingAppends: PendingAppend[] = [],
   inboxAppends: InboxAppend[] = [],
+  anchors: ConversationAnchor[] = [],
 ): Harness {
   const parent = document.createElement('div');
   document.body.appendChild(parent);
@@ -67,6 +75,7 @@ function open(
         markdown: request.markdown,
         baseRevision: request.baseRevision,
         spans: request.spans,
+        conversationAnchors: request.conversationAnchors,
         resolvedPendingThrough: request.resolvedPendingThrough,
         consumedInboxThrough: request.consumedInboxThrough,
       });
@@ -98,6 +107,7 @@ function open(
     transport,
     revision,
     spans,
+    conversationAnchors: anchors,
     pendingAppends,
     inboxAppends,
     autosaveDelay: 5,
@@ -122,6 +132,12 @@ afterEach(() => {
 });
 
 const type = (ed: RichTextEditor, text: string) => ed.view.dispatch(ed.view.state.tr.insertText(text, 1));
+
+const fullBlockAnchor = (ed: RichTextEditor, threadId = 'thread-1') => {
+  const anchor = fullBlockConversationAnchor(ed.view.state.doc, 1, threadId);
+  if (!anchor) throw new Error('expected a non-empty block anchor');
+  return anchor;
+};
 
 /**
  * What the host ACTUALLY sends. Every producer records offsets into the
@@ -189,6 +205,20 @@ describe('the durable append inbox', () => {
     await h.session.saveNow();
     expect(h.saves).toHaveLength(1);
     expect(h.saves[0].consumedInboxThrough).toBe(9);
+  });
+
+  it('maps existing conversation anchors while reducing opening inbox rows', async () => {
+    const anchor = { threadId: 'thread-1', from: 1, to: 6, detached: false };
+    const h = open('Base.', 7, [], [], [inboxAppend(3, 'Later.')], [anchor]);
+
+    expect(conversationAnchors(h.ed.view.state)).toEqual([anchor]);
+    await h.session.saveNow();
+    expect(h.saves[0].conversationAnchors[0]).toMatchObject({
+      threadId: 'thread-1',
+      anchorStart: 1,
+      anchorEnd: 6,
+      detached: false,
+    });
   });
 
   it('leaves the live document untouched when one row is malformed', () => {
@@ -393,6 +423,21 @@ describe('autosave', () => {
     await h.session.saveNow();
     expect(h.saves[h.saves.length - 1].markdown).toBe(h.ed.getMarkdownProjection());
   });
+
+  it('rule 4: persists a detached anchor on the next document save', async () => {
+    const h = open('Delete me');
+    const anchor = fullBlockAnchor(h.ed);
+    h.session.restoreConversationAnchors([anchor]);
+    h.ed.view.dispatch(h.ed.view.state.tr.delete(anchor.from, anchor.to));
+
+    await h.session.saveNow();
+    expect(h.saves[0].conversationAnchors).toEqual([{
+      threadId: 'thread-1',
+      anchorStart: 1,
+      anchorEnd: 1,
+      detached: true,
+    }]);
+  });
 });
 
 describe('an append from outside the editor', () => {
@@ -415,6 +460,21 @@ describe('an append from outside the editor', () => {
     expect(h.saves).toHaveLength(1);
     expect(h.saves[0].markdown).toBe('first\n\nappended');
     expect(h.saves[0].resolvedPendingThrough).toBe(4);
+  });
+
+  it('rule 6: maps and saves anchors through an external append transaction', async () => {
+    const h = open('A🙂B', 3);
+    const anchor = fullBlockAnchor(h.ed);
+    h.session.restoreConversationAnchors([anchor]);
+    h.session.documentAppended({ streamId: 'stream-1', fragment: 'later', revision: 4 });
+
+    await h.session.saveNow();
+    expect(h.saves[0].conversationAnchors).toEqual([{
+      threadId: 'thread-1',
+      anchorStart: 1,
+      anchorEnd: 5,
+      detached: false,
+    }]);
   });
 
   it('reloads instead of patching when a revision is MISSING', () => {

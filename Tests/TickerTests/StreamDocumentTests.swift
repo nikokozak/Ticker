@@ -2327,7 +2327,10 @@ final class StreamDocumentTests: XCTestCase {
                 title: "Original",
                 workingText: "Frozen draft",
                 docJSON: docJSON,
-                docFormatVersion: 1
+                docFormatVersion: 1,
+                anchorStart: 2,
+                anchorEnd: 6,
+                ephemeral: true
             )
             try service.createStreamThread(thread)
 
@@ -2342,7 +2345,27 @@ final class StreamDocumentTests: XCTestCase {
                     ]))
                 }
             )
-            XCTAssertEqual(handler.handledTypes, ["saveStreamThread"])
+            XCTAssertEqual(handler.handledTypes, ["listConversations", "saveStreamThread"])
+
+            await handler.handle(BridgeMessage(
+                type: "listConversations",
+                payload: ["streamId": AnyCodable(stream.id.uuidString)],
+                callbackId: "list"
+            ))
+            let listResponse = try XCTUnwrap(
+                recorder.messages(ofType: "callback").first { $0.callbackId == "list" }
+            )
+            let conversations = try XCTUnwrap(
+                listResponse.payload?["conversations"]?.value as? [[String: Any]]
+            )
+            XCTAssertEqual(conversations.count, 1)
+            XCTAssertEqual(conversations[0]["threadId"] as? String, thread.threadId.uuidString)
+            XCTAssertEqual(conversations[0]["anchorStart"] as? Int, 2)
+            XCTAssertEqual(conversations[0]["anchorEnd"] as? Int, 6)
+            XCTAssertEqual(conversations[0]["anchorText"] as? String, thread.anchorText)
+            XCTAssertEqual(conversations[0]["detached"] as? Bool, false)
+            XCTAssertEqual(conversations[0]["ephemeral"] as? Bool, true)
+            XCTAssertNotNil(conversations[0]["updatedAt"] as? String)
 
             await handler.handle(BridgeMessage(
                 type: "saveStreamThread",
@@ -5120,6 +5143,13 @@ final class StreamDocumentTests: XCTestCase {
             let other = Stream(title: "Other inbox")
             try service.saveStream(stream)
             try service.saveStream(other)
+            let thread = StreamThread(
+                streamId: stream.id,
+                anchorText: "First",
+                anchorStart: 1,
+                anchorEnd: 6
+            )
+            try service.createStreamThread(thread)
 
             let dbQueue = try DatabaseQueue(path: dbURL.path)
             try dbQueue.write { db in
@@ -5142,6 +5172,7 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(snapshot.appendInbox.map(\.fragment), ["First", "Third"])
             XCTAssertEqual(snapshot.appendInbox.last?.rawSpansJSON, #"[{"spanId":"span-3"}]"#)
             XCTAssertEqual(snapshot.appendInbox.last?.createdAt, Date(timeIntervalSince1970: 1002))
+            XCTAssertEqual(snapshot.conversationAnchors.map(\.threadId), [thread.threadId])
 
             let wire = StreamCodec.encodeAppendInbox(snapshot.appendInbox)
             XCTAssertEqual(wire.map { $0["seq"]?.intValue }, [1, 3])

@@ -32,7 +32,7 @@ import {
   type PDFSectionActionRequest,
 } from './StreamEditor';
 import { createRichTextEditor, type RichTextEditor } from '../richtext/editor';
-import { refreshConversationViewport } from '../richtext/conversationAnchors';
+import { conversationAnchorFromJSON, refreshConversationViewport } from '../richtext/conversationAnchors';
 import {
   aiWritingRange,
   insertImage,
@@ -533,6 +533,7 @@ export function RichStreamEditor({
       editor: created,
       revision: stream.document?.revision ?? 0,
       spans: (stream.spans ?? []).map(spanFromJSON),
+      conversationAnchors: (stream.conversationAnchors ?? []).map(conversationAnchorFromJSON),
       pendingAppends: decodePendingAppends(stream.pendingAppends),
       inboxAppends: stream.appendInbox ?? [],
       transport: {
@@ -546,6 +547,7 @@ export function RichStreamEditor({
           markdown,
           baseRevision,
           spans,
+          conversationAnchors,
           resolvedPendingThrough,
           consumedInboxThrough,
         }) => bridge.sendAsync<{ revision: number }>(
@@ -557,6 +559,7 @@ export function RichStreamEditor({
             markdown,
             baseRevision,
             spans,
+            conversationAnchors,
             resolvedPendingThrough,
             consumedInboxThrough,
           },
@@ -1147,6 +1150,7 @@ export function RichStreamEditor({
         markdown: String(conflict?.markdown ?? ''),
         revision: Number(conflict?.revision),
         spans: conflict?.spans?.map(spanFromJSON),
+        conversationAnchors: conflict?.conversationAnchors?.map(conversationAnchorFromJSON),
         pendingAppends: decodePendingAppends(
           Array.isArray(conflict?.pendingAppends) ? conflict.pendingAppends : [],
         ),
@@ -1202,6 +1206,7 @@ export function RichStreamEditor({
       markdown: document.markdown,
       revision: document.revision,
       spans: (stream.spans ?? []).map(spanFromJSON),
+      conversationAnchors: (stream.conversationAnchors ?? []).map(conversationAnchorFromJSON),
       // The reloaded document brings its own rows. Without them the session could
       // never let the store forget another one, and a row that outlives the
       // revision it was recorded at can never be replayed.
@@ -1212,6 +1217,7 @@ export function RichStreamEditor({
     cancelDocumentAI,
     stream.appendInbox,
     stream.document,
+    stream.conversationAnchors,
     stream.pendingAppends,
     stream.spans,
   ]);

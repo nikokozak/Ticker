@@ -1,22 +1,13 @@
 import type { Node as ProseNode } from 'prosemirror-model';
 import { Plugin, PluginKey, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
+import type { ConversationAnchorJSON } from '../types/models';
 
 export interface ConversationAnchor {
   threadId: string;
   from: number;
   to: number;
   detached: boolean;
-}
-
-export interface ConversationAnchorJSON {
-  threadId: string;
-  anchorStart: number | null;
-  anchorEnd: number | null;
-  anchorText: string;
-  detached: boolean;
-  ephemeral: boolean;
-  updatedAt: string;
 }
 
 export interface ConversationAnchorUpdateJSON {
@@ -40,6 +31,7 @@ interface VisibleRange {
 
 interface ConversationAnchorState {
   anchors: ConversationAnchor[];
+  markerBlockFrom: Set<number>;
   visibleRanges: VisibleRange[];
   hoveredBlockFrom: number | null;
 }
@@ -127,8 +119,12 @@ export function hasConversationAnchorTextDrifted(
 }
 
 export function conversationAnchorFromJSON(json: ConversationAnchorJSON): ConversationAnchor {
-  const from = Number.isInteger(json.anchorStart) ? json.anchorStart as number : 0;
-  const to = Number.isInteger(json.anchorEnd) ? json.anchorEnd as number : from;
+  const from = Number.isInteger(json.anchorStart) && (json.anchorStart as number) >= 0
+    ? json.anchorStart as number
+    : 0;
+  const to = Number.isInteger(json.anchorEnd) && (json.anchorEnd as number) >= from
+    ? json.anchorEnd as number
+    : from;
   return {
     threadId: json.threadId,
     from,
@@ -175,8 +171,10 @@ function mapAnchor(anchor: ConversationAnchor, tr: Transaction): ConversationAnc
 }
 
 function validAnchors(anchors: ConversationAnchor[], doc: ProseNode): ConversationAnchor[] {
-  return anchors.filter((anchor) => anchor.detached || (
-    anchor.from >= 0 && anchor.to <= doc.content.size && anchor.from < anchor.to
+  return anchors.filter((anchor) => (
+    anchor.from >= 0
+    && anchor.to <= doc.content.size
+    && (anchor.detached ? anchor.from <= anchor.to : anchor.from < anchor.to)
   ));
 }
 
@@ -192,10 +190,23 @@ export interface ConversationDecorationTarget extends BlockRange {
   right: boolean;
 }
 
+export function conversationMarkerBlockPositions(
+  doc: ProseNode,
+  anchors: ConversationAnchor[],
+): Set<number> {
+  const positions = new Set<number>();
+  for (const anchor of anchors) {
+    const marker = conversationRenderPosition(doc, anchor);
+    const block = marker === null ? null : textBlockAt(doc, marker - 1);
+    if (block) positions.add(block.from);
+  }
+  return positions;
+}
+
 /** Only walks visible document ranges; anchor endpoints are resolved directly. */
 export function conversationDecorationTargets(
   doc: ProseNode,
-  anchors: ConversationAnchor[],
+  markerBlockFrom: ReadonlySet<number>,
   visibleRanges: VisibleRange[],
   activeBlockFrom: number | null,
 ): ConversationDecorationTarget[] {
@@ -218,12 +229,8 @@ export function conversationDecorationTargets(
     });
   }
 
-  for (const anchor of anchors) {
-    const marker = conversationRenderPosition(doc, anchor);
-    if (marker === null) continue;
-    const block = textBlockAt(doc, marker - 1);
-    const target = block && visibleBlocks.get(block.from);
-    if (target) target.right = true;
+  for (const [pos, target] of visibleBlocks) {
+    if (markerBlockFrom.has(pos)) target.right = true;
   }
   return [...visibleBlocks.values()].filter((target) => target.left || target.right);
 }
@@ -232,10 +239,14 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
   return new Plugin<ConversationAnchorState>({
     key: conversationAnchorKey,
     state: {
-      init: () => ({ anchors: [], visibleRanges: [], hoveredBlockFrom: null }),
+      init: () => ({ anchors: [], markerBlockFrom: new Set(), visibleRanges: [], hoveredBlockFrom: null }),
       apply(tr, current, _old, next) {
+        const anchors = current.anchors.map((anchor) => mapAnchor(anchor, tr));
         const mapped: ConversationAnchorState = {
-          anchors: current.anchors.map((anchor) => mapAnchor(anchor, tr)),
+          anchors,
+          markerBlockFrom: tr.docChanged
+            ? conversationMarkerBlockPositions(next.doc, anchors)
+            : current.markerBlockFrom,
           visibleRanges: tr.docChanged
             ? current.visibleRanges.map((range) => mapRange(range, tr))
             : current.visibleRanges,
@@ -245,7 +256,14 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
         };
         const meta = tr.getMeta(conversationAnchorKey) as AnchorMessage | undefined;
         if (!meta) return mapped;
-        if (meta.kind === 'set') return { ...mapped, anchors: validAnchors(meta.anchors, next.doc) };
+        if (meta.kind === 'set') {
+          const valid = validAnchors(meta.anchors, next.doc);
+          return {
+            ...mapped,
+            anchors: valid,
+            markerBlockFrom: conversationMarkerBlockPositions(next.doc, valid),
+          };
+        }
         if (meta.kind === 'visible') return { ...mapped, visibleRanges: meta.ranges };
         return { ...mapped, hoveredBlockFrom: meta.blockFrom };
       },
@@ -257,7 +275,7 @@ export function conversationAnchorField(): Plugin<ConversationAnchorState> {
         const cursorBlock = textBlockAt(state.doc, state.selection.head)?.from ?? null;
         const targets = conversationDecorationTargets(
           state.doc,
-          field.anchors,
+          field.markerBlockFrom,
           field.visibleRanges,
           field.hoveredBlockFrom ?? cursorBlock,
         );

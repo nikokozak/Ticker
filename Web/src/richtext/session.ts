@@ -4,6 +4,13 @@ import { reduceAppendInbox, type InboxAppend } from './inbox';
 import { parseMarkdown } from './markdown';
 import { placeFragmentSpan, planReplay, type PendingAppend } from './pendingAppends';
 import {
+  conversationAnchors,
+  conversationAnchorToJSON,
+  setConversationAnchors,
+  type ConversationAnchor,
+  type ConversationAnchorUpdateJSON,
+} from './conversationAnchors';
+import {
   addProvenanceSpans,
   hashProvenanceText,
   provenanceSpans,
@@ -41,6 +48,7 @@ export interface SessionTransport {
     markdown: string;
     baseRevision: number;
     spans: ProvenanceSpanJSON[];
+    conversationAnchors: ConversationAnchorUpdateJSON[];
     /**
      * The highest append revision whose provenance this editor has converted. The
      * store forgets only those rows; without it, it keeps every one — an editor
@@ -62,6 +70,7 @@ export interface SessionOptions {
   transport: SessionTransport;
   revision: number;
   spans?: ProvenanceSpan[];
+  conversationAnchors?: ConversationAnchor[];
   /** Appends recorded while no editor was open, still in fragment coordinates. */
   pendingAppends?: PendingAppend[];
   /** New append inbox rows, ordered by their database sequence. */
@@ -88,6 +97,8 @@ export class DocumentSession {
 
   /** The spans as last persisted, so metadata-only changes still count as dirty. */
   private lastSavedSpans = '';
+
+  private lastSavedConversationAnchors = '';
 
   private timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -132,6 +143,8 @@ export class DocumentSession {
     this.lastSavedMarkdown = options.editor.getMarkdownProjection();
     if (options.spans?.length) this.restoreSpans(options.spans);
     this.lastSavedSpans = this.spanFingerprint();
+    if (options.conversationAnchors?.length) this.restoreConversationAnchors(options.conversationAnchors);
+    this.lastSavedConversationAnchors = this.conversationAnchorFingerprint();
     this.adoptPendingAppends(options.pendingAppends ?? []);
     this.adoptInboxAppends(options.inboxAppends ?? []);
   }
@@ -272,7 +285,7 @@ export class DocumentSession {
   }
 
   /**
-   * Parse and place every queued append off-screen before replacing the live
+   * Parse and place every queued append off-screen before appending to the live
    * opening document. If one row is bad, consuming any earlier row would strand
    * the rest behind a canonical document they were never applied to.
    */
@@ -292,14 +305,13 @@ export class DocumentSession {
       return;
     }
 
-    editor.setDocumentJSON(JSON.stringify(reduced.doc.toJSON()));
-    // These were proved against the exact document just installed. Filtering them
-    // a second time could turn a future disagreement into silent history loss
-    // while the same save consumes the only rows that could recover it.
-    editor.view.dispatch(setProvenanceSpans(
-      editor.view.state.tr,
-      [...existing, ...reduced.spans],
-    ));
+    const { view } = editor;
+    const insertedAt = view.state.doc.content.size;
+    const appended = reduced.doc.content.cut(insertedAt);
+    view.dispatch(addProvenanceSpans(
+      view.state.tr.replace(insertedAt, insertedAt, new Slice(appended, 0, 0)),
+      reduced.spans,
+    ).setMeta('addToHistory', false));
     this.inboxConsumedThrough = reduced.consumedThrough;
     this.inboxSeenThrough = reduced.consumedThrough ?? 0;
     // The stored fingerprints stay at the base document: this combined document
@@ -359,9 +371,14 @@ export class DocumentSession {
     return JSON.stringify(provenanceSpans(this.options.editor.view.state).map(spanToJSON));
   }
 
+  private conversationAnchorFingerprint(): string {
+    return JSON.stringify(conversationAnchors(this.options.editor.view.state).map(conversationAnchorToJSON));
+  }
+
   private isDirty(): boolean {
     return this.options.editor.getDocumentJSON() !== this.lastSavedDocument
-      || this.spanFingerprint() !== this.lastSavedSpans;
+      || this.spanFingerprint() !== this.lastSavedSpans
+      || this.conversationAnchorFingerprint() !== this.lastSavedConversationAnchors;
   }
 
   /**
@@ -420,6 +437,8 @@ export class DocumentSession {
     const baseRevision = this.revision;
     const spans = this.spansForSave();
     const fingerprint = this.spanFingerprint();
+    const anchors = conversationAnchors(editor.view.state);
+    const anchorFingerprint = this.conversationAnchorFingerprint();
     const generation = this.generation;
     const consumedInboxThrough = this.inboxConsumedThrough ?? undefined;
 
@@ -436,6 +455,7 @@ export class DocumentSession {
         markdown,
         baseRevision,
         spans: spans.map(spanToJSON),
+        conversationAnchors: anchors.map(conversationAnchorToJSON),
         resolvedPendingThrough,
         consumedInboxThrough,
       });
@@ -472,6 +492,7 @@ export class DocumentSession {
       this.lastSavedDocument = docJSON;
       this.lastSavedMarkdown = markdown;
       this.lastSavedSpans = fingerprint;
+      this.lastSavedConversationAnchors = anchorFingerprint;
       // Only settle if nothing changed while the write was in flight.
       this.setState(this.isDirty() ? 'saving' : 'saved');
     } catch (error) {
@@ -563,6 +584,7 @@ export class DocumentSession {
     markdown: string;
     revision: number;
     spans?: ProvenanceSpan[];
+    conversationAnchors?: ConversationAnchor[];
     pendingAppends?: PendingAppend[];
     inboxAppends?: InboxAppend[];
   }): void {
@@ -663,6 +685,7 @@ export class DocumentSession {
     markdown: string;
     revision: number;
     spans?: ProvenanceSpan[];
+    conversationAnchors?: ConversationAnchor[];
     pendingAppends?: PendingAppend[];
     inboxAppends?: InboxAppend[];
   }): void {
@@ -677,6 +700,7 @@ export class DocumentSession {
     markdown: string;
     revision: number;
     spans?: ProvenanceSpan[];
+    conversationAnchors?: ConversationAnchor[];
   }): boolean {
     if (payload.docFormatVersion !== DOCUMENT_FORMAT_VERSION || typeof payload.docJSON !== 'string') {
       this.refuseHostDocument('missingCanonicalDocument');
@@ -693,9 +717,11 @@ export class DocumentSession {
     this.generation += 1;
     this.revision = payload.revision;
     this.restoreSpans(payload.spans ?? []);
+    this.restoreConversationAnchors(payload.conversationAnchors ?? []);
     this.lastSavedDocument = this.options.editor.getDocumentJSON();
     this.lastSavedMarkdown = payload.markdown;
     this.lastSavedSpans = this.spanFingerprint();
+    this.lastSavedConversationAnchors = this.conversationAnchorFingerprint();
     // The document it had proven things about is gone; a caller that knows the new
     // document's rows says so by calling adoptPendingAppends after this.
     this.pendingSafeThrough = null;
@@ -726,6 +752,12 @@ export class DocumentSession {
       && hashProvenanceText(view.state.doc, span) === span.textHash
     ));
     view.dispatch(setProvenanceSpans(view.state.tr, valid));
+  }
+
+  restoreConversationAnchors(anchors: ConversationAnchor[]): void {
+    const { view } = this.options.editor;
+    view.dispatch(setConversationAnchors(view.state.tr, anchors));
+    this.lastSavedConversationAnchors = this.conversationAnchorFingerprint();
   }
 
   /**

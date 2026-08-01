@@ -300,6 +300,9 @@ export function App() {
             ...payloadStream,
             sourceScope,
             spans: deserializeProvenanceSpans(message.payload?.spans),
+            conversationAnchors: (Array.isArray(message.payload?.conversationAnchors)
+              ? message.payload.conversationAnchors
+              : []) as Stream['conversationAnchors'],
             // Appends made while no editor was open; the editor converts their
             // provenance out of fragment coordinates the first time it opens.
             pendingAppends: (Array.isArray(message.payload?.pendingAppends)

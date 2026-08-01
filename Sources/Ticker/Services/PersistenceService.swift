@@ -35,6 +35,7 @@ enum ExternalAppendResult {
 struct EditorSnapshot {
     let document: StreamDocument
     let spans: [ProvenanceSpan]
+    let conversationAnchors: [ConversationAnchor]
     let pendingAppends: [PendingStreamAppend]
     let appendInbox: [StreamAppendInboxEntry]
 }
@@ -1113,6 +1114,7 @@ final class PersistenceService {
             EditorSnapshot(
                 document: try loadOrCreateStreamDocument(streamId: streamId, db: db),
                 spans: try fetchSpans(streamId: streamId, db: db),
+                conversationAnchors: try fetchConversationAnchors(streamId: streamId, db: db),
                 pendingAppends: try fetchPendingAppends(streamId: streamId, db: db),
                 appendInbox: try fetchAppendInbox(streamId: streamId, db: db)
             )

@@ -7,10 +7,12 @@ import {
   conversationAnchorTextForStorage,
   conversationAnchors,
   conversationDecorationTargets,
+  conversationMarkerBlockPositions,
   conversationRenderPosition,
   fullBlockConversationAnchor,
   hasConversationAnchorTextDrifted,
   setConversationAnchors,
+  setConversationVisibleRanges,
 } from './conversationAnchors';
 
 let editor: RichTextEditor | null = null;
@@ -120,7 +122,7 @@ it('bounds decoration traversal to the supplied visible ranges and collapses ove
 
   const firstTargets = conversationDecorationTargets(
     ed.view.state.doc,
-    [first, last, duplicate],
+    conversationMarkerBlockPositions(ed.view.state.doc, [first, last, duplicate]),
     [{ from: first.from, to: first.to }],
     null,
   );
@@ -129,10 +131,21 @@ it('bounds decoration traversal to the supplied visible ranges and collapses ove
 
   const lastTargets = conversationDecorationTargets(
     ed.view.state.doc,
-    [first, last, duplicate],
+    conversationMarkerBlockPositions(ed.view.state.doc, [first, last, duplicate]),
     [{ from: last.from, to: last.to }],
     null,
   );
   expect(lastTargets).toHaveLength(1);
   expect(lastTargets[0].right).toBe(true);
+});
+
+it('renders one passive right glyph class and the current-block left line class', () => {
+  const ed = open('Visible block');
+  const anchor = fullBlockConversationAnchor(ed.view.state.doc, 1, 'one')!;
+  ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor, { ...anchor, threadId: 'two' }]));
+  ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{ from: anchor.from, to: anchor.to }]));
+
+  const block = ed.view.dom.querySelector('p');
+  expect(block?.classList.contains('conversation-block-active')).toBe(true);
+  expect(block?.classList.contains('conversation-block-anchored')).toBe(true);
 });
