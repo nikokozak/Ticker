@@ -60,13 +60,10 @@ import {
   conversationSurface,
   fullBlockConversationAnchor,
   hasConversationAnchorTextDrifted,
-  queueConversationHover,
   refreshConversationViewport,
   setConversationAnchors,
   setConversationSurface,
-  updateConversationHoverAtCoords,
   type ConversationAnchor,
-  type ConversationGutterAction,
 } from '../richtext/conversationAnchors';
 import {
   aiWritingRange,
@@ -225,17 +222,6 @@ const SLASH_COMMANDS: Array<{ command: SlashCommand; description: string }> = [
   { command: 'chat', description: 'think out loud, saved only if you keep it' },
   { command: 'research', description: 'ask with sources and web search' },
 ];
-
-function setConversationGutterFeedback(
-  root: HTMLElement,
-  action: ConversationGutterAction | null,
-): void {
-  root.classList.toggle('stream-content--conversation-gutter', action !== null);
-  if (action) root.title = action.kind === 'create'
-    ? 'Start a conversation about this block'
-    : 'Open conversation';
-  else root.removeAttribute('title');
-}
 
 function slashCommandInput(view: RichTextEditor['view']) {
   const { selection } = view.state;
@@ -2284,8 +2270,11 @@ export function RichStreamEditor({
     const rect = view.dom.getBoundingClientRect();
     let pos = event.clientY < rect.top ? 0 : view.state.doc.content.size;
     try {
-      const left = rect.width > 2
-        ? Math.max(rect.left + 1, Math.min(event.clientX, rect.right - 1))
+      const style = getComputedStyle(view.dom);
+      const contentLeft = rect.left + (Number.parseFloat(style.paddingLeft) || 0);
+      const contentRight = rect.right - (Number.parseFloat(style.paddingRight) || 0);
+      const left = contentRight - contentLeft > 2
+        ? Math.max(contentLeft + 1, Math.min(event.clientX, contentRight - 1))
         : event.clientX;
       const top = rect.height > 2
         ? Math.max(rect.top + 1, Math.min(event.clientY, rect.bottom - 1))
@@ -2299,48 +2288,6 @@ export function RichStreamEditor({
       .setSelection(TextSelection.near(view.state.doc.resolve(pos)))
       .setMeta('addToHistory', false));
     view.focus();
-  }, []);
-
-  const handleEditorPageMouseMove = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    const view = editorRef.current?.view;
-    if (!view) return;
-    if (event.target instanceof Node && view.dom.contains(event.target)) {
-      setConversationGutterFeedback(event.currentTarget, null);
-      return;
-    }
-    const root = event.currentTarget;
-    queueConversationHover(view, { left: event.clientX, top: event.clientY }, (action) => {
-      if (root.isConnected) setConversationGutterFeedback(root, action);
-    });
-  }, []);
-
-  const handleEditorPageMouseDown = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    const view = editorRef.current?.view;
-    if (!view || (event.target instanceof Node && view.dom.contains(event.target))) {
-      focusEditorPage(event);
-      return;
-    }
-    const action = updateConversationHoverAtCoords(view, event.clientX, event.clientY);
-    setConversationGutterFeedback(event.currentTarget, action);
-    if (action) event.preventDefault();
-    else focusEditorPage(event);
-  }, [focusEditorPage]);
-
-  const handleEditorPageClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    const view = editorRef.current?.view;
-    if (!view || (event.target instanceof Node && view.dom.contains(event.target))) return;
-    const action = updateConversationHoverAtCoords(view, event.clientX, event.clientY);
-    setConversationGutterFeedback(event.currentTarget, action);
-    if (!action) return;
-    event.preventDefault();
-    if (action.kind === 'create') createConversationAtBlock(action.anchor);
-    else openConversationFromGlyph(action.threadId);
-  }, [createConversationAtBlock, openConversationFromGlyph]);
-
-  const handleEditorPageMouseLeave = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    const view = editorRef.current?.view;
-    if (view) queueConversationHover(view);
-    setConversationGutterFeedback(event.currentTarget, null);
   }, []);
 
   const formats = editor ? activeFormats(editor.view.state) : null;
@@ -2906,10 +2853,7 @@ export function RichStreamEditor({
         <div
           className="stream-content"
           onScroll={(event) => setHeaderScrolled(event.currentTarget.scrollTop > 0)}
-          onMouseMove={handleEditorPageMouseMove}
-          onMouseDown={handleEditorPageMouseDown}
-          onClick={handleEditorPageClick}
-          onMouseLeave={handleEditorPageMouseLeave}
+          onMouseDown={focusEditorPage}
         >
           <div
             ref={editorShellRef}

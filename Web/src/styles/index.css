@@ -2213,7 +2213,8 @@ body {
 }
 
 .search-modal-results {
-  flex: 1;
+  flex: none;
+  max-height: calc(60vh - var(--space-8));
   overflow-y: auto;
   padding: var(--spacing-sm) 0;
 }

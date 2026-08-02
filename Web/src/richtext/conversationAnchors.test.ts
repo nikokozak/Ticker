@@ -209,33 +209,37 @@ it('renders one passive right glyph class and the current-block left line class'
   expect(block?.classList.contains('conversation-block-anchored')).toBe(true);
 });
 
-it('dispatches rail and glyph clicks across their full 24px gutter bands', () => {
+it('dispatches rail and glyph clicks from ProseMirror padding across their 24px bands', () => {
   const onCreate = vi.fn();
   const onOpen = vi.fn();
   const ed = open('Visible block', undefined, { onCreate, onOpen });
   const anchor = fullBlockConversationAnchor(ed.view.state.doc, 1, 'one')!;
   ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor]));
   ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{ from: anchor.from, to: anchor.to }]));
-  const block = ed.view.dom.querySelector('p')!;
-  vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
-    left: 10, right: 110, top: 0, bottom: 28, width: 100, height: 28, x: 10, y: 0,
+  ed.view.dom.style.paddingLeft = '32px';
+  ed.view.dom.style.paddingRight = '32px';
+  vi.spyOn(ed.view.dom, 'getBoundingClientRect').mockReturnValue({
+    left: 0, right: 160, top: 0, bottom: 28, width: 160, height: 28, x: 0, y: 0,
     toJSON: () => ({}),
   });
+  const posAtCoords = vi.spyOn(ed.view, 'posAtCoords').mockImplementation(({ left }) => (
+    left >= 32 && left <= 128 ? { pos: 1, inside: 0 } : null
+  ));
+  expect(ed.view.posAtCoords({ left: 8, top: 14 })).toBeNull();
+  posAtCoords.mockClear();
 
-  block.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: -14, clientY: 14 }));
-  expect(block.title).toBe('Start a conversation about this block');
-  block.dispatchEvent(new MouseEvent('click', {
-    bubbles: true, cancelable: true, clientX: -14, clientY: 14,
+  ed.view.dom.dispatchEvent(new MouseEvent('click', {
+    bubbles: true, cancelable: true, clientX: 8, clientY: 14,
   }));
+  expect(posAtCoords).toHaveBeenLastCalledWith({ left: 33, top: 14 });
   expect(onCreate).toHaveBeenCalledWith({ ...anchor, threadId: '' });
-  block.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 134, clientY: 14 }));
-  expect(block.title).toBe('Open conversation');
-  block.dispatchEvent(new MouseEvent('click', {
-    bubbles: true, cancelable: true, clientX: 134, clientY: 14,
+  ed.view.dom.dispatchEvent(new MouseEvent('click', {
+    bubbles: true, cancelable: true, clientX: 152, clientY: 14,
   }));
+  expect(posAtCoords).toHaveBeenLastCalledWith({ left: 127, top: 14 });
   expect(onOpen).toHaveBeenCalledWith('one');
-  block.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: -15, clientY: 14 }));
-  block.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 135, clientY: 14 }));
+  ed.view.dom.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 7, clientY: 14 }));
+  ed.view.dom.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 153, clientY: 14 }));
   expect(onCreate).toHaveBeenCalledOnce();
   expect(onOpen).toHaveBeenCalledOnce();
 
@@ -249,7 +253,7 @@ it('dispatches rail and glyph clicks across their full 24px gutter bands', () =>
   expect(ed.getDocumentJSON()).toBe(before);
 });
 
-it('resolves margin hover inside the editor before mousedown dispatch', () => {
+it('clamps padding hover into the ProseMirror content box before resolving its block', () => {
   const ed = open('First block\n\nSecond block');
   const blocks = ed.view.dom.querySelectorAll('p');
   ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{
@@ -261,19 +265,35 @@ it('resolves margin hover inside the editor before mousedown dispatch', () => {
     find(ed, 'Second').from,
   )));
   expect(blocks[0].classList.contains('conversation-block-active')).toBe(false);
+  ed.view.dom.style.paddingLeft = '32px';
+  ed.view.dom.style.paddingRight = '32px';
   vi.spyOn(ed.view.dom, 'getBoundingClientRect').mockReturnValue({
-    left: 10, right: 110, top: 0, bottom: 56, width: 100, height: 56, x: 10, y: 0,
+    left: 0, right: 160, top: 0, bottom: 56, width: 160, height: 56, x: 0, y: 0,
     toJSON: () => ({}),
   });
-  const posAtCoords = vi.spyOn(ed.view, 'posAtCoords').mockReturnValue({ pos: 1, inside: 0 });
+  const posAtCoords = vi.spyOn(ed.view, 'posAtCoords').mockImplementation(({ left }) => (
+    left >= 32 && left <= 128 ? { pos: 1, inside: 0 } : null
+  ));
+  const callbacks: FrameRequestCallback[] = [];
+  const requestAnimationFrame = window.requestAnimationFrame;
+  window.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+    callbacks.push(callback);
+    return callbacks.length;
+  });
 
-  ed.view.dom.dispatchEvent(new MouseEvent('mousedown', {
-    bubbles: true, cancelable: true, clientX: -10, clientY: 14,
-  }));
+  try {
+    ed.view.dom.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true, clientX: 8, clientY: 14,
+    }));
+    callbacks.shift()!(0);
 
-  expect(posAtCoords).toHaveBeenCalledWith({ left: 11, top: 14 });
-  expect(blocks[0].classList.contains('conversation-block-active')).toBe(true);
-  expect(blocks[0].title).toBe('Start a conversation about this block');
+    expect(posAtCoords).toHaveBeenCalledWith({ left: 33, top: 14 });
+    expect(blocks[0].classList.contains('conversation-block-active')).toBe(true);
+    expect(ed.view.dom.classList.contains('conversation-gutter-actionable')).toBe(true);
+    expect(ed.view.dom.title).toBe('Start a conversation about this block');
+  } finally {
+    window.requestAnimationFrame = requestAnimationFrame;
+  }
 });
 
 it('moves an ArrowDown caret from the anchored block to the block below the widget', () => {

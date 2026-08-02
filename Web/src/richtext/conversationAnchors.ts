@@ -57,14 +57,8 @@ type AnchorMessage =
 const conversationAnchorKey = new PluginKey<ConversationAnchorState>('tickerConversationAnchors');
 const pendingViewportRefreshes = new WeakSet<EditorView>();
 const conversationGutterHitWidth = 24;
-const pendingHoverFrames = new WeakMap<EditorView, number>();
-const pendingHovers = new WeakMap<EditorView, {
-  left?: number;
-  top?: number;
-  onAction?: (action: ConversationGutterAction | null) => void;
-}>();
 
-export type ConversationGutterAction =
+type ConversationGutterAction =
   | { kind: 'create'; anchor: ConversationAnchor }
   | { kind: 'open'; threadId: string };
 
@@ -239,26 +233,30 @@ function textBlockAt(doc: ProseNode, rawPos: number): BlockRange | null {
   return null;
 }
 
-function blockFromAtCoords(view: EditorView, left: number, top: number): number | null {
+function conversationContentBounds(view: EditorView): { left: number; right: number } {
   const rect = view.dom.getBoundingClientRect();
-  const safeLeft = rect.width > 2
-    ? Math.max(rect.left + 1, Math.min(left, rect.right - 1))
+  const style = getComputedStyle(view.dom);
+  return {
+    left: rect.left + (Number.parseFloat(style.paddingLeft) || 0),
+    right: rect.right - (Number.parseFloat(style.paddingRight) || 0),
+  };
+}
+
+function blockFromAtCoords(view: EditorView, left: number, top: number): number | null {
+  const content = conversationContentBounds(view);
+  const safeLeft = content.right - content.left > 2
+    ? Math.max(content.left + 1, Math.min(left, content.right - 1))
     : left;
   const found = view.posAtCoords({ left: safeLeft, top });
   return found ? textBlockAt(view.state.doc, found.pos)?.from ?? null : null;
 }
 
-function updateGutterTitle(target: HTMLElement | null, clientX: number): void {
-  if (!target) return;
-  const rect = target.getBoundingClientRect();
-  const title = clientX >= rect.left - conversationGutterHitWidth && clientX < rect.left
-    && target.classList.contains('conversation-block-active')
+function updateGutterFeedback(view: EditorView, action: ConversationGutterAction | null): void {
+  view.dom.classList.toggle('conversation-gutter-actionable', action !== null);
+  if (action) view.dom.title = action.kind === 'create'
     ? 'Start a conversation about this block'
-    : clientX > rect.right && clientX <= rect.right + conversationGutterHitWidth
-      && target.classList.contains('conversation-block-anchored')
-      ? 'Open conversation'
-      : '';
-  if (target.title !== title) target.title = title;
+    : 'Open conversation';
+  else view.dom.removeAttribute('title');
 }
 
 function conversationGutterActionAtBlock(
@@ -267,14 +265,18 @@ function conversationGutterActionAtBlock(
   blockFrom: number | null,
 ): ConversationGutterAction | null {
   if (blockFrom === null) return null;
-  const rect = view.dom.getBoundingClientRect();
   const block = textBlockAt(view.state.doc, blockFrom + 1);
   if (!block) return null;
-  if (clientX >= rect.left - conversationGutterHitWidth && clientX < rect.left) {
+  let content = conversationContentBounds(view);
+  if (content.right <= content.left) {
+    const rect = (view.nodeDOM(blockFrom) as HTMLElement | null)?.getBoundingClientRect();
+    if (rect) content = { left: rect.left, right: rect.right };
+  }
+  if (clientX >= content.left - conversationGutterHitWidth && clientX < content.left) {
     const anchor = fullBlockConversationAnchor(view.state.doc, block.contentFrom, '');
     return anchor ? { kind: 'create', anchor } : null;
   }
-  if (clientX <= rect.right || clientX > rect.right + conversationGutterHitWidth) return null;
+  if (clientX <= content.right || clientX > content.right + conversationGutterHitWidth) return null;
   const anchor = conversationAnchorKey.getState(view.state)?.anchors.find((candidate) => {
     const position = conversationRenderPosition(view.state.doc, candidate);
     return position !== null && textBlockAt(view.state.doc, position - 1)?.from === blockFrom;
@@ -282,51 +284,39 @@ function conversationGutterActionAtBlock(
   return anchor ? { kind: 'open', threadId: anchor.threadId } : null;
 }
 
-export function updateConversationHoverAtCoords(
+function blockFromDOMTarget(
+  view: EditorView,
+  target: EventTarget | null,
+  clientX: number,
+): number | null {
+  const block = target instanceof Element
+    ? target.closest<HTMLElement>('.conversation-block-active, .conversation-block-anchored')
+    : null;
+  if (!block || !view.dom.contains(block)) return null;
+  const content = conversationContentBounds(view);
+  const rect = content.right > content.left ? content : block.getBoundingClientRect();
+  const inLeftGutter = clientX >= rect.left - conversationGutterHitWidth && clientX < rect.left;
+  const inRightGutter = clientX > rect.right && clientX <= rect.right + conversationGutterHitWidth;
+  if (!inLeftGutter && !inRightGutter) return null;
+  try {
+    return textBlockAt(view.state.doc, view.posAtDOM(block, 0))?.from ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function updateConversationHoverAtCoords(
   view: EditorView,
   left: number,
   top: number,
+  target: EventTarget | null = null,
 ): ConversationGutterAction | null {
   if (view.isDestroyed) return null;
-  const blockFrom = blockFromAtCoords(view, left, top);
+  const blockFrom = blockFromAtCoords(view, left, top) ?? blockFromDOMTarget(view, target, left);
   if (blockFrom !== conversationAnchorKey.getState(view.state)?.hoveredBlockFrom) {
     view.dispatch(view.state.tr.setMeta(conversationAnchorKey, { kind: 'hover', blockFrom }));
   }
-  if (blockFrom !== null) {
-    updateGutterTitle(view.nodeDOM(blockFrom) as HTMLElement | null, left);
-  }
   return conversationGutterActionAtBlock(view, left, blockFrom);
-}
-
-export function queueConversationHover(
-  view: EditorView,
-  point?: { left: number; top: number },
-  onAction?: (action: ConversationGutterAction | null) => void,
-): void {
-  pendingHovers.set(view, point ? { ...point, onAction } : { onAction });
-  if (pendingHoverFrames.has(view)) return;
-  pendingHoverFrames.set(view, requestFrame(() => {
-    pendingHoverFrames.delete(view);
-    const pending = pendingHovers.get(view);
-    pendingHovers.delete(view);
-    if (!pending) return;
-    if (pending.left === undefined || pending.top === undefined) {
-      if (conversationAnchorKey.getState(view.state)?.hoveredBlockFrom !== null) {
-        view.dispatch(view.state.tr.setMeta(conversationAnchorKey, { kind: 'hover', blockFrom: null }));
-      }
-      pending.onAction?.(null);
-      return;
-    }
-    const action = updateConversationHoverAtCoords(view, pending.left, pending.top);
-    pending.onAction?.(action);
-  }));
-}
-
-function cancelConversationHover(view: EditorView): void {
-  const frame = pendingHoverFrames.get(view);
-  if (frame !== undefined) cancelFrame(frame);
-  pendingHoverFrames.delete(view);
-  pendingHovers.delete(view);
 }
 
 function mapAnchor(anchor: ConversationAnchor, tr: Transaction): ConversationAnchor {
@@ -410,6 +400,30 @@ export function conversationDecorationTargets(
 export function conversationAnchorField(
   options: ConversationAnchorFieldOptions = {},
 ): Plugin<ConversationAnchorState> {
+  let hoverFrame: number | null = null;
+  let pendingHover: { view: EditorView; left: number; top: number } | { view: EditorView } | null = null;
+  const queueHover = (view: EditorView, point?: { left: number; top: number }): void => {
+    pendingHover = point ? { view, ...point } : { view };
+    if (hoverFrame !== null) return;
+    hoverFrame = requestFrame(() => {
+      const pending = pendingHover;
+      pendingHover = null;
+      hoverFrame = null;
+      if (!pending) return;
+      const action = 'left' in pending
+        ? updateConversationHoverAtCoords(pending.view, pending.left, pending.top)
+        : null;
+      if (!('left' in pending)
+        && conversationAnchorKey.getState(pending.view.state)?.hoveredBlockFrom !== null) {
+        pending.view.dispatch(pending.view.state.tr.setMeta(
+          conversationAnchorKey,
+          { kind: 'hover', blockFrom: null },
+        ));
+      }
+      updateGutterFeedback(pending.view, action);
+    });
+  };
+
   return new Plugin<ConversationAnchorState>({
     key: conversationAnchorKey,
     state: {
@@ -525,62 +539,41 @@ export function conversationAnchorField(
       },
       handleDOMEvents: {
         mousemove(view, event) {
-          updateGutterTitle(event.target instanceof Element
-            ? event.target.closest<HTMLElement>('.conversation-block-active, .conversation-block-anchored')
-            : null, event.clientX);
-          queueConversationHover(view, { left: event.clientX, top: event.clientY });
+          queueHover(view, { left: event.clientX, top: event.clientY });
           return false;
         },
         mousedown(view, event) {
-          updateConversationHoverAtCoords(view, event.clientX, event.clientY);
+          updateGutterFeedback(
+            view,
+            updateConversationHoverAtCoords(view, event.clientX, event.clientY, event.target),
+          );
           return false;
         },
         mouseleave(view) {
-          queueConversationHover(view);
+          queueHover(view);
           return false;
         },
         click(view, event) {
-          const target = event.target instanceof Element
-            ? event.target.closest<HTMLElement>('.conversation-block-active, .conversation-block-anchored')
-            : null;
-          if (!target || !view.dom.contains(target)) return false;
-          const rect = target.getBoundingClientRect();
-          let block: BlockRange | null = null;
-          try {
-            block = textBlockAt(view.state.doc, view.posAtDOM(target, 0));
-          } catch {
-            return false;
-          }
-          if (!block) return false;
-          if (event.clientX >= rect.left - conversationGutterHitWidth
-            && event.clientX < rect.left
-            && target.classList.contains('conversation-block-active')) {
-            const anchor = fullBlockConversationAnchor(view.state.doc, block.contentFrom, '');
-            if (!anchor) return false;
-            event.preventDefault();
-            options.onCreate?.(anchor);
-            return true;
-          }
-          if (event.clientX > rect.right
-            && event.clientX <= rect.right + conversationGutterHitWidth
-            && target.classList.contains('conversation-block-anchored')) {
-            const field = conversationAnchorKey.getState(view.state);
-            const anchor = field?.anchors.find((candidate) => {
-              const position = conversationRenderPosition(view.state.doc, candidate);
-              return position !== null && textBlockAt(view.state.doc, position - 1)?.from === block?.from;
-            });
-            if (!anchor) return false;
-            event.preventDefault();
-            options.onOpen?.(anchor.threadId);
-            return true;
-          }
-          return false;
+          const action = updateConversationHoverAtCoords(
+            view,
+            event.clientX,
+            event.clientY,
+            event.target,
+          );
+          updateGutterFeedback(view, action);
+          if (!action) return false;
+          event.preventDefault();
+          if (action.kind === 'create') options.onCreate?.(action.anchor);
+          else options.onOpen?.(action.threadId);
+          return true;
         },
       },
     },
-    view: (view) => ({
+    view: () => ({
       destroy() {
-        cancelConversationHover(view);
+        if (hoverFrame !== null) cancelFrame(hoverFrame);
+        hoverFrame = null;
+        pendingHover = null;
       },
     }),
   });
