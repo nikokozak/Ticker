@@ -49,6 +49,10 @@
   background: var(--color-accent-soft);
 }
 
+.richtext-editor .ProseMirror.conversation-gutter-actionable {
+  cursor: pointer;
+}
+
 /* Blocks --------------------------------------------------------------- */
 
 .richtext-editor .ProseMirror p {
@@ -67,9 +71,9 @@
 .richtext-editor .ProseMirror .conversation-block-active::before {
   content: '';
   position: absolute;
-  inset: 0 auto 0 -23px;
-  width: 12px;
-  background: linear-gradient(to right, transparent 5px, var(--accent) 5px 7px, transparent 7px);
+  inset: 0 auto 0 calc(-1 * var(--space-5));
+  width: var(--space-5);
+  background: linear-gradient(to right, transparent 11px, var(--accent) 11px 13px, transparent 13px);
   cursor: pointer;
   pointer-events: auto;
 }
@@ -77,15 +81,17 @@
 .richtext-editor .ProseMirror .conversation-block-anchored::after {
   content: '◆';
   position: absolute;
-  top: 50%;
-  right: -24px;
+  inset: 0 calc(-1 * var(--space-5)) 0 auto;
+  display: flex;
+  width: var(--space-5);
+  align-items: center;
+  justify-content: center;
   color: var(--accent);
   font-size: 8px;
   line-height: 1;
   opacity: 0.55;
   cursor: pointer;
   pointer-events: auto;
-  transform: translateY(-50%);
 }
 
 .richtext-editor .ProseMirror .conversation-widget-host {
@@ -93,11 +99,27 @@
   width: 100%;
 }
 
+.richtext-editor .ProseMirror .richtext-empty-block {
+  position: relative;
+}
+
+.richtext-editor .ProseMirror .richtext-empty-block::before {
+  position: absolute;
+  color: var(--text-faint);
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
+
 .conversation-surface {
   position: relative;
-  margin: 0 0 var(--space-5) 28px;
-  padding-left: var(--space-4);
-  color: var(--text);
+  box-sizing: border-box;
+  max-width: 56ch;
+  margin: 0 0 var(--space-5) calc(var(--space-5) + var(--space-1));
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  color: var(--text-muted);
   font-family: var(--editor-font-family);
   font-size: var(--conversation-body);
   line-height: var(--conversation-line-height);
@@ -129,7 +151,7 @@
 }
 
 .conversation-rail:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 3px;
 }
 
@@ -137,14 +159,20 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  max-height: 45vh;
+  padding-right: var(--space-2);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .conversation-header {
   display: flex;
   justify-content: flex-end;
+  gap: var(--space-2);
 }
 
-.conversation-keep {
+.conversation-keep,
+.conversation-close {
   padding: 0;
   border: 0;
   background: transparent;
@@ -154,7 +182,8 @@
   cursor: pointer;
 }
 
-.conversation-keep:hover {
+.conversation-keep:hover,
+.conversation-close:hover {
   color: var(--text);
 }
 
@@ -268,7 +297,9 @@
 }
 
 .conversation-receipt summary {
-  width: max-content;
+  width: 100%;
+  min-height: var(--space-6);
+  padding-block: var(--space-1);
   cursor: pointer;
 }
 
@@ -287,8 +318,10 @@
 
 .conversation-turn-controls {
   display: flex;
+  flex: 0 0 auto;
   gap: var(--space-2);
   opacity: 0;
+  white-space: nowrap;
 }
 
 .conversation-turn-controls button {
@@ -299,6 +332,7 @@
   font: inherit;
   font-size: var(--type-ui-caption);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .conversation-turn:hover .conversation-turn-controls,
@@ -307,9 +341,14 @@
 }
 
 .conversation-composer-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
+  padding-block: var(--space-2);
+  background: var(--surface);
 }
 
 .conversation-pins {
@@ -346,10 +385,12 @@
 
 .conversation-context-picker {
   position: relative;
-  align-self: center;
+  align-self: flex-end;
 }
 
 .conversation-context-button {
+  padding-block: var(--space-2);
+  line-height: var(--conversation-line-height);
   white-space: nowrap;
 }
 
@@ -387,18 +428,21 @@
 .conversation-composer {
   flex: 1;
   min-width: 0;
-  resize: vertical;
+  min-height: calc(var(--conversation-line-height) + 2 * var(--space-2) + 2px);
+  max-height: calc(6 * var(--conversation-line-height) + 2 * var(--space-2) + 2px);
+  resize: none;
+  field-sizing: content;
+  overflow-y: auto;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  outline: none;
   background: transparent;
   color: var(--text);
   font: inherit;
   line-height: var(--conversation-line-height);
 }
 
-.conversation-composer:focus {
+.conversation-composer:focus-visible {
   border-color: var(--accent);
 }
 

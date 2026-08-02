@@ -353,8 +353,9 @@ export function ConversationSurface({
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
       void send();
-    } else if (event.key === 'Escape' && state.composer.length === 0) {
+    } else if (event.key === 'Escape') {
       event.preventDefault();
+      event.stopPropagation();
       onCollapse();
     }
   };
@@ -420,10 +421,16 @@ export function ConversationSurface({
     || Boolean(threadId && !state.thread);
   return (
     <section className={`conversation-surface ${state.closing ? 'conversation-surface--closing' : ''}`}>
-      <button type="button" className="conversation-rail" aria-label="Collapse conversation" onClick={onCollapse} />
+      <button
+        type="button"
+        className="conversation-rail"
+        aria-label="Collapse conversation"
+        title="Collapse conversation"
+        onClick={onCollapse}
+      />
       <div className="conversation-content">
-        {ephemeral && (
-          <div className="conversation-header">
+        <div className="conversation-header">
+          {ephemeral && (
             <button
               type="button"
               className="conversation-keep"
@@ -432,8 +439,17 @@ export function ConversationSurface({
             >
               Keep
             </button>
-          </div>
-        )}
+          )}
+          <button
+            type="button"
+            className="conversation-close"
+            aria-label="Close conversation"
+            title="Close conversation"
+            onClick={onCollapse}
+          >
+            ×
+          </button>
+        </div>
         {hasDrifted(originalAnchorText) && (
           <p className="conversation-drift-note">The passage has changed since this conversation started.</p>
         )}
@@ -512,7 +528,7 @@ export function ConversationSurface({
             }))}
             onKeyDown={handleComposerKeyDown}
             placeholder="Ask — sees this block, the Stream, and sources"
-            rows={2}
+            rows={1}
             aria-label="Conversation message"
           />
           {state.active?.running ? (

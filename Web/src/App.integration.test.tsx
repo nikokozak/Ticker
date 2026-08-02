@@ -168,6 +168,44 @@ describe('App stream loading', () => {
     expect(document.querySelector('.stream-list-header')?.classList.contains('stream-list-header--scrolled')).toBe(true);
   });
 
+  it('renders plain-text previews and labels an empty stream', async () => {
+    await boot();
+    await act(async () => {
+      bridge.receive({
+        type: 'streamsLoaded',
+        payload: {
+          streams: [
+            { ...summaries[0], previewLine: '<u>Components</u> with **bold** [docs](https://example.com)' },
+            { ...summaries[1], previewLine: '' },
+          ],
+        },
+      });
+    });
+
+    const previews = [...document.querySelectorAll('.stream-preview')].map((node) => node.textContent);
+    expect(previews).toEqual(['Components with bold docs', 'Empty']);
+  });
+
+  it('clears list hover state on leave and before navigation', async () => {
+    await boot();
+    const first = document.querySelector('.stream-item') as HTMLButtonElement;
+    await act(async () => {
+      first.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }));
+    });
+    expect(first.classList.contains('stream-item--hovered')).toBe(true);
+
+    await act(async () => {
+      document.querySelector('.stream-list-content')!.dispatchEvent(new MouseEvent('pointerout', {
+        bubbles: true,
+        relatedTarget: document.body,
+      }));
+    });
+    expect(first.classList.contains('stream-item--hovered')).toBe(false);
+
+    await act(async () => { first.click(); });
+    expect(first.classList.contains('stream-item--hovered')).toBe(false);
+  });
+
   it('keeps the list recoverable while a stream load is pending', async () => {
     await boot();
     await selectStream();
@@ -248,6 +286,23 @@ describe('App stream loading', () => {
 
     expect(document.querySelector('.ProseMirror')?.textContent)
       .toContain('I’ve been wondering about Cape Verde');
+  });
+
+  it('patches the open stream when the host auto-title changes', async () => {
+    await boot();
+    await selectStream();
+    const requestId = Number(loads()[0].payload?.requestId);
+    await act(async () => {
+      bridge.receive(loaded(requestId));
+      await Promise.resolve();
+      bridge.receive({
+        type: 'streamTitleUpdated',
+        payload: { id: 'stream-1', title: 'Generated title' },
+      });
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector('.stream-title-editable')?.textContent).toBe('Generated title');
   });
 
 });

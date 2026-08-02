@@ -125,6 +125,12 @@ export interface ThinkDocumentPayload extends Record<string, unknown> {
   streamMarkdown?: string;
 }
 
+export interface LoadStreamPayload extends Record<string, unknown> {
+  id: string;
+  requestId?: number;
+  activeThreadId?: string;
+}
+
 export interface UpdateMarginNotePayload extends Record<string, unknown> {
   noteId: string;
   status: 'open' | 'dismissed' | 'promoted' | 'unanchored';

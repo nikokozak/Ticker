@@ -150,13 +150,7 @@ final class QuickPanelManager: ObservableObject {
 
     @Published private(set) var isVisible: Bool = false
     @Published private(set) var context: QuickPanelContext?
-    @Published var inputText: String = "" {
-        didSet {
-            if !inputText.isEmpty {
-                cancelClipboardContextExpiry()
-            }
-        }
-    }
+    @Published var inputText: String = ""
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var status: QuickPanelStatus?  // Temporary feedback and capture status.
@@ -194,12 +188,8 @@ final class QuickPanelManager: ObservableObject {
     private var panel: QuickPanelWindow?
     private var hostingView: NSHostingView<QuickPanelView>?
     private var currentAppearance: NSAppearance?  // Stored to apply when panel is created
-    private var suppressedImageHash: Int?
-    private var suppressedClipboardTextChangeCount: Int?
-    private var clipboardContextExpiryWorkItem: DispatchWorkItem?
     private var presentationGeneration: Int = 0
     private var preserveInputOnNextShow = false
-    private static let clipboardContextLifetime: TimeInterval = 60
 
     // MARK: - Initialization
 
@@ -218,7 +208,6 @@ final class QuickPanelManager: ObservableObject {
     }
 
     deinit {
-        clipboardContextExpiryWorkItem?.cancel()
         streamingTask?.cancel()
         aiOperations.cancelAll()
     }
@@ -281,9 +270,7 @@ final class QuickPanelManager: ObservableObject {
 
     private func toggleAfterCapturingContext() async {
         // Capture context BEFORE we steal focus
-        let capturedContext = contextRespectingDismissedClipboardText(
-            contextRespectingDismissedImage(await buildContextForQuickPanelToggle())
-        )
+        let capturedContext = await buildContextForQuickPanelToggle()
         logCapturedContext(capturedContext)
 
         if isVisible {
@@ -295,7 +282,6 @@ final class QuickPanelManager: ObservableObject {
                 // Update context in place without discarding a note already in flight.
                 self.context = capturedContext
                 resetState(clearInput: false)
-                scheduleClipboardContextExpiry()
             } else {
                 // Same selection or no selection - toggle off
                 hide(preservingInput: true)
@@ -310,7 +296,6 @@ final class QuickPanelManager: ObservableObject {
     private func buildContextForQuickPanelToggle() async -> QuickPanelContext {
         let activeBundleId = selectionService.getActiveAppBundleId()
         let appBundleId = Bundle.main.bundleIdentifier
-        let clipboardTextCandidate = SelectionReaderService.recentClipboardTextCandidate()
         let selectionResult = await SelectionReaderService.resolveSelectedTextWithOutcome(
             activeBundleId: activeBundleId,
             currentBundleId: appBundleId,
@@ -324,7 +309,6 @@ final class QuickPanelManager: ObservableObject {
 
         return selectionService.buildContext(
             selectedText: selectionResult.text,
-            clipboardTextCandidate: clipboardTextCandidate,
             selectionCaptureOutcome: selectionResult.outcome,
             readSelectionFromAX: false,
             panelSize: currentPanelSizeForPositioning()
@@ -341,7 +325,7 @@ final class QuickPanelManager: ObservableObject {
         // Load available streams for picker
         loadAvailableStreams()
 
-        if showAccessibilityWarning && !capturedContext.hasSelection && !capturedContext.isClipboardTextContext {
+        if showAccessibilityWarning && !capturedContext.hasSelection {
             status = QuickPanelStatus.selectionCaptureStatus(
                 for: capturedContext.selectionCaptureOutcome
             )
@@ -366,7 +350,6 @@ final class QuickPanelManager: ObservableObject {
 
         // Show panel without bringing main window forward
         isVisible = true
-        scheduleClipboardContextExpiry()
         panel.fadeIn()
         panel.makeKey()
         NotificationCenter.default.post(name: .quickPanelDidShow, object: nil)
@@ -381,8 +364,6 @@ final class QuickPanelManager: ObservableObject {
         preserveInputOnNextShow = keepInput
         heightDebounceTimer?.invalidate()
         heightDebounceTimer = nil
-        cancelClipboardContextExpiry()
-
         isVisible = false
 
         let finishHide = { [weak self] in
@@ -432,7 +413,6 @@ final class QuickPanelManager: ObservableObject {
             "[QuickPanel] toggle captured context " +
             "axTrusted=\(cursorService.hasAccessibilityPermission) " +
             "hasSelection=\(capturedContext.hasSelection) " +
-            "isClipboardText=\(capturedContext.isClipboardTextContext) " +
             "contextTextLength=\(contextTextLength) " +
             "hasImage=\(capturedContext.hasImage) " +
             "activeApp=\(capturedContext.activeApp ?? "unknown")"
@@ -591,50 +571,7 @@ final class QuickPanelManager: ObservableObject {
 
     /// Clear attached context
     func clearContext() {
-        cancelClipboardContextExpiry()
-        suppressDismissedClipboardContextIfNeeded()
         context = nil
-    }
-
-    private func scheduleClipboardContextExpiry() {
-        cancelClipboardContextExpiry()
-        guard context?.isClipboardTextContext == true else { return }
-
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.clipboardContextExpiryWorkItem = nil
-            guard Self.shouldExpireClipboardTextContext(
-                self.context,
-                inputText: self.inputText,
-                isLoading: self.isLoading,
-                isStreaming: self.ephemeralConversation.isStreaming
-            ) else {
-                return
-            }
-            self.context = nil
-        }
-        clipboardContextExpiryWorkItem = workItem
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + Self.clipboardContextLifetime,
-            execute: workItem
-        )
-    }
-
-    private func cancelClipboardContextExpiry() {
-        clipboardContextExpiryWorkItem?.cancel()
-        clipboardContextExpiryWorkItem = nil
-    }
-
-    static func shouldExpireClipboardTextContext(
-        _ context: QuickPanelContext?,
-        inputText: String,
-        isLoading: Bool,
-        isStreaming: Bool
-    ) -> Bool {
-        context?.isClipboardTextContext == true
-            && inputText.isEmpty
-            && !isLoading
-            && !isStreaming
     }
 
     func performStatusAction(_ action: QuickPanelStatusAction) {
@@ -649,83 +586,6 @@ final class QuickPanelManager: ObservableObject {
     func clearEphemeralConversation() {
         cancelStreaming()
         ephemeralConversation.clear()
-    }
-
-    private func suppressDismissedClipboardContextIfNeeded() {
-        suppressDismissedImageIfNeeded()
-        suppressDismissedClipboardTextIfNeeded()
-    }
-
-    /// Suppress reattaching the same captured image on Cmd+L.
-    private func suppressDismissedImageIfNeeded() {
-        guard let image = context?.clipboardImage else { return }
-        suppressedImageHash = image.hashValue
-    }
-
-    /// Suppress reattaching the current clipboard text on Cmd+L until clipboard changes.
-    private func suppressDismissedClipboardTextIfNeeded() {
-        guard context?.isClipboardTextContext == true else { return }
-        suppressedClipboardTextChangeCount = ClipboardService.changeCount()
-    }
-
-    /// Applies explicit image-dismissal state to freshly captured clipboard or screenshot context.
-    private func contextRespectingDismissedImage(_ capturedContext: QuickPanelContext) -> QuickPanelContext {
-        guard let image = capturedContext.clipboardImage else { return capturedContext }
-        let imageHash = image.hashValue
-        if let suppressedImageHash, suppressedImageHash != imageHash {
-            self.suppressedImageHash = nil
-        }
-
-        // ponytail: bytes identify a dismissed image; add source tokens only if identical recaptures must reattach.
-        guard suppressedImageHash == imageHash else {
-            return capturedContext
-        }
-
-        return QuickPanelContext(
-            selectedText: capturedContext.selectedText,
-            activeApp: capturedContext.activeApp,
-            windowTitle: capturedContext.windowTitle,
-            panelPosition: capturedContext.panelPosition,
-            clipboardImage: nil,
-            clipboardText: capturedContext.clipboardText,
-            selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
-        )
-    }
-
-    /// Applies explicit text-dismissal state to freshly captured context.
-    private func contextRespectingDismissedClipboardText(_ capturedContext: QuickPanelContext) -> QuickPanelContext {
-        let currentClipboardChangeCount = ClipboardService.changeCount()
-        return Self.contextRespectingDismissedClipboardText(
-            capturedContext,
-            suppressedChangeCount: &suppressedClipboardTextChangeCount,
-            currentClipboardChangeCount: currentClipboardChangeCount
-        )
-    }
-
-    static func contextRespectingDismissedClipboardText(
-        _ capturedContext: QuickPanelContext,
-        suppressedChangeCount: inout Int?,
-        currentClipboardChangeCount: Int
-    ) -> QuickPanelContext {
-        if let suppressedCount = suppressedChangeCount,
-           suppressedCount != currentClipboardChangeCount {
-            suppressedChangeCount = nil
-        }
-
-        guard capturedContext.isClipboardTextContext,
-              suppressedChangeCount == currentClipboardChangeCount else {
-            return capturedContext
-        }
-
-        return QuickPanelContext(
-            selectedText: capturedContext.selectedText,
-            activeApp: capturedContext.activeApp,
-            windowTitle: capturedContext.windowTitle,
-            panelPosition: capturedContext.panelPosition,
-            clipboardImage: capturedContext.clipboardImage,
-            clipboardText: nil,
-            selectionCaptureOutcome: capturedContext.selectionCaptureOutcome
-        )
     }
 
     // MARK: - Markdown Capture

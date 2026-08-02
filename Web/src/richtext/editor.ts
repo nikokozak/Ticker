@@ -17,8 +17,8 @@ import {
 type ClipboardParseOptions = ParseOptions & {
   ruleFromNode?: (node: Node) => { ignore?: boolean } | null;
 };
-import { EditorState, type Command, type Transaction } from 'prosemirror-state';
-import { EditorView, type NodeView } from 'prosemirror-view';
+import { EditorState, Plugin, type Command, type Transaction } from 'prosemirror-state';
+import { Decoration, DecorationSet, EditorView, type NodeView } from 'prosemirror-view';
 import {
   indentListItem,
   outdentListItem,
@@ -144,6 +144,19 @@ function tickerKeymap() {
     'Shift-Tab': outdentListItem,
   });
 }
+
+const emptyDocumentPlaceholder = new Plugin({
+  props: {
+    decorations(state) {
+      const block = state.doc.childCount === 1 ? state.doc.firstChild : null;
+      if (!block?.isTextblock || block.content.size > 0) return null;
+      return DecorationSet.create(state.doc, [Decoration.node(0, block.nodeSize, {
+        class: 'richtext-empty-block',
+        'data-placeholder': 'Start writing…',
+      })]);
+    },
+  },
+});
 
 export interface RichTextEditor {
   readonly view: EditorView;
@@ -296,7 +309,7 @@ function stateFor(doc: ProseNode, conversations?: ConversationAnchorFieldOptions
   // Order matters: our keymap gets first refusal, then the stock bindings.
   return EditorState.create({
     doc,
-    plugins: [history(), tickerKeymap(), keymap(baseKeymap), aiWritingHighlight(), provenance(), conversationAnchorField(conversations)],
+    plugins: [history(), tickerKeymap(), keymap(baseKeymap), emptyDocumentPlaceholder, aiWritingHighlight(), provenance(), conversationAnchorField(conversations)],
   });
 }
 

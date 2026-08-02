@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
 import type { Slice } from 'prosemirror-model';
@@ -209,6 +210,32 @@ interface ExpandedConversation {
   profile?: 'research';
 }
 
+type EphemeralCloseDecision = 'keep' | 'discard' | 'cancel';
+
+const conversationComposerDrafts = new Map<string, string>();
+const conversationComposerDraftStorageKey = (key: string) => `ticker:conversation-draft:${key}`;
+
+function conversationComposerDraftKey(streamId: string, key: string, state?: ConversationLiveState) {
+  const threadId = state?.thread?.threadId ?? (key.startsWith('thread:') ? key.slice(7) : null);
+  return `${streamId}:${threadId ?? key}`;
+}
+
+function conversationComposerDraft(key: string): string {
+  return conversationComposerDrafts.get(key)
+    ?? window.sessionStorage.getItem(conversationComposerDraftStorageKey(key))
+    ?? '';
+}
+
+function setConversationComposerDraft(key: string, value: string): void {
+  if (value) {
+    conversationComposerDrafts.set(key, value);
+    window.sessionStorage.setItem(conversationComposerDraftStorageKey(key), value);
+  } else {
+    conversationComposerDrafts.delete(key);
+    window.sessionStorage.removeItem(conversationComposerDraftStorageKey(key));
+  }
+}
+
 type SlashCommand = 'chat' | 'research';
 
 interface SlashMenuState {
@@ -302,6 +329,7 @@ export function RichStreamEditor({
   const conversationCreatePromisesRef = useRef(new Map<string, Promise<StreamThreadJSON>>());
   const conversationKeepPromisesRef = useRef(new Map<string, Promise<boolean>>());
   const closingConversationKeysRef = useRef(new Set<string>());
+  const ephemeralCloseResolverRef = useRef<((decision: EphemeralCloseDecision) => void) | null>(null);
   const slashArmedRef = useRef(false);
   const slashMenuRef = useRef<SlashMenuState | null>(null);
 
@@ -345,6 +373,7 @@ export function RichStreamEditor({
   const [conversationListLoading, setConversationListLoading] = useState(false);
   const [conversationListError, setConversationListError] = useState(false);
   const [conversationPendingDelete, setConversationPendingDelete] = useState<ConversationAnchorJSON | null>(null);
+  const [ephemeralClosePrompt, setEphemeralClosePrompt] = useState<ExpandedConversation | null>(null);
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
   slashMenuRef.current = slashMenu;
   const addToast = useToastStore((state) => state.addToast);
@@ -395,6 +424,10 @@ export function RichStreamEditor({
     const timer = window.setTimeout(() => setShowSaving(false), 800);
     return () => window.clearTimeout(timer);
   }, [saveState]);
+
+  useEffect(() => {
+    if (!isEditingTitle) setTitle(stream.title);
+  }, [stream.title, isEditingTitle]);
 
   const canStartAI = useCallback(() => {
     if (!aiInFlightRef.current && !pdfAIInFlightRef.current) return true;
@@ -525,20 +558,28 @@ export function RichStreamEditor({
     updater: ConversationLiveStateUpdater,
   ) => {
     const current = conversationLiveStatesRef.current;
-    const value = updater(current[key] ?? initialConversationLiveState());
+    const previous = current[key] ?? initialConversationLiveState();
+    const value = updater(previous);
     if (value === current[key]) return;
+    const previousDraftKey = conversationComposerDraftKey(stream.id, key, previous);
+    const draftKey = conversationComposerDraftKey(stream.id, key, value);
+    if (previousDraftKey !== draftKey) setConversationComposerDraft(previousDraftKey, '');
+    setConversationComposerDraft(draftKey, value.composer);
     const next = { ...current, [key]: value };
     conversationLiveStatesRef.current = next;
     setConversationLiveStates(next);
-  }, []);
+  }, [stream.id]);
 
   const ensureConversationLiveState = useCallback((key: string, threadId?: string) => {
     const current = conversationLiveStatesRef.current;
     if (current[key]) return;
-    const next = { ...current, [key]: initialConversationLiveState(threadId) };
+    const initial = initialConversationLiveState(threadId);
+    const draftKey = conversationComposerDraftKey(stream.id, key, initial);
+    initial.composer = conversationComposerDraft(draftKey);
+    const next = { ...current, [key]: initial };
     conversationLiveStatesRef.current = next;
     setConversationLiveStates(next);
-  }, []);
+  }, [stream.id]);
 
   const cancelConversationRequest = useCallback((key: string, updateUI = true) => {
     const current = conversationLiveStatesRef.current[key];
@@ -567,11 +608,14 @@ export function RichStreamEditor({
       const records = conversationRecordsRef.current.filter((record) => record.threadId !== thread.threadId);
       conversationRecordsRef.current = records;
       setConversationRecords(records);
+      setConversationComposerDraft(`${stream.id}:${key}`, '');
+      setConversationComposerDraft(`${stream.id}:${thread.threadId}`, '');
       updateConversationLiveState(key, (current) => ({
         ...current,
         thread: null,
         exchanges: [],
         active: null,
+        composer: '',
       }));
       return true;
     } catch {
@@ -656,40 +700,67 @@ export function RichStreamEditor({
     return task;
   }, [stream.id, updateConversationLiveState]);
 
-  const discardExpandedEphemeralConversation = useCallback(async (): Promise<boolean> => {
-    const expanded = expandedConversationRef.current;
-    return expanded?.ephemeral ? discardEphemeralConversation(expanded.key) : true;
-  }, [discardEphemeralConversation]);
+  const requestEphemeralCloseDecision = useCallback((expanded: ExpandedConversation) => (
+    new Promise<EphemeralCloseDecision>((resolve) => {
+      ephemeralCloseResolverRef.current = resolve;
+      setEphemeralClosePrompt(expanded);
+    })
+  ), []);
 
-  const flushAll = useCallback(async () => {
-    cancelDocumentAI();
-    const expanded = expandedConversationRef.current;
-    if (expanded) {
-      closingConversationKeysRef.current.add(expanded.key);
-      cancelConversationRequest(expanded.key);
-      await discardExpandedEphemeralConversation();
-      closingConversationKeysRef.current.delete(expanded.key);
-    }
-    return sessionRef.current?.saveNow() ?? Promise.resolve(true);
-  }, [cancelConversationRequest, cancelDocumentAI, discardExpandedEphemeralConversation]);
-
-  useEffect(() => {
-    onFlushAvailable?.(flushAll);
-    return () => onFlushAvailable?.(null);
-  }, [flushAll, onFlushAvailable]);
+  const resolveEphemeralCloseDecision = useCallback((decision: EphemeralCloseDecision) => {
+    const resolve = ephemeralCloseResolverRef.current;
+    ephemeralCloseResolverRef.current = null;
+    setEphemeralClosePrompt(null);
+    resolve?.(decision);
+  }, []);
 
   const prepareConversationClose = useCallback(async (expanded: ExpandedConversation) => {
+    if (closingConversationKeysRef.current.has(expanded.key) || ephemeralCloseResolverRef.current) return false;
+    await conversationKeepPromisesRef.current.get(expanded.key);
+    const liveExpanded = expandedConversationRef.current?.key === expanded.key
+      ? expandedConversationRef.current
+      : expanded;
+    let discard = liveExpanded?.ephemeral === true;
+    if (discard) {
+      const live = conversationLiveStatesRef.current[expanded.key];
+      const meaningful = Boolean(live?.composer.trim() || live?.thread || live?.active || live?.exchanges.length);
+      if (meaningful) {
+        const decision = await requestEphemeralCloseDecision(expanded);
+        if (decision === 'cancel') return false;
+        if (decision === 'keep') {
+          if (!await keepExpandedConversation()) return false;
+          discard = false;
+        }
+      }
+    }
     closingConversationKeysRef.current.add(expanded.key);
     cancelConversationRequest(expanded.key);
     updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: true }));
-    const discarded = expanded.ephemeral !== true
-      || await discardEphemeralConversation(expanded.key);
+    const discarded = !discard || await discardEphemeralConversation(expanded.key);
     closingConversationKeysRef.current.delete(expanded.key);
     if (!discarded) {
       updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: false }));
     }
     return discarded;
-  }, [cancelConversationRequest, discardEphemeralConversation, updateConversationLiveState]);
+  }, [
+    cancelConversationRequest,
+    discardEphemeralConversation,
+    keepExpandedConversation,
+    requestEphemeralCloseDecision,
+    updateConversationLiveState,
+  ]);
+
+  const flushAll = useCallback(async () => {
+    cancelDocumentAI();
+    const expanded = expandedConversationRef.current;
+    if (expanded && !await prepareConversationClose(expanded)) return false;
+    return sessionRef.current?.saveNow() ?? Promise.resolve(true);
+  }, [cancelDocumentAI, prepareConversationClose]);
+
+  useEffect(() => {
+    onFlushAvailable?.(flushAll);
+    return () => onFlushAvailable?.(null);
+  }, [flushAll, onFlushAvailable]);
 
   const expandConversation = useCallback(async (next: ExpandedConversation) => {
     const current = expandedConversationRef.current;
@@ -740,9 +811,9 @@ export function RichStreamEditor({
     }
     const expanded = expandedConversationRef.current;
     if (expanded) closingConversationKeysRef.current.add(expanded.key);
-    const thread = expanded && conversationLiveStatesRef.current[expanded.key]?.thread;
-    if (expanded?.ephemeral && thread?.ephemeral) {
-      void deleteEphemeralThread({ streamId: stream.id, threadId: thread.threadId }).catch(() => undefined);
+    const prefix = `${stream.id}:`;
+    for (const key of conversationComposerDrafts.keys()) {
+      if (key.startsWith(prefix)) conversationComposerDrafts.delete(key);
     }
   }, [cancelConversationRequest, stream.id]);
 
@@ -1018,7 +1089,13 @@ export function RichStreamEditor({
             consumedInboxThrough,
           },
         ),
-        reload: (streamId) => bridge.send({ type: 'loadStream', payload: { id: streamId } }),
+        reload: (streamId) => {
+          const expanded = expandedConversationRef.current;
+          const activeThreadId = expanded?.ephemeral
+            ? conversationLiveStatesRef.current[expanded.key]?.thread?.threadId
+            : undefined;
+          bridge.send({ type: 'loadStream', payload: { id: streamId, activeThreadId } });
+        },
         onSaveStateChange: setSaveState,
         onError: (message) => addToast(message, 'error'),
       },
@@ -1027,6 +1104,15 @@ export function RichStreamEditor({
     editorRef.current = created;
     sessionRef.current = session;
     setEditor(created);
+    const documentIsEmpty = created.view.state.doc.childCount === 1
+      && created.view.state.doc.firstChild?.isTextblock
+      && created.view.state.doc.firstChild.content.size === 0;
+    created.view.dispatch(created.view.state.tr
+      .setSelection(documentIsEmpty
+        ? TextSelection.atStart(created.view.state.doc)
+        : TextSelection.atEnd(created.view.state.doc))
+      .setMeta('addToHistory', false));
+    created.view.focus();
 
     const scroller = host.current.closest('.stream-content') as HTMLElement;
     let scrollSaveTimer: number | undefined;
@@ -1634,6 +1720,11 @@ export function RichStreamEditor({
         }
         return;
       }
+      if (event.key === 'Escape' && expandedConversationRef.current) {
+        event.preventDefault();
+        void collapseConversation();
+        return;
+      }
       const { selection } = editor.view.state;
       if (event.key === '/'
         && selection.empty
@@ -1644,7 +1735,7 @@ export function RichStreamEditor({
     };
     editor.view.dom.addEventListener('keydown', keydown, true);
     return () => editor.view.dom.removeEventListener('keydown', keydown, true);
-  }, [editor, runSlashCommand]);
+  }, [collapseConversation, editor, runSlashCommand]);
 
   useEffect(() => {
     if (!editor || !xray) return undefined;
@@ -1823,7 +1914,6 @@ export function RichStreamEditor({
     setLeaving(true);
     if (expanded && !await prepareConversationClose(expanded)) {
       setLeaving(false);
-      addToast('This chat could not be discarded, so the stream stayed open.', 'error');
       return;
     }
     const documentSaved = await (sessionRef.current?.destroy() ?? Promise.resolve(true));
@@ -2245,6 +2335,36 @@ export function RichStreamEditor({
     }
   };
 
+  const focusEditorPage = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+    const target = event.target;
+    if (target instanceof Node && view.dom.contains(target) && target !== view.dom) return;
+    if (target instanceof Element
+      && target.closest('button, input, textarea, select, a, [contenteditable="false"]')) return;
+    const rect = view.dom.getBoundingClientRect();
+    let pos = event.clientY < rect.top ? 0 : view.state.doc.content.size;
+    try {
+      const style = getComputedStyle(view.dom);
+      const contentLeft = rect.left + (Number.parseFloat(style.paddingLeft) || 0);
+      const contentRight = rect.right - (Number.parseFloat(style.paddingRight) || 0);
+      const left = contentRight - contentLeft > 2
+        ? Math.max(contentLeft + 1, Math.min(event.clientX, contentRight - 1))
+        : event.clientX;
+      const top = rect.height > 2
+        ? Math.max(rect.top + 1, Math.min(event.clientY, rect.bottom - 1))
+        : event.clientY;
+      pos = view.posAtCoords({ left, top })?.pos ?? pos;
+    } catch {
+      // A pre-layout WebView has no caret geometry; the start/end fallback is still nearest.
+    }
+    event.preventDefault();
+    view.dispatch(view.state.tr
+      .setSelection(TextSelection.near(view.state.doc.resolve(pos)))
+      .setMeta('addToHistory', false));
+    view.focus();
+  }, []);
+
   const formats = editor ? activeFormats(editor.view.state) : null;
   const activePDFHighlight = editor ? selectedPDFHighlight(editor.view.state) : null;
   const liveConversationSurface = editor ? conversationSurface(editor.view.state) : null;
@@ -2391,9 +2511,9 @@ export function RichStreamEditor({
             autoFocus
           />
         ) : (
-          <h1 onClick={startEditingTitle} className="stream-title-editable" title={title}>
+          <button type="button" onClick={startEditingTitle} className="stream-title-editable" title={title}>
             {title}
-          </h1>
+          </button>
         )}
         <div className="stream-header-actions">
           {(saveState === 'error' || showSaving) && (
@@ -2429,78 +2549,82 @@ export function RichStreamEditor({
           >
             {sources.length > 0 ? `Sources · ${sources.length}` : 'Sources'}
           </button>
-          <details
-            ref={streamOverflowMenuRef}
-            className="stream-overflow-menu"
+          <div
+            className="stream-overflow-anchor"
             onBlur={(event) => {
-              if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
-                event.currentTarget.open = false;
+              if (!event.currentTarget.contains(event.relatedTarget)) {
+                if (streamOverflowMenuRef.current) streamOverflowMenuRef.current.open = false;
+                setShowConversationList(false);
               }
             }}
             onKeyDown={(event) => {
               if (event.key !== 'Escape') return;
               event.preventDefault();
-              event.currentTarget.open = false;
-              event.currentTarget.querySelector('summary')?.focus();
+              if (streamOverflowMenuRef.current) streamOverflowMenuRef.current.open = false;
+              setShowConversationList(false);
+              streamOverflowMenuRef.current?.querySelector('summary')?.focus();
             }}
           >
-            <summary title="More stream actions" aria-label="More stream actions">
-              <span aria-hidden="true">•••</span>
-            </summary>
-            <div className={`stream-overflow-panel ${showConversationList ? 'stream-overflow-panel--conversations' : ''}`}>
-              <button
-                type="button"
-                className="stream-overflow-action"
-                aria-expanded={showConversationList}
-                onClick={() => void toggleConversationList()}
-              >
-                Conversations
-              </button>
-              {showConversationList && (
-                <div className="conversation-list" aria-label="Conversations">
-                  {conversationListLoading && <p>Loading…</p>}
-                  {conversationListError && <p>Conversations could not be loaded.</p>}
-                  {!conversationListLoading && !conversationListError && conversationRecords.length === 0 && (
-                    <p>No conversations yet.</p>
-                  )}
-                  {conversationRecords.map((record) => (
-                    <div className="conversation-list-row" key={record.threadId}>
-                      <button
-                        type="button"
-                        className="conversation-list-open"
-                        onClick={() => openConversationFromList(record)}
-                      >
-                        <span className="conversation-list-title">
-                          {record.anchorText.split(/\r?\n/, 1)[0] || 'Conversation'}
-                        </span>
-                        <span className="conversation-list-meta">
-                          {formatRelativeTime(record.updatedAt)}{record.detached ? ' · detached' : ''}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="conversation-list-delete"
-                        aria-label="Delete conversation"
-                        onClick={() => setConversationPendingDelete(record)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <button
-                type="button"
-                className="stream-overflow-delete"
-                onClick={() => {
-                  streamOverflowMenuRef.current!.open = false;
-                  setShowDeleteConfirm(true);
-                }}
-              >
-                Delete stream…
-              </button>
-            </div>
-          </details>
+            <details ref={streamOverflowMenuRef} className="stream-overflow-menu">
+              <summary title="More stream actions" aria-label="More stream actions">
+                <span aria-hidden="true">•••</span>
+              </summary>
+              <div className="stream-overflow-panel">
+                <button
+                  type="button"
+                  className="stream-overflow-action"
+                  aria-expanded={showConversationList}
+                  disabled={conversationRecords.length === 0}
+                  onClick={() => {
+                    streamOverflowMenuRef.current!.open = false;
+                    void toggleConversationList();
+                  }}
+                >
+                  Conversations ({conversationRecords.length})
+                </button>
+                <button
+                  type="button"
+                  className="stream-overflow-delete"
+                  onClick={() => {
+                    streamOverflowMenuRef.current!.open = false;
+                    setShowDeleteConfirm(true);
+                  }}
+                >
+                  Delete stream…
+                </button>
+              </div>
+            </details>
+            {showConversationList && (
+              <div className="conversation-popover" aria-label="Conversations">
+                {conversationListLoading && <p>Loading…</p>}
+                {conversationListError && <p>Conversations could not be loaded.</p>}
+                {conversationRecords.map((record) => (
+                  <div className="conversation-list-row" key={record.threadId}>
+                    <button
+                      type="button"
+                      className="conversation-list-open"
+                      onClick={() => openConversationFromList(record)}
+                    >
+                      <span className="conversation-list-title">
+                        {record.anchorText.split(/\r?\n/, 1)[0] || 'Conversation'}
+                      </span>
+                      <span className="conversation-list-meta">
+                        {formatRelativeTime(record.updatedAt)}{record.detached ? ' · detached' : ''}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="conversation-list-delete"
+                      aria-label="Delete conversation"
+                      onClick={() => setConversationPendingDelete(record)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -2528,6 +2652,37 @@ export function RichStreamEditor({
               }}
             >
               Delete
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {ephemeralClosePrompt && (
+        <Modal
+          className="delete-confirm-dialog ephemeral-close-dialog"
+          aria-labelledby="ephemeral-close-title"
+          onRequestClose={() => resolveEphemeralCloseDecision('cancel')}
+        >
+          <h2 id="ephemeral-close-title">Keep this chat?</h2>
+          <p>Keep saves it with the Stream. Discard removes its turns.</p>
+          <div className="delete-confirm-actions">
+            <button
+              className="delete-confirm-cancel"
+              onClick={() => resolveEphemeralCloseDecision('cancel')}
+            >
+              Cancel
+            </button>
+            <button
+              className="delete-confirm-delete ephemeral-close-discard"
+              onClick={() => resolveEphemeralCloseDecision('discard')}
+            >
+              Discard
+            </button>
+            <button
+              className="primary-button ephemeral-close-keep"
+              onClick={() => resolveEphemeralCloseDecision('keep')}
+            >
+              Keep
             </button>
           </div>
         </Modal>
@@ -2808,6 +2963,7 @@ export function RichStreamEditor({
         <div
           className="stream-content"
           onScroll={(event) => setHeaderScrolled(event.currentTarget.scrollTop > 0)}
+          onMouseDown={focusEditorPage}
         >
           <div
             ref={editorShellRef}

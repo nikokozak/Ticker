@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { SearchResult, HybridSearchResults, bridge } from '../types';
 import { DocumentIcon, SearchIcon, Spinner } from './icons';
-import { markdownPreviewLine } from '../utils/markdownPreview';
+import { markdownPreviewLine, plainTextFromMarkdown } from '../utils/markdownPreview';
 import { Modal } from './Modal';
 
 interface SearchModalProps {
@@ -199,7 +199,7 @@ export function SearchModal({
         {expandedResult ? (
           <div className="search-modal-preview">
             <div className="search-modal-preview-header">
-              <span className="search-modal-preview-stream">{expandedResult.streamTitle}</span>
+              <span className="search-modal-preview-stream">{plainTextFromMarkdown(expandedResult.streamTitle)}</span>
               <button
                 className="search-modal-preview-close"
                 onClick={() => setExpandedResult(null)}
@@ -207,7 +207,7 @@ export function SearchModal({
                 ← Back
               </button>
             </div>
-            <div className="search-modal-preview-title">{expandedResult.title}</div>
+            <div className="search-modal-preview-title">{plainTextFromMarkdown(expandedResult.title)}</div>
             <div className="search-modal-preview-content">{markdownPreviewLine(expandedResult.snippet)}</div>
             <button
               className="search-modal-go-button"
@@ -249,7 +249,7 @@ export function SearchModal({
             )}
 
             {results.currentStreamResults.length === 0 && results.otherStreamResults.length === 0 && (
-              <div className="search-modal-empty">No results found</div>
+              <div className="search-modal-empty">No results for “{query.trim()}”</div>
             )}
           </div>
         )}
@@ -271,12 +271,13 @@ interface SearchResultItemProps {
 
 function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps) {
   const icon = getResultIcon(result);
-  const title = result.sourceType === 'chunk'
+  const title = plainTextFromMarkdown(result.sourceType === 'chunk'
     ? result.shortTitle ?? result.title
-    : result.title;
-  const fullTitle = result.sourceType === 'chunk'
+    : result.title);
+  const fullTitle = plainTextFromMarkdown(result.sourceType === 'chunk'
     ? result.sourceName ?? result.title
-    : result.title;
+    : result.title);
+  const streamTitle = plainTextFromMarkdown(result.streamTitle);
 
   return (
     <button
@@ -287,8 +288,8 @@ function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps
       <span className="search-result-icon">{icon}</span>
       <div className="search-result-content">
         <div className="search-result-title">
-          {result.streamTitle !== '' && result.sourceType === 'document' && (
-            <span className="search-result-stream">[{result.streamTitle}]</span>
+          {streamTitle !== '' && result.sourceType === 'document' && (
+            <span className="search-result-stream">[{streamTitle}]</span>
           )}
           {title}
         </div>

@@ -25,14 +25,14 @@ actor AutoTitleService {
     private let persistence: PersistenceService
     private let restatementProvider: RestatementProviding
     private let now: () -> Date
-    private let onStreamsChanged: () async -> Void
+    private let onStreamsChanged: (UUID, String) async -> Void
     private var inFlight: Set<UUID> = []
 
     init(
         persistence: PersistenceService,
         restatementProvider: RestatementProviding,
         now: @escaping () -> Date = { Date() },
-        onStreamsChanged: @escaping () async -> Void = {}
+        onStreamsChanged: @escaping (UUID, String) async -> Void = { _, _ in }
     ) {
         self.persistence = persistence
         self.restatementProvider = restatementProvider
@@ -73,7 +73,7 @@ actor AutoTitleService {
                 now: now()
             )
             if changed {
-                await onStreamsChanged()
+                await onStreamsChanged(streamId, title)
             }
         } catch {
             DebugLog.log("[AutoTitleService] Failed to apply title (\(DebugLog.errorSummary(error)))")

@@ -34,7 +34,6 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
         )
 
         configurePanel()
-        setupVisualEffect()
         delegate = self
     }
 
@@ -51,8 +50,8 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
         isReleasedWhenClosed = false
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        isOpaque = false
-        backgroundColor = .clear
+        isOpaque = true
+        backgroundColor = NativePalette.surfaceRaised
         hasShadow = true
         hidesOnDeactivate = false  // We handle dismissal manually
 
@@ -63,19 +62,6 @@ final class QuickPanelWindow: NSPanel, NSWindowDelegate {
         contentView?.wantsLayer = true
         contentView?.layer?.cornerRadius = 14
         contentView?.layer?.masksToBounds = true
-    }
-
-    private func setupVisualEffect() {
-        guard let contentView = contentView else { return }
-
-        // Create visual effect view that fills the content view
-        let visualEffect = NSVisualEffectView(frame: contentView.bounds)
-        visualEffect.material = .hudWindow
-        visualEffect.blendingMode = .behindWindow
-        visualEffect.state = .active
-        visualEffect.autoresizingMask = [.width, .height]
-
-        contentView.addSubview(visualEffect, positioned: .below, relativeTo: nil)
     }
 
     // MARK: - Keyboard Handling

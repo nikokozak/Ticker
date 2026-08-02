@@ -147,11 +147,15 @@ async function enterPrompt(value: string) {
 
 async function openDraftConversation(blockIndex = 0): Promise<HTMLTextAreaElement> {
   const block = editor().querySelectorAll('p')[blockIndex] as HTMLParagraphElement;
-  await vi.waitFor(() => expect(block.classList.contains('conversation-block-active')).toBe(true));
   vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
     left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
     toJSON: () => ({}),
   });
+  await act(async () => {
+    block.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 0 }));
+    await Promise.resolve();
+  });
+  await vi.waitFor(() => expect(block.classList.contains('conversation-block-active')).toBe(true));
   await act(async () => {
     block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 0 }));
     await Promise.resolve();
@@ -172,7 +176,13 @@ async function enterConversationMessage(input: HTMLTextAreaElement, value: strin
   });
 }
 
-async function renderSlashEditor(id: string, withAnchor = true, slashInList = false): Promise<EditorView> {
+async function renderSlashEditor(
+  id: string,
+  withAnchor = true,
+  slashInList = false,
+  onBack: () => void = () => {},
+  onFlushAvailable?: (flush: (() => Promise<boolean>) | null) => void,
+): Promise<EditorView> {
   let liveView: EditorView | null = null;
   const updateState = EditorView.prototype.updateState;
   vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
@@ -206,7 +216,7 @@ async function renderSlashEditor(id: string, withAnchor = true, slashInList = fa
       }),
       markdown: withAnchor ? 'Anchor paragraph.' : '\n\nFollowing paragraph.',
     },
-  });
+  }, { onBack, onFlushAvailable });
   liveView = null;
   if (withAnchor) {
     await selectEditorText('Anchor');
@@ -317,6 +327,7 @@ async function renderStream(next: Stream, options: {
   onClearPendingSource?: () => void;
   onDelete?: () => void;
   onBack?: () => void;
+  onFlushAvailable?: (flush: (() => Promise<boolean>) | null) => void;
 } = {}) {
   const { onDelete = () => {}, onBack = () => {}, ...rest } = options;
   await act(async () => {
@@ -404,13 +415,70 @@ afterEach(async () => {
 });
 
 describe('RichStreamEditor chrome parity', () => {
+  it('autofocuses at the document edge and routes page-margin clicks to the nearest caret', async () => {
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      return updateState.call(this, state);
+    });
+    await renderStream({
+      ...stream,
+      id: 'focus-existing-stream',
+      document: { ...stream.document, streamId: 'focus-existing-stream' },
+    });
+    const existing = liveView!;
+    expect(document.activeElement).toBe(existing.dom);
+    expect(existing.state.selection.eq(TextSelection.atEnd(existing.state.doc))).toBe(true);
+
+    vi.spyOn(existing.dom, 'getBoundingClientRect').mockReturnValue({
+      left: 100, right: 300, top: 100, bottom: 300, width: 200, height: 200, x: 100, y: 100,
+      toJSON: () => ({}),
+    });
+    existing.dom.style.paddingLeft = '32px';
+    existing.dom.style.paddingRight = '32px';
+    const posAtCoords = vi.spyOn(existing, 'posAtCoords').mockImplementation(({ top }) => ({
+      pos: top === 299 ? TextSelection.atEnd(existing.state.doc).head : 1,
+      inside: 0,
+    }));
+    (document.querySelector('.back-button') as HTMLButtonElement).focus();
+    const page = document.querySelector('.stream-content') as HTMLElement;
+    await act(async () => {
+      page.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, clientX: 500, clientY: 500,
+      }));
+    });
+    expect(posAtCoords).toHaveBeenCalledWith({ left: 267, top: 299 });
+    expect(existing.state.selection.eq(TextSelection.atEnd(existing.state.doc))).toBe(true);
+    expect(document.activeElement).toBe(existing.dom);
+
+    liveView = null;
+    await renderStream({
+      ...stream,
+      id: 'empty-focus-stream',
+      document: {
+        ...stream.document,
+        streamId: 'empty-focus-stream',
+        docJSON: docJSON(''),
+        markdown: '',
+      },
+    });
+    const empty = liveView!;
+    expect(document.activeElement).toBe(empty.dom);
+    expect(empty.state.selection.eq(TextSelection.atStart(empty.state.doc))).toBe(true);
+  });
+
   it('uses the quiet header and a contextual formatting menu', async () => {
     expect(document.querySelector('.stream-title-editable')?.textContent).toBe('Test');
     expect(document.querySelector('.stream-title-input')).toBe(null);
     expect(document.querySelector('.stream-xray-button')?.textContent).toBe('');
     expect(document.querySelector('.stream-overflow-menu')).not.toBe(null);
     expect([...document.querySelectorAll('.stream-overflow-panel button')]
-      .map((button) => button.textContent?.trim())).toEqual(['Conversations', 'Delete stream…']);
+      .map((button) => button.textContent?.trim())).toEqual(['Conversations (0)', 'Delete stream…']);
+    expect((document.querySelector('.stream-overflow-action') as HTMLButtonElement).disabled).toBe(true);
     expect(document.querySelector('.delete-button')).toBe(null);
     expect(document.querySelector('.stream-format-bar')).toBe(null);
     expect(document.querySelector('.selection-action-menu')).toBe(null);
@@ -442,6 +510,34 @@ describe('RichStreamEditor chrome parity', () => {
     expect(lastSent()).toMatchObject({
       type: 'updateStreamTitle',
       payload: { id: stream.id, title: 'Renamed' },
+    });
+
+    await act(async () => {
+      (document.querySelector('.stream-title-editable') as HTMLElement).click();
+      await Promise.resolve();
+    });
+    const escapeTitle = document.querySelector('.stream-title-input') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(escapeTitle, 'Never saved');
+      escapeTitle.dispatchEvent(new Event('input', { bubbles: true }));
+      escapeTitle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(document.querySelector('.stream-title-editable')?.textContent).toBe('Test');
+
+    await act(async () => {
+      (document.querySelector('.stream-title-editable') as HTMLElement).click();
+      await Promise.resolve();
+    });
+    const blurredTitle = document.querySelector('.stream-title-input') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(blurredTitle, 'Blurred');
+      blurredTitle.dispatchEvent(new Event('input', { bubbles: true }));
+      blurredTitle.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(lastSent()).toMatchObject({
+      type: 'updateStreamTitle',
+      payload: { id: stream.id, title: 'Blurred' },
     });
 
     const deleteAction = [...document.querySelectorAll('.stream-overflow-panel button')]
@@ -517,6 +613,7 @@ describe('RichStreamEditor inline conversations', () => {
     const composer = await openDraftConversation();
     await vi.waitFor(() => expect(document.activeElement).toBe(composer));
     expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+    await enterConversationMessage(composer, 'Unsaved thought');
 
     await act(async () => {
       composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
@@ -527,6 +624,34 @@ describe('RichStreamEditor inline conversations', () => {
     expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
     expect(editor().querySelector('p')?.classList.contains('conversation-block-anchored')).toBe(false);
     await vi.waitFor(() => expect(document.activeElement).toBe(editor()));
+  });
+
+  it('collapses from the close control, editor Escape, and anchor-rail toggle', async () => {
+    await openDraftConversation();
+    await act(async () => {
+      (document.querySelector('.conversation-close') as HTMLButtonElement).click();
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    });
+    expect(document.querySelector('.conversation-surface')).toBe(null);
+
+    await openDraftConversation();
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', bubbles: true, cancelable: true,
+      }));
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    });
+    expect(document.querySelector('.conversation-surface')).toBe(null);
+
+    await openDraftConversation();
+    const block = editor().querySelector('p') as HTMLParagraphElement;
+    await act(async () => {
+      block.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, clientX: 0, clientY: 14,
+      }));
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    });
+    expect(document.querySelector('.conversation-surface')).toBe(null);
   });
 
   it('round-trips the v2 receipt and completes normally when the proxy emits no tool call', async () => {
@@ -573,7 +698,7 @@ describe('RichStreamEditor inline conversations', () => {
       anchorText: 'Original paragraph.',
     });
     expect(Number(createCall?.[1]?.anchorEnd)).toBeGreaterThan(Number(createCall?.[1]?.anchorStart));
-    expect(editor().querySelector('p')?.classList.contains('conversation-block-anchored')).toBe(true);
+    expect(editor().querySelector('p')?.classList.contains('conversation-block-anchored')).toBe(false);
     expect(document.querySelector('.conversation-stop')).not.toBe(null);
 
     const requestId = String(sent.find((message) => message.type === 'thinkDocument')?.payload?.requestId);
@@ -653,6 +778,16 @@ describe('RichStreamEditor inline conversations', () => {
       expect(save?.[1]?.docJSON).not.toContain('Does this hold?');
       expect(save?.[1]?.docJSON).not.toContain('It streams.');
     });
+  });
+
+  it('resyncs an idle title from the host and exposes rename to the keyboard', async () => {
+    const button = document.querySelector('.stream-title-editable') as HTMLButtonElement;
+    expect(button.tagName).toBe('BUTTON');
+    expect(button.type).toBe('button');
+
+    await renderStream({ ...stream, title: 'Generated title' });
+    expect(document.querySelector('.stream-title-editable')?.textContent).toBe('Generated title');
+    expect(sent.some((message) => message.type === 'updateStreamTitle')).toBe(false);
   });
 
   it('applies update_block only to the live anchor despite adversarial offsets and undoes byte-exactly', async () => {
@@ -1362,6 +1497,72 @@ describe('RichStreamEditor inline conversations', () => {
     expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
   });
 
+  it('restores a session draft after pruning its in-memory stream entry on unmount', async () => {
+    const updatedAt = new Date(0).toISOString();
+    const threadId = 'draft-navigation-thread';
+    const opened: Stream = {
+      ...stream,
+      id: 'draft-navigation-stream',
+      document: { ...stream.document, streamId: 'draft-navigation-stream' },
+      conversationAnchors: [{
+        threadId,
+        anchorStart: 1,
+        anchorEnd: 20,
+        anchorText: 'Original paragraph.',
+        detached: false,
+        ephemeral: false,
+        updatedAt,
+      }],
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'loadStreamThread') return {
+        thread: {
+          threadId,
+          streamId: opened.id,
+          title: 'Draft test',
+          workingText: '',
+          anchorText: 'Original paragraph.',
+          anchorStart: 1,
+          anchorEnd: 20,
+          detached: false,
+          ephemeral: false,
+          revision: 0,
+          createdAt: updatedAt,
+          updatedAt,
+          exchanges: [],
+        },
+      };
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+
+    const openPersisted = async () => {
+      const block = editor().querySelector('p') as HTMLParagraphElement;
+      await vi.waitFor(() => expect(block.classList.contains('conversation-block-anchored')).toBe(true));
+      vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+        left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
+        toJSON: () => ({}),
+      });
+      await act(async () => {
+        block.dispatchEvent(new MouseEvent('click', {
+          bubbles: true, cancelable: true, clientX: 320, clientY: 14,
+        }));
+        await Promise.resolve();
+      });
+      return vi.waitFor(() => document.querySelector('.conversation-composer') as HTMLTextAreaElement);
+    };
+
+    await renderStream(opened, { onBack: () => root!.render(<></>) });
+    await enterConversationMessage(await openPersisted(), 'Draft survives navigation.');
+    await act(async () => {
+      (document.querySelector('.back-button') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.ProseMirror')).toBe(null));
+
+    await renderStream(opened);
+    expect((await openPersisted()).value).toBe('Draft survives navigation.');
+  });
+
   it.each(['collapse', 'editor unmount'] as const)(
     'cancels an in-flight conversation on %s',
     async (exit) => {
@@ -1510,13 +1711,19 @@ describe('RichStreamEditor inline conversations', () => {
       ephemeral: false,
       updatedAt,
     };
+    const detachedStream = {
+      ...stream,
+      id: 'detached-list-stream',
+      conversationAnchors: [record],
+      document: { ...stream.document!, streamId: 'detached-list-stream' },
+    };
     vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
       if (type === 'listConversations') return { conversations: [record] };
       if (type === 'loadStreamThread') {
         return {
           thread: {
             threadId: record.threadId,
-            streamId: stream.id,
+            streamId: detachedStream.id,
             title: 'Detached question',
             workingText: '',
             anchorText: record.anchorText,
@@ -1542,7 +1749,11 @@ describe('RichStreamEditor inline conversations', () => {
       return { revision: 2 };
     }) as typeof bridge.sendAsync);
 
+    await renderStream(detachedStream);
+
     const conversations = document.querySelector('.stream-overflow-action') as HTMLButtonElement;
+    expect(conversations.textContent).toContain('Conversations (1)');
+    expect(conversations.disabled).toBe(false);
     await act(async () => {
       conversations.click();
       await Promise.resolve();
@@ -1553,6 +1764,8 @@ describe('RichStreamEditor inline conversations', () => {
       expect(found?.textContent).toContain('detached');
       return found!;
     });
+    expect(row.closest('.conversation-popover')).not.toBe(null);
+    expect(row.closest('.stream-overflow-panel')).toBe(null);
     await act(async () => {
       (row.querySelector('.conversation-list-open') as HTMLButtonElement).click();
       await Promise.resolve();
@@ -1581,7 +1794,7 @@ describe('RichStreamEditor inline conversations', () => {
     });
     expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([
       'deleteStreamThread',
-      { streamId: stream.id, threadId: record.threadId },
+      { streamId: detachedStream.id, threadId: record.threadId },
     ]);
     expect(document.querySelector('.conversation-list-row')).toBe(null);
   });
@@ -1649,7 +1862,7 @@ describe('RichStreamEditor slash conversations', () => {
     expect(document.querySelector('.conversation-surface')).toBe(null);
   });
 
-  it('/chat carries its draft, stays glyph-free, and deletes its row on collapse', async () => {
+  it('/chat carries its draft, stays glyph-free, and deletes its row only after Discard', async () => {
     const id = 'ephemeral-slash-stream';
     const updatedAt = new Date(0).toISOString();
     vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
@@ -1711,6 +1924,11 @@ describe('RichStreamEditor slash conversations', () => {
         },
       });
       (document.querySelector('.conversation-rail') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.ephemeral-close-discard')).not.toBe(null));
+    await act(async () => {
+      (document.querySelector('.ephemeral-close-discard') as HTMLButtonElement).click();
       await new Promise((resolve) => window.setTimeout(resolve, 160));
     });
     expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([
@@ -1719,6 +1937,98 @@ describe('RichStreamEditor slash conversations', () => {
     ]);
     expect(document.querySelector('.conversation-surface')).toBe(null);
     expect(editor().querySelector('p')?.classList.contains('conversation-block-anchored')).toBe(false);
+  });
+
+  it('Back asks to Keep or Discard an ephemeral chat instead of deleting it silently', async () => {
+    const id = 'ephemeral-back-stream';
+    const updatedAt = new Date(0).toISOString();
+    const onBack = vi.fn();
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'createStreamThread') return {
+        thread: {
+          threadId: 'ephemeral-back-thread', streamId: id, title: String(payload?.title), workingText: '',
+          anchorText: 'Anchor paragraph.', anchorStart: 1, anchorEnd: 18,
+          detached: false, ephemeral: true, revision: 0,
+          createdAt: updatedAt, updatedAt, exchanges: [],
+        },
+      };
+      if (type === 'saveStreamThread') return {
+        conflict: false,
+        thread: {
+          threadId: 'ephemeral-back-thread', streamId: id, title: String(payload?.title), workingText: '',
+          anchorText: 'Anchor paragraph.', anchorStart: 1, anchorEnd: 18,
+          detached: false, ephemeral: false, revision: 1,
+          createdAt: updatedAt, updatedAt, exchanges: [],
+        },
+      };
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    const view = await renderSlashEditor(id, true, false, onBack);
+    await typeSlashCommand(view, '/chat keep this');
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    const composer = await vi.waitFor(() => document.querySelector('.conversation-composer') as HTMLTextAreaElement);
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+      (document.querySelector('.back-button') as HTMLButtonElement).click();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.ephemeral-close-dialog')).not.toBe(null));
+    expect(onBack).not.toHaveBeenCalled();
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'deleteStreamThread')).toBe(false);
+    await act(async () => {
+      (document.querySelector('.ephemeral-close-keep') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'deleteStreamThread')).toBe(false);
+  });
+
+  it('composer Escape owns one ephemeral close decision without wedging later collapse', async () => {
+    const id = 'ephemeral-escape-stream';
+    const updatedAt = new Date(0).toISOString();
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => type === 'createStreamThread'
+      ? {
+        thread: {
+          threadId: 'ephemeral-escape-thread', streamId: id, title: String(payload?.title), workingText: '',
+          anchorText: 'Anchor paragraph.', anchorStart: 1, anchorEnd: 18,
+          detached: false, ephemeral: true, revision: 0,
+          createdAt: updatedAt, updatedAt, exchanges: [],
+        },
+      }
+      : { revision: 2 }) as typeof bridge.sendAsync);
+    const view = await renderSlashEditor(id);
+    await typeSlashCommand(view, '/chat close once');
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    const composer = await vi.waitFor(() => document.querySelector('.conversation-composer') as HTMLTextAreaElement);
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(sent.some((message) => message.type === 'thinkDocument')).toBe(true));
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await act(async () => {
+        composer.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Escape', bubbles: true, cancelable: true,
+        }));
+        await Promise.resolve();
+      });
+      await vi.waitFor(() => expect(document.querySelector('.ephemeral-close-dialog')).not.toBe(null));
+      await act(async () => {
+        (document.querySelector('.delete-confirm-cancel') as HTMLButtonElement).click();
+        await Promise.resolve();
+      });
+      expect(document.querySelector('.conversation-surface')).not.toBe(null);
+    }
   });
 
   it('Keep turns a document-start chat into a normal detached conversation', async () => {
@@ -1827,7 +2137,48 @@ describe('RichStreamEditor slash conversations', () => {
     ))).toBe(false);
   });
 
-  it('switching blocks discards the outgoing ephemeral conversation', async () => {
+  it('reloads an append conflict without sweeping the open ephemeral chat', async () => {
+    const id = 'ephemeral-conflict-stream';
+    const updatedAt = new Date(0).toISOString();
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'createStreamThread') return {
+        thread: {
+          threadId: 'active-ephemeral-thread', streamId: id, title: String(payload?.title), workingText: '',
+          anchorText: 'Anchor paragraph.', anchorStart: 1, anchorEnd: 18,
+          detached: false, ephemeral: true, revision: 0,
+          createdAt: updatedAt, updatedAt, exchanges: [],
+        },
+      };
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    const view = await renderSlashEditor(id);
+    await typeSlashCommand(view, '/chat survive reload');
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    const composer = await vi.waitFor(() => document.querySelector('.conversation-composer') as HTMLTextAreaElement);
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(sent.some((message) => message.type === 'thinkDocument')).toBe(true));
+
+    await act(async () => {
+      bridge.receive({
+        type: 'streamDocumentAppended',
+        payload: { streamId: id, fragment: 'Missed append.', revision: 99, spans: [] },
+      });
+    });
+
+    expect(sent).toContainEqual({
+      type: 'loadStream',
+      payload: { id, activeThreadId: 'active-ephemeral-thread' },
+    });
+  });
+
+  it('switching blocks asks before discarding the outgoing ephemeral conversation', async () => {
     const id = 'switch-ephemeral-stream';
     const updatedAt = new Date(0).toISOString();
     const rows = new Set<string>();
@@ -1876,10 +2227,18 @@ describe('RichStreamEditor slash conversations', () => {
       left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
       toJSON: () => ({}),
     });
-    await act(async () => { view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1))); });
+    await act(async () => {
+      first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 0 }));
+      await Promise.resolve();
+    });
     await vi.waitFor(() => expect(first.classList.contains('conversation-block-active')).toBe(true));
     await act(async () => {
       first.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 0 }));
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.ephemeral-close-dialog')).not.toBe(null));
+    await act(async () => {
+      (document.querySelector('.ephemeral-close-discard') as HTMLButtonElement).click();
       await Promise.resolve();
     });
     await vi.waitFor(() => expect(rows.size).toBe(0));
@@ -1920,6 +2279,11 @@ describe('RichStreamEditor slash conversations', () => {
     await vi.waitFor(() => expect(finishCreate).toBeDefined());
     await act(async () => {
       (document.querySelector('.conversation-rail') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.ephemeral-close-discard')).not.toBe(null));
+    await act(async () => {
+      (document.querySelector('.ephemeral-close-discard') as HTMLButtonElement).click();
       rows.add('late-ephemeral-thread');
       finishCreate?.({
         thread: {
@@ -1935,49 +2299,69 @@ describe('RichStreamEditor slash conversations', () => {
     expect(document.querySelector('.conversation-surface')).toBe(null);
   });
 
-  it('flush reports the document save even when scratch cleanup fails', async () => {
-    const id = 'flush-ephemeral-stream';
-    const updatedAt = new Date(0).toISOString();
-    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
-      if (type === 'createStreamThread') return {
-        thread: {
-          threadId: 'flush-ephemeral-thread', streamId: id, title: String(payload?.title), workingText: '',
-          anchorText: 'Anchor paragraph.', anchorStart: 1, anchorEnd: 18,
-          detached: false, ephemeral: true, revision: 0,
-          createdAt: updatedAt, updatedAt, exchanges: [],
-        },
-      };
-      if (type === 'deleteStreamThread' && payload?.ephemeralOnly === true) {
-        throw new Error('cleanup unavailable');
-      }
-      return { revision: 2 };
-    }) as typeof bridge.sendAsync);
-    const view = await renderSlashEditor(id);
-    await typeSlashCommand(view, '/chat scratch');
-    await act(async () => {
-      editor().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    });
-    const composer = await vi.waitFor(() => {
-      const found = document.querySelector('.conversation-composer') as HTMLTextAreaElement | null;
-      expect(found).not.toBe(null);
-      return found!;
-    });
-    await act(async () => {
-      composer.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
-      }));
-      await Promise.resolve();
-    });
-    await vi.waitFor(() => expect(sent.some((message) => message.type === 'thinkDocument')).toBe(true));
-    await act(async () => {
-      bridge.receive({ type: 'flushEditor', payload: { requestId: 'flush-scratch' } });
-      await Promise.resolve();
-    });
-    await vi.waitFor(() => expect(sent).toContainEqual({
-      type: 'editorFlushed',
-      payload: { requestId: 'flush-scratch', saved: true },
-    }));
-  });
+  it.each(['cancel', 'discard', 'keep'] as const)(
+    'navigation flush prompts before an ephemeral chat and honors %s',
+    async (decision) => {
+      const id = `flush-ephemeral-${decision}`;
+      const updatedAt = new Date(0).toISOString();
+      let flush: (() => Promise<boolean>) | null = null;
+      vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+        if (type === 'createStreamThread') return {
+          thread: {
+            threadId: `flush-thread-${decision}`, streamId: id, title: String(payload?.title), workingText: '',
+            anchorText: 'Anchor paragraph.', anchorStart: 1, anchorEnd: 18,
+            detached: false, ephemeral: true, revision: 0,
+            createdAt: updatedAt, updatedAt, exchanges: [],
+          },
+        };
+        if (type === 'saveStreamThread') return {
+          conflict: false,
+          thread: {
+            threadId: `flush-thread-${decision}`, streamId: id, title: String(payload?.title), workingText: '',
+            anchorText: 'Anchor paragraph.', anchorStart: 1, anchorEnd: 18,
+            detached: false, ephemeral: false, revision: 1,
+            createdAt: updatedAt, updatedAt, exchanges: [],
+          },
+        };
+        if (type === 'deleteStreamThread') return { highlightIds: [] };
+        return { revision: 2 };
+      }) as typeof bridge.sendAsync);
+      const view = await renderSlashEditor(id, true, false, () => {}, (next) => { flush = next; });
+      await typeSlashCommand(view, '/chat scratch');
+      await act(async () => {
+        editor().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      });
+      const composer = await vi.waitFor(() => {
+        const found = document.querySelector('.conversation-composer') as HTMLTextAreaElement | null;
+        expect(found).not.toBe(null);
+        return found!;
+      });
+      await act(async () => {
+        composer.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+        }));
+        await Promise.resolve();
+      });
+      await vi.waitFor(() => expect(sent.some((message) => message.type === 'thinkDocument')).toBe(true));
+      let result: boolean | undefined;
+      await act(async () => {
+        void flush?.().then((saved) => { result = saved; });
+        await Promise.resolve();
+      });
+      await vi.waitFor(() => expect(document.querySelector('.ephemeral-close-dialog')).not.toBe(null));
+      await act(async () => {
+        const selector = decision === 'cancel' ? '.delete-confirm-cancel' : `.ephemeral-close-${decision}`;
+        (document.querySelector(selector) as HTMLButtonElement).click();
+        await Promise.resolve();
+      });
+      await vi.waitFor(() => expect(result).toBe(decision !== 'cancel'));
+      if (decision === 'cancel') expect(document.querySelector('.conversation-surface')).not.toBe(null);
+      expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'deleteStreamThread'))
+        .toBe(decision === 'discard');
+      expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'saveStreamThread'))
+        .toBe(decision === 'keep');
+    },
+  );
 
   it('promotion keeps an ephemeral chat before inserting', async () => {
     const id = 'kept-slash-stream';
@@ -2049,7 +2433,7 @@ describe('RichStreamEditor slash conversations', () => {
     expect(document.querySelector('.conversation-keep')).toBe(null);
     await vi.waitFor(() => expect(
       editor().querySelector('p')?.classList.contains('conversation-block-anchored'),
-    ).toBe(true));
+    ).toBe(false));
   });
 
   it('/research selects by keyboard and renders its persisted research receipt', async () => {
@@ -2903,7 +3287,7 @@ describe('RichStreamEditor images', () => {
     const saves = vi.mocked(bridge.sendAsync).mock.calls
       .filter(([type]) => type === 'saveRichStreamDocument');
     expect(saves[saves.length - 1]?.[1]?.markdown)
-      .toBe('![shot](ticker-asset://stream-1/shot.png){width=320}Original paragraph.');
+      .toBe('Original paragraph.![shot](ticker-asset://stream-1/shot.png){width=320}');
 
     await act(async () => {
       editor().dispatchEvent(new KeyboardEvent('keydown', {

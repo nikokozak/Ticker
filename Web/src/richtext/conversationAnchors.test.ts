@@ -16,6 +16,7 @@ import {
   hasConversationAnchorTextDrifted,
   refreshConversationViewport,
   setConversationAnchors,
+  setConversationHoveredBlock,
   setConversationSurface,
   setConversationVisibleRanges,
   type ConversationAnchorFieldOptions,
@@ -203,29 +204,79 @@ it('renders one passive right glyph class and the current-block left line class'
   const anchor = fullBlockConversationAnchor(ed.view.state.doc, 1, 'one')!;
   ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor, { ...anchor, threadId: 'two' }]));
   ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{ from: anchor.from, to: anchor.to }]));
+  ed.view.dispatch(setConversationHoveredBlock(ed.view.state.tr, 0));
 
   const block = ed.view.dom.querySelector('p');
   expect(block?.classList.contains('conversation-block-active')).toBe(true);
   expect(block?.classList.contains('conversation-block-anchored')).toBe(true);
 });
 
-it('routes gutter clicks and mounts only one caret-excluded block widget', () => {
+it('hides the glyph on the open block and suppresses the rail on an empty block', () => {
+  const ed = open('Visible block');
+  const anchor = fullBlockConversationAnchor(ed.view.state.doc, 1, 'one')!;
+  ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor]));
+  ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{ from: anchor.from, to: anchor.to }]));
+  ed.view.dispatch(setConversationSurface(ed.view.state.tr, { key: 'thread:one', anchor }));
+  ed.view.dispatch(setConversationHoveredBlock(ed.view.state.tr, 0));
+
+  const block = ed.view.dom.querySelector('p');
+  expect(block?.classList.contains('conversation-block-active')).toBe(true);
+  expect(block?.classList.contains('conversation-block-anchored')).toBe(false);
+
+  ed.destroy();
+  editor = null;
+  const empty = open('');
+  empty.view.dispatch(setConversationVisibleRanges(empty.view.state.tr, [{
+    from: 0,
+    to: empty.view.state.doc.content.size,
+  }]));
+  expect(empty.view.dom.querySelector('p')?.classList.contains('conversation-block-active')).toBe(false);
+});
+
+it('keeps the conversation rail hover-only when the caret moves', () => {
+  const ed = open('First\n\nSecond');
+  ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{
+    from: 0,
+    to: ed.view.state.doc.content.size,
+  }]));
+  ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.atEnd(ed.view.state.doc)));
+
+  expect(ed.view.dom.querySelector('.conversation-block-active')).toBe(null);
+});
+
+it('dispatches rail and glyph clicks from ProseMirror padding across their 24px bands', () => {
   const onCreate = vi.fn();
   const onOpen = vi.fn();
   const ed = open('Visible block', undefined, { onCreate, onOpen });
   const anchor = fullBlockConversationAnchor(ed.view.state.doc, 1, 'one')!;
   ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor]));
   ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{ from: anchor.from, to: anchor.to }]));
-  const block = ed.view.dom.querySelector('p')!;
-  vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
-    left: 10, right: 110, top: 0, bottom: 28, width: 100, height: 28, x: 10, y: 0,
+  ed.view.dom.style.paddingLeft = '32px';
+  ed.view.dom.style.paddingRight = '32px';
+  vi.spyOn(ed.view.dom, 'getBoundingClientRect').mockReturnValue({
+    left: 0, right: 160, top: 0, bottom: 28, width: 160, height: 28, x: 0, y: 0,
     toJSON: () => ({}),
   });
+  const posAtCoords = vi.spyOn(ed.view, 'posAtCoords').mockImplementation(({ left }) => (
+    left >= 32 && left <= 128 ? { pos: 1, inside: 0 } : null
+  ));
+  expect(ed.view.posAtCoords({ left: 8, top: 14 })).toBeNull();
+  posAtCoords.mockClear();
 
-  block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 0 }));
+  ed.view.dom.dispatchEvent(new MouseEvent('click', {
+    bubbles: true, cancelable: true, clientX: 8, clientY: 14,
+  }));
+  expect(posAtCoords).toHaveBeenLastCalledWith({ left: 33, top: 14 });
   expect(onCreate).toHaveBeenCalledWith({ ...anchor, threadId: '' });
-  block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 120 }));
+  ed.view.dom.dispatchEvent(new MouseEvent('click', {
+    bubbles: true, cancelable: true, clientX: 152, clientY: 14,
+  }));
+  expect(posAtCoords).toHaveBeenLastCalledWith({ left: 127, top: 14 });
   expect(onOpen).toHaveBeenCalledWith('one');
+  ed.view.dom.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 7, clientY: 14 }));
+  ed.view.dom.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 153, clientY: 14 }));
+  expect(onCreate).toHaveBeenCalledOnce();
+  expect(onOpen).toHaveBeenCalledOnce();
 
   const before = ed.getDocumentJSON();
   ed.view.dispatch(setConversationSurface(ed.view.state.tr, { key: 'first', anchor }));
@@ -235,6 +286,49 @@ it('routes gutter clicks and mounts only one caret-excluded block widget', () =>
   expect(widgets[0].dataset.conversationWidget).toBe('second');
   expect(widgets[0].contentEditable).toBe('false');
   expect(ed.getDocumentJSON()).toBe(before);
+});
+
+it('clamps padding hover into the ProseMirror content box before resolving its block', () => {
+  const ed = open('First block\n\nSecond block');
+  const blocks = ed.view.dom.querySelectorAll('p');
+  ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{
+    from: 0,
+    to: ed.view.state.doc.content.size,
+  }]));
+  ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(
+    ed.view.state.doc,
+    find(ed, 'Second').from,
+  )));
+  expect(blocks[0].classList.contains('conversation-block-active')).toBe(false);
+  ed.view.dom.style.paddingLeft = '32px';
+  ed.view.dom.style.paddingRight = '32px';
+  vi.spyOn(ed.view.dom, 'getBoundingClientRect').mockReturnValue({
+    left: 0, right: 160, top: 0, bottom: 56, width: 160, height: 56, x: 0, y: 0,
+    toJSON: () => ({}),
+  });
+  const posAtCoords = vi.spyOn(ed.view, 'posAtCoords').mockImplementation(({ left }) => (
+    left >= 32 && left <= 128 ? { pos: 1, inside: 0 } : null
+  ));
+  const callbacks: FrameRequestCallback[] = [];
+  const requestAnimationFrame = window.requestAnimationFrame;
+  window.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+    callbacks.push(callback);
+    return callbacks.length;
+  });
+
+  try {
+    ed.view.dom.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true, clientX: 8, clientY: 14,
+    }));
+    callbacks.shift()!(0);
+
+    expect(posAtCoords).toHaveBeenCalledWith({ left: 33, top: 14 });
+    expect(blocks[0].classList.contains('conversation-block-active')).toBe(true);
+    expect(ed.view.dom.classList.contains('conversation-gutter-actionable')).toBe(true);
+    expect(ed.view.dom.title).toBe('Start a conversation about this block');
+  } finally {
+    window.requestAnimationFrame = requestAnimationFrame;
+  }
 });
 
 it('moves an ArrowDown caret from the anchored block to the block below the widget', () => {

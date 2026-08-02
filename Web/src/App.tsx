@@ -21,6 +21,7 @@ import { useToastStore } from './store/toastStore';
 import { debugError, debugLog } from './utils/debug';
 import { deserializeProvenanceSpans } from './utils/provenanceSpans';
 import { formatRelativeTime } from './utils/relativeTime';
+import { plainTextFromMarkdown } from './utils/markdownPreview';
 import {
   editorFontStack,
   normalizeEditorTypography,
@@ -385,6 +386,13 @@ export function App() {
           }
           break;
         }
+        case 'streamTitleUpdated': {
+          const id = message.payload?.id;
+          const title = message.payload?.title;
+          if (typeof id !== 'string' || typeof title !== 'string') break;
+          setCurrentStream((current) => current?.id === id ? { ...current, title } : current);
+          break;
+        }
         case 'streamsChanged':
           // Quick Panel created a new stream - reload the list
           debugLog('[App] Streams changed, reloading list');
@@ -649,6 +657,7 @@ interface StreamListViewProps {
 
 function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSettings, onRetry }: StreamListViewProps) {
   const [scrolled, setScrolled] = useState(false);
+  const [hoveredStreamId, setHoveredStreamId] = useState<string | null>(null);
 
   useEffect(() => {
     const update = () => setScrolled(window.scrollY > 0);
@@ -673,7 +682,7 @@ function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSetti
           <button onClick={onCreate} className="primary-button">New Stream</button>
         </div>
       </header>
-      <div className="stream-list-content">
+      <div className="stream-list-content" onPointerLeave={() => setHoveredStreamId(null)}>
         {isLoading ? (
           <div className="loading-state">
             <Spinner className="loading-spinner" />
@@ -697,8 +706,12 @@ function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSetti
           sortedStreams.map((stream) => (
             <button
               key={stream.id}
-              className="stream-item"
-              onClick={() => onSelect(stream.id)}
+              className={`stream-item ${hoveredStreamId === stream.id ? 'stream-item--hovered' : ''}`}
+              onPointerMove={() => setHoveredStreamId(stream.id)}
+              onClick={() => {
+                setHoveredStreamId(null);
+                onSelect(stream.id);
+              }}
             >
               <span className="stream-title-row">
                 <span className="stream-title">{stream.title}</span>
@@ -708,9 +721,7 @@ function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSetti
                   </span>
                 )}
               </span>
-              {stream.previewLine && (
-                <span className="stream-preview">{stream.previewLine}</span>
-              )}
+              <span className="stream-preview">{plainTextFromMarkdown(stream.previewLine ?? '') || 'Empty'}</span>
               <span className="stream-meta">
                 {formatRelativeTime(stream.updatedAt)}
               </span>

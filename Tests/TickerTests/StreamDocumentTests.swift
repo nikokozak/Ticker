@@ -96,33 +96,6 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         """)
     }
 
-    func test_buildFragment_usesClipboardTextAsBlockquoteContext() throws {
-        let context = QuickPanelContext(
-            selectedText: nil,
-            activeApp: "Terminal",
-            windowTitle: "Shell",
-            panelPosition: CGPoint(x: 0, y: 0),
-            clipboardImage: nil,
-            clipboardText: " Copied line "
-        )
-
-        let fragment = try QuickPanelMarkdownFormatter.buildFragment(
-            context: context,
-            inputText: ""
-        ) { _ in
-            XCTFail("Image formatter should not run for text-only context")
-            return ""
-        }
-
-        XCTAssertEqual(context.contextText, "Copied line")
-        XCTAssertTrue(context.isClipboardTextContext)
-        XCTAssertEqual(fragment, """
-        > Copied line
-
-        *— Terminal — Shell*
-        """)
-    }
-
     func test_captureSpansCoverCapturedTextAndAttributionOnly() throws {
         let streamId = UUID()
         let context = QuickPanelContext(
@@ -157,53 +130,6 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(spans[0].textHash, FNV1a.hash(captured))
     }
 
-    func test_recentClipboardTextCandidateReturnsRecentPlainText() throws {
-        let pasteboard = makeTrackedPasteboard()
-        defer { pasteboard.clearContents() }
-
-        writeText(" Copied text ", to: pasteboard)
-
-        XCTAssertEqual(
-            SelectionReaderService.recentClipboardTextCandidate(pasteboard: pasteboard),
-            "Copied text"
-        )
-    }
-
-    func test_recentClipboardTextCandidateRejectsStaleEmptyAndPrivateText() throws {
-        let stalePasteboard = makeTrackedPasteboard()
-        defer { stalePasteboard.clearContents() }
-        writeText("Stale text", to: stalePasteboard)
-        ClipboardService.syncChangeCount(pasteboard: stalePasteboard)
-        XCTAssertNil(SelectionReaderService.recentClipboardTextCandidate(pasteboard: stalePasteboard))
-
-        let emptyPasteboard = makeTrackedPasteboard()
-        defer { emptyPasteboard.clearContents() }
-        writeText(" \n\t ", to: emptyPasteboard)
-        XCTAssertNil(SelectionReaderService.recentClipboardTextCandidate(pasteboard: emptyPasteboard))
-
-        let concealedPasteboard = makeTrackedPasteboard()
-        defer { concealedPasteboard.clearContents() }
-        writeText("Password", to: concealedPasteboard, extraTypes: [ClipboardService.concealedType])
-        XCTAssertNil(SelectionReaderService.recentClipboardTextCandidate(pasteboard: concealedPasteboard))
-
-        let transientPasteboard = makeTrackedPasteboard()
-        defer { transientPasteboard.clearContents() }
-        writeText("Transient", to: transientPasteboard, extraTypes: [ClipboardService.transientType])
-        XCTAssertNil(SelectionReaderService.recentClipboardTextCandidate(pasteboard: transientPasteboard))
-    }
-
-    func test_recentClipboardTextCandidateTruncatesLongText() throws {
-        let pasteboard = makeTrackedPasteboard()
-        defer { pasteboard.clearContents() }
-        writeText(String(repeating: "x", count: 10_005), to: pasteboard)
-
-        let result = try XCTUnwrap(SelectionReaderService.recentClipboardTextCandidate(pasteboard: pasteboard))
-
-        XCTAssertEqual(result.count, 10_001)
-        XCTAssertEqual(result.last, "…")
-        XCTAssertEqual(result.dropLast().count, 10_000)
-    }
-
     func test_clipboardSyncChangeCountIgnoresSyntheticCopyRestoreBumps() throws {
         let pasteboard = makeTrackedPasteboard()
         defer { pasteboard.clearContents() }
@@ -219,96 +145,17 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         XCTAssertTrue(ClipboardService.wasRecentlyModified(threshold: 15, pasteboard: pasteboard))
     }
 
-    func test_buildContextPrefersSelectionOverClipboardText() {
-        let context = SelectionReaderService().buildContext(
-            selectedText: " Selected text ",
-            clipboardTextCandidate: "Copied text",
-            readSelectionFromAX: false
-        )
+    func test_quickPanelContextAttachesRecentImageOnlyWithoutTextSelection() {
+        let image = Data("image".utf8)
+        let service = SelectionReaderService(recentClipboardImage: { image })
 
-        XCTAssertEqual(context.contextText, "Selected text")
-        XCTAssertNil(context.clipboardText)
-        XCTAssertTrue(context.hasSelection)
-        XCTAssertFalse(context.isClipboardTextContext)
-    }
-
-    @MainActor
-    func test_clipboardTextDismissSuppressionSkipsSameChangeCountOnly() {
-        let context = QuickPanelContext(
-            selectedText: nil,
-            activeApp: "Terminal",
-            windowTitle: nil,
-            panelPosition: CGPoint(x: 0, y: 0),
-            clipboardImage: nil,
-            clipboardText: "Copied text"
+        XCTAssertEqual(
+            service.buildContext(selectedText: nil, readSelectionFromAX: false).clipboardImage,
+            image
         )
-        var suppressedChangeCount: Int? = 7
-
-        let sameCopy = QuickPanelManager.contextRespectingDismissedClipboardText(
-            context,
-            suppressedChangeCount: &suppressedChangeCount,
-            currentClipboardChangeCount: 7
+        XCTAssertNil(
+            service.buildContext(selectedText: "Selected", readSelectionFromAX: false).clipboardImage
         )
-        XCTAssertNil(sameCopy.clipboardText)
-        XCTAssertEqual(suppressedChangeCount, 7)
-
-        let newCopy = QuickPanelManager.contextRespectingDismissedClipboardText(
-            context,
-            suppressedChangeCount: &suppressedChangeCount,
-            currentClipboardChangeCount: 8
-        )
-        XCTAssertEqual(newCopy.clipboardText, "Copied text")
-        XCTAssertNil(suppressedChangeCount)
-    }
-
-    @MainActor
-    func test_clipboardTextContextExpiresOnlyWhileIdle() {
-        let clipboardContext = QuickPanelContext(
-            selectedText: nil,
-            activeApp: "Terminal",
-            windowTitle: nil,
-            panelPosition: CGPoint(x: 0, y: 0),
-            clipboardImage: nil,
-            clipboardText: "Copied text"
-        )
-        let selectionContext = QuickPanelContext(
-            selectedText: "Selected text",
-            activeApp: "Terminal",
-            windowTitle: nil,
-            panelPosition: CGPoint(x: 0, y: 0),
-            clipboardImage: nil
-        )
-
-        XCTAssertTrue(QuickPanelManager.shouldExpireClipboardTextContext(
-            clipboardContext,
-            inputText: "",
-            isLoading: false,
-            isStreaming: false
-        ))
-        XCTAssertFalse(QuickPanelManager.shouldExpireClipboardTextContext(
-            selectionContext,
-            inputText: "",
-            isLoading: false,
-            isStreaming: false
-        ))
-        XCTAssertFalse(QuickPanelManager.shouldExpireClipboardTextContext(
-            clipboardContext,
-            inputText: "Draft",
-            isLoading: false,
-            isStreaming: false
-        ))
-        XCTAssertFalse(QuickPanelManager.shouldExpireClipboardTextContext(
-            clipboardContext,
-            inputText: "",
-            isLoading: true,
-            isStreaming: false
-        ))
-        XCTAssertFalse(QuickPanelManager.shouldExpireClipboardTextContext(
-            clipboardContext,
-            inputText: "",
-            isLoading: false,
-            isStreaming: true
-        ))
     }
 
     @MainActor
@@ -1046,7 +893,7 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 restatementProvider: provider,
                 now: { Date(timeIntervalSince1970: 1_000) },
-                onStreamsChanged: { await notifications.increment() }
+                onStreamsChanged: { _, _ in await notifications.increment() }
             )
             let markdown = "Short note"
 
@@ -2592,8 +2439,10 @@ final class StreamDocumentTests: XCTestCase {
             let stream = Stream(title: "Crash recovery")
             try service.saveStream(stream)
             let scratch = StreamThread(streamId: stream.id, ephemeral: true)
+            let activeScratch = StreamThread(streamId: stream.id, ephemeral: true)
             let kept = StreamThread(streamId: stream.id)
             try service.createStreamThread(scratch)
+            try service.createStreamThread(activeScratch)
             try service.createStreamThread(kept)
             try service.saveExchange(AIExchange(
                 requestId: "scratch-exchange",
@@ -2603,10 +2452,29 @@ final class StreamDocumentTests: XCTestCase {
                 userInput: "Scratch",
                 responseRaw: "Temporary"
             ))
+            try service.saveExchange(AIExchange(
+                requestId: "active-scratch-exchange",
+                streamId: stream.id,
+                threadId: activeScratch.threadId,
+                verb: "thread",
+                userInput: "Still open",
+                responseRaw: "Keep temporarily"
+            ))
 
-            XCTAssertEqual(try service.deleteEphemeralThreads(streamId: stream.id), 1)
+            XCTAssertEqual(
+                try service.deleteEphemeralThreads(
+                    streamId: stream.id,
+                    excluding: activeScratch.threadId
+                ),
+                1
+            )
             XCTAssertNil(try service.loadStreamThread(threadId: scratch.threadId, streamId: stream.id))
             XCTAssertNil(try service.loadExchange(requestId: "scratch-exchange"))
+            XCTAssertNotNil(try service.loadStreamThread(
+                threadId: activeScratch.threadId,
+                streamId: stream.id
+            ))
+            XCTAssertNotNil(try service.loadExchange(requestId: "active-scratch-exchange"))
             XCTAssertNotNil(try service.loadStreamThread(threadId: kept.threadId, streamId: stream.id))
         }
     }
@@ -7050,6 +6918,28 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertTrue(results.otherStreamResults.contains {
                 $0.sourceType.rawValue == "chunk" && $0.sourceName == "Global Manual.pdf"
             })
+        }
+    }
+
+    func test_hybridSearchFindsStreamTitleSubstrings() async throws {
+        try await withTempPersistenceService { service in
+            let first = Stream(title: "Sensor calibration")
+            let second = Stream(title: "Field sensor notes")
+            try service.saveStream(first)
+            try service.saveStream(second)
+            try service.saveStreamDocument(streamId: first.id, markdown: "Unrelated body one.")
+            try service.saveStreamDocument(streamId: second.id, markdown: "Unrelated body two.")
+
+            let results = try await SearchService(
+                persistence: service,
+                retrieval: RetrievalService(persistence: service)
+            ).hybridSearch(query: "sensor", currentStreamId: nil, limit: 5)
+
+            XCTAssertTrue(results.currentStreamResults.isEmpty)
+            XCTAssertEqual(Set(results.otherStreamResults.map(\.streamId)), Set([
+                first.id.uuidString,
+                second.id.uuidString
+            ]))
         }
     }
 
