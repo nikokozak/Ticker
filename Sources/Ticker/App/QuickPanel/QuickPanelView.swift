@@ -94,7 +94,7 @@ struct QuickPanelView: View {
         .padding(Spacing.lg)
         .frame(width: QuickPanelWindow.defaultWidth, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
-        .background(QuickPanelStyle.surfaceRaised.opacity(0.96))
+        .background(QuickPanelStyle.surfaceRaised)
         .background(
             GeometryReader { geometry in
                 Color.clear
@@ -188,7 +188,7 @@ struct QuickPanelView: View {
             if let app = context.activeApp {
                 Text(app)
                     .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-                    .foregroundColor(QuickPanelStyle.textMuted.opacity(0.7))
+                    .foregroundColor(QuickPanelStyle.textMuted)
                     .padding(.horizontal, Spacing.xs)
                     .padding(.vertical, QuickPanelStyle.badgeVerticalPadding)
                     .background(QuickPanelStyle.surfaceMuted)
@@ -207,7 +207,7 @@ struct QuickPanelView: View {
         Button(action: { manager.clearContext() }) {
             Image(systemName: "xmark")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .semibold))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.6))
+                .foregroundColor(QuickPanelStyle.textMuted)
         }
         .buttonStyle(.plain)
         .help("Clear context")
@@ -295,7 +295,7 @@ struct QuickPanelView: View {
         }) {
             Image(systemName: "xmark.circle")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, weight: .semibold))
-                .foregroundColor(QuickPanelStyle.textMuted.opacity(0.72))
+                .foregroundColor(QuickPanelStyle.textMuted)
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
@@ -317,14 +317,14 @@ struct QuickPanelView: View {
                         .foregroundColor(QuickPanelStyle.textMuted)
                     Text("Save to")
                         .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize))
-                        .foregroundColor(QuickPanelStyle.textSubtle)
+                        .foregroundColor(QuickPanelStyle.textMuted)
                     Text(selectedStreamTitle)
                         .font(QuickPanelStyle.font(size: QuickPanelStyle.captionSize, weight: .medium))
                         .foregroundColor(QuickPanelStyle.text)
                         .lineLimit(1)
                     Image(systemName: isPickerExpanded ? "chevron.up" : "chevron.down")
                         .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .semibold))
-                        .foregroundColor(QuickPanelStyle.textSubtle)
+                        .foregroundColor(QuickPanelStyle.textMuted)
                 }
                 .padding(.horizontal, Spacing.sm)
                 .padding(.vertical, Spacing.xs)
@@ -467,7 +467,7 @@ struct QuickPanelView: View {
                 // Role indicator
                 Text(roleLabel)
                     .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .medium))
-                    .foregroundColor(QuickPanelStyle.textSubtle)
+                    .foregroundColor(QuickPanelStyle.textMuted)
 
                 Text(verbatim: turn.content)
                     .font(QuickPanelStyle.font(size: QuickPanelStyle.bodySize))
@@ -492,7 +492,7 @@ struct QuickPanelView: View {
         }) {
             Image(systemName: isSaved ? "checkmark" : "tray.and.arrow.down")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.iconSize, weight: .semibold))
-                .foregroundColor(isSaved ? QuickPanelStyle.success : QuickPanelStyle.textMuted.opacity(0.64))
+                .foregroundColor(isSaved ? QuickPanelStyle.success : QuickPanelStyle.textMuted)
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
@@ -507,7 +507,7 @@ struct QuickPanelView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("AI")
                 .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize, weight: .medium))
-                .foregroundColor(QuickPanelStyle.textSubtle)
+                .foregroundColor(QuickPanelStyle.textMuted)
 
             if manager.ephemeralConversation.currentResponse.isEmpty {
                 // Typing indicator when waiting for first chunk
@@ -606,10 +606,10 @@ struct QuickPanelView: View {
                     Text("⌘↵  Save + develop")
                     Spacer(minLength: 0)
                 }
-                Text("⌥↵  Chat here (not saved) · Esc closes, draft kept")
+                Text("⌘V  Attach clipboard · ⌥↵  Chat here (not saved) · Esc closes, draft kept")
             }
             .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
-            .foregroundColor(QuickPanelStyle.textMuted.opacity(0.78))
+            .foregroundColor(QuickPanelStyle.textMuted)
             .lineLimit(1)
             .padding(.horizontal, Spacing.xs)
         }
@@ -914,7 +914,7 @@ class QuickPanelTextView: NSTextView {
 
         let placeholderAttributes: [NSAttributedString.Key: Any] = [
             .font: font ?? NSFont.systemFont(ofSize: QuickPanelStyle.inputSize),
-            .foregroundColor: NSColor(QuickPanelStyle.textSubtle)
+            .foregroundColor: NSColor(QuickPanelStyle.textMuted)
         ]
         let origin = NSPoint(
             x: textContainerInset.width + (textContainer?.lineFragmentPadding ?? 0),

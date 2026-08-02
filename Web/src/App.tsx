@@ -21,6 +21,7 @@ import { useToastStore } from './store/toastStore';
 import { debugError, debugLog } from './utils/debug';
 import { deserializeProvenanceSpans } from './utils/provenanceSpans';
 import { formatRelativeTime } from './utils/relativeTime';
+import { plainTextFromMarkdown } from './utils/markdownPreview';
 import {
   editorFontStack,
   normalizeEditorTypography,
@@ -708,9 +709,7 @@ function StreamListView({ streams, isLoading, error, onSelect, onCreate, onSetti
                   </span>
                 )}
               </span>
-              {stream.previewLine && (
-                <span className="stream-preview">{stream.previewLine}</span>
-              )}
+              <span className="stream-preview">{plainTextFromMarkdown(stream.previewLine ?? '') || 'Empty'}</span>
               <span className="stream-meta">
                 {formatRelativeTime(stream.updatedAt)}
               </span>

@@ -168,6 +168,24 @@ describe('App stream loading', () => {
     expect(document.querySelector('.stream-list-header')?.classList.contains('stream-list-header--scrolled')).toBe(true);
   });
 
+  it('renders plain-text previews and labels an empty stream', async () => {
+    await boot();
+    await act(async () => {
+      bridge.receive({
+        type: 'streamsLoaded',
+        payload: {
+          streams: [
+            { ...summaries[0], previewLine: '<u>Components</u> with **bold** [docs](https://example.com)' },
+            { ...summaries[1], previewLine: '' },
+          ],
+        },
+      });
+    });
+
+    const previews = [...document.querySelectorAll('.stream-preview')].map((node) => node.textContent);
+    expect(previews).toEqual(['Components with bold docs', 'Empty']);
+  });
+
   it('keeps the list recoverable while a stream load is pending', async () => {
     await boot();
     await selectStream();

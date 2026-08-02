@@ -86,6 +86,15 @@ function type(ed: RichTextEditor, text: string): void {
 }
 
 describe('the document survives the editor', () => {
+  it('shows the empty-document placeholder until the user types', () => {
+    const ed = open('');
+    const block = ed.view.dom.querySelector('p')!;
+    expect(block.dataset.placeholder).toBe('Start writing…');
+
+    type(ed, 'Hello');
+    expect(ed.view.dom.querySelector('[data-placeholder]')).toBe(null);
+  });
+
   it('opens markdown and gives it back unchanged', () => {
     const source = '# Title\n\nSome **bold** and <u>underlined</u> text.\n\n* one\n* two';
     expect(open(source).getMarkdownProjection()).toBe(source);

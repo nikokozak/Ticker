@@ -209,6 +209,27 @@ it('renders one passive right glyph class and the current-block left line class'
   expect(block?.classList.contains('conversation-block-anchored')).toBe(true);
 });
 
+it('hides the glyph on the open block and suppresses the rail on an empty block', () => {
+  const ed = open('Visible block');
+  const anchor = fullBlockConversationAnchor(ed.view.state.doc, 1, 'one')!;
+  ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor]));
+  ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{ from: anchor.from, to: anchor.to }]));
+  ed.view.dispatch(setConversationSurface(ed.view.state.tr, { key: 'thread:one', anchor }));
+
+  const block = ed.view.dom.querySelector('p');
+  expect(block?.classList.contains('conversation-block-active')).toBe(true);
+  expect(block?.classList.contains('conversation-block-anchored')).toBe(false);
+
+  ed.destroy();
+  editor = null;
+  const empty = open('');
+  empty.view.dispatch(setConversationVisibleRanges(empty.view.state.tr, [{
+    from: 0,
+    to: empty.view.state.doc.content.size,
+  }]));
+  expect(empty.view.dom.querySelector('p')?.classList.contains('conversation-block-active')).toBe(false);
+});
+
 it('dispatches rail and glyph clicks from ProseMirror padding across their 24px bands', () => {
   const onCreate = vi.fn();
   const onOpen = vi.fn();

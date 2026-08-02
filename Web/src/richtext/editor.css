@@ -99,11 +99,27 @@
   width: 100%;
 }
 
+.richtext-editor .ProseMirror .richtext-empty-block {
+  position: relative;
+}
+
+.richtext-editor .ProseMirror .richtext-empty-block::before {
+  position: absolute;
+  color: var(--text-faint);
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
+
 .conversation-surface {
   position: relative;
-  margin: 0 0 var(--space-5) 28px;
-  padding-left: var(--space-4);
-  color: var(--text);
+  box-sizing: border-box;
+  max-width: 56ch;
+  margin: 0 0 var(--space-5) calc(var(--space-5) + var(--space-1));
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  color: var(--text-muted);
   font-family: var(--editor-font-family);
   font-size: var(--conversation-body);
   line-height: var(--conversation-line-height);
@@ -143,6 +159,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  max-height: 45vh;
+  padding-right: var(--space-2);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .conversation-header {
@@ -319,9 +339,14 @@
 }
 
 .conversation-composer-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
+  padding-block: var(--space-2);
+  background: var(--surface);
 }
 
 .conversation-pins {

@@ -210,6 +210,15 @@ interface ExpandedConversation {
   profile?: 'research';
 }
 
+type EphemeralCloseDecision = 'keep' | 'discard' | 'cancel';
+
+const conversationComposerDrafts = new Map<string, string>();
+
+function conversationComposerDraftKey(streamId: string, key: string, state?: ConversationLiveState) {
+  const threadId = state?.thread?.threadId ?? (key.startsWith('thread:') ? key.slice(7) : null);
+  return threadId ? `${streamId}:${threadId}` : null;
+}
+
 type SlashCommand = 'chat' | 'research';
 
 interface SlashMenuState {
@@ -303,6 +312,7 @@ export function RichStreamEditor({
   const conversationCreatePromisesRef = useRef(new Map<string, Promise<StreamThreadJSON>>());
   const conversationKeepPromisesRef = useRef(new Map<string, Promise<boolean>>());
   const closingConversationKeysRef = useRef(new Set<string>());
+  const ephemeralCloseResolverRef = useRef<((decision: EphemeralCloseDecision) => void) | null>(null);
   const slashArmedRef = useRef(false);
   const slashMenuRef = useRef<SlashMenuState | null>(null);
 
@@ -346,6 +356,7 @@ export function RichStreamEditor({
   const [conversationListLoading, setConversationListLoading] = useState(false);
   const [conversationListError, setConversationListError] = useState(false);
   const [conversationPendingDelete, setConversationPendingDelete] = useState<ConversationAnchorJSON | null>(null);
+  const [ephemeralClosePrompt, setEphemeralClosePrompt] = useState<ExpandedConversation | null>(null);
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
   slashMenuRef.current = slashMenu;
   const addToast = useToastStore((state) => state.addToast);
@@ -528,18 +539,26 @@ export function RichStreamEditor({
     const current = conversationLiveStatesRef.current;
     const value = updater(current[key] ?? initialConversationLiveState());
     if (value === current[key]) return;
+    const draftKey = conversationComposerDraftKey(stream.id, key, value);
+    if (draftKey) {
+      if (value.composer) conversationComposerDrafts.set(draftKey, value.composer);
+      else conversationComposerDrafts.delete(draftKey);
+    }
     const next = { ...current, [key]: value };
     conversationLiveStatesRef.current = next;
     setConversationLiveStates(next);
-  }, []);
+  }, [stream.id]);
 
   const ensureConversationLiveState = useCallback((key: string, threadId?: string) => {
     const current = conversationLiveStatesRef.current;
     if (current[key]) return;
-    const next = { ...current, [key]: initialConversationLiveState(threadId) };
+    const initial = initialConversationLiveState(threadId);
+    const draftKey = conversationComposerDraftKey(stream.id, key, initial);
+    if (draftKey) initial.composer = conversationComposerDrafts.get(draftKey) ?? '';
+    const next = { ...current, [key]: initial };
     conversationLiveStatesRef.current = next;
     setConversationLiveStates(next);
-  }, []);
+  }, [stream.id]);
 
   const cancelConversationRequest = useCallback((key: string, updateUI = true) => {
     const current = conversationLiveStatesRef.current[key];
@@ -662,6 +681,20 @@ export function RichStreamEditor({
     return expanded?.ephemeral ? discardEphemeralConversation(expanded.key) : true;
   }, [discardEphemeralConversation]);
 
+  const requestEphemeralCloseDecision = useCallback((expanded: ExpandedConversation) => (
+    new Promise<EphemeralCloseDecision>((resolve) => {
+      ephemeralCloseResolverRef.current = resolve;
+      setEphemeralClosePrompt(expanded);
+    })
+  ), []);
+
+  const resolveEphemeralCloseDecision = useCallback((decision: EphemeralCloseDecision) => {
+    const resolve = ephemeralCloseResolverRef.current;
+    ephemeralCloseResolverRef.current = null;
+    setEphemeralClosePrompt(null);
+    resolve?.(decision);
+  }, []);
+
   const flushAll = useCallback(async () => {
     cancelDocumentAI();
     const expanded = expandedConversationRef.current;
@@ -680,17 +713,40 @@ export function RichStreamEditor({
   }, [flushAll, onFlushAvailable]);
 
   const prepareConversationClose = useCallback(async (expanded: ExpandedConversation) => {
+    if (closingConversationKeysRef.current.has(expanded.key) || ephemeralCloseResolverRef.current) return false;
+    await conversationKeepPromisesRef.current.get(expanded.key);
+    const liveExpanded = expandedConversationRef.current?.key === expanded.key
+      ? expandedConversationRef.current
+      : expanded;
+    let discard = liveExpanded?.ephemeral === true;
+    if (discard) {
+      const live = conversationLiveStatesRef.current[expanded.key];
+      const meaningful = Boolean(live?.composer.trim() || live?.thread || live?.active || live?.exchanges.length);
+      if (meaningful) {
+        const decision = await requestEphemeralCloseDecision(expanded);
+        if (decision === 'cancel') return false;
+        if (decision === 'keep') {
+          if (!await keepExpandedConversation()) return false;
+          discard = false;
+        }
+      }
+    }
     closingConversationKeysRef.current.add(expanded.key);
     cancelConversationRequest(expanded.key);
     updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: true }));
-    const discarded = expanded.ephemeral !== true
-      || await discardEphemeralConversation(expanded.key);
+    const discarded = !discard || await discardEphemeralConversation(expanded.key);
     closingConversationKeysRef.current.delete(expanded.key);
     if (!discarded) {
       updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: false }));
     }
     return discarded;
-  }, [cancelConversationRequest, discardEphemeralConversation, updateConversationLiveState]);
+  }, [
+    cancelConversationRequest,
+    discardEphemeralConversation,
+    keepExpandedConversation,
+    requestEphemeralCloseDecision,
+    updateConversationLiveState,
+  ]);
 
   const expandConversation = useCallback(async (next: ExpandedConversation) => {
     const current = expandedConversationRef.current;
@@ -741,10 +797,6 @@ export function RichStreamEditor({
     }
     const expanded = expandedConversationRef.current;
     if (expanded) closingConversationKeysRef.current.add(expanded.key);
-    const thread = expanded && conversationLiveStatesRef.current[expanded.key]?.thread;
-    if (expanded?.ephemeral && thread?.ephemeral) {
-      void deleteEphemeralThread({ streamId: stream.id, threadId: thread.threadId }).catch(() => undefined);
-    }
   }, [cancelConversationRequest, stream.id]);
 
   const openConversationFromGlyph = useCallback((threadId: string) => {
@@ -1838,7 +1890,6 @@ export function RichStreamEditor({
     setLeaving(true);
     if (expanded && !await prepareConversationClose(expanded)) {
       setLeaving(false);
-      addToast('This chat could not be discarded, so the stream stayed open.', 'error');
       return;
     }
     const documentSaved = await (sessionRef.current?.destroy() ?? Promise.resolve(true));
@@ -2573,6 +2624,37 @@ export function RichStreamEditor({
               }}
             >
               Delete
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {ephemeralClosePrompt && (
+        <Modal
+          className="delete-confirm-dialog ephemeral-close-dialog"
+          aria-labelledby="ephemeral-close-title"
+          onRequestClose={() => resolveEphemeralCloseDecision('cancel')}
+        >
+          <h2 id="ephemeral-close-title">Keep this chat?</h2>
+          <p>Keep saves it with the Stream. Discard removes its turns.</p>
+          <div className="delete-confirm-actions">
+            <button
+              className="delete-confirm-cancel"
+              onClick={() => resolveEphemeralCloseDecision('cancel')}
+            >
+              Cancel
+            </button>
+            <button
+              className="delete-confirm-delete ephemeral-close-discard"
+              onClick={() => resolveEphemeralCloseDecision('discard')}
+            >
+              Discard
+            </button>
+            <button
+              className="primary-button ephemeral-close-keep"
+              onClick={() => resolveEphemeralCloseDecision('keep')}
+            >
+              Keep
             </button>
           </div>
         </Modal>

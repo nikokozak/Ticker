@@ -1,8 +1,9 @@
 const markdownLinkPattern = /\[([^\]]+)]\(([^)]+)\)/g;
 const markdownImagePattern = /!\[[^\]]*]\([^)]+\)/g;
 
-function stripMarkdownMarks(line: string): string {
+export function plainTextFromMarkdown(line: string): string {
   return line
+    .replace(/<\/?[A-Za-z][^>]*>/g, '')
     .replace(markdownImagePattern, '')
     .replace(markdownLinkPattern, '$1')
     .replace(/^>\s*/, '')
@@ -24,7 +25,7 @@ export function markdownPreviewLine(markdown: string): string {
       continue;
     }
 
-    const stripped = stripMarkdownMarks(line);
+    const stripped = plainTextFromMarkdown(line);
     if (stripped) return stripped;
   }
 

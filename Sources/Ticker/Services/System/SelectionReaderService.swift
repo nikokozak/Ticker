@@ -98,8 +98,6 @@ final class SelectionReaderService {
     private let hintedSelectionReadRetryDelay: TimeInterval = 0.05
     private let clipboardPollAttempts = 15
     private let clipboardPollDelay: TimeInterval = 0.02
-    private static let recentClipboardTextThreshold: TimeInterval = 15
-    private static let maxClipboardTextContextLength = 10_000
     private var hintedApplicationPIDs = Set<pid_t>()
 
     private static let axEnhancedUserInterfaceAttribute = "AXEnhancedUserInterface" as CFString
@@ -603,7 +601,6 @@ final class SelectionReaderService {
     /// Captures everything at once BEFORE focus changes
     func buildContext(
         selectedText providedSelectedText: String? = nil,
-        clipboardTextCandidate: String? = nil,
         selectionCaptureOutcome: SelectionCaptureOutcome = .notAttempted,
         readSelectionFromAX: Bool = true,
         panelSize: CGSize = CGSize(width: QuickPanelWindow.defaultWidth, height: QuickPanelWindow.minHeight)
@@ -615,22 +612,14 @@ final class SelectionReaderService {
         let position = cursorService.calculatePanelPosition(panelSize: panelSize)
 
         let selectedText = providedSelectedText ?? (readSelectionFromAX ? getSelectedText() : nil)
-        let hasSelectedText = Self.nonEmptyText(selectedText) != nil
-        let clipboardText = hasSelectedText ? nil : Self.nonEmptyText(clipboardTextCandidate)
-
-        // Only grab clipboard image if no text context.
-        var clipboardImageData: Data? = nil
-        if !hasSelectedText && clipboardText == nil {
-            clipboardImageData = getRecentClipboardImage()
-        }
 
         let context = QuickPanelContext(
             selectedText: selectedText,
             activeApp: getActiveApp(),
             windowTitle: getActiveWindowTitle(),
             panelPosition: position,
-            clipboardImage: clipboardImageData,
-            clipboardText: clipboardText,
+            clipboardImage: nil,
+            clipboardText: nil,
             selectionCaptureOutcome: selectionCaptureOutcome
         )
         DebugLog.log(
@@ -643,36 +632,6 @@ final class SelectionReaderService {
         return context
     }
 
-    /// Get a recently copied image or a screenshot saved by macOS.
-    private func getRecentClipboardImage() -> Data? {
-        if ClipboardService.wasRecentlyModified(threshold: 60),
-           let image = ClipboardService.getImageData() {
-            return image
-        }
-        return ClipboardService.getRecentScreenshotData()
-    }
-
-    static func recentClipboardTextCandidate(
-        pasteboard: NSPasteboard = .general,
-        threshold: TimeInterval = recentClipboardTextThreshold,
-        maxLength: Int = maxClipboardTextContextLength
-    ) -> String? {
-        guard ClipboardService.wasRecentlyModified(threshold: threshold, pasteboard: pasteboard),
-              !ClipboardService.hasConcealedOrTransientTypes(pasteboard: pasteboard),
-              let rawText = ClipboardService.getText(pasteboard: pasteboard) else {
-            return nil
-        }
-
-        guard let text = Self.nonEmptyText(rawText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            return nil
-        }
-
-        guard text.count > maxLength else {
-            return text
-        }
-
-        return String(text.prefix(maxLength)) + "…"
-    }
 }
 
 /// Context captured when Quick Panel is invoked

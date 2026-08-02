@@ -371,6 +371,7 @@ export function conversationDecorationTargets(
   markerBlockFrom: ReadonlySet<number>,
   visibleRanges: VisibleRange[],
   activeBlockFrom: number | null,
+  openBlockFrom: number | null = null,
 ): ConversationDecorationTarget[] {
   const visibleBlocks = new Map<number, ConversationDecorationTarget>();
   for (const range of visibleRanges) {
@@ -384,7 +385,7 @@ export function conversationDecorationTargets(
         to: pos + node.nodeSize,
         contentFrom: pos + 1,
         contentTo: pos + node.nodeSize - 1,
-        left: pos === activeBlockFrom,
+        left: pos === activeBlockFrom && node.content.size > 0,
         right: false,
       });
       return false;
@@ -392,7 +393,7 @@ export function conversationDecorationTargets(
   }
 
   for (const [pos, target] of visibleBlocks) {
-    if (markerBlockFrom.has(pos)) target.right = true;
+    if (markerBlockFrom.has(pos) && pos !== openBlockFrom) target.right = true;
   }
   return [...visibleBlocks.values()].filter((target) => target.left || target.right);
 }
@@ -506,11 +507,16 @@ export function conversationAnchorField(
         const field = conversationAnchorKey.getState(state);
         if (!field) return null;
         const cursorBlock = textBlockAt(state.doc, state.selection.head)?.from ?? null;
+        const openPosition = field.surface && conversationRenderPosition(state.doc, field.surface.anchor);
+        const openBlockFrom = openPosition === null || openPosition === undefined
+          ? null
+          : textBlockAt(state.doc, openPosition - 1)?.from ?? null;
         const targets = conversationDecorationTargets(
           state.doc,
           field.markerBlockFrom,
           field.visibleRanges,
           field.hoveredBlockFrom ?? cursorBlock,
+          openBlockFrom,
         );
         const decorations = targets.map((target) => Decoration.node(
           target.from,
