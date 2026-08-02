@@ -1324,6 +1324,64 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertTrue(prepared.request.systemPrompt.contains("web_search"))
     }
 
+    func test_conversationUpdateBlockToolUsesTheProxyFunctionSchemaOnlyWhenEligible() throws {
+        let legacy = try AIOrchestrator.prepareThreadRequest(
+            query: "Rewrite this",
+            anchorText: "Primary block",
+            streamMarkdown: "Whole stream",
+            priorTurns: [],
+            sourceContext: nil
+        )
+        XCTAssertTrue(legacy.request.tools.isEmpty)
+        XCTAssertNil(legacy.request.toolChoice)
+
+        let prepared = try AIOrchestrator.prepareThreadRequest(
+            query: "Rewrite this",
+            anchorText: "Primary block",
+            streamMarkdown: "Whole stream",
+            priorTurns: [],
+            sourceContext: nil,
+            offerUpdateBlock: true
+        )
+        let tool = try XCTUnwrap(prepared.request.tools.first)
+        XCTAssertEqual(tool.name, "update_block")
+        XCTAssertTrue(tool.description.contains("full replacement markdown"))
+        XCTAssertEqual(prepared.request.toolChoice, "auto")
+        let properties = try XCTUnwrap(tool.parameters["properties"] as? [String: [String: String]])
+        XCTAssertEqual(properties, ["content": ["type": "string"]])
+        XCTAssertEqual(tool.parameters["required"] as? [String], ["content"])
+        XCTAssertEqual(tool.parameters["additionalProperties"] as? Bool, false)
+        XCTAssertEqual(prepared.request.truncated().tools.first?.name, "update_block")
+
+        let streamId = UUID()
+        let normal = StreamThread(streamId: streamId, anchorStart: 1, anchorEnd: 4)
+        let detached = StreamThread(streamId: streamId, anchorStart: 2, anchorEnd: 2, detached: true)
+        let ephemeral = StreamThread(streamId: streamId, anchorStart: 1, anchorEnd: 4, ephemeral: true)
+        XCTAssertTrue(AIMessageHandler.shouldOfferUpdateBlock(thread: normal, anchorStart: 1, anchorEnd: 4))
+        XCTAssertFalse(AIMessageHandler.shouldOfferUpdateBlock(thread: detached, anchorStart: 2, anchorEnd: 2))
+        XCTAssertFalse(AIMessageHandler.shouldOfferUpdateBlock(thread: ephemeral, anchorStart: 1, anchorEnd: 4))
+    }
+
+    func test_proxyParsesCompleteToolCallsAndDropsMalformedArguments() {
+        let valid = #"{"id":"call-1","name":"update_block","arguments":"{\"content\":\"New text.\"}"}"#
+        XCTAssertEqual(
+            ProxyLLMService.parseToolCallEvent(valid),
+            LLMToolCall(
+                id: "call-1",
+                name: "update_block",
+                argumentsJSON: #"{"content":"New text."}"#
+            )
+        )
+        XCTAssertNil(ProxyLLMService.parseToolCallEvent(
+            #"{"id":"call-1","name":"update_block","arguments":"{bad"}"#
+        ))
+        XCTAssertNil(ProxyLLMService.parseToolCallEvent(
+            #"{"id":"call-1","name":"update_block","arguments":"[]"}"#
+        ))
+        XCTAssertTrue(ProxyLLMService.parseToolCallsFlag(#"{"usage":{},"tool_calls":true}"#))
+        XCTAssertFalse(ProxyLLMService.parseToolCallsFlag(#"{"usage":{}}"#))
+    }
+
     func test_threadAIRequestRefusesOneTokenPastProtectedBoundary() throws {
         let fitted = try AIOrchestrator.prepareThreadRequest(
             query: "Question",
@@ -1678,7 +1736,7 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
                 routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
-                routeThreadAI: { query, retrievalQuery, _, _, anchorText, streamMarkdown, pinned, turns, researchProfile, onPrepared, onChunk, onComplete, _, onModelSelected in
+                routeThreadAI: { query, retrievalQuery, _, _, anchorText, streamMarkdown, pinned, turns, researchProfile, offerUpdateBlock, onPrepared, onChunk, onComplete, _, onModelSelected in
                     routedQuery = query
                     routedRetrievalQuery = retrievalQuery
                     XCTAssertEqual(anchorText, thread.anchorText)
@@ -1686,6 +1744,7 @@ final class StreamDocumentTests: XCTestCase {
                     XCTAssertEqual(pinned.map(\.quote), ["A second constraint."])
                     XCTAssertEqual(turns.map(\.requestId), [prior.requestId])
                     XCTAssertTrue(researchProfile)
+                    XCTAssertTrue(offerUpdateBlock)
                     let receipt = ThreadAIRequestReceipt(
                         sourceContext: SourceContext(
                             text: sentSource.extractedText ?? "",
@@ -1699,7 +1758,7 @@ final class StreamDocumentTests: XCTestCase {
                     onPrepared(receipt)
                     onModelSelected?("provider/model")
                     onChunk("A grounded reply.")
-                    onComplete(receipt)
+                    onComplete(receipt, ProxyLLMCompletion(toolCalls: [], reportedToolCalls: false))
                 }
             )
             let rawPrompt = "Use [this thread](ticker-thread://private-prompt)."
@@ -1753,6 +1812,73 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(afterDocument.revision, beforeDocument.revision)
             XCTAssertEqual(recorder.messages(ofType: "threadAIContext").count, 1)
             XCTAssertEqual(recorder.messages(ofType: "documentAIComplete").count, 1)
+            let completion = try XCTUnwrap(recorder.messages(ofType: "documentAIComplete").last)
+            XCTAssertEqual(completion.payload?["toolCalls"]?.value as? Bool, false)
+            XCTAssertNil(completion.payload?["toolCall"])
+        }
+    }
+
+    @MainActor
+    func test_conversationToolCallPersistsAVisibleTurnAndCompletesWithTheCall() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Tool call")
+            let thread = StreamThread(
+                streamId: stream.id,
+                anchorText: "Original passage.",
+                anchorStart: 1,
+                anchorEnd: 18
+            )
+            try service.saveStream(stream)
+            try service.createStreamThread(thread)
+            let recorder = BridgeMessageRecorder()
+            let receipt = ThreadAIRequestReceipt(
+                sourceContext: nil,
+                includedPriorRequestIds: [],
+                totalPriorExchangeCount: 0
+            )
+            let handler = AIMessageHandler(
+                persistence: service,
+                sendToWeb: { recorder.send($0) },
+                routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
+                routeThreadAI: { _, _, _, _, _, _, _, _, _, offerUpdateBlock, onPrepared, _, onComplete, _, _ in
+                    XCTAssertTrue(offerUpdateBlock)
+                    onPrepared(receipt)
+                    onComplete(receipt, ProxyLLMCompletion(
+                        toolCalls: [LLMToolCall(
+                            id: "call-1",
+                            name: "update_block",
+                            argumentsJSON: #"{"content":"Rewritten passage.","from":0,"to":999999}"#
+                        )],
+                        reportedToolCalls: true
+                    ))
+                }
+            )
+
+            await handler.handle(BridgeMessage(type: "thinkDocument", payload: [
+                "requestId": AnyCodable("tool-request"),
+                "streamId": AnyCodable(stream.id.uuidString),
+                "threadId": AnyCodable(thread.threadId.uuidString),
+                "query": AnyCodable("Rewrite this"),
+                "anchorStart": AnyCodable(1),
+                "anchorEnd": AnyCodable(18),
+                "imageURLs": AnyCodable([])
+            ]))
+
+            try await waitUntil { (try? service.loadExchange(requestId: "tool-request")) != nil }
+            let exchange = try XCTUnwrap(try service.loadExchange(requestId: "tool-request"))
+            XCTAssertEqual(exchange.responseRaw, "Rewritten passage.")
+            let factsData = try XCTUnwrap(exchange.sourceManifest.data(using: .utf8))
+            let facts = try XCTUnwrap(JSONSerialization.jsonObject(with: factsData) as? [String: Any])
+            let edit = try XCTUnwrap(facts["updateBlock"] as? [String: Any])
+            XCTAssertEqual(edit["before"] as? String, "Original passage.")
+            XCTAssertEqual(edit["after"] as? String, "Rewritten passage.")
+            XCTAssertNil(edit["applied"])
+
+            let completion = try XCTUnwrap(recorder.messages(ofType: "documentAIComplete").last)
+            XCTAssertEqual(completion.payload?["toolCalls"]?.value as? Bool, true)
+            let call = try XCTUnwrap(completion.payload?["toolCall"]?.value as? [String: Any])
+            XCTAssertEqual(call["name"] as? String, "update_block")
+            XCTAssertEqual(call["arguments"] as? String, #"{"content":"Rewritten passage.","from":0,"to":999999}"#)
         }
     }
 
@@ -1769,7 +1895,7 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 sendToWeb: { recorder.send($0) },
                 routeDocumentAI: { _, _, _, _, _, _, _, _, _, _, _ in },
-                routeThreadAI: { _, _, _, _, _, _, _, _, _, _, _, _, onError, _ in
+                routeThreadAI: { _, _, _, _, _, _, _, _, _, _, _, _, _, onError, _ in
                     onError(ThreadAIRequestError.contextTooLarge(
                         largestBlock: "Your note",
                         protectedTokens: 98_000,
@@ -2251,6 +2377,45 @@ final class StreamDocumentTests: XCTestCase {
             ), [])
             XCTAssertNil(try service.loadStreamThread(threadId: thread.threadId, streamId: stream.id))
             XCTAssertNil(try service.loadExchange(requestId: exchange.requestId))
+        }
+    }
+
+    func test_threadToolApplicationUpdatesThePersistedReceipt() throws {
+        try withTempPersistenceService { service in
+            let stream = Stream(title: "Tool receipt")
+            let thread = StreamThread(
+                streamId: stream.id,
+                anchorText: "Original passage.",
+                anchorStart: 1,
+                anchorEnd: 18
+            )
+            try service.saveStream(stream)
+            try service.createStreamThread(thread)
+            try service.saveExchange(AIExchange(
+                requestId: "tool-result",
+                streamId: stream.id,
+                threadId: thread.threadId,
+                verb: "thread",
+                userInput: "Rewrite this",
+                sourceManifest: #"{"version":2,"kind":"threadAI","updateBlock":{"before":"Sent passage.","after":"Rewritten passage."}}"#,
+                responseRaw: "Rewritten passage."
+            ))
+
+            let updated = try service.recordThreadToolApplication(
+                requestId: "tool-result",
+                streamId: stream.id,
+                before: "Original passage.",
+                applied: true,
+                failure: nil
+            )
+            let data = try XCTUnwrap(updated.sourceManifest.data(using: .utf8))
+            let receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let edit = try XCTUnwrap(receipt["updateBlock"] as? [String: Any])
+            XCTAssertEqual(edit["before"] as? String, "Original passage.")
+            XCTAssertEqual(edit["after"] as? String, "Rewritten passage.")
+            XCTAssertEqual(edit["applied"] as? Bool, true)
+            XCTAssertNil(edit["failure"] as? String)
+            XCTAssertEqual(try service.loadExchange(requestId: "tool-result")?.sourceManifest, updated.sourceManifest)
         }
     }
 

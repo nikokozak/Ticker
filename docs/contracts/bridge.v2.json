@@ -19,7 +19,7 @@
       },
       "documentAIComplete": {
         "requiredPayloadKeys": ["requestId"],
-        "optionalPayloadKeys": ["citations", "sourceContextMode", "exchange", "sentContext"]
+        "optionalPayloadKeys": ["citations", "sourceContextMode", "exchange", "sentContext", "toolCalls", "toolCall"]
       },
       "documentAIError": {
         "requiredPayloadKeys": ["requestId"],
@@ -255,6 +255,11 @@
       },
       "removeStreamThreadAnchor": {
         "requiredPayloadKeys": ["streamId", "threadId", "anchorId"],
+        "requiredCallbackId": true
+      },
+      "recordThreadToolApplication": {
+        "requiredPayloadKeys": ["streamId", "requestId", "before", "applied"],
+        "optionalPayloadKeys": ["failure"],
         "requiredCallbackId": true
       },
       "retrySourceIndexing": {

@@ -8,6 +8,7 @@ final class ThreadMessageHandler: BridgeMessageHandler {
         "createStreamThread",
         "deleteStreamThread",
         "loadStreamThread",
+        "recordThreadToolApplication",
         "removeStreamThreadAnchor",
         "saveStreamThread"
     ]
@@ -210,6 +211,37 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 } catch {
                     respondWithError(callbackId, error.localizedDescription)
                 }
+            } catch {
+                respondWithError(callbackId, error.localizedDescription)
+            }
+
+        case "recordThreadToolApplication":
+            guard let payload = message.payload,
+                  let streamId = decodeUUID(payload, key: "streamId"),
+                  let requestId = payload["requestId"]?.value as? String,
+                  !requestId.isEmpty,
+                  let before = payload["before"]?.value as? String,
+                  let applied = payload["applied"]?.value as? Bool else {
+                respondWithError(callbackId, "Invalid recordThreadToolApplication payload")
+                return
+            }
+            let failure = payload["failure"]?.value as? String
+            guard (applied && failure == nil) || (!applied && failure == "passage_changed") else {
+                respondWithError(callbackId, "Invalid recordThreadToolApplication payload")
+                return
+            }
+            do {
+                respond(callbackId, [
+                    "exchange": AnyCodable(StreamCodec.encodeExchange(
+                        try persistence.recordThreadToolApplication(
+                            requestId: requestId,
+                            streamId: streamId,
+                            before: before,
+                            applied: applied,
+                            failure: failure
+                        )
+                    ))
+                ])
             } catch {
                 respondWithError(callbackId, error.localizedDescription)
             }

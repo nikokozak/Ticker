@@ -2237,6 +2237,56 @@ final class PersistenceService {
         }
     }
 
+    func recordThreadToolApplication(
+        requestId: String,
+        streamId: UUID,
+        before: String,
+        applied: Bool,
+        failure: String?
+    ) throws -> AIExchange {
+        try dbQueue.write { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT request_id, stream_id, thread_id, verb, user_input,
+                           source_manifest, response_raw, model, thread_disposition, created_at
+                    FROM ai_exchanges
+                    WHERE request_id = ? AND stream_id = ? AND thread_id IS NOT NULL
+                """,
+                arguments: [requestId, streamId.uuidString]
+            ),
+            let exchange = Self.decodeExchange(row),
+            let data = exchange.sourceManifest.data(using: .utf8),
+            var receipt = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            var updateBlock = receipt["updateBlock"] as? [String: Any],
+            updateBlock["after"] is String else {
+                throw StreamThreadPersistenceError.exchangeOutsideThread
+            }
+            updateBlock["before"] = before
+            updateBlock["applied"] = applied
+            updateBlock["failure"] = failure ?? NSNull()
+            receipt["updateBlock"] = updateBlock
+            let manifestData = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+            let sourceManifest = String(decoding: manifestData, as: UTF8.self)
+            try db.execute(
+                sql: "UPDATE ai_exchanges SET source_manifest = ? WHERE request_id = ?",
+                arguments: [sourceManifest, requestId]
+            )
+            return AIExchange(
+                requestId: exchange.requestId,
+                streamId: exchange.streamId,
+                threadId: exchange.threadId,
+                verb: exchange.verb,
+                userInput: exchange.userInput,
+                sourceManifest: sourceManifest,
+                responseRaw: exchange.responseRaw,
+                model: exchange.model,
+                threadDisposition: exchange.threadDisposition,
+                createdAt: exchange.createdAt
+            )
+        }
+    }
+
     func saveExchange(_ exchange: AIExchange) throws {
         try dbQueue.write { db in
             try saveExchange(exchange, db: db)

@@ -16,7 +16,9 @@ import type {
   StreamThreadJSON,
 } from '../types/models';
 import { DocumentSession } from '../richtext/session';
-import { parseMarkdown } from '../richtext/markdown';
+import { parseMarkdown, serializeMarkdown } from '../richtext/markdown';
+import { aiWritingRange } from '../richtext/operations';
+import { provenanceSpans } from '../richtext/provenance';
 import { useToastStore } from '../store/toastStore';
 import { fnv1a } from '../utils/fnv1a';
 import { RichStreamEditor } from './RichStreamEditor';
@@ -143,8 +145,8 @@ async function enterPrompt(value: string) {
   });
 }
 
-async function openDraftConversation(): Promise<HTMLTextAreaElement> {
-  const block = editor().querySelector('p') as HTMLParagraphElement;
+async function openDraftConversation(blockIndex = 0): Promise<HTMLTextAreaElement> {
+  const block = editor().querySelectorAll('p')[blockIndex] as HTMLParagraphElement;
   await vi.waitFor(() => expect(block.classList.contains('conversation-block-active')).toBe(true));
   vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
     left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
@@ -527,7 +529,7 @@ describe('RichStreamEditor inline conversations', () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(editor()));
   });
 
-  it('round-trips the v2 receipt from send through completion and disclosure rendering', async () => {
+  it('round-trips the v2 receipt and completes normally when the proxy emits no tool call', async () => {
     const createdAt = new Date(0).toISOString();
     vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
       if (type === 'createStreamThread') {
@@ -641,12 +643,251 @@ describe('RichStreamEditor inline conversations', () => {
     expect(disclosure.textContent).toContain('Pinned Stream Pinned constraint.');
     expect(disclosure.textContent).toContain('Retrieved passages · Manual p.4');
     expect(disclosure.textContent).toContain('Prior turns 0 of 0');
+    expect(vi.mocked(bridge.sendAsync).mock.calls.some(
+      ([type]) => type === 'recordThreadToolApplication',
+    )).toBe(false);
 
     await vi.waitFor(() => {
       const save = vi.mocked(bridge.sendAsync).mock.calls
         .find(([type]) => type === 'saveRichStreamDocument');
       expect(save?.[1]?.docJSON).not.toContain('Does this hold?');
       expect(save?.[1]?.docJSON).not.toContain('It streams.');
+    });
+  });
+
+  it('applies update_block only to the live anchor despite adversarial offsets and undoes byte-exactly', async () => {
+    const id = 'update-block-stream';
+    const createdAt = new Date(0).toISOString();
+    let liveView: EditorView | null = null;
+    let completedExchange: AIExchangeJSON | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      return updateState.call(this, state);
+    });
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'createStreamThread') return {
+        thread: {
+          threadId: 'update-thread', streamId: id, title: String(payload?.title), workingText: '',
+          anchorText: String(payload?.anchorText), anchorStart: Number(payload?.anchorStart),
+          anchorEnd: Number(payload?.anchorEnd), detached: false, ephemeral: false, revision: 0,
+          createdAt, updatedAt: createdAt, exchanges: [],
+        },
+      };
+      if (type === 'recordThreadToolApplication') {
+        const sourceManifest = JSON.stringify({
+          ...JSON.parse(completedExchange!.sourceManifest) as Record<string, unknown>,
+          updateBlock: {
+            before: payload?.before,
+            after: '# Replacement\n\nFirst.\n\n- one\n- two',
+            applied: payload?.applied,
+            failure: payload?.failure ?? null,
+          },
+        });
+        return { exchange: { ...completedExchange!, sourceManifest } };
+      }
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    await renderStream({
+      ...stream,
+      id,
+      document: {
+        ...stream.document,
+        streamId: id,
+        docJSON: docJSON('Outside before.\n\nTarget text.\n\nOutside after.'),
+        markdown: 'Outside before.\n\nTarget text.\n\nOutside after.',
+      },
+    });
+    await selectEditorText('Target');
+    const composer = await openDraftConversation(1);
+    await enterConversationMessage(composer, 'Rewrite this block');
+    const beforeMarkdown = serializeMarkdown(liveView!.state.doc);
+    const beforeJSON = JSON.stringify(liveView!.state.doc.toJSON());
+    const beforeFirst = liveView!.state.doc.firstChild!.toJSON();
+    const beforeLast = liveView!.state.doc.lastChild!.toJSON();
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    const requestId = activeRequestId();
+    const pendingReceipt = {
+      version: 2,
+      kind: 'threadAI',
+      requestId,
+      anchor: { kind: 'stream', text: 'Target text.', from: 18, to: 30 },
+      streamDocument: { sent: true, charCount: beforeMarkdown.length },
+      note: { sent: false },
+      turns: { includedRequestIds: [], totalAtSend: 0 },
+      sourceContextMode: 'none',
+      sources: [],
+      pinned: [],
+      updateBlock: { before: 'Target text.', after: '# Replacement\n\nFirst.\n\n- one\n- two' },
+    };
+    completedExchange = {
+      requestId,
+      streamId: id,
+      threadId: 'update-thread',
+      verb: 'thread',
+      userInput: 'Rewrite this block',
+      sourceManifest: JSON.stringify(pendingReceipt),
+      responseRaw: '# Replacement\n\nFirst.\n\n- one\n- two',
+      createdAt,
+    };
+    await act(async () => {
+      bridge.receive({
+        type: 'documentAIComplete',
+        payload: {
+          requestId,
+          exchange: completedExchange!,
+          toolCalls: true,
+          toolCall: {
+            id: 'call-1',
+            name: 'update_block',
+            arguments: JSON.stringify({
+              content: '# Replacement\n\nFirst.\n\n- one\n- two',
+              from: 0,
+              to: 999_999,
+            }),
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(vi.mocked(bridge.sendAsync).mock.calls.some(
+      ([type]) => type === 'recordThreadToolApplication',
+    )).toBe(true));
+
+    expect(serializeMarkdown(liveView!.state.doc)).toBe(
+      'Outside before.\n\n# Replacement\n\nFirst.\n\n* one\n* two\n\nOutside after.',
+    );
+    expect(liveView!.state.doc.firstChild!.toJSON()).toEqual(beforeFirst);
+    expect(liveView!.state.doc.lastChild!.toJSON()).toEqual(beforeLast);
+    expect(aiWritingRange(liveView!.state)).not.toBe(null);
+    expect(provenanceSpans(liveView!.state)).toEqual([
+      expect.objectContaining({ origin: 'ai', requestId, meta: expect.objectContaining({ threadId: 'update-thread' }) }),
+    ]);
+    expect(document.querySelector('.conversation-tool-note')?.textContent)
+      .toBe('AI edited this block · ⌘Z undoes it');
+    const disclosure = document.querySelector('.conversation-receipt') as HTMLDetailsElement;
+    await act(async () => { (disclosure.querySelector('summary') as HTMLElement).click(); });
+    expect(disclosure.textContent).toContain('Before edit Target text.');
+    expect(disclosure.textContent).toContain('After edit # Replacement');
+
+    await act(async () => {
+      const undoEvent = new KeyboardEvent('keydown', {
+        key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+      });
+      liveView!.someProp('handleKeyDown', (handler) => handler(liveView!, undoEvent));
+    });
+    expect(serializeMarkdown(liveView!.state.doc)).toBe(beforeMarkdown);
+    expect(JSON.stringify(liveView!.state.doc.toJSON())).toBe(beforeJSON);
+    expect(provenanceSpans(liveView!.state)).toEqual([]);
+  });
+
+  it('renders an update_block proposal without applying when the live passage drifted', async () => {
+    const createdAt = new Date(0).toISOString();
+    let liveView: EditorView | null = null;
+    let completedExchange: AIExchangeJSON | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      return updateState.call(this, state);
+    });
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {
+      if (type === 'createStreamThread') return {
+        thread: {
+          threadId: 'drift-thread', streamId: stream.id, title: String(payload?.title), workingText: '',
+          anchorText: 'Original paragraph.', anchorStart: 1, anchorEnd: 20,
+          detached: false, ephemeral: false, revision: 0,
+          createdAt, updatedAt: createdAt, exchanges: [],
+        },
+      };
+      if (type === 'recordThreadToolApplication') return {
+        exchange: {
+          ...completedExchange!,
+          sourceManifest: JSON.stringify({
+            ...JSON.parse(completedExchange!.sourceManifest) as Record<string, unknown>,
+            updateBlock: {
+              before: payload?.before,
+              after: 'Proposed replacement.',
+              applied: false,
+              failure: 'passage_changed',
+            },
+          }),
+        },
+      };
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    const composer = await openDraftConversation();
+    await enterConversationMessage(composer, 'Rewrite this block');
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    const requestId = activeRequestId();
+    await act(async () => {
+      liveView!.dispatch(liveView!.state.tr.insertText('Altered', 1, 9));
+    });
+    const changed = serializeMarkdown(liveView!.state.doc);
+    const receipt = {
+      version: 2,
+      kind: 'threadAI',
+      requestId,
+      anchor: { kind: 'stream', text: 'Original paragraph.', from: 1, to: 20 },
+      streamDocument: { sent: true, charCount: 19 },
+      note: { sent: false },
+      turns: { includedRequestIds: [], totalAtSend: 0 },
+      sourceContextMode: 'none',
+      sources: [],
+      pinned: [],
+      updateBlock: { before: 'Original paragraph.', after: 'Proposed replacement.' },
+    };
+    completedExchange = {
+      requestId,
+      streamId: stream.id,
+      threadId: 'drift-thread',
+      verb: 'thread',
+      userInput: 'Rewrite this block',
+      sourceManifest: JSON.stringify(receipt),
+      responseRaw: 'I proposed an edit.',
+      createdAt,
+    };
+    await act(async () => {
+      bridge.receive({
+        type: 'documentAIComplete',
+        payload: {
+          requestId,
+          exchange: completedExchange!,
+          toolCalls: true,
+          toolCall: {
+            id: 'call-2', name: 'update_block',
+            arguments: JSON.stringify({ content: 'Proposed replacement.' }),
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(document.querySelector('.conversation-tool-note')?.textContent)
+      .toBe("couldn't apply — passage changed"));
+    expect(serializeMarkdown(liveView!.state.doc)).toBe(changed);
+    expect(document.querySelector('.conversation-turn--ai .conversation-turn-text')?.textContent)
+      .toBe('Proposed replacement.');
+    expect(vi.mocked(bridge.sendAsync).mock.calls.find(
+      ([type]) => type === 'recordThreadToolApplication',
+    )?.[1]).toMatchObject({
+      before: 'Altered paragraph.',
+      applied: false,
+      failure: 'passage_changed',
     });
   });
 

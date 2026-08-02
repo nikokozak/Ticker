@@ -4,6 +4,7 @@ import {
   bridge,
   loadStreamThread,
   removeStreamThreadAnchor,
+  type ConversationToolCall,
 } from '../types/bridge';
 import type {
   AIExchangeJSON,
@@ -73,6 +74,7 @@ interface ConversationSurfaceProps {
   ) => Promise<StreamThreadJSON>;
   hasDrifted: (anchorText: string) => boolean;
   onPromote: (exchange: AIExchangeJSON) => void;
+  onUpdateBlock: (exchange: AIExchangeJSON, toolCall: ConversationToolCall) => Promise<AIExchangeJSON>;
   onKeep: () => void;
   onCollapse: () => void;
 }
@@ -114,6 +116,12 @@ function ThreadContextDisclosure({ value }: { value: unknown }) {
           </p>
         ))}
         {receipt.profile === 'research' && <p><span>Research profile</span></p>}
+        {receipt.updateBlock && (
+          <>
+            <p><span>Before edit</span> {receipt.updateBlock.before || 'Empty'}</p>
+            <p><span>After edit</span> {receipt.updateBlock.after || 'Empty'}</p>
+          </>
+        )}
         <p>
           <span>Sources</span> {retrieval}
           {receipt.sources.length > 0
@@ -139,10 +147,21 @@ const Turn = memo(function Turn({
   exchange?: AIExchangeJSON;
   onPromote?: (exchange: AIExchangeJSON) => void;
 }) {
+  const facts = parseThreadAISentFacts(receipt);
+  const update = facts?.updateBlock;
+  const visibleText = update?.applied === false
+    ? update.after || 'Clear this block.'
+    : text;
   return (
     <div className={`conversation-turn conversation-turn--${who === 'You' ? 'you' : 'ai'}`}>
       <span className="conversation-turn-label">{who}</span>
-      <div className="conversation-turn-text">{text}</div>
+      <div className="conversation-turn-text">{visibleText}</div>
+      {update?.applied === true && (
+        <p className="conversation-tool-note">AI edited this block · ⌘Z undoes it</p>
+      )}
+      {update?.applied === false && (
+        <p className="conversation-tool-note">couldn't apply — passage changed</p>
+      )}
       {who === 'AI' && <ThreadContextDisclosure value={receipt} />}
       <div className="conversation-turn-controls">
         {exchange && onPromote && (
@@ -173,6 +192,7 @@ export function ConversationSurface({
   createThread,
   hasDrifted,
   onPromote,
+  onUpdateBlock,
   onKeep,
   onCollapse,
 }: ConversationSurfaceProps) {
@@ -231,13 +251,20 @@ export function ConversationSurface({
     if (message.type === 'documentAIComplete') {
       activeRequestId.current = null;
       const exchange = payload.exchange as AIExchangeJSON | undefined;
-      updateState(conversationKey, (current) => ({
-        ...current,
-        exchanges: exchange?.requestId === requestId
-          ? [...current.exchanges, exchange]
-          : current.exchanges,
-        active: null,
-      }));
+      const toolCall = payload.toolCall as ConversationToolCall | null | undefined;
+      void (async () => {
+        const completed = exchange?.requestId === requestId
+          && toolCall?.name === 'update_block'
+          ? await onUpdateBlock(exchange, toolCall).catch(() => exchange)
+          : exchange;
+        updateState(conversationKey, (current) => ({
+          ...current,
+          exchanges: completed?.requestId === requestId
+            ? [...current.exchanges, completed]
+            : current.exchanges,
+          active: null,
+        }));
+      })();
       return;
     }
     if (message.type === 'documentAIError') {
@@ -255,7 +282,7 @@ export function ConversationSurface({
         }
         : current);
     }
-  }), [conversationKey, updateState]);
+  }), [conversationKey, onUpdateBlock, updateState]);
 
   const send = async () => {
     const snapshot = stateRef.current;

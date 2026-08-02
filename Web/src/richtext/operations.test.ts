@@ -14,6 +14,7 @@ import {
   selectText,
   setImageWidth,
   streamAIMarkdown,
+  updateConversationBlockMarkdown,
 } from './operations';
 import { provenanceSpans } from './provenance';
 
@@ -174,6 +175,49 @@ describe('promoting a conversation answer', () => {
     undo(ed);
     expect(ed.getDocumentJSON()).toBe(before);
     expect(provenanceSpans(ed.view.state)).toEqual([]);
+  });
+});
+
+describe('updating a conversation anchor', () => {
+  it('clamps huge, empty, and block-splitting replacements to the live anchor and undoes byte-exactly', () => {
+    const cases = [
+      'x'.repeat(20_000),
+      '',
+      '# Replacement\n\nFirst paragraph.\n\n- one\n- two\n\n> final block',
+    ];
+    for (const markdown of cases) {
+      const ed = open('Outside before.\n\nTarget text.\n\nOutside after.');
+      const beforeMarkdown = ed.getMarkdownProjection();
+      const beforeJSON = ed.getDocumentJSON();
+      const first = ed.view.state.doc.firstChild!.toJSON();
+      const last = ed.view.state.doc.lastChild!.toJSON();
+      const replaced = updateConversationBlockMarkdown(ed.view, find(ed, 'Target text.'), markdown, {
+        requestId: `update-${markdown.length}`,
+        model: 'test-model',
+        verb: 'thread',
+        threadId: 'thread-1',
+      });
+
+      expect(ed.view.state.doc.firstChild!.toJSON()).toEqual(first);
+      expect(ed.view.state.doc.lastChild!.toJSON()).toEqual(last);
+      if (markdown) {
+        expect(aiWritingRange(ed.view.state)).toEqual(replaced);
+        expect(provenanceSpans(ed.view.state)).toEqual([
+          expect.objectContaining({
+            from: replaced.from,
+            to: replaced.to,
+            origin: 'ai',
+            requestId: `update-${markdown.length}`,
+          }),
+        ]);
+      } else expect(provenanceSpans(ed.view.state)).toEqual([]);
+      undo(ed);
+      expect(ed.getMarkdownProjection()).toBe(beforeMarkdown);
+      expect(ed.getDocumentJSON()).toBe(beforeJSON);
+      expect(provenanceSpans(ed.view.state)).toEqual([]);
+      ed.destroy();
+      editor = null;
+    }
   });
 });
 
