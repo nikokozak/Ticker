@@ -60,10 +60,13 @@ import {
   conversationSurface,
   fullBlockConversationAnchor,
   hasConversationAnchorTextDrifted,
+  queueConversationHover,
   refreshConversationViewport,
   setConversationAnchors,
   setConversationSurface,
+  updateConversationHoverAtCoords,
   type ConversationAnchor,
+  type ConversationGutterAction,
 } from '../richtext/conversationAnchors';
 import {
   aiWritingRange,
@@ -222,6 +225,17 @@ const SLASH_COMMANDS: Array<{ command: SlashCommand; description: string }> = [
   { command: 'chat', description: 'think out loud, saved only if you keep it' },
   { command: 'research', description: 'ask with sources and web search' },
 ];
+
+function setConversationGutterFeedback(
+  root: HTMLElement,
+  action: ConversationGutterAction | null,
+): void {
+  root.classList.toggle('stream-content--conversation-gutter', action !== null);
+  if (action) root.title = action.kind === 'create'
+    ? 'Start a conversation about this block'
+    : 'Open conversation';
+  else root.removeAttribute('title');
+}
 
 function slashCommandInput(view: RichTextEditor['view']) {
   const { selection } = view.state;
@@ -2287,6 +2301,48 @@ export function RichStreamEditor({
     view.focus();
   }, []);
 
+  const handleEditorPageMouseMove = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+    if (event.target instanceof Node && view.dom.contains(event.target)) {
+      setConversationGutterFeedback(event.currentTarget, null);
+      return;
+    }
+    const root = event.currentTarget;
+    queueConversationHover(view, { left: event.clientX, top: event.clientY }, (action) => {
+      if (root.isConnected) setConversationGutterFeedback(root, action);
+    });
+  }, []);
+
+  const handleEditorPageMouseDown = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const view = editorRef.current?.view;
+    if (!view || (event.target instanceof Node && view.dom.contains(event.target))) {
+      focusEditorPage(event);
+      return;
+    }
+    const action = updateConversationHoverAtCoords(view, event.clientX, event.clientY);
+    setConversationGutterFeedback(event.currentTarget, action);
+    if (action) event.preventDefault();
+    else focusEditorPage(event);
+  }, [focusEditorPage]);
+
+  const handleEditorPageClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const view = editorRef.current?.view;
+    if (!view || (event.target instanceof Node && view.dom.contains(event.target))) return;
+    const action = updateConversationHoverAtCoords(view, event.clientX, event.clientY);
+    setConversationGutterFeedback(event.currentTarget, action);
+    if (!action) return;
+    event.preventDefault();
+    if (action.kind === 'create') createConversationAtBlock(action.anchor);
+    else openConversationFromGlyph(action.threadId);
+  }, [createConversationAtBlock, openConversationFromGlyph]);
+
+  const handleEditorPageMouseLeave = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const view = editorRef.current?.view;
+    if (view) queueConversationHover(view);
+    setConversationGutterFeedback(event.currentTarget, null);
+  }, []);
+
   const formats = editor ? activeFormats(editor.view.state) : null;
   const activePDFHighlight = editor ? selectedPDFHighlight(editor.view.state) : null;
   const liveConversationSurface = editor ? conversationSurface(editor.view.state) : null;
@@ -2850,7 +2906,10 @@ export function RichStreamEditor({
         <div
           className="stream-content"
           onScroll={(event) => setHeaderScrolled(event.currentTarget.scrollTop > 0)}
-          onMouseDown={focusEditorPage}
+          onMouseMove={handleEditorPageMouseMove}
+          onMouseDown={handleEditorPageMouseDown}
+          onClick={handleEditorPageClick}
+          onMouseLeave={handleEditorPageMouseLeave}
         >
           <div
             ref={editorShellRef}

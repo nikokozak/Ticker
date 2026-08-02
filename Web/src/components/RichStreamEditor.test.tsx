@@ -612,6 +612,126 @@ describe('RichStreamEditor inline conversations', () => {
     expect(document.querySelector('.conversation-surface')).toBe(null);
   });
 
+  it('delegates full-width wrapper rail hover and click to conversation creation', async () => {
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      return updateState.call(this, state);
+    });
+    const id = 'wrapper-rail-stream';
+    await renderStream({
+      ...stream,
+      id,
+      document: {
+        ...stream.document,
+        streamId: id,
+        docJSON: docJSON('First block\n\nSecond block'),
+        markdown: 'First block\n\nSecond block',
+      },
+    });
+    const view = liveView!;
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue({
+      left: 100, right: 300, top: 0, bottom: 80, width: 200, height: 80, x: 100, y: 0,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 1, inside: 0 });
+    const page = document.querySelector('.stream-content') as HTMLElement;
+    const first = editor().querySelectorAll('p')[0];
+
+    await act(async () => {
+      page.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, clientX: 80, clientY: 14,
+      }));
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+    });
+    expect(first.classList.contains('conversation-block-active')).toBe(true);
+    expect(page.classList.contains('stream-content--conversation-gutter')).toBe(true);
+    expect(page.title).toBe('Start a conversation about this block');
+
+    await act(async () => {
+      page.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, clientX: 80, clientY: 14,
+      }));
+      page.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, clientX: 80, clientY: 14,
+      }));
+      await Promise.resolve();
+    });
+    expect(document.querySelector('.conversation-composer')).not.toBe(null);
+  });
+
+  it('delegates full-width wrapper glyph click to persisted conversation open', async () => {
+    const updatedAt = new Date(0).toISOString();
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => type === 'loadStreamThread'
+      ? {
+        thread: {
+          threadId: 'wrapper-thread', streamId: 'wrapper-glyph-stream', title: 'Existing', workingText: '',
+          anchorText: 'First block', anchorStart: 1, anchorEnd: 12,
+          detached: false, ephemeral: false, revision: 0, createdAt: updatedAt, updatedAt,
+          anchors: [], exchanges: [],
+        },
+      }
+      : { revision: 2 }) as typeof bridge.sendAsync);
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      return updateState.call(this, state);
+    });
+    const id = 'wrapper-glyph-stream';
+    await renderStream({
+      ...stream,
+      id,
+      conversationAnchors: [{
+        threadId: 'wrapper-thread', anchorStart: 1, anchorEnd: 12, anchorText: 'First block',
+        detached: false, ephemeral: false, updatedAt,
+      }],
+      document: {
+        ...stream.document,
+        streamId: id,
+        docJSON: docJSON('First block\n\nSecond block'),
+        markdown: 'First block\n\nSecond block',
+      },
+    });
+    const view = liveView!;
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue({
+      left: 100, right: 300, top: 0, bottom: 80, width: 200, height: 80, x: 100, y: 0,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 1, inside: 0 });
+    const page = document.querySelector('.stream-content') as HTMLElement;
+
+    await act(async () => {
+      page.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, clientX: 320, clientY: 14,
+      }));
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+    });
+    expect(page.classList.contains('stream-content--conversation-gutter')).toBe(true);
+    expect(page.title).toBe('Open conversation');
+    await act(async () => {
+      page.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, clientX: 320, clientY: 14,
+      }));
+      page.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, clientX: 320, clientY: 14,
+      }));
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(vi.mocked(bridge.sendAsync).mock.calls.some(
+      ([type]) => type === 'loadStreamThread',
+    )).toBe(true));
+    expect(document.querySelector('.conversation-surface')).not.toBe(null);
+  });
+
   it('round-trips the v2 receipt and completes normally when the proxy emits no tool call', async () => {
     const createdAt = new Date(0).toISOString();
     vi.mocked(bridge.sendAsync).mockImplementation((async (type, payload) => {

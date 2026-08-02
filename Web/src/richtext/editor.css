@@ -49,6 +49,10 @@
   background: var(--color-accent-soft);
 }
 
+.stream-content--conversation-gutter {
+  cursor: pointer;
+}
+
 /* Blocks --------------------------------------------------------------- */
 
 .richtext-editor .ProseMirror p {
