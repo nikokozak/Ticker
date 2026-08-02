@@ -224,7 +224,7 @@
       },
       "loadStream": {
         "requiredPayloadKeys": ["id"],
-        "optionalPayloadKeys": ["requestId"]
+        "optionalPayloadKeys": ["requestId", "activeThreadId"]
       },
       "loadStreams": {
         "requiredPayloadKeys": []

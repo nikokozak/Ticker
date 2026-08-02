@@ -1895,12 +1895,15 @@ final class PersistenceService {
     }
 
     @discardableResult
-    func deleteEphemeralThreads(streamId: UUID) throws -> Int {
+    func deleteEphemeralThreads(streamId: UUID, excluding threadIdToKeep: UUID? = nil) throws -> Int {
         try dbQueue.write { db in
             let threadIds = try String.fetchAll(
                 db,
-                sql: "SELECT thread_id FROM stream_threads WHERE stream_id = ? AND ephemeral = 1",
-                arguments: [streamId.uuidString]
+                sql: """
+                    SELECT thread_id FROM stream_threads
+                    WHERE stream_id = ? AND ephemeral = 1 AND (? IS NULL OR thread_id != ?)
+                """,
+                arguments: [streamId.uuidString, threadIdToKeep?.uuidString, threadIdToKeep?.uuidString]
             ).compactMap(UUID.init(uuidString:))
             for threadId in threadIds {
                 _ = try deleteStreamThreadRows(threadId: threadId, streamId: streamId, db: db)

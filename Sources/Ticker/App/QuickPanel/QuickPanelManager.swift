@@ -325,7 +325,7 @@ final class QuickPanelManager: ObservableObject {
         // Load available streams for picker
         loadAvailableStreams()
 
-        if showAccessibilityWarning && !capturedContext.hasSelection && !capturedContext.isClipboardTextContext {
+        if showAccessibilityWarning && !capturedContext.hasSelection {
             status = QuickPanelStatus.selectionCaptureStatus(
                 for: capturedContext.selectionCaptureOutcome
             )
@@ -413,7 +413,6 @@ final class QuickPanelManager: ObservableObject {
             "[QuickPanel] toggle captured context " +
             "axTrusted=\(cursorService.hasAccessibilityPermission) " +
             "hasSelection=\(capturedContext.hasSelection) " +
-            "isClipboardText=\(capturedContext.isClipboardTextContext) " +
             "contextTextLength=\(contextTextLength) " +
             "hasImage=\(capturedContext.hasImage) " +
             "activeApp=\(capturedContext.activeApp ?? "unknown")"

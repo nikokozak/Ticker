@@ -45,9 +45,16 @@ struct ServiceContainer {
             self.autoTitleService = AutoTitleService(
                 persistence: persistence,
                 restatementProvider: proxyService,
-                onStreamsChanged: { [bridgeService] in
+                onStreamsChanged: { [bridgeService] streamId, title in
                     await MainActor.run {
                         bridgeService.send(BridgeMessage(type: "streamsChanged", payload: [:]))
+                        bridgeService.send(BridgeMessage(
+                            type: "streamTitleUpdated",
+                            payload: [
+                                "id": AnyCodable(streamId.uuidString),
+                                "title": AnyCodable(title)
+                            ]
+                        ))
                     }
                 }
             )

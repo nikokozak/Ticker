@@ -90,6 +90,11 @@ export const setConversationVisibleRanges = (
   ranges: VisibleRange[],
 ): Transaction => tr.setMeta(conversationAnchorKey, { kind: 'visible', ranges });
 
+export const setConversationHoveredBlock = (
+  tr: Transaction,
+  blockFrom: number | null,
+): Transaction => tr.setMeta(conversationAnchorKey, { kind: 'hover', blockFrom });
+
 export const setConversationSurface = (
   tr: Transaction,
   surface: ConversationSurfaceState | null,
@@ -289,10 +294,9 @@ function blockFromDOMTarget(
   target: EventTarget | null,
   clientX: number,
 ): number | null {
-  const block = target instanceof Element
-    ? target.closest<HTMLElement>('.conversation-block-active, .conversation-block-anchored')
-    : null;
-  if (!block || !view.dom.contains(block)) return null;
+  let block = target instanceof HTMLElement ? target : null;
+  while (block && block.parentElement !== view.dom) block = block.parentElement;
+  if (!block) return null;
   const content = conversationContentBounds(view);
   const rect = content.right > content.left ? content : block.getBoundingClientRect();
   const inLeftGutter = clientX >= rect.left - conversationGutterHitWidth && clientX < rect.left;
@@ -506,7 +510,6 @@ export function conversationAnchorField(
       decorations(state) {
         const field = conversationAnchorKey.getState(state);
         if (!field) return null;
-        const cursorBlock = textBlockAt(state.doc, state.selection.head)?.from ?? null;
         const openPosition = field.surface && conversationRenderPosition(state.doc, field.surface.anchor);
         const openBlockFrom = openPosition === null || openPosition === undefined
           ? null
@@ -515,7 +518,7 @@ export function conversationAnchorField(
           state.doc,
           field.markerBlockFrom,
           field.visibleRanges,
-          field.hoveredBlockFrom ?? cursorBlock,
+          field.hoveredBlockFrom,
           openBlockFrom,
         );
         const decorations = targets.map((target) => Decoration.node(

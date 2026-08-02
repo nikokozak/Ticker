@@ -288,4 +288,21 @@ describe('App stream loading', () => {
       .toContain('I’ve been wondering about Cape Verde');
   });
 
+  it('patches the open stream when the host auto-title changes', async () => {
+    await boot();
+    await selectStream();
+    const requestId = Number(loads()[0].payload?.requestId);
+    await act(async () => {
+      bridge.receive(loaded(requestId));
+      await Promise.resolve();
+      bridge.receive({
+        type: 'streamTitleUpdated',
+        payload: { id: 'stream-1', title: 'Generated title' },
+      });
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector('.stream-title-editable')?.textContent).toBe('Generated title');
+  });
+
 });

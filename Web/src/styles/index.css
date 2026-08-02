@@ -453,7 +453,8 @@ body {
   border-bottom-color: var(--border-subtle);
 }
 
-.stream-header h1 {
+.stream-header h1,
+.stream-header .stream-title-editable {
   font-size: var(--font-size-md);
   line-height: var(--type-ui-line-height);
   font-weight: 500;
@@ -475,6 +476,12 @@ body {
   padding: var(--spacing-xs) var(--spacing-sm);
   margin: 0;
   transition: all var(--duration-fast) ease;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
 }
 
 .stream-title-editable:hover {

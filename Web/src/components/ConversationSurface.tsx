@@ -355,6 +355,7 @@ export function ConversationSurface({
       void send();
     } else if (event.key === 'Escape') {
       event.preventDefault();
+      event.stopPropagation();
       onCollapse();
     }
   };

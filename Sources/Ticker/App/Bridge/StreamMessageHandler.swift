@@ -77,7 +77,13 @@ final class StreamMessageHandler: BridgeMessageHandler {
                 return
             }
             do {
-                try await sendStreamLoaded(id: id, requestId: payload["requestId"]?.intValue)
+                let activeThreadId = (payload["activeThreadId"]?.value as? String)
+                    .flatMap(UUID.init(uuidString:))
+                try await sendStreamLoaded(
+                    id: id,
+                    requestId: payload["requestId"]?.intValue,
+                    activeThreadId: activeThreadId
+                )
             } catch {
                 DebugLog.log("[WebViewManager] Failed to load stream (\(DebugLog.errorSummary(error)))")
                 await sendStreamLoadFailed(
@@ -331,12 +337,16 @@ final class StreamMessageHandler: BridgeMessageHandler {
         }
     }
 
-    func sendStreamLoaded(id: UUID, requestId: Int? = nil) async throws {
+    func sendStreamLoaded(
+        id: UUID,
+        requestId: Int? = nil,
+        activeThreadId: UUID? = nil
+    ) async throws {
         guard let stream = try persistence.loadStream(id: id) else {
             await sendStreamLoadFailed(id: id, requestId: requestId, reason: "notFound")
             return
         }
-        _ = try persistence.deleteEphemeralThreads(streamId: id)
+        _ = try persistence.deleteEphemeralThreads(streamId: id, excluding: activeThreadId)
         delegate?.setCurrentStreamIdForFileDrops(id)
         await delegate?.closePDFPaneIfShowingDifferentStream(id)
         // The document, its spans and both append queues TOGETHER, in one

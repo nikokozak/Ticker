@@ -16,6 +16,7 @@ import {
   hasConversationAnchorTextDrifted,
   refreshConversationViewport,
   setConversationAnchors,
+  setConversationHoveredBlock,
   setConversationSurface,
   setConversationVisibleRanges,
   type ConversationAnchorFieldOptions,
@@ -203,6 +204,7 @@ it('renders one passive right glyph class and the current-block left line class'
   const anchor = fullBlockConversationAnchor(ed.view.state.doc, 1, 'one')!;
   ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor, { ...anchor, threadId: 'two' }]));
   ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{ from: anchor.from, to: anchor.to }]));
+  ed.view.dispatch(setConversationHoveredBlock(ed.view.state.tr, 0));
 
   const block = ed.view.dom.querySelector('p');
   expect(block?.classList.contains('conversation-block-active')).toBe(true);
@@ -215,6 +217,7 @@ it('hides the glyph on the open block and suppresses the rail on an empty block'
   ed.view.dispatch(setConversationAnchors(ed.view.state.tr, [anchor]));
   ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{ from: anchor.from, to: anchor.to }]));
   ed.view.dispatch(setConversationSurface(ed.view.state.tr, { key: 'thread:one', anchor }));
+  ed.view.dispatch(setConversationHoveredBlock(ed.view.state.tr, 0));
 
   const block = ed.view.dom.querySelector('p');
   expect(block?.classList.contains('conversation-block-active')).toBe(true);
@@ -228,6 +231,17 @@ it('hides the glyph on the open block and suppresses the rail on an empty block'
     to: empty.view.state.doc.content.size,
   }]));
   expect(empty.view.dom.querySelector('p')?.classList.contains('conversation-block-active')).toBe(false);
+});
+
+it('keeps the conversation rail hover-only when the caret moves', () => {
+  const ed = open('First\n\nSecond');
+  ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{
+    from: 0,
+    to: ed.view.state.doc.content.size,
+  }]));
+  ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.atEnd(ed.view.state.doc)));
+
+  expect(ed.view.dom.querySelector('.conversation-block-active')).toBe(null);
 });
 
 it('dispatches rail and glyph clicks from ProseMirror padding across their 24px bands', () => {

@@ -92,6 +92,7 @@ struct PasteboardSnapshot: Equatable {
 final class SelectionReaderService {
 
     private let cursorService: CursorPositionService
+    private let recentClipboardImage: () -> Data?
     private let maxSelectionReadAttempts = 2
     private let selectionReadRetryDelay: TimeInterval = 0.02
     private let hintedSelectionReadAttempts = 6
@@ -104,8 +105,12 @@ final class SelectionReaderService {
     private static let axManualAccessibilityAttribute = "AXManualAccessibility" as CFString
     private static let copyKeyCode = CGKeyCode(8)
 
-    init(cursorService: CursorPositionService? = nil) {
+    init(
+        cursorService: CursorPositionService? = nil,
+        recentClipboardImage: (() -> Data?)? = nil
+    ) {
         self.cursorService = cursorService ?? CursorPositionService()
+        self.recentClipboardImage = recentClipboardImage ?? Self.getRecentClipboardImage
     }
 
     static func isCurrentAppBundle(activeBundleId: String?, currentBundleId: String?) -> Bool {
@@ -612,14 +617,14 @@ final class SelectionReaderService {
         let position = cursorService.calculatePanelPosition(panelSize: panelSize)
 
         let selectedText = providedSelectedText ?? (readSelectionFromAX ? getSelectedText() : nil)
+        let clipboardImage = Self.nonEmptyText(selectedText) == nil ? recentClipboardImage() : nil
 
         let context = QuickPanelContext(
             selectedText: selectedText,
             activeApp: getActiveApp(),
             windowTitle: getActiveWindowTitle(),
             panelPosition: position,
-            clipboardImage: nil,
-            clipboardText: nil,
+            clipboardImage: clipboardImage,
             selectionCaptureOutcome: selectionCaptureOutcome
         )
         DebugLog.log(
@@ -630,6 +635,14 @@ final class SelectionReaderService {
             "activeApp=\(context.activeApp ?? "unknown")"
         )
         return context
+    }
+
+    private static func getRecentClipboardImage() -> Data? {
+        if ClipboardService.wasRecentlyModified(threshold: 60),
+           let image = ClipboardService.getImageData() {
+            return image
+        }
+        return ClipboardService.getRecentScreenshotData()
     }
 
 }
@@ -643,8 +656,6 @@ struct QuickPanelContext {
     let panelPosition: CGPoint
     /// Clipboard image data (if no text selection and clipboard has image)
     let clipboardImage: Data?
-    /// Recent user-copied clipboard text used as context when no real selection exists.
-    let clipboardText: String?
     /// Outcome of the external-app selection ladder when Quick Panel was invoked.
     let selectionCaptureOutcome: SelectionCaptureOutcome
 
@@ -654,7 +665,6 @@ struct QuickPanelContext {
         windowTitle: String?,
         panelPosition: CGPoint,
         clipboardImage: Data?,
-        clipboardText: String? = nil,
         selectionCaptureOutcome: SelectionCaptureOutcome = .notAttempted
     ) {
         self.selectedText = selectedText
@@ -662,7 +672,6 @@ struct QuickPanelContext {
         self.windowTitle = windowTitle
         self.panelPosition = panelPosition
         self.clipboardImage = clipboardImage
-        self.clipboardText = clipboardText
         self.selectionCaptureOutcome = selectionCaptureOutcome
     }
 
@@ -674,20 +683,8 @@ struct QuickPanelContext {
         return trimmed
     }
 
-    var trimmedClipboardText: String? {
-        guard let trimmed = clipboardText?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else {
-            return nil
-        }
-        return trimmed
-    }
-
     var contextText: String? {
-        trimmedSelectedText ?? trimmedClipboardText
-    }
-
-    var isClipboardTextContext: Bool {
-        trimmedSelectedText == nil && trimmedClipboardText != nil
+        trimmedSelectedText
     }
 
     var hasSelection: Bool {

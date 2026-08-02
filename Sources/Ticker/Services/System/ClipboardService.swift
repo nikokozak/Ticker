@@ -18,16 +18,8 @@ enum ClipboardService {
         )
     ]
 
-    static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
-    static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
-
-    /// Get current clipboard text
-    static func getText(pasteboard: NSPasteboard = .general) -> String? {
-        pasteboard.string(forType: .string)
-    }
-
     /// Get current clipboard image
-    static func getImage(pasteboard: NSPasteboard = .general) -> NSImage? {
+    private static func getImage(pasteboard: NSPasteboard = .general) -> NSImage? {
         // Check for image types
         if let image = NSImage(pasteboard: pasteboard) {
             return image
@@ -128,11 +120,6 @@ enum ClipboardService {
         return nil
     }
 
-    /// Get clipboard change count (to detect changes)
-    static func changeCount(pasteboard: NSPasteboard = .general) -> Int {
-        pasteboard.changeCount
-    }
-
     /// Check if clipboard was recently modified (within threshold)
     /// Updates internal tracking on each call
     static func wasRecentlyModified(
@@ -161,11 +148,6 @@ enum ClipboardService {
         var tracker = changeTracker(for: pasteboard)
         tracker.lastChangeCount = pasteboard.changeCount
         changeTrackers[pasteboard.name] = tracker
-    }
-
-    static func hasConcealedOrTransientTypes(pasteboard: NSPasteboard = .general) -> Bool {
-        let types = pasteboard.types ?? []
-        return types.contains(concealedType) || types.contains(transientType)
     }
 
     private static func screenshotDirectory(fileManager: FileManager) -> URL? {

@@ -386,6 +386,13 @@ export function App() {
           }
           break;
         }
+        case 'streamTitleUpdated': {
+          const id = message.payload?.id;
+          const title = message.payload?.title;
+          if (typeof id !== 'string' || typeof title !== 'string') break;
+          setCurrentStream((current) => current?.id === id ? { ...current, title } : current);
+          break;
+        }
         case 'streamsChanged':
           // Quick Panel created a new stream - reload the list
           debugLog('[App] Streams changed, reloading list');

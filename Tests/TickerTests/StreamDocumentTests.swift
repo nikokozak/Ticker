@@ -96,33 +96,6 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
         """)
     }
 
-    func test_buildFragment_usesClipboardTextAsBlockquoteContext() throws {
-        let context = QuickPanelContext(
-            selectedText: nil,
-            activeApp: "Terminal",
-            windowTitle: "Shell",
-            panelPosition: CGPoint(x: 0, y: 0),
-            clipboardImage: nil,
-            clipboardText: " Copied line "
-        )
-
-        let fragment = try QuickPanelMarkdownFormatter.buildFragment(
-            context: context,
-            inputText: ""
-        ) { _ in
-            XCTFail("Image formatter should not run for text-only context")
-            return ""
-        }
-
-        XCTAssertEqual(context.contextText, "Copied line")
-        XCTAssertTrue(context.isClipboardTextContext)
-        XCTAssertEqual(fragment, """
-        > Copied line
-
-        *— Terminal — Shell*
-        """)
-    }
-
     func test_captureSpansCoverCapturedTextAndAttributionOnly() throws {
         let streamId = UUID()
         let context = QuickPanelContext(
@@ -170,6 +143,19 @@ final class QuickPanelMarkdownFormatterTests: XCTestCase {
 
         writeText("Genuine copy", to: pasteboard)
         XCTAssertTrue(ClipboardService.wasRecentlyModified(threshold: 15, pasteboard: pasteboard))
+    }
+
+    func test_quickPanelContextAttachesRecentImageOnlyWithoutTextSelection() {
+        let image = Data("image".utf8)
+        let service = SelectionReaderService(recentClipboardImage: { image })
+
+        XCTAssertEqual(
+            service.buildContext(selectedText: nil, readSelectionFromAX: false).clipboardImage,
+            image
+        )
+        XCTAssertNil(
+            service.buildContext(selectedText: "Selected", readSelectionFromAX: false).clipboardImage
+        )
     }
 
     @MainActor
@@ -907,7 +893,7 @@ final class StreamDocumentTests: XCTestCase {
                 persistence: service,
                 restatementProvider: provider,
                 now: { Date(timeIntervalSince1970: 1_000) },
-                onStreamsChanged: { await notifications.increment() }
+                onStreamsChanged: { _, _ in await notifications.increment() }
             )
             let markdown = "Short note"
 
@@ -2453,8 +2439,10 @@ final class StreamDocumentTests: XCTestCase {
             let stream = Stream(title: "Crash recovery")
             try service.saveStream(stream)
             let scratch = StreamThread(streamId: stream.id, ephemeral: true)
+            let activeScratch = StreamThread(streamId: stream.id, ephemeral: true)
             let kept = StreamThread(streamId: stream.id)
             try service.createStreamThread(scratch)
+            try service.createStreamThread(activeScratch)
             try service.createStreamThread(kept)
             try service.saveExchange(AIExchange(
                 requestId: "scratch-exchange",
@@ -2464,10 +2452,29 @@ final class StreamDocumentTests: XCTestCase {
                 userInput: "Scratch",
                 responseRaw: "Temporary"
             ))
+            try service.saveExchange(AIExchange(
+                requestId: "active-scratch-exchange",
+                streamId: stream.id,
+                threadId: activeScratch.threadId,
+                verb: "thread",
+                userInput: "Still open",
+                responseRaw: "Keep temporarily"
+            ))
 
-            XCTAssertEqual(try service.deleteEphemeralThreads(streamId: stream.id), 1)
+            XCTAssertEqual(
+                try service.deleteEphemeralThreads(
+                    streamId: stream.id,
+                    excluding: activeScratch.threadId
+                ),
+                1
+            )
             XCTAssertNil(try service.loadStreamThread(threadId: scratch.threadId, streamId: stream.id))
             XCTAssertNil(try service.loadExchange(requestId: "scratch-exchange"))
+            XCTAssertNotNil(try service.loadStreamThread(
+                threadId: activeScratch.threadId,
+                streamId: stream.id
+            ))
+            XCTAssertNotNil(try service.loadExchange(requestId: "active-scratch-exchange"))
             XCTAssertNotNil(try service.loadStreamThread(threadId: kept.threadId, streamId: stream.id))
         }
     }

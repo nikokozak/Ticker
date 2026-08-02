@@ -245,12 +245,7 @@ struct QuickPanelView: View {
             baseLabel = nil
         }
 
-        let isClipboardText = context.selectionCaptureOutcome == .clipboard || context.isClipboardTextContext
-        guard isClipboardText else {
-            return baseLabel
-        }
-
-        return "\(baseLabel ?? "Copied text") · from clipboard"
+        return baseLabel
     }
 
     private func contextSourceFullLabel(_ context: QuickPanelContext) -> String? {
@@ -606,7 +601,7 @@ struct QuickPanelView: View {
                     Text("⌘↵  Save + develop")
                     Spacer(minLength: 0)
                 }
-                Text("⌘V  Attach clipboard · ⌥↵  Chat here (not saved) · Esc closes, draft kept")
+                Text("⌘V  Paste into note · ⌥↵  Chat here (not saved) · Esc closes, draft kept")
             }
             .font(QuickPanelStyle.font(size: QuickPanelStyle.microTextSize))
             .foregroundColor(QuickPanelStyle.textMuted)

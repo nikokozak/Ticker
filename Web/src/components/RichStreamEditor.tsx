@@ -213,10 +213,27 @@ interface ExpandedConversation {
 type EphemeralCloseDecision = 'keep' | 'discard' | 'cancel';
 
 const conversationComposerDrafts = new Map<string, string>();
+const conversationComposerDraftStorageKey = (key: string) => `ticker:conversation-draft:${key}`;
 
 function conversationComposerDraftKey(streamId: string, key: string, state?: ConversationLiveState) {
   const threadId = state?.thread?.threadId ?? (key.startsWith('thread:') ? key.slice(7) : null);
-  return threadId ? `${streamId}:${threadId}` : null;
+  return `${streamId}:${threadId ?? key}`;
+}
+
+function conversationComposerDraft(key: string): string {
+  return conversationComposerDrafts.get(key)
+    ?? window.sessionStorage.getItem(conversationComposerDraftStorageKey(key))
+    ?? '';
+}
+
+function setConversationComposerDraft(key: string, value: string): void {
+  if (value) {
+    conversationComposerDrafts.set(key, value);
+    window.sessionStorage.setItem(conversationComposerDraftStorageKey(key), value);
+  } else {
+    conversationComposerDrafts.delete(key);
+    window.sessionStorage.removeItem(conversationComposerDraftStorageKey(key));
+  }
 }
 
 type SlashCommand = 'chat' | 'research';
@@ -408,6 +425,10 @@ export function RichStreamEditor({
     return () => window.clearTimeout(timer);
   }, [saveState]);
 
+  useEffect(() => {
+    if (!isEditingTitle) setTitle(stream.title);
+  }, [stream.title, isEditingTitle]);
+
   const canStartAI = useCallback(() => {
     if (!aiInFlightRef.current && !pdfAIInFlightRef.current) return true;
     addToast('Wait for the current AI operation to finish, or stop it first.', 'info');
@@ -537,13 +558,13 @@ export function RichStreamEditor({
     updater: ConversationLiveStateUpdater,
   ) => {
     const current = conversationLiveStatesRef.current;
-    const value = updater(current[key] ?? initialConversationLiveState());
+    const previous = current[key] ?? initialConversationLiveState();
+    const value = updater(previous);
     if (value === current[key]) return;
+    const previousDraftKey = conversationComposerDraftKey(stream.id, key, previous);
     const draftKey = conversationComposerDraftKey(stream.id, key, value);
-    if (draftKey) {
-      if (value.composer) conversationComposerDrafts.set(draftKey, value.composer);
-      else conversationComposerDrafts.delete(draftKey);
-    }
+    if (previousDraftKey !== draftKey) setConversationComposerDraft(previousDraftKey, '');
+    setConversationComposerDraft(draftKey, value.composer);
     const next = { ...current, [key]: value };
     conversationLiveStatesRef.current = next;
     setConversationLiveStates(next);
@@ -554,7 +575,7 @@ export function RichStreamEditor({
     if (current[key]) return;
     const initial = initialConversationLiveState(threadId);
     const draftKey = conversationComposerDraftKey(stream.id, key, initial);
-    if (draftKey) initial.composer = conversationComposerDrafts.get(draftKey) ?? '';
+    initial.composer = conversationComposerDraft(draftKey);
     const next = { ...current, [key]: initial };
     conversationLiveStatesRef.current = next;
     setConversationLiveStates(next);
@@ -587,11 +608,14 @@ export function RichStreamEditor({
       const records = conversationRecordsRef.current.filter((record) => record.threadId !== thread.threadId);
       conversationRecordsRef.current = records;
       setConversationRecords(records);
+      setConversationComposerDraft(`${stream.id}:${key}`, '');
+      setConversationComposerDraft(`${stream.id}:${thread.threadId}`, '');
       updateConversationLiveState(key, (current) => ({
         ...current,
         thread: null,
         exchanges: [],
         active: null,
+        composer: '',
       }));
       return true;
     } catch {
@@ -676,11 +700,6 @@ export function RichStreamEditor({
     return task;
   }, [stream.id, updateConversationLiveState]);
 
-  const discardExpandedEphemeralConversation = useCallback(async (): Promise<boolean> => {
-    const expanded = expandedConversationRef.current;
-    return expanded?.ephemeral ? discardEphemeralConversation(expanded.key) : true;
-  }, [discardEphemeralConversation]);
-
   const requestEphemeralCloseDecision = useCallback((expanded: ExpandedConversation) => (
     new Promise<EphemeralCloseDecision>((resolve) => {
       ephemeralCloseResolverRef.current = resolve;
@@ -694,23 +713,6 @@ export function RichStreamEditor({
     setEphemeralClosePrompt(null);
     resolve?.(decision);
   }, []);
-
-  const flushAll = useCallback(async () => {
-    cancelDocumentAI();
-    const expanded = expandedConversationRef.current;
-    if (expanded) {
-      closingConversationKeysRef.current.add(expanded.key);
-      cancelConversationRequest(expanded.key);
-      await discardExpandedEphemeralConversation();
-      closingConversationKeysRef.current.delete(expanded.key);
-    }
-    return sessionRef.current?.saveNow() ?? Promise.resolve(true);
-  }, [cancelConversationRequest, cancelDocumentAI, discardExpandedEphemeralConversation]);
-
-  useEffect(() => {
-    onFlushAvailable?.(flushAll);
-    return () => onFlushAvailable?.(null);
-  }, [flushAll, onFlushAvailable]);
 
   const prepareConversationClose = useCallback(async (expanded: ExpandedConversation) => {
     if (closingConversationKeysRef.current.has(expanded.key) || ephemeralCloseResolverRef.current) return false;
@@ -747,6 +749,18 @@ export function RichStreamEditor({
     requestEphemeralCloseDecision,
     updateConversationLiveState,
   ]);
+
+  const flushAll = useCallback(async () => {
+    cancelDocumentAI();
+    const expanded = expandedConversationRef.current;
+    if (expanded && !await prepareConversationClose(expanded)) return false;
+    return sessionRef.current?.saveNow() ?? Promise.resolve(true);
+  }, [cancelDocumentAI, prepareConversationClose]);
+
+  useEffect(() => {
+    onFlushAvailable?.(flushAll);
+    return () => onFlushAvailable?.(null);
+  }, [flushAll, onFlushAvailable]);
 
   const expandConversation = useCallback(async (next: ExpandedConversation) => {
     const current = expandedConversationRef.current;
@@ -797,6 +811,10 @@ export function RichStreamEditor({
     }
     const expanded = expandedConversationRef.current;
     if (expanded) closingConversationKeysRef.current.add(expanded.key);
+    const prefix = `${stream.id}:`;
+    for (const key of conversationComposerDrafts.keys()) {
+      if (key.startsWith(prefix)) conversationComposerDrafts.delete(key);
+    }
   }, [cancelConversationRequest, stream.id]);
 
   const openConversationFromGlyph = useCallback((threadId: string) => {
@@ -1071,7 +1089,13 @@ export function RichStreamEditor({
             consumedInboxThrough,
           },
         ),
-        reload: (streamId) => bridge.send({ type: 'loadStream', payload: { id: streamId } }),
+        reload: (streamId) => {
+          const expanded = expandedConversationRef.current;
+          const activeThreadId = expanded?.ephemeral
+            ? conversationLiveStatesRef.current[expanded.key]?.thread?.threadId
+            : undefined;
+          bridge.send({ type: 'loadStream', payload: { id: streamId, activeThreadId } });
+        },
         onSaveStateChange: setSaveState,
         onError: (message) => addToast(message, 'error'),
       },
@@ -2487,9 +2511,9 @@ export function RichStreamEditor({
             autoFocus
           />
         ) : (
-          <h1 onClick={startEditingTitle} className="stream-title-editable" title={title}>
+          <button type="button" onClick={startEditingTitle} className="stream-title-editable" title={title}>
             {title}
-          </h1>
+          </button>
         )}
         <div className="stream-header-actions">
           {(saveState === 'error' || showSaving) && (
