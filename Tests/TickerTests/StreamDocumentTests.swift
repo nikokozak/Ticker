@@ -1324,6 +1324,7 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertTrue(prepared.request.systemPrompt.contains("web_search"))
     }
 
+    @MainActor
     func test_conversationUpdateBlockToolUsesTheProxyFunctionSchemaOnlyWhenEligible() throws {
         let legacy = try AIOrchestrator.prepareThreadRequest(
             query: "Rewrite this",
