@@ -64,7 +64,7 @@ sidecar data.
 
 ### Anchor lifecycle rules (verbatim; encode in tests)
 
-1. A conversation anchors to a contiguous range of ProseMirror document positions, initially the full
+1. A conversation anchors to a contiguous UTF-16 range in the canonical document, initially the full
    text of one block. The range maps through every transaction (same mapping discipline as provenance
    spans). The conversation renders after the **last block intersecting the range**.
 2. Block split inside the range: the range now spans both halves; render rule (1) keeps the
@@ -124,7 +124,7 @@ composer empty) collapses. Streaming renders progressively into the last AI turn
 
 ```sql
 -- v30_conversation_anchors
-ALTER TABLE stream_threads ADD COLUMN anchor_start INTEGER;   -- ProseMirror doc position (opaque to Swift)
+ALTER TABLE stream_threads ADD COLUMN anchor_start INTEGER;   -- UTF-16 offset in canonical doc
 ALTER TABLE stream_threads ADD COLUMN anchor_end   INTEGER;
 ALTER TABLE stream_threads ADD COLUMN detached     INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE stream_threads ADD COLUMN ephemeral    INTEGER NOT NULL DEFAULT 0;  -- /chat, D9
@@ -346,16 +346,22 @@ acting on the Stream.
 - Governor reviews every round's diff, runs gates independently, and updates the session/status table
   below. User runs live smokes; DB backup before any launch against the real profile.
 
-| Phase | Branch | Codex session | Status |
+| Phase | Branch | PR | Status |
 |---|---|---|---|
-| C0 | codex/conv-c0 | see memory / PR body | in progress (2026-08-01) |
-| C1 | codex/conv-c1 | — | not started |
-| C2 | codex/conv-c2 | — | not started |
-| C3 | codex/conv-c3 | — | not started |
-| C4 | codex/conv-c4 | — | not started |
-| C5 | codex/conv-c5 | — | not started |
-| C6 | codex/conv-c6 | — | not started |
-| C7 | codex/conv-c7 + Ticker-Proxy | — | blocked on proxy |
+| C0 | codex/conv-c0 | #68 | DONE 2026-08-01 |
+| C1 | codex/conv-c1 | #69 | DONE 2026-08-01 |
+| C2 | codex/conv-c2 | #70 | DONE 2026-08-01 |
+| C3 | codex/conv-c3 | #71 | DONE 2026-08-01 (swift-test correction noted on PR) |
+| C4 | codex/conv-c4 | #72 | DONE 2026-08-01 (v31 profile migration added in C6) |
+| C5 | codex/conv-c5 | #73 | DONE 2026-08-01 |
+| C6 | codex/conv-c6 | #74 | DONE 2026-08-01 |
+| C7 | codex/conv-c7 + Ticker-Proxy `codex/tool-passthrough` (`7c636aa`) | #75 | DONE 2026-08-01 — proxy NOT deployed; deploy before the tool can fire live |
+
+All phases governed by one warm Codex session (`019fbe73-…93f8`) + one proxy session; every phase
+independently gated (exit codes) and Opus-reviewed with fix rounds. Merge order: #68→#75, one at a
+time (retarget-race lesson). User-reserved: PR merges, Fly deploy of the proxy branch, live smokes
+(editor-slice baseline + conversation flows + Quote & discuss round-trip + /chat ephemerality +
+update_block on a real stream), light/dark visual pass on C1.
 
 ---
 
