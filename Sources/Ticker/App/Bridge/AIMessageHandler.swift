@@ -99,6 +99,13 @@ struct ThreadAISentFacts: Codable, Equatable {
         let page: Int?
     }
 
+    struct UpdateBlock: Codable, Equatable {
+        let before: String
+        let after: String
+        let applied: Bool?
+        let failure: String?
+    }
+
     let version: Int
     let kind: String
     let requestId: String
@@ -110,6 +117,7 @@ struct ThreadAISentFacts: Codable, Equatable {
     let sources: [Source]
     let pinned: [Pinned]
     let profile: String?
+    let updateBlock: UpdateBlock?
 
     var jsonString: String {
         let encoder = JSONEncoder()
@@ -137,12 +145,19 @@ typealias ThreadAIRoute = (
     _ pinnedContext: [ThreadAIPinnedContext],
     _ priorTurns: [ThreadAIConversationTurn],
     _ researchProfile: Bool,
+    _ offerUpdateBlock: Bool,
     _ onPrepared: @escaping (ThreadAIRequestReceipt) -> Void,
     _ onChunk: @escaping (String) -> Void,
-    _ onComplete: @escaping (ThreadAIRequestReceipt) -> Void,
+    _ onComplete: @escaping (ThreadAIRequestReceipt, ProxyLLMCompletion) -> Void,
     _ onError: @escaping (Error) -> Void,
     _ onModelSelected: ((String) -> Void)?
 ) async -> Void
+
+private struct ThreadAIUpdateBlockCall {
+    let id: String
+    let argumentsJSON: String
+    let content: String
+}
 
 private enum DocumentAIVerb: String {
     case develop
@@ -273,7 +288,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                 onModelSelected: onModelSelected
             )
         }
-        self.routeThreadAI = { [orchestrator = container.orchestrator] query, retrievalQuery, streamId, sourceScope, anchorText, streamMarkdown, pinnedContext, priorTurns, researchProfile, onPrepared, onChunk, onComplete, onError, onModelSelected in
+        self.routeThreadAI = { [orchestrator = container.orchestrator] query, retrievalQuery, streamId, sourceScope, anchorText, streamMarkdown, pinnedContext, priorTurns, researchProfile, offerUpdateBlock, onPrepared, onChunk, onComplete, onError, onModelSelected in
             await orchestrator.routeThread(
                 query: query,
                 retrievalQuery: retrievalQuery,
@@ -284,6 +299,7 @@ final class AIMessageHandler: BridgeMessageHandler {
                 pinnedContext: pinnedContext,
                 priorTurns: priorTurns,
                 researchProfile: researchProfile,
+                offerUpdateBlock: offerUpdateBlock,
                 onPrepared: onPrepared,
                 onChunk: onChunk,
                 onComplete: onComplete,
@@ -314,7 +330,7 @@ final class AIMessageHandler: BridgeMessageHandler {
             _ onError: @escaping (Error) -> Void,
             _ onModelSelected: ((String) -> Void)?
         ) async -> Void,
-        routeThreadAI: @escaping ThreadAIRoute = { _, _, _, _, _, _, _, _, _, _, _, _, onError, _ in
+        routeThreadAI: @escaping ThreadAIRoute = { _, _, _, _, _, _, _, _, _, _, _, _, _, onError, _ in
             onError(OrchestratorError.noProviderAvailable)
         }
     ) {
@@ -622,7 +638,6 @@ final class AIMessageHandler: BridgeMessageHandler {
 
         var responseRaw = ""
         var selectedModel: String?
-        var sentFacts: ThreadAISentFacts?
         let onPrepared: (ThreadAIRequestReceipt) -> Void = { [weak self] receipt in
             guard let self, !Task.isCancelled else { return }
             let facts = self.threadSentFacts(
@@ -636,7 +651,6 @@ final class AIMessageHandler: BridgeMessageHandler {
                 receipt: receipt,
                 profile: profile
             )
-            sentFacts = facts
             self.sendToWeb(BridgeMessage(
                 type: "threadAIContext",
                 payload: [
@@ -653,9 +667,10 @@ final class AIMessageHandler: BridgeMessageHandler {
                 payload: ["requestId": AnyCodable(requestId), "chunk": AnyCodable(chunk)]
             ))
         }
-        let onComplete: (ThreadAIRequestReceipt) -> Void = { [weak self] receipt in
+        let onComplete: (ThreadAIRequestReceipt, ProxyLLMCompletion) -> Void = { [weak self] receipt, completion in
             guard let self, !Task.isCancelled else { return }
-            let facts = sentFacts ?? self.threadSentFacts(
+            let toolCall = completion.toolCalls.lazy.compactMap(Self.updateBlockCall).first
+            let facts = self.threadSentFacts(
                 requestId: requestId,
                 thread: thread,
                 anchorText: sentAnchorContext,
@@ -664,9 +679,20 @@ final class AIMessageHandler: BridgeMessageHandler {
                 streamMarkdown: streamMarkdown,
                 anchors: pinnedAnchors,
                 receipt: receipt,
-                profile: profile
+                profile: profile,
+                updateBlock: toolCall.map {
+                    ThreadAISentFacts.UpdateBlock(
+                        before: sentAnchorContext,
+                        after: $0.content,
+                        applied: nil,
+                        failure: nil
+                    )
+                }
             )
-            guard !responseRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            let visibleResponse = responseRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? toolCall.map { $0.content.isEmpty ? "Clear this block." : $0.content } ?? ""
+                : responseRaw
+            guard !visibleResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 self.sendToWeb(BridgeMessage(
                     type: "documentAIError",
                     payload: [
@@ -685,19 +711,28 @@ final class AIMessageHandler: BridgeMessageHandler {
                 verb: "thread",
                 userInput: query,
                 sourceManifest: facts.jsonString,
-                responseRaw: responseRaw,
+                responseRaw: visibleResponse,
                 model: selectedModel,
                 threadDisposition: "pending"
             )
             do {
                 try persistence.saveExchange(exchange)
+                var completionPayload: [String: AnyCodable] = [
+                    "requestId": AnyCodable(requestId),
+                    "exchange": AnyCodable(StreamCodec.encodeExchange(exchange)),
+                    "sentContext": AnyCodable(facts.bridgePayload),
+                    "toolCalls": AnyCodable(completion.reportedToolCalls)
+                ]
+                if let toolCall {
+                    completionPayload["toolCall"] = AnyCodable([
+                        "id": toolCall.id,
+                        "name": "update_block",
+                        "arguments": toolCall.argumentsJSON
+                    ])
+                }
                 self.sendToWeb(BridgeMessage(
                     type: "documentAIComplete",
-                    payload: [
-                        "requestId": AnyCodable(requestId),
-                        "exchange": AnyCodable(StreamCodec.encodeExchange(exchange)),
-                        "sentContext": AnyCodable(facts.bridgePayload)
-                    ]
+                    payload: completionPayload
                 ))
             } catch {
                 DebugLog.log("[AIMessageHandler] Failed to save thread exchange (\(DebugLog.errorSummary(error)))")
@@ -769,6 +804,11 @@ final class AIMessageHandler: BridgeMessageHandler {
                 pinnedContext,
                 priorTurns,
                 profile == "research",
+                Self.shouldOfferUpdateBlock(
+                    thread: thread,
+                    anchorStart: anchorStart,
+                    anchorEnd: anchorEnd
+                ),
                 onPrepared,
                 onChunk,
                 onComplete,
@@ -795,7 +835,8 @@ final class AIMessageHandler: BridgeMessageHandler {
         streamMarkdown: String,
         anchors: [StreamThreadAnchor],
         receipt: ThreadAIRequestReceipt,
-        profile: String?
+        profile: String?,
+        updateBlock: ThreadAISentFacts.UpdateBlock? = nil
     ) -> ThreadAISentFacts {
         var source: SourceReference?
         var highlight: PDFHighlightRecord?
@@ -889,8 +930,40 @@ final class AIMessageHandler: BridgeMessageHandler {
             sourceContextMode: Self.sourceContextMode(receipt.sourceContext),
             sources: sources,
             pinned: pinned,
-            profile: profile
+            profile: profile,
+            updateBlock: updateBlock
         )
+    }
+
+    private static func updateBlockCall(_ call: LLMToolCall) -> ThreadAIUpdateBlockCall? {
+        guard call.name == "update_block" else {
+            DebugLog.log("[AIMessageHandler] Ignored unsupported conversation tool call '\(call.name)'")
+            return nil
+        }
+        guard let data = call.argumentsJSON.data(using: .utf8),
+              let arguments = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let content = arguments["content"] as? String else {
+            DebugLog.log("[AIMessageHandler] Dropped malformed update_block tool call")
+            return nil
+        }
+        return ThreadAIUpdateBlockCall(id: call.id, argumentsJSON: call.argumentsJSON, content: content)
+    }
+
+    static func shouldOfferUpdateBlock(
+        thread: StreamThread,
+        anchorStart: Int?,
+        anchorEnd: Int?
+    ) -> Bool {
+        guard thread.sourceId == nil,
+              thread.highlightId == nil,
+              !thread.detached,
+              !thread.ephemeral,
+              let persistedStart = thread.anchorStart,
+              let persistedEnd = thread.anchorEnd,
+              persistedStart < persistedEnd else {
+            return false
+        }
+        return (anchorStart ?? 0) < (anchorEnd ?? 0)
     }
 
     private static func sentPinnedAnchors(

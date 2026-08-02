@@ -14,6 +14,7 @@ import {
   selectText,
   setImageWidth,
   streamAIMarkdown,
+  updateConversationBlockMarkdown,
 } from './operations';
 import { provenanceSpans } from './provenance';
 
@@ -174,6 +175,84 @@ describe('promoting a conversation answer', () => {
     undo(ed);
     expect(ed.getDocumentJSON()).toBe(before);
     expect(provenanceSpans(ed.view.state)).toEqual([]);
+  });
+});
+
+describe('updating a conversation anchor', () => {
+  it('clamps huge, empty, and block-splitting replacements to the live anchor and undoes byte-exactly', () => {
+    const cases = [
+      'x'.repeat(20_000),
+      '',
+      '# Replacement\n\nFirst paragraph.\n\n- one\n- two\n\n> final block',
+    ];
+    for (const markdown of cases) {
+      const ed = open('Outside before.\n\nTarget text.\n\nOutside after.');
+      const beforeMarkdown = ed.getMarkdownProjection();
+      const beforeJSON = ed.getDocumentJSON();
+      const first = ed.view.state.doc.firstChild!.toJSON();
+      const last = ed.view.state.doc.lastChild!.toJSON();
+      const replaced = updateConversationBlockMarkdown(ed.view, find(ed, 'Target text.'), markdown, {
+        requestId: `update-${markdown.length}`,
+        model: 'test-model',
+        verb: 'thread',
+        threadId: 'thread-1',
+      });
+      expect(replaced.applied).toBe(true);
+      if (!replaced.applied) throw new Error(replaced.failure);
+
+      expect(ed.view.state.doc.firstChild!.toJSON()).toEqual(first);
+      expect(ed.view.state.doc.lastChild!.toJSON()).toEqual(last);
+      if (markdown) {
+        expect(aiWritingRange(ed.view.state)).toEqual({ from: replaced.from, to: replaced.to });
+        expect(provenanceSpans(ed.view.state)).toEqual([
+          expect.objectContaining({
+            from: replaced.from,
+            to: replaced.to,
+            origin: 'ai',
+            requestId: `update-${markdown.length}`,
+          }),
+        ]);
+      } else expect(provenanceSpans(ed.view.state)).toEqual([]);
+      undo(ed);
+      expect(ed.getMarkdownProjection()).toBe(beforeMarkdown);
+      expect(ed.getDocumentJSON()).toBe(beforeJSON);
+      expect(provenanceSpans(ed.view.state)).toEqual([]);
+      ed.destroy();
+      editor = null;
+    }
+  });
+
+  it('keeps partial-anchor replacements inline and refuses structural content byte-exactly', () => {
+    const ed = open('Outside before.\n\nPrefix target suffix.\n\nOutside after.');
+    const target = find(ed, 'target');
+    const before = ed.getDocumentJSON();
+    const first = ed.view.state.doc.firstChild!.toJSON();
+    const last = ed.view.state.doc.lastChild!.toJSON();
+    const inline = updateConversationBlockMarkdown(ed.view, target, 'AI **inline**', {
+      requestId: 'inline-update',
+      model: 'test-model',
+      verb: 'thread',
+      threadId: 'thread-1',
+    });
+
+    expect(inline.applied).toBe(true);
+    expect(ed.view.state.doc.firstChild!.toJSON()).toEqual(first);
+    expect(ed.view.state.doc.lastChild!.toJSON()).toEqual(last);
+    expect(ed.view.state.doc.child(1).type.name).toBe('paragraph');
+    const expected = 'Outside before.\n\nPrefix AI **inline** suffix.\n\nOutside after.';
+    expect(ed.getMarkdownProjection()).toBe(expected);
+    expect(ed.view.state.doc.toJSON()).toEqual(parseMarkdown(expected).toJSON());
+    undo(ed);
+    expect(ed.getDocumentJSON()).toBe(before);
+
+    const structuralBefore = ed.getDocumentJSON();
+    expect(updateConversationBlockMarkdown(ed.view, target, '# Heading\n\nSecond block.', {
+      requestId: 'structural-update',
+      model: 'test-model',
+      verb: 'thread',
+      threadId: 'thread-1',
+    })).toEqual({ applied: false, failure: 'partial_anchor' });
+    expect(ed.getDocumentJSON()).toBe(structuralBefore);
   });
 });
 

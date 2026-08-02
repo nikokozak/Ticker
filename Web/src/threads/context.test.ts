@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { manifestCitations, parseThreadAISentFacts } from './context';
+import {
+  manifestCitations,
+  parseThreadAISentFacts,
+  threadAIReceiptWithUpdateResult,
+} from './context';
 
 const receipt = {
   version: 1,
@@ -75,5 +79,44 @@ describe('thread AI context receipts', () => {
     expect(manifestCitations(JSON.stringify([{
       sourceId: 'source-1', chunkId: 'chunk-1', page: 0, shortTitle: 'Manual',
     }]))[0].page).toBe(1);
+  });
+
+  it('round-trips pending and applied update_block receipt facts', () => {
+    const pending = {
+      ...receiptV2,
+      updateBlock: { before: 'Old passage.', after: 'New passage.' },
+    };
+    expect(parseThreadAISentFacts(pending)?.updateBlock).toEqual(pending.updateBlock);
+    const applied = threadAIReceiptWithUpdateResult(JSON.stringify(pending), 'Current passage.');
+    expect(parseThreadAISentFacts(applied)?.updateBlock).toEqual({
+      before: 'Current passage.',
+      after: 'New passage.',
+      applied: true,
+      failure: undefined,
+    });
+    const failed = threadAIReceiptWithUpdateResult(
+      JSON.stringify(pending),
+      'Changed passage.',
+      'passage_changed',
+    );
+    expect(parseThreadAISentFacts(failed)?.updateBlock).toEqual({
+      before: 'Changed passage.',
+      after: 'New passage.',
+      applied: false,
+      failure: 'passage_changed',
+    });
+    for (const failure of [
+      'partial_anchor', 'surface_closed', 'thread_mismatch', 'apply_error',
+    ] as const) {
+      expect(parseThreadAISentFacts(threadAIReceiptWithUpdateResult(
+        JSON.stringify(pending),
+        'Current passage.',
+        failure,
+      ))?.updateBlock?.failure).toBe(failure);
+    }
+    expect(parseThreadAISentFacts({
+      ...pending,
+      updateBlock: { ...pending.updateBlock, applied: false, failure: 'made_up' },
+    })).toBe(null);
   });
 });

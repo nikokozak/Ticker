@@ -85,6 +85,7 @@ export const WEB_TO_SWIFT_MESSAGE_TYPES = [
   'openSource',
   'quitApp',
   'refreshProxyAuth',
+  'recordThreadToolApplication',
   'removeSource',
   'removeStreamThreadAnchor',
   'retrySourceIndexing',
@@ -157,6 +158,19 @@ export interface DocumentAICitation {
   page: number;
   shortTitle: string;
 }
+
+export interface ConversationToolCall {
+  id: string;
+  name: 'update_block';
+  arguments: string;
+}
+
+export type ConversationToolFailure =
+  | 'passage_changed'
+  | 'partial_anchor'
+  | 'surface_closed'
+  | 'thread_mismatch'
+  | 'apply_error';
 
 export interface SourceTitlePayload {
   sourceName?: string;
@@ -304,6 +318,22 @@ export function removeStreamThreadAnchor(input: {
     streamId: input.streamId,
     threadId: input.threadId,
     anchorId: input.anchorId,
+  });
+}
+
+export function recordThreadToolApplication(input: {
+  streamId: string;
+  requestId: string;
+  before: string;
+  applied: boolean;
+  failure?: ConversationToolFailure;
+}): Promise<{ exchange: AIExchangeJSON }> {
+  return bridge.sendAsync('recordThreadToolApplication', {
+    streamId: input.streamId,
+    requestId: input.requestId,
+    before: input.before,
+    applied: input.applied,
+    failure: input.failure,
   });
 }
 

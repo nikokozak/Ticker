@@ -2,12 +2,17 @@ import Foundation
 
 @MainActor
 final class ThreadMessageHandler: BridgeMessageHandler {
+    private static let updateBlockFailures: Set<String> = [
+        "passage_changed", "partial_anchor", "surface_closed", "thread_mismatch", "apply_error"
+    ]
+
     let handledTypes: Set<String> = [
         "addStreamThreadAnchor",
         "listConversations",
         "createStreamThread",
         "deleteStreamThread",
         "loadStreamThread",
+        "recordThreadToolApplication",
         "removeStreamThreadAnchor",
         "saveStreamThread"
     ]
@@ -210,6 +215,39 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 } catch {
                     respondWithError(callbackId, error.localizedDescription)
                 }
+            } catch {
+                respondWithError(callbackId, error.localizedDescription)
+            }
+
+        case "recordThreadToolApplication":
+            guard let payload = message.payload,
+                  let streamId = decodeUUID(payload, key: "streamId"),
+                  let requestId = payload["requestId"]?.value as? String,
+                  !requestId.isEmpty,
+                  let before = payload["before"]?.value as? String,
+                  let applied = payload["applied"]?.value as? Bool else {
+                respondWithError(callbackId, "Invalid recordThreadToolApplication payload")
+                return
+            }
+            let failure = payload["failure"]?.value as? String
+            let validFailure = failure.map { Self.updateBlockFailures.contains($0) } ?? false
+            guard (applied && failure == nil)
+                    || (!applied && validFailure) else {
+                respondWithError(callbackId, "Invalid recordThreadToolApplication payload")
+                return
+            }
+            do {
+                respond(callbackId, [
+                    "exchange": AnyCodable(StreamCodec.encodeExchange(
+                        try persistence.recordThreadToolApplication(
+                            requestId: requestId,
+                            streamId: streamId,
+                            before: before,
+                            applied: applied,
+                            failure: failure
+                        )
+                    ))
+                ])
             } catch {
                 respondWithError(callbackId, error.localizedDescription)
             }

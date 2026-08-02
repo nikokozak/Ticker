@@ -4,6 +4,8 @@ import {
   bridge,
   loadStreamThread,
   removeStreamThreadAnchor,
+  type ConversationToolCall,
+  type ConversationToolFailure,
 } from '../types/bridge';
 import type {
   AIExchangeJSON,
@@ -73,6 +75,7 @@ interface ConversationSurfaceProps {
   ) => Promise<StreamThreadJSON>;
   hasDrifted: (anchorText: string) => boolean;
   onPromote: (exchange: AIExchangeJSON) => void;
+  onUpdateBlock: (exchange: AIExchangeJSON, toolCall: ConversationToolCall) => Promise<AIExchangeJSON>;
   onKeep: () => void;
   onCollapse: () => void;
 }
@@ -92,6 +95,14 @@ export interface ConversationContextOption {
 }
 
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
+
+const toolFailureCopy: Record<ConversationToolFailure, string> = {
+  passage_changed: "couldn't apply — passage changed",
+  partial_anchor: "couldn't apply — select the whole passage",
+  surface_closed: "couldn't apply — conversation closed",
+  thread_mismatch: "couldn't apply — conversation changed",
+  apply_error: "couldn't apply — edit failed",
+};
 
 function ThreadContextDisclosure({ value }: { value: unknown }) {
   const receipt = parseThreadAISentFacts(value);
@@ -114,6 +125,12 @@ function ThreadContextDisclosure({ value }: { value: unknown }) {
           </p>
         ))}
         {receipt.profile === 'research' && <p><span>Research profile</span></p>}
+        {receipt.updateBlock && (
+          <>
+            <p><span>Before edit</span> {receipt.updateBlock.before || 'Empty'}</p>
+            <p><span>After edit</span> {receipt.updateBlock.after || 'Empty'}</p>
+          </>
+        )}
         <p>
           <span>Sources</span> {retrieval}
           {receipt.sources.length > 0
@@ -139,16 +156,30 @@ const Turn = memo(function Turn({
   exchange?: AIExchangeJSON;
   onPromote?: (exchange: AIExchangeJSON) => void;
 }) {
+  const facts = parseThreadAISentFacts(receipt);
+  const update = facts?.updateBlock;
+  const visibleText = update && update.applied !== true
+    ? update.after || 'Clear this block.'
+    : text;
   return (
     <div className={`conversation-turn conversation-turn--${who === 'You' ? 'you' : 'ai'}`}>
       <span className="conversation-turn-label">{who}</span>
-      <div className="conversation-turn-text">{text}</div>
+      <div className="conversation-turn-text">{visibleText}</div>
+      {update?.applied === true && (
+        <p className="conversation-tool-note">AI edited this block · ⌘Z undoes it</p>
+      )}
+      {update && update.applied === undefined && (
+        <p className="conversation-tool-note">Proposed edit (not applied)</p>
+      )}
+      {update?.applied === false && (
+        <p className="conversation-tool-note">{toolFailureCopy[update.failure!]}</p>
+      )}
       {who === 'AI' && <ThreadContextDisclosure value={receipt} />}
       <div className="conversation-turn-controls">
         {exchange && onPromote && (
           <button type="button" onClick={() => onPromote(exchange)}>↑ Add to Stream</button>
         )}
-        <button type="button" onClick={() => copy(text)}>Copy</button>
+        <button type="button" onClick={() => copy(visibleText)}>Copy</button>
       </div>
     </div>
   );
@@ -173,6 +204,7 @@ export function ConversationSurface({
   createThread,
   hasDrifted,
   onPromote,
+  onUpdateBlock,
   onKeep,
   onCollapse,
 }: ConversationSurfaceProps) {
@@ -231,6 +263,7 @@ export function ConversationSurface({
     if (message.type === 'documentAIComplete') {
       activeRequestId.current = null;
       const exchange = payload.exchange as AIExchangeJSON | undefined;
+      const toolCall = payload.toolCall as ConversationToolCall | null | undefined;
       updateState(conversationKey, (current) => ({
         ...current,
         exchanges: exchange?.requestId === requestId
@@ -238,6 +271,16 @@ export function ConversationSurface({
           : current.exchanges,
         active: null,
       }));
+      void (async () => {
+        if (exchange?.requestId !== requestId || toolCall?.name !== 'update_block') return;
+        const completed = await onUpdateBlock(exchange, toolCall).catch(() => exchange);
+        updateState(conversationKey, (current) => ({
+          ...current,
+          exchanges: current.exchanges.map((candidate) => (
+            candidate.requestId === requestId ? completed : candidate
+          )),
+        }));
+      })();
       return;
     }
     if (message.type === 'documentAIError') {
@@ -255,7 +298,7 @@ export function ConversationSurface({
         }
         : current);
     }
-  }), [conversationKey, updateState]);
+  }), [conversationKey, onUpdateBlock, updateState]);
 
   const send = async () => {
     const snapshot = stateRef.current;

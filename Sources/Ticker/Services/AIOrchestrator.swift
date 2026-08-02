@@ -71,6 +71,19 @@ enum TickerInternalURLSanitizer {
 /// Freshness is the answering model's call: the proxy offers it a web_search
 /// tool on every request, so no client-side intent classification exists.
 final class AIOrchestrator {
+    private static let updateBlockTool = LLMFunctionTool(
+        name: "update_block",
+        description: "Rewrite the passage this conversation is anchored to when the user asks for a rewrite or edit. Provide the full replacement markdown for the anchored block or blocks.",
+        parameters: [
+            "type": "object",
+            "properties": [
+                "content": ["type": "string"]
+            ],
+            "required": ["content"],
+            "additionalProperties": false
+        ]
+    )
+
     private var retrievalService: RetrievalService?
 
     /// Proxy service - the sole LLM provider in proxy-only mode
@@ -186,7 +199,7 @@ final class AIOrchestrator {
                 onModelSelected?(displayModel)
             },
             onChunk: onChunk,
-            onComplete: {
+            onComplete: { _ in
                 onComplete(contextToUse)
             },
             onError: onError
@@ -205,9 +218,10 @@ final class AIOrchestrator {
         pinnedContext: [ThreadAIPinnedContext],
         priorTurns: [ThreadAIConversationTurn],
         researchProfile: Bool,
+        offerUpdateBlock: Bool,
         onPrepared: @escaping (ThreadAIRequestReceipt) -> Void,
         onChunk: @escaping (String) -> Void,
-        onComplete: @escaping (ThreadAIRequestReceipt) -> Void,
+        onComplete: @escaping (ThreadAIRequestReceipt, ProxyLLMCompletion) -> Void,
         onError: @escaping (Error) -> Void,
         onModelSelected: ((String) -> Void)? = nil
     ) async {
@@ -240,7 +254,8 @@ final class AIOrchestrator {
                 pinnedContext: pinnedContext,
                 priorTurns: priorTurns,
                 sourceContext: sourceContext,
-                researchProfile: researchProfile
+                researchProfile: researchProfile,
+                offerUpdateBlock: offerUpdateBlock
             )
             onPrepared(prepared.receipt)
             await proxyService.stream(
@@ -249,7 +264,7 @@ final class AIOrchestrator {
                     onModelSelected?("\(provider)/\(model)")
                 },
                 onChunk: onChunk,
-                onComplete: { onComplete(prepared.receipt) },
+                onComplete: { onComplete(prepared.receipt, $0) },
                 onError: onError
             )
         } catch {
@@ -286,6 +301,7 @@ final class AIOrchestrator {
         priorTurns: [ThreadAIConversationTurn],
         sourceContext: SourceContext?,
         researchProfile: Bool = false,
+        offerUpdateBlock: Bool = false,
         tokenBudget: Int = LLMRequest.defaultTokenBudget
     ) throws -> PreparedThreadAIRequest {
         let cleanAnchor = TickerInternalURLSanitizer.sanitize(anchorText)
@@ -332,7 +348,9 @@ final class AIOrchestrator {
                 systemPrompt: researchProfile ? Prompts.threadResearch : Prompts.threadConversation,
                 messages: messages,
                 temperature: 0.7,
-                maxTokens: 2048
+                maxTokens: 2048,
+                tools: offerUpdateBlock ? [Self.updateBlockTool] : [],
+                toolChoice: offerUpdateBlock ? "auto" : nil
             )
         }
 
@@ -397,7 +415,7 @@ final class AIOrchestrator {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func buildRequest(
+    func buildRequest(
         query: String,
         queryImages: [String],
         priorCells: [[String: Any]],

@@ -59,7 +59,7 @@ final class ProxyLLMService {
         request: LLMRequest,
         onModelSelected: ((String, String) -> Void)? = nil,
         onChunk: @escaping (String) -> Void,
-        onComplete: @escaping () -> Void,
+        onComplete: @escaping (ProxyLLMCompletion) -> Void,
         onError: @escaping (Error) -> Void
     ) async {
         // Get credentials from device key service
@@ -80,14 +80,8 @@ final class ProxyLLMService {
         }
 
         // Build request body in proxy format
-        let messages = buildProxyMessages(from: request)
         let provider = SettingsService.shared.defaultModel.provider
-        let requestBody: [String: Any] = [
-            "model": SettingsService.shared.defaultModel.proxyModel,
-            "messages": messages,
-            "provider": provider,
-            "stream": true
-        ]
+        let requestBody = buildStreamingRequestBody(from: request)
 
         guard let bodyData = try? JSONSerialization.data(withJSONObject: requestBody) else {
             await MainActor.run {
@@ -195,6 +189,7 @@ final class ProxyLLMService {
             var currentEventType: String?
             var dataLines: [String] = []
             var didReceiveAnyEvent = false
+            var toolCalls: [LLMToolCall] = []
 
             func dispatchEventIfReady() async -> Bool {
                 guard let eventType = currentEventType else {
@@ -210,7 +205,13 @@ final class ProxyLLMService {
                     dataLine: dataLine,
                     requestId: responseRequestId ?? "unknown",
                     onChunk: onChunk,
-                    onComplete: onComplete,
+                    onToolCall: { toolCalls.append($0) },
+                    onComplete: { reportedToolCalls in
+                        onComplete(ProxyLLMCompletion(
+                            toolCalls: toolCalls,
+                            reportedToolCalls: reportedToolCalls
+                        ))
+                    },
                     onError: onError
                 )
 
@@ -249,7 +250,7 @@ final class ProxyLLMService {
                     // isn't delivered, dispatch immediately once we have a complete data line.
                     if let eventType = currentEventType,
                        dataLines.count == 1,
-                       ["delta", "done", "error"].contains(eventType),
+                       ["delta", "tool_call", "done", "error"].contains(eventType),
                        data.hasPrefix("{"),
                        data.hasSuffix("}") {
                         if await dispatchEventIfReady() {
@@ -276,7 +277,9 @@ final class ProxyLLMService {
             }
 
             // Stream ended without done event
-            await MainActor.run { onComplete() }
+            await MainActor.run {
+                onComplete(ProxyLLMCompletion(toolCalls: toolCalls, reportedToolCalls: false))
+            }
 
         } catch let urlError as URLError {
             headerWatchdog.cancel()
@@ -307,6 +310,20 @@ final class ProxyLLMService {
                 onError(ProxyLLMError.unreachable)
             }
         }
+    }
+
+    func buildStreamingRequestBody(from request: LLMRequest) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": SettingsService.shared.defaultModel.proxyModel,
+            "messages": buildProxyMessages(from: request),
+            "provider": SettingsService.shared.defaultModel.provider,
+            "stream": true
+        ]
+        if !request.tools.isEmpty {
+            body["tools"] = request.tools.map(\.proxyPayload)
+            body["tool_choice"] = request.toolChoice ?? "auto"
+        }
+        return body
     }
 
     // MARK: - Non-Streaming Methods
@@ -487,7 +504,8 @@ final class ProxyLLMService {
         dataLine: String,
         requestId: String,
         onChunk: @escaping (String) -> Void,
-        onComplete: @escaping () -> Void,
+        onToolCall: (LLMToolCall) -> Void,
+        onComplete: @escaping (Bool) -> Void,
         onError: @escaping (Error) -> Void
     ) async {
         switch eventType {
@@ -501,10 +519,17 @@ final class ProxyLLMService {
                 await MainActor.run { onChunk(text) }
             }
 
+        case "tool_call":
+            guard let call = Self.parseToolCallEvent(dataLine) else {
+                DebugLog.log("[ProxyLLMService] Dropped malformed tool_call event")
+                return
+            }
+            onToolCall(call)
+
         case "done":
-            // data: {"usage": {...}}
+            // data: {"usage": {...}, "tool_calls": true}
             debugLog("Done event received; completing stream")
-            await MainActor.run { onComplete() }
+            await MainActor.run { onComplete(Self.parseToolCallsFlag(dataLine)) }
 
         case "error":
             // data: {"error": {"code": "...", "message": "...", "details": {...}}}
@@ -540,6 +565,29 @@ final class ProxyLLMService {
         default:
             break
         }
+    }
+
+    static func parseToolCallEvent(_ dataLine: String) -> LLMToolCall? {
+        guard let data = dataLine.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = payload["id"] as? String,
+              !id.isEmpty,
+              let name = payload["name"] as? String,
+              !name.isEmpty,
+              let arguments = payload["arguments"] as? String,
+              let argumentData = arguments.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: argumentData)) is [String: Any] else {
+            return nil
+        }
+        return LLMToolCall(id: id, name: name, argumentsJSON: arguments)
+    }
+
+    static func parseToolCallsFlag(_ dataLine: String) -> Bool {
+        guard let data = dataLine.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        return payload["tool_calls"] as? Bool ?? false
     }
 
     // MARK: - Error Handling

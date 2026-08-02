@@ -16,7 +16,10 @@ import {
   deleteStreamThread,
   getExchange,
   listConversations,
+  recordThreadToolApplication,
   saveStreamThread,
+  type ConversationToolCall,
+  type ConversationToolFailure,
   type DocumentAIVerb,
   type SourceTitlePayload,
   type StreamDocumentConflictPayload,
@@ -73,8 +76,10 @@ import {
   selectText,
   setAIWritingRange,
   streamAIMarkdown,
+  updateConversationBlockMarkdown,
 } from '../richtext/operations';
 import { DocumentSession, type SaveState } from '../richtext/session';
+import { serializeMarkdown } from '../richtext/markdown';
 import {
   addProvenanceSpans,
   hashProvenanceText,
@@ -100,7 +105,11 @@ import {
 } from '../utils/pdfAnchorSelection';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 import { formatRelativeTime } from '../utils/relativeTime';
-import { manifestCitations } from '../threads/context';
+import {
+  manifestCitations,
+  parseThreadAISentFacts,
+  threadAIReceiptWithUpdateResult,
+} from '../threads/context';
 import {
   activeFormats,
   toggleBlockquote,
@@ -712,7 +721,7 @@ export function RichStreamEditor({
       updateConversationLiveState(expanded.key, (state) => ({ ...state, closing: false }));
       if (!currentEditor || !anchor) return;
       window.requestAnimationFrame(() => {
-        if (currentEditor.view.isDestroyed) return;
+        if (currentEditor.view.isDestroyed || expandedConversationRef.current) return;
         const pos = Math.max(0, Math.min(anchor.from, currentEditor.view.state.doc.content.size));
         currentEditor.view.dispatch(currentEditor.view.state.tr.setSelection(
           TextSelection.near(currentEditor.view.state.doc.resolve(pos)),
@@ -1258,6 +1267,95 @@ export function RichStreamEditor({
       addToast("Couldn't add the reply.", 'error');
     }
   }, [addToast, keepExpandedConversation]);
+
+  const applyConversationUpdateBlock = useCallback(async (
+    exchange: AIExchangeJSON,
+    toolCall: ConversationToolCall,
+  ): Promise<AIExchangeJSON> => {
+    let argumentsValue: unknown;
+    try { argumentsValue = JSON.parse(toolCall.arguments) as unknown; } catch { return exchange; }
+    if (!argumentsValue || typeof argumentsValue !== 'object' || Array.isArray(argumentsValue)) return exchange;
+    const content = (argumentsValue as Record<string, unknown>).content;
+    if (typeof content !== 'string') return exchange;
+
+    const currentEditor = editorRef.current;
+    const surface = currentEditor && conversationSurface(currentEditor.view.state);
+    const currentThread = surface && conversationLiveStatesRef.current[surface.key]?.thread;
+    const expanded = expandedConversationRef.current;
+    const persistedThread = Object.values(conversationLiveStatesRef.current)
+      .find((state) => state.thread?.threadId === exchange.threadId)?.thread;
+    const persistedBefore = persistedThread?.anchorText
+      ?? (expanded && expanded.threadId === exchange.threadId
+        ? expanded.anchorText
+        : parseThreadAISentFacts(exchange.sourceManifest)?.anchor.text ?? '');
+    const surfaceMatches = surface?.anchor.threadId === exchange.threadId;
+    let before = persistedBefore;
+    let beforeSerializationFailed = false;
+    if (currentEditor && surface && surfaceMatches && surface.anchor.from < surface.anchor.to) {
+      try {
+        before = serializeMarkdown(currentEditor.view.state.doc.cut(surface.anchor.from, surface.anchor.to));
+      } catch {
+        beforeSerializationFailed = true;
+      }
+    }
+    let applied = false;
+    let failure: ConversationToolFailure | undefined;
+    if (beforeSerializationFailed) failure = 'apply_error';
+    else if (!currentEditor || !surface) failure = 'surface_closed';
+    else if (!surfaceMatches) failure = 'thread_mismatch';
+    else if (expandedConversationRef.current?.ephemeral === true || currentThread?.ephemeral === true) {
+      failure = 'apply_error';
+    } else if (!currentThread?.anchorText || surface.anchor.from >= surface.anchor.to
+      || hasConversationAnchorTextDrifted(
+        currentEditor.view.state.doc,
+        surface.anchor,
+        currentThread.anchorText,
+      )) failure = 'passage_changed';
+    else {
+      try {
+        const result = updateConversationBlockMarkdown(currentEditor.view, surface.anchor, content, {
+          requestId: exchange.requestId,
+          model: exchange.model,
+          verb: exchange.verb,
+          threadId: surface.anchor.threadId,
+        });
+        if (!result.applied) failure = result.failure;
+        else {
+          applied = true;
+          window.setTimeout(() => {
+            if (currentEditor.view.isDestroyed) return;
+            const highlighted = aiWritingRange(currentEditor.view.state);
+            if (highlighted?.from !== result.from || highlighted.to !== result.to) return;
+            currentEditor.view.dispatch(
+              setAIWritingRange(currentEditor.view.state.tr, null).setMeta('addToHistory', false),
+            );
+          }, 1_200);
+        }
+      } catch {
+        failure = 'apply_error';
+      }
+    }
+
+    const applicationFailure = applied ? undefined : failure ?? 'apply_error';
+    const localManifest = threadAIReceiptWithUpdateResult(
+      exchange.sourceManifest,
+      before,
+      applicationFailure,
+    );
+    const localExchange = localManifest ? { ...exchange, sourceManifest: localManifest } : exchange;
+    try {
+      return (await recordThreadToolApplication({
+        streamId: stream.id,
+        requestId: exchange.requestId,
+        before,
+        applied,
+        failure: applicationFailure,
+      })).exchange;
+    } catch {
+      addToast('The edit result could not be saved to the conversation.', 'info');
+      return localExchange;
+    }
+  }, [addToast, stream.id]);
 
   const discardPDFQuote = useCallback((streamId: unknown, highlightId: unknown) => {
     if (typeof highlightId === 'string') {
@@ -2557,6 +2655,7 @@ export function RichStreamEditor({
           createThread={createPersistedConversation}
           hasDrifted={conversationHasDrifted}
           onPromote={promoteConversationTurn}
+          onUpdateBlock={applyConversationUpdateBlock}
           onKeep={() => { void keepExpandedConversation(); }}
           onCollapse={collapseConversation}
         />,

@@ -162,6 +162,7 @@ describe('conversation anchor lifecycle', () => {
     expect(stored).toHaveLength(200);
     expect([...stored]).toHaveLength(100);
     expect(hasConversationAnchorTextDrifted(ed.view.state.doc, anchor, stored)).toBe(false);
+    expect(hasConversationAnchorTextDrifted(ed.view.state.doc, anchor, '')).toBe(true);
 
     ed.view.dispatch(ed.view.state.tr.insertText('changed', anchor.from + 100, anchor.from + 102));
     expect(hasConversationAnchorTextDrifted(

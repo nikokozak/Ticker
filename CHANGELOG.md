@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Changed
+- editor: let anchored conversations apply scoped AI block edits with one-step undo (phase C7)
 - editor: add slash chat and research conversations (phase C6)
 - editor: add conversation reply promotion and PDF Quote & discuss (phase C5)
 - editor: add complete AI context, persistent pins, and receipts to inline conversations (phase C4)

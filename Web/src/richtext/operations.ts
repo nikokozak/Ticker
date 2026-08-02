@@ -169,6 +169,68 @@ export function promoteConversationMarkdown(
   return inserted;
 }
 
+/** Replace exactly one conversation anchor, never a model-supplied range. */
+export function updateConversationBlockMarkdown(
+  view: EditorView,
+  anchor: { from: number; to: number },
+  markdown: string,
+  attribution: { requestId: string; model?: string | null; verb: string; threadId: string },
+): { applied: true; from: number; to: number } | { applied: false; failure: 'partial_anchor' } {
+  const from = Math.max(0, Math.min(anchor.from, view.state.doc.content.size));
+  const to = Math.max(from, Math.min(anchor.to, view.state.doc.content.size));
+  if (from >= to) throw new Error('The conversation anchor is detached.');
+  const parsed = parseMarkdown(markdown);
+  const first = textBlockBounds(view.state.doc, from);
+  const last = textBlockBounds(view.state.doc, to - 1);
+  if (!first || !last) throw new Error('The conversation anchor has no text block.');
+  const wholeBlocks = first && last
+    && from === first.contentFrom
+    && to === last.contentTo
+    && first.parentStart === last.parentStart;
+  const tr = view.state.tr;
+  if (wholeBlocks) {
+    tr.replace(first.nodeFrom, last.nodeTo, new Slice(parsed.content, 0, 0));
+  } else {
+    if (first.nodeFrom !== last.nodeFrom
+      || parsed.childCount !== 1
+      || parsed.firstChild?.type !== tickerSchema.nodes.paragraph) {
+      return { applied: false, failure: 'partial_anchor' };
+    }
+    tr.replace(from, to, new Slice(parsed.firstChild.content, 0, 0));
+  }
+  const replaced = { from: tr.mapping.map(from, -1), to: tr.mapping.map(to, 1) };
+  tr.setTime(1);
+  closeHistory(tr);
+  if (replaced.from < replaced.to) {
+    addProvenanceSpans(setAIWritingRange(tr, replaced), [{
+      spanId: crypto.randomUUID(),
+      ...replaced,
+      origin: 'ai',
+      requestId: attribution.requestId,
+      meta: { model: attribution.model ?? null, verb: attribution.verb, threadId: attribution.threadId },
+      textHash: hashProvenanceText(tr.doc, replaced),
+      createdAt: Date.now(),
+    }]);
+  }
+  view.dispatch(tr.scrollIntoView());
+  return { applied: true, ...replaced };
+}
+
+function textBlockBounds(doc: ProseNode, pos: number) {
+  const $pos = doc.resolve(pos);
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if (!$pos.node(depth).isTextblock) continue;
+    return {
+      contentFrom: $pos.start(depth),
+      contentTo: $pos.end(depth),
+      nodeFrom: $pos.before(depth),
+      nodeTo: $pos.after(depth),
+      parentStart: $pos.start(depth - 1),
+    };
+  }
+  return null;
+}
+
 function markdownBlockInsertion(view: EditorView, pos: number, markdown: string) {
   const parsed = parseMarkdown(markdown);
   if (parsed.childCount === 0) throw new Error('There is no content to add.');

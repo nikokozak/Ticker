@@ -16,6 +16,32 @@ struct LLMMessage {
     var hasImages: Bool { !imageURLs.isEmpty }
 }
 
+struct LLMFunctionTool {
+    let name: String
+    let description: String
+    let parameters: [String: Any]
+
+    var proxyPayload: [String: Any] {
+        [
+            "type": "function",
+            "name": name,
+            "description": description,
+            "parameters": parameters
+        ]
+    }
+}
+
+struct LLMToolCall: Equatable {
+    let id: String
+    let name: String
+    let argumentsJSON: String
+}
+
+struct ProxyLLMCompletion: Equatable {
+    let toolCalls: [LLMToolCall]
+    let reportedToolCalls: Bool
+}
+
 /// A standardized request to an LLM provider
 struct LLMRequest {
     static let defaultTokenBudget = 100_000
@@ -32,16 +58,24 @@ struct LLMRequest {
     /// Maximum tokens to generate (nil for provider default)
     var maxTokens: Int?
 
+    /// Optional function tools. Empty preserves the legacy proxy request byte shape.
+    var tools: [LLMFunctionTool]
+    var toolChoice: String?
+
     init(
         systemPrompt: String,
         messages: [LLMMessage],
         temperature: Double = 0.7,
-        maxTokens: Int? = nil
+        maxTokens: Int? = nil,
+        tools: [LLMFunctionTool] = [],
+        toolChoice: String? = nil
     ) {
         self.systemPrompt = systemPrompt
         self.messages = messages
         self.temperature = temperature
         self.maxTokens = maxTokens
+        self.tools = tools
+        self.toolChoice = toolChoice
     }
 
     /// Convenience initializer for text-only messages
@@ -49,12 +83,16 @@ struct LLMRequest {
         systemPrompt: String,
         textMessages: [(role: String, content: String)],
         temperature: Double = 0.7,
-        maxTokens: Int? = nil
+        maxTokens: Int? = nil,
+        tools: [LLMFunctionTool] = [],
+        toolChoice: String? = nil
     ) {
         self.systemPrompt = systemPrompt
         self.messages = textMessages.map { LLMMessage(role: $0.role, content: $0.content) }
         self.temperature = temperature
         self.maxTokens = maxTokens
+        self.tools = tools
+        self.toolChoice = toolChoice
     }
 
     /// Whether any message in the request contains images
@@ -111,7 +149,9 @@ struct LLMRequest {
                 systemPrompt: systemPrompt,
                 messages: [],
                 temperature: temperature,
-                maxTokens: maxTokens
+                maxTokens: maxTokens,
+                tools: tools,
+                toolChoice: toolChoice
             )
         }
 
@@ -140,7 +180,9 @@ struct LLMRequest {
             systemPrompt: systemPrompt,
             messages: keptMessages,
             temperature: temperature,
-            maxTokens: maxTokens
+            maxTokens: maxTokens,
+            tools: tools,
+            toolChoice: toolChoice
         )
     }
 }

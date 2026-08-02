@@ -197,11 +197,16 @@
 .conversation-drift-note,
 .conversation-status,
 .conversation-load-error,
+.conversation-tool-note,
 .conversation-error {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--type-ui-small);
   line-height: var(--type-ui-line-height);
+}
+
+.conversation-tool-note {
+  grid-column: 2 / -1;
 }
 
 .conversation-load-error button {
