@@ -2704,6 +2704,7 @@ final class StreamDocumentTests: XCTestCase {
                 "createStreamThread",
                 "deleteStreamThread",
                 "loadStreamThread",
+                "recordThreadToolApplication",
                 "removeStreamThreadAnchor",
                 "saveStreamThread"
             ])
