@@ -249,7 +249,7 @@ export function SearchModal({
             )}
 
             {results.currentStreamResults.length === 0 && results.otherStreamResults.length === 0 && (
-              <div className="search-modal-empty">No results found</div>
+              <div className="search-modal-empty">No results for “{query.trim()}”</div>
             )}
           </div>
         )}

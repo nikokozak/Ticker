@@ -869,6 +869,14 @@ extension WebViewManager: SourceMessageHandlerDelegate {
     func setFileDropContext(streamId: UUID?, allowsListFileDrops: Bool) {
         currentStreamIdForFileDrops = streamId
         self.allowsListFileDrops = allowsListFileDrops
+        if streamId != nil {
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let window = webView.window,
+                      window.firstResponder !== webView else { return }
+                window.makeFirstResponder(webView)
+            }
+        }
     }
 
     func hidePDFPane() async {

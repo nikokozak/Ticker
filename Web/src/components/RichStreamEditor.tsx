@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
 import type { Slice } from 'prosemirror-model';
@@ -1027,6 +1028,15 @@ export function RichStreamEditor({
     editorRef.current = created;
     sessionRef.current = session;
     setEditor(created);
+    const documentIsEmpty = created.view.state.doc.childCount === 1
+      && created.view.state.doc.firstChild?.isTextblock
+      && created.view.state.doc.firstChild.content.size === 0;
+    created.view.dispatch(created.view.state.tr
+      .setSelection(documentIsEmpty
+        ? TextSelection.atStart(created.view.state.doc)
+        : TextSelection.atEnd(created.view.state.doc))
+      .setMeta('addToHistory', false));
+    created.view.focus();
 
     const scroller = host.current.closest('.stream-content') as HTMLElement;
     let scrollSaveTimer: number | undefined;
@@ -1634,6 +1644,11 @@ export function RichStreamEditor({
         }
         return;
       }
+      if (event.key === 'Escape' && expandedConversationRef.current) {
+        event.preventDefault();
+        void collapseConversation();
+        return;
+      }
       const { selection } = editor.view.state;
       if (event.key === '/'
         && selection.empty
@@ -1644,7 +1659,7 @@ export function RichStreamEditor({
     };
     editor.view.dom.addEventListener('keydown', keydown, true);
     return () => editor.view.dom.removeEventListener('keydown', keydown, true);
-  }, [editor, runSlashCommand]);
+  }, [collapseConversation, editor, runSlashCommand]);
 
   useEffect(() => {
     if (!editor || !xray) return undefined;
@@ -2245,6 +2260,33 @@ export function RichStreamEditor({
     }
   };
 
+  const focusEditorPage = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+    const target = event.target;
+    if (target instanceof Node && view.dom.contains(target) && target !== view.dom) return;
+    if (target instanceof Element
+      && target.closest('button, input, textarea, select, a, [contenteditable="false"]')) return;
+    const rect = view.dom.getBoundingClientRect();
+    let pos = event.clientY < rect.top ? 0 : view.state.doc.content.size;
+    try {
+      const left = rect.width > 2
+        ? Math.max(rect.left + 1, Math.min(event.clientX, rect.right - 1))
+        : event.clientX;
+      const top = rect.height > 2
+        ? Math.max(rect.top + 1, Math.min(event.clientY, rect.bottom - 1))
+        : event.clientY;
+      pos = view.posAtCoords({ left, top })?.pos ?? pos;
+    } catch {
+      // A pre-layout WebView has no caret geometry; the start/end fallback is still nearest.
+    }
+    event.preventDefault();
+    view.dispatch(view.state.tr
+      .setSelection(TextSelection.near(view.state.doc.resolve(pos)))
+      .setMeta('addToHistory', false));
+    view.focus();
+  }, []);
+
   const formats = editor ? activeFormats(editor.view.state) : null;
   const activePDFHighlight = editor ? selectedPDFHighlight(editor.view.state) : null;
   const liveConversationSurface = editor ? conversationSurface(editor.view.state) : null;
@@ -2808,6 +2850,7 @@ export function RichStreamEditor({
         <div
           className="stream-content"
           onScroll={(event) => setHeaderScrolled(event.currentTarget.scrollTop > 0)}
+          onMouseDown={focusEditorPage}
         >
           <div
             ref={editorShellRef}

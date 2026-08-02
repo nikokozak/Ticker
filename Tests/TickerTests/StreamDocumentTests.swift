@@ -7053,6 +7053,28 @@ final class StreamDocumentTests: XCTestCase {
         }
     }
 
+    func test_hybridSearchFindsStreamTitleSubstrings() async throws {
+        try await withTempPersistenceService { service in
+            let first = Stream(title: "Sensor calibration")
+            let second = Stream(title: "Field sensor notes")
+            try service.saveStream(first)
+            try service.saveStream(second)
+            try service.saveStreamDocument(streamId: first.id, markdown: "Unrelated body one.")
+            try service.saveStreamDocument(streamId: second.id, markdown: "Unrelated body two.")
+
+            let results = try await SearchService(
+                persistence: service,
+                retrieval: RetrievalService(persistence: service)
+            ).hybridSearch(query: "sensor", currentStreamId: nil, limit: 5)
+
+            XCTAssertTrue(results.currentStreamResults.isEmpty)
+            XCTAssertEqual(Set(results.otherStreamResults.map(\.streamId)), Set([
+                first.id.uuidString,
+                second.id.uuidString
+            ]))
+        }
+    }
+
     func test_hybridSearchGroupsOtherStreamSourceMatches() async throws {
         try await withTempPersistenceService { service in
             let current = Stream(title: "Current")

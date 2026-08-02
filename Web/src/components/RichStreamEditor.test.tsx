@@ -404,6 +404,60 @@ afterEach(async () => {
 });
 
 describe('RichStreamEditor chrome parity', () => {
+  it('autofocuses at the document edge and routes page-margin clicks to the nearest caret', async () => {
+    let liveView: EditorView | null = null;
+    const updateState = EditorView.prototype.updateState;
+    vi.spyOn(EditorView.prototype, 'updateState').mockImplementation(function captureView(
+      this: EditorView,
+      state,
+    ) {
+      liveView = this;
+      return updateState.call(this, state);
+    });
+    await renderStream({
+      ...stream,
+      id: 'focus-existing-stream',
+      document: { ...stream.document, streamId: 'focus-existing-stream' },
+    });
+    const existing = liveView!;
+    expect(document.activeElement).toBe(existing.dom);
+    expect(existing.state.selection.eq(TextSelection.atEnd(existing.state.doc))).toBe(true);
+
+    vi.spyOn(existing.dom, 'getBoundingClientRect').mockReturnValue({
+      left: 100, right: 300, top: 100, bottom: 300, width: 200, height: 200, x: 100, y: 100,
+      toJSON: () => ({}),
+    });
+    const posAtCoords = vi.spyOn(existing, 'posAtCoords').mockImplementation(({ top }) => ({
+      pos: top === 299 ? TextSelection.atEnd(existing.state.doc).head : 1,
+      inside: 0,
+    }));
+    (document.querySelector('.back-button') as HTMLButtonElement).focus();
+    const page = document.querySelector('.stream-content') as HTMLElement;
+    await act(async () => {
+      page.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, clientX: 500, clientY: 500,
+      }));
+    });
+    expect(posAtCoords).toHaveBeenCalledWith({ left: 299, top: 299 });
+    expect(existing.state.selection.eq(TextSelection.atEnd(existing.state.doc))).toBe(true);
+    expect(document.activeElement).toBe(existing.dom);
+
+    liveView = null;
+    await renderStream({
+      ...stream,
+      id: 'empty-focus-stream',
+      document: {
+        ...stream.document,
+        streamId: 'empty-focus-stream',
+        docJSON: docJSON(''),
+        markdown: '',
+      },
+    });
+    const empty = liveView!;
+    expect(document.activeElement).toBe(empty.dom);
+    expect(empty.state.selection.eq(TextSelection.atStart(empty.state.doc))).toBe(true);
+  });
+
   it('uses the quiet header and a contextual formatting menu', async () => {
     expect(document.querySelector('.stream-title-editable')?.textContent).toBe('Test');
     expect(document.querySelector('.stream-title-input')).toBe(null);
@@ -517,6 +571,7 @@ describe('RichStreamEditor inline conversations', () => {
     const composer = await openDraftConversation();
     await vi.waitFor(() => expect(document.activeElement).toBe(composer));
     expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
+    await enterConversationMessage(composer, 'Unsaved thought');
 
     await act(async () => {
       composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
@@ -527,6 +582,34 @@ describe('RichStreamEditor inline conversations', () => {
     expect(vi.mocked(bridge.sendAsync).mock.calls.some(([type]) => type === 'createStreamThread')).toBe(false);
     expect(editor().querySelector('p')?.classList.contains('conversation-block-anchored')).toBe(false);
     await vi.waitFor(() => expect(document.activeElement).toBe(editor()));
+  });
+
+  it('collapses from the close control, editor Escape, and anchor-rail toggle', async () => {
+    await openDraftConversation();
+    await act(async () => {
+      (document.querySelector('.conversation-close') as HTMLButtonElement).click();
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    });
+    expect(document.querySelector('.conversation-surface')).toBe(null);
+
+    await openDraftConversation();
+    await act(async () => {
+      editor().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', bubbles: true, cancelable: true,
+      }));
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    });
+    expect(document.querySelector('.conversation-surface')).toBe(null);
+
+    await openDraftConversation();
+    const block = editor().querySelector('p') as HTMLParagraphElement;
+    await act(async () => {
+      block.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, clientX: 0, clientY: 14,
+      }));
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    });
+    expect(document.querySelector('.conversation-surface')).toBe(null);
   });
 
   it('round-trips the v2 receipt and completes normally when the proxy emits no tool call', async () => {
@@ -2903,7 +2986,7 @@ describe('RichStreamEditor images', () => {
     const saves = vi.mocked(bridge.sendAsync).mock.calls
       .filter(([type]) => type === 'saveRichStreamDocument');
     expect(saves[saves.length - 1]?.[1]?.markdown)
-      .toBe('![shot](ticker-asset://stream-1/shot.png){width=320}Original paragraph.');
+      .toBe('Original paragraph.![shot](ticker-asset://stream-1/shot.png){width=320}');
 
     await act(async () => {
       editor().dispatchEvent(new KeyboardEvent('keydown', {

@@ -209,7 +209,7 @@ it('renders one passive right glyph class and the current-block left line class'
   expect(block?.classList.contains('conversation-block-anchored')).toBe(true);
 });
 
-it('routes gutter clicks and mounts only one caret-excluded block widget', () => {
+it('dispatches rail and glyph clicks across their full 24px gutter bands', () => {
   const onCreate = vi.fn();
   const onOpen = vi.fn();
   const ed = open('Visible block', undefined, { onCreate, onOpen });
@@ -222,10 +222,22 @@ it('routes gutter clicks and mounts only one caret-excluded block widget', () =>
     toJSON: () => ({}),
   });
 
-  block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 0 }));
+  block.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: -14, clientY: 14 }));
+  expect(block.title).toBe('Start a conversation about this block');
+  block.dispatchEvent(new MouseEvent('click', {
+    bubbles: true, cancelable: true, clientX: -14, clientY: 14,
+  }));
   expect(onCreate).toHaveBeenCalledWith({ ...anchor, threadId: '' });
-  block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 120 }));
+  block.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 134, clientY: 14 }));
+  expect(block.title).toBe('Open conversation');
+  block.dispatchEvent(new MouseEvent('click', {
+    bubbles: true, cancelable: true, clientX: 134, clientY: 14,
+  }));
   expect(onOpen).toHaveBeenCalledWith('one');
+  block.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: -15, clientY: 14 }));
+  block.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 135, clientY: 14 }));
+  expect(onCreate).toHaveBeenCalledOnce();
+  expect(onOpen).toHaveBeenCalledOnce();
 
   const before = ed.getDocumentJSON();
   ed.view.dispatch(setConversationSurface(ed.view.state.tr, { key: 'first', anchor }));
@@ -235,6 +247,33 @@ it('routes gutter clicks and mounts only one caret-excluded block widget', () =>
   expect(widgets[0].dataset.conversationWidget).toBe('second');
   expect(widgets[0].contentEditable).toBe('false');
   expect(ed.getDocumentJSON()).toBe(before);
+});
+
+it('resolves margin hover inside the editor before mousedown dispatch', () => {
+  const ed = open('First block\n\nSecond block');
+  const blocks = ed.view.dom.querySelectorAll('p');
+  ed.view.dispatch(setConversationVisibleRanges(ed.view.state.tr, [{
+    from: 0,
+    to: ed.view.state.doc.content.size,
+  }]));
+  ed.view.dispatch(ed.view.state.tr.setSelection(TextSelection.create(
+    ed.view.state.doc,
+    find(ed, 'Second').from,
+  )));
+  expect(blocks[0].classList.contains('conversation-block-active')).toBe(false);
+  vi.spyOn(ed.view.dom, 'getBoundingClientRect').mockReturnValue({
+    left: 10, right: 110, top: 0, bottom: 56, width: 100, height: 56, x: 10, y: 0,
+    toJSON: () => ({}),
+  });
+  const posAtCoords = vi.spyOn(ed.view, 'posAtCoords').mockReturnValue({ pos: 1, inside: 0 });
+
+  ed.view.dom.dispatchEvent(new MouseEvent('mousedown', {
+    bubbles: true, cancelable: true, clientX: -10, clientY: 14,
+  }));
+
+  expect(posAtCoords).toHaveBeenCalledWith({ left: 11, top: 14 });
+  expect(blocks[0].classList.contains('conversation-block-active')).toBe(true);
+  expect(blocks[0].title).toBe('Start a conversation about this block');
 });
 
 it('moves an ArrowDown caret from the anchored block to the block below the widget', () => {

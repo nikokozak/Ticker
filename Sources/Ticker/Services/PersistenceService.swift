@@ -3430,10 +3430,11 @@ final class PersistenceService {
                 FROM stream_documents d
                 JOIN streams s ON d.stream_id = s.id
                 WHERE d.stream_id = ?
-                  AND d.markdown LIKE ? ESCAPE '\\' COLLATE NOCASE
+                  AND (s.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+                    OR d.markdown LIKE ? ESCAPE '\\' COLLATE NOCASE)
                 ORDER BY d.updated_at DESC
                 LIMIT ?
-            """, arguments: [currentStreamId?.uuidString ?? "", pattern, limitPerCategory])
+            """, arguments: [currentStreamId?.uuidString ?? "", pattern, pattern, limitPerCategory])
             .map { row in
                 StreamDocumentSearchResult(
                     streamId: UUID(uuidString: row["stream_id"])!,
@@ -3449,10 +3450,11 @@ final class PersistenceService {
                 FROM stream_documents d
                 JOIN streams s ON d.stream_id = s.id
                 WHERE d.stream_id != ?
-                  AND d.markdown LIKE ? ESCAPE '\\' COLLATE NOCASE
+                  AND (s.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+                    OR d.markdown LIKE ? ESCAPE '\\' COLLATE NOCASE)
                 ORDER BY d.updated_at DESC
                 LIMIT ?
-            """, arguments: [currentStreamId?.uuidString ?? "", pattern, limitPerCategory])
+            """, arguments: [currentStreamId?.uuidString ?? "", pattern, pattern, limitPerCategory])
             .map { row in
                 StreamDocumentSearchResult(
                     streamId: UUID(uuidString: row["stream_id"])!,

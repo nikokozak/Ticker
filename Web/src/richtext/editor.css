@@ -67,9 +67,9 @@
 .richtext-editor .ProseMirror .conversation-block-active::before {
   content: '';
   position: absolute;
-  inset: 0 auto 0 -23px;
-  width: 12px;
-  background: linear-gradient(to right, transparent 5px, var(--accent) 5px 7px, transparent 7px);
+  inset: 0 auto 0 calc(-1 * var(--space-5));
+  width: var(--space-5);
+  background: linear-gradient(to right, transparent 11px, var(--accent) 11px 13px, transparent 13px);
   cursor: pointer;
   pointer-events: auto;
 }
@@ -77,15 +77,17 @@
 .richtext-editor .ProseMirror .conversation-block-anchored::after {
   content: '◆';
   position: absolute;
-  top: 50%;
-  right: -24px;
+  inset: 0 calc(-1 * var(--space-5)) 0 auto;
+  display: flex;
+  width: var(--space-5);
+  align-items: center;
+  justify-content: center;
   color: var(--accent);
   font-size: 8px;
   line-height: 1;
   opacity: 0.55;
   cursor: pointer;
   pointer-events: auto;
-  transform: translateY(-50%);
 }
 
 .richtext-editor .ProseMirror .conversation-widget-host {
@@ -142,9 +144,11 @@
 .conversation-header {
   display: flex;
   justify-content: flex-end;
+  gap: var(--space-2);
 }
 
-.conversation-keep {
+.conversation-keep,
+.conversation-close {
   padding: 0;
   border: 0;
   background: transparent;
@@ -154,7 +158,8 @@
   cursor: pointer;
 }
 
-.conversation-keep:hover {
+.conversation-keep:hover,
+.conversation-close:hover {
   color: var(--text);
 }
 
@@ -287,8 +292,10 @@
 
 .conversation-turn-controls {
   display: flex;
+  flex: 0 0 auto;
   gap: var(--space-2);
   opacity: 0;
+  white-space: nowrap;
 }
 
 .conversation-turn-controls button {
@@ -299,6 +306,7 @@
   font: inherit;
   font-size: var(--type-ui-caption);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .conversation-turn:hover .conversation-turn-controls,
