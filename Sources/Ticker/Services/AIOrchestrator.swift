@@ -415,7 +415,7 @@ final class AIOrchestrator {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func buildRequest(
+    func buildRequest(
         query: String,
         queryImages: [String],
         priorCells: [[String: Any]],

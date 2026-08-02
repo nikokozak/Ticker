@@ -183,7 +183,8 @@ export function hasConversationAnchorTextDrifted(
   anchor: ConversationAnchor,
   originalText: string,
 ): boolean {
-  return anchor.from >= anchor.to || !conversationAnchorText(doc, anchor).includes(originalText);
+  return !originalText || anchor.from >= anchor.to
+    || !conversationAnchorText(doc, anchor).includes(originalText);
 }
 
 export function conversationAnchorFromJSON(json: ConversationAnchorJSON): ConversationAnchor {

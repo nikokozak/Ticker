@@ -197,11 +197,13 @@ describe('updating a conversation anchor', () => {
         verb: 'thread',
         threadId: 'thread-1',
       });
+      expect(replaced.applied).toBe(true);
+      if (!replaced.applied) throw new Error(replaced.failure);
 
       expect(ed.view.state.doc.firstChild!.toJSON()).toEqual(first);
       expect(ed.view.state.doc.lastChild!.toJSON()).toEqual(last);
       if (markdown) {
-        expect(aiWritingRange(ed.view.state)).toEqual(replaced);
+        expect(aiWritingRange(ed.view.state)).toEqual({ from: replaced.from, to: replaced.to });
         expect(provenanceSpans(ed.view.state)).toEqual([
           expect.objectContaining({
             from: replaced.from,
@@ -218,6 +220,39 @@ describe('updating a conversation anchor', () => {
       ed.destroy();
       editor = null;
     }
+  });
+
+  it('keeps partial-anchor replacements inline and refuses structural content byte-exactly', () => {
+    const ed = open('Outside before.\n\nPrefix target suffix.\n\nOutside after.');
+    const target = find(ed, 'target');
+    const before = ed.getDocumentJSON();
+    const first = ed.view.state.doc.firstChild!.toJSON();
+    const last = ed.view.state.doc.lastChild!.toJSON();
+    const inline = updateConversationBlockMarkdown(ed.view, target, 'AI **inline**', {
+      requestId: 'inline-update',
+      model: 'test-model',
+      verb: 'thread',
+      threadId: 'thread-1',
+    });
+
+    expect(inline.applied).toBe(true);
+    expect(ed.view.state.doc.firstChild!.toJSON()).toEqual(first);
+    expect(ed.view.state.doc.lastChild!.toJSON()).toEqual(last);
+    expect(ed.view.state.doc.child(1).type.name).toBe('paragraph');
+    const expected = 'Outside before.\n\nPrefix AI **inline** suffix.\n\nOutside after.';
+    expect(ed.getMarkdownProjection()).toBe(expected);
+    expect(ed.view.state.doc.toJSON()).toEqual(parseMarkdown(expected).toJSON());
+    undo(ed);
+    expect(ed.getDocumentJSON()).toBe(before);
+
+    const structuralBefore = ed.getDocumentJSON();
+    expect(updateConversationBlockMarkdown(ed.view, target, '# Heading\n\nSecond block.', {
+      requestId: 'structural-update',
+      model: 'test-model',
+      verb: 'thread',
+      threadId: 'thread-1',
+    })).toEqual({ applied: false, failure: 'partial_anchor' });
+    expect(ed.getDocumentJSON()).toBe(structuralBefore);
   });
 });
 

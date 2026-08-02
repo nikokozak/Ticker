@@ -1353,14 +1353,70 @@ final class StreamDocumentTests: XCTestCase {
         XCTAssertEqual(tool.parameters["required"] as? [String], ["content"])
         XCTAssertEqual(tool.parameters["additionalProperties"] as? Bool, false)
         XCTAssertEqual(prepared.request.truncated().tools.first?.name, "update_block")
+        let toolBody = ProxyLLMService().buildStreamingRequestBody(from: prepared.request)
+        XCTAssertEqual((toolBody["tools"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual(toolBody["tool_choice"] as? String, "auto")
 
         let streamId = UUID()
         let normal = StreamThread(streamId: streamId, anchorStart: 1, anchorEnd: 4)
-        let detached = StreamThread(streamId: streamId, anchorStart: 2, anchorEnd: 2, detached: true)
+        let detached = StreamThread(streamId: streamId, anchorStart: 1, anchorEnd: 4, detached: true)
         let ephemeral = StreamThread(streamId: streamId, anchorStart: 1, anchorEnd: 4, ephemeral: true)
+        let missingAnchor = StreamThread(streamId: streamId)
         XCTAssertTrue(AIMessageHandler.shouldOfferUpdateBlock(thread: normal, anchorStart: 1, anchorEnd: 4))
-        XCTAssertFalse(AIMessageHandler.shouldOfferUpdateBlock(thread: detached, anchorStart: 2, anchorEnd: 2))
+        XCTAssertFalse(AIMessageHandler.shouldOfferUpdateBlock(thread: normal, anchorStart: 2, anchorEnd: 2))
+        XCTAssertFalse(AIMessageHandler.shouldOfferUpdateBlock(thread: detached, anchorStart: 1, anchorEnd: 4))
         XCTAssertFalse(AIMessageHandler.shouldOfferUpdateBlock(thread: ephemeral, anchorStart: 1, anchorEnd: 4))
+        XCTAssertFalse(AIMessageHandler.shouldOfferUpdateBlock(thread: missingAnchor, anchorStart: 1, anchorEnd: 4))
+    }
+
+    @MainActor
+    func test_pdfQuoteConversationRequestCarriesNoUpdateBlockTool() throws {
+        let pdfQuote = StreamThread(
+            streamId: UUID(),
+            sourceId: UUID(),
+            highlightId: UUID(),
+            anchorStart: 1,
+            anchorEnd: 4
+        )
+        XCTAssertFalse(AIMessageHandler.shouldOfferUpdateBlock(thread: pdfQuote, anchorStart: 1, anchorEnd: 4))
+        let pdfRequest = try AIOrchestrator.prepareThreadRequest(
+            query: "Rewrite this",
+            anchorText: "Verbatim quote",
+            streamMarkdown: "Whole stream",
+            priorTurns: [],
+            sourceContext: nil,
+            offerUpdateBlock: AIMessageHandler.shouldOfferUpdateBlock(
+                thread: pdfQuote,
+                anchorStart: 1,
+                anchorEnd: 4
+            )
+        )
+        XCTAssertTrue(pdfRequest.request.tools.isEmpty)
+        XCTAssertNil(ProxyLLMService().buildStreamingRequestBody(from: pdfRequest.request)["tools"])
+    }
+
+    @MainActor
+    func test_documentAndQuickPanelOutgoingProxyPayloadsOmitConversationTools() {
+        let proxy = ProxyLLMService()
+        let orchestrator = AIOrchestrator(proxyService: proxy)
+        let document = orchestrator.buildRequest(
+            query: "Develop this",
+            queryImages: [],
+            priorCells: [],
+            sourceContext: nil
+        )
+        let quickPanel = orchestrator.buildRequest(
+            query: "Think out loud",
+            queryImages: [],
+            priorCells: [],
+            sourceContext: nil,
+            systemPromptOverride: Prompts.quickPanelChat
+        )
+        for (path, request) in [("document AI", document), ("quick panel", quickPanel)] {
+            let body = proxy.buildStreamingRequestBody(from: request)
+            XCTAssertNil(body["tools"], "\(path) must not send conversation tools")
+            XCTAssertNil(body["tool_choice"], "\(path) must not send conversation tool choice")
+        }
     }
 
     func test_proxyParsesCompleteToolCallsAndDropsMalformedArguments() {
@@ -1820,7 +1876,7 @@ final class StreamDocumentTests: XCTestCase {
     }
 
     @MainActor
-    func test_conversationToolCallPersistsAVisibleTurnAndCompletesWithTheCall() async throws {
+    func test_conversationUsesFirstUpdateBlockCallAndPersistsAVisibleTurn() async throws {
         try await withTempPersistenceService { service in
             let stream = Stream(title: "Tool call")
             let thread = StreamThread(
@@ -1845,11 +1901,18 @@ final class StreamDocumentTests: XCTestCase {
                     XCTAssertTrue(offerUpdateBlock)
                     onPrepared(receipt)
                     onComplete(receipt, ProxyLLMCompletion(
-                        toolCalls: [LLMToolCall(
-                            id: "call-1",
-                            name: "update_block",
-                            argumentsJSON: #"{"content":"Rewritten passage.","from":0,"to":999999}"#
-                        )],
+                        toolCalls: [
+                            LLMToolCall(
+                                id: "call-1",
+                                name: "update_block",
+                                argumentsJSON: #"{"content":"Rewritten passage.","from":0,"to":999999}"#
+                            ),
+                            LLMToolCall(
+                                id: "call-2",
+                                name: "update_block",
+                                argumentsJSON: #"{"content":"Second replacement must be ignored."}"#
+                            )
+                        ],
                         reportedToolCalls: true
                     ))
                 }
@@ -2417,6 +2480,72 @@ final class StreamDocumentTests: XCTestCase {
             XCTAssertEqual(edit["applied"] as? Bool, true)
             XCTAssertNil(edit["failure"] as? String)
             XCTAssertEqual(try service.loadExchange(requestId: "tool-result")?.sourceManifest, updated.sourceManifest)
+        }
+    }
+
+    @MainActor
+    func test_threadToolApplicationBridgeAcceptsOnlyTheClosedFailureSet() async throws {
+        try await withTempPersistenceService { service in
+            let stream = Stream(title: "Tool failures")
+            let thread = StreamThread(
+                streamId: stream.id,
+                anchorText: "Original passage.",
+                anchorStart: 1,
+                anchorEnd: 18
+            )
+            try service.saveStream(stream)
+            try service.createStreamThread(thread)
+            try service.saveExchange(AIExchange(
+                requestId: "failed-tool-result",
+                streamId: stream.id,
+                threadId: thread.threadId,
+                verb: "thread",
+                userInput: "Rewrite this",
+                sourceManifest: #"{"updateBlock":{"before":"Sent.","after":"Proposal."}}"#,
+                responseRaw: "Proposal."
+            ))
+            let recorder = BridgeMessageRecorder()
+            let handler = ThreadMessageHandler(persistence: service, sendToWeb: recorder.send)
+            let failures = [
+                "passage_changed", "partial_anchor", "surface_closed", "thread_mismatch", "apply_error"
+            ]
+            for failure in failures {
+                await handler.handle(BridgeMessage(
+                    type: "recordThreadToolApplication",
+                    payload: [
+                        "streamId": AnyCodable(stream.id.uuidString),
+                        "requestId": AnyCodable("failed-tool-result"),
+                        "before": AnyCodable("Current passage."),
+                        "applied": AnyCodable(false),
+                        "failure": AnyCodable(failure)
+                    ],
+                    callbackId: failure
+                ))
+                let response = try XCTUnwrap(
+                    recorder.messages(ofType: "callback").first { $0.callbackId == failure }
+                )
+                XCTAssertNil(response.payload?["error"])
+                let exchange = try XCTUnwrap(try service.loadExchange(requestId: "failed-tool-result"))
+                let data = try XCTUnwrap(exchange.sourceManifest.data(using: .utf8))
+                let receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let update = try XCTUnwrap(receipt["updateBlock"] as? [String: Any])
+                XCTAssertEqual(update["failure"] as? String, failure)
+            }
+
+            await handler.handle(BridgeMessage(
+                type: "recordThreadToolApplication",
+                payload: [
+                    "streamId": AnyCodable(stream.id.uuidString),
+                    "requestId": AnyCodable("failed-tool-result"),
+                    "before": AnyCodable("Current passage."),
+                    "applied": AnyCodable(false),
+                    "failure": AnyCodable("made_up")
+                ],
+                callbackId: "made-up"
+            ))
+            XCTAssertNotNil(recorder.messages(ofType: "callback").first {
+                $0.callbackId == "made-up"
+            }?.payload?["error"])
         }
     }
 

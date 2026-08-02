@@ -80,18 +80,8 @@ final class ProxyLLMService {
         }
 
         // Build request body in proxy format
-        let messages = buildProxyMessages(from: request)
         let provider = SettingsService.shared.defaultModel.provider
-        var requestBody: [String: Any] = [
-            "model": SettingsService.shared.defaultModel.proxyModel,
-            "messages": messages,
-            "provider": provider,
-            "stream": true
-        ]
-        if !request.tools.isEmpty {
-            requestBody["tools"] = request.tools.map(\.proxyPayload)
-            requestBody["tool_choice"] = request.toolChoice ?? "auto"
-        }
+        let requestBody = buildStreamingRequestBody(from: request)
 
         guard let bodyData = try? JSONSerialization.data(withJSONObject: requestBody) else {
             await MainActor.run {
@@ -320,6 +310,20 @@ final class ProxyLLMService {
                 onError(ProxyLLMError.unreachable)
             }
         }
+    }
+
+    func buildStreamingRequestBody(from request: LLMRequest) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": SettingsService.shared.defaultModel.proxyModel,
+            "messages": buildProxyMessages(from: request),
+            "provider": SettingsService.shared.defaultModel.provider,
+            "stream": true
+        ]
+        if !request.tools.isEmpty {
+            body["tools"] = request.tools.map(\.proxyPayload)
+            body["tool_choice"] = request.toolChoice ?? "auto"
+        }
+        return body
     }
 
     // MARK: - Non-Streaming Methods

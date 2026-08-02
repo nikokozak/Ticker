@@ -936,11 +936,14 @@ final class AIMessageHandler: BridgeMessageHandler {
     }
 
     private static func updateBlockCall(_ call: LLMToolCall) -> ThreadAIUpdateBlockCall? {
-        guard call.name == "update_block",
-              let data = call.argumentsJSON.data(using: .utf8),
+        guard call.name == "update_block" else {
+            DebugLog.log("[AIMessageHandler] Ignored unsupported conversation tool call '\(call.name)'")
+            return nil
+        }
+        guard let data = call.argumentsJSON.data(using: .utf8),
               let arguments = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let content = arguments["content"] as? String else {
-            DebugLog.log("[AIMessageHandler] Dropped unsupported or malformed conversation tool call")
+            DebugLog.log("[AIMessageHandler] Dropped malformed update_block tool call")
             return nil
         }
         return ThreadAIUpdateBlockCall(id: call.id, argumentsJSON: call.argumentsJSON, content: content)
@@ -951,7 +954,16 @@ final class AIMessageHandler: BridgeMessageHandler {
         anchorStart: Int?,
         anchorEnd: Int?
     ) -> Bool {
-        !thread.ephemeral && (anchorStart ?? 0) < (anchorEnd ?? 0)
+        guard thread.sourceId == nil,
+              thread.highlightId == nil,
+              !thread.detached,
+              !thread.ephemeral,
+              let persistedStart = thread.anchorStart,
+              let persistedEnd = thread.anchorEnd,
+              persistedStart < persistedEnd else {
+            return false
+        }
+        return (anchorStart ?? 0) < (anchorEnd ?? 0)
     }
 
     private static func sentPinnedAnchors(

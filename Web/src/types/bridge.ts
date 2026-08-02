@@ -165,6 +165,13 @@ export interface ConversationToolCall {
   arguments: string;
 }
 
+export type ConversationToolFailure =
+  | 'passage_changed'
+  | 'partial_anchor'
+  | 'surface_closed'
+  | 'thread_mismatch'
+  | 'apply_error';
+
 export interface SourceTitlePayload {
   sourceName?: string;
   shortTitle?: string;
@@ -319,7 +326,7 @@ export function recordThreadToolApplication(input: {
   requestId: string;
   before: string;
   applied: boolean;
-  failure?: 'passage_changed';
+  failure?: ConversationToolFailure;
 }): Promise<{ exchange: AIExchangeJSON }> {
   return bridge.sendAsync('recordThreadToolApplication', {
     streamId: input.streamId,

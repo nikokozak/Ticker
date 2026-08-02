@@ -2266,6 +2266,7 @@ final class PersistenceService {
             updateBlock["applied"] = applied
             updateBlock["failure"] = failure ?? NSNull()
             receipt["updateBlock"] = updateBlock
+            // Receipt identity is semantic, not JSON key order; sorting only stabilizes stored/debug output.
             let manifestData = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
             let sourceManifest = String(decoding: manifestData, as: UTF8.self)
             try db.execute(

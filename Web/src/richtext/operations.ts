@@ -175,26 +175,28 @@ export function updateConversationBlockMarkdown(
   anchor: { from: number; to: number },
   markdown: string,
   attribution: { requestId: string; model?: string | null; verb: string; threadId: string },
-): { from: number; to: number } {
+): { applied: true; from: number; to: number } | { applied: false; failure: 'partial_anchor' } {
   const from = Math.max(0, Math.min(anchor.from, view.state.doc.content.size));
   const to = Math.max(from, Math.min(anchor.to, view.state.doc.content.size));
   if (from >= to) throw new Error('The conversation anchor is detached.');
   const parsed = parseMarkdown(markdown);
   const first = textBlockBounds(view.state.doc, from);
   const last = textBlockBounds(view.state.doc, to - 1);
+  if (!first || !last) throw new Error('The conversation anchor has no text block.');
   const wholeBlocks = first && last
     && from === first.contentFrom
     && to === last.contentTo
     && first.parentStart === last.parentStart;
-  let tr = view.state.tr;
+  const tr = view.state.tr;
   if (wholeBlocks) {
-    try {
-      tr.replace(first.nodeFrom, last.nodeTo, new Slice(parsed.content, 0, 0));
-    } catch {
-      tr = view.state.tr.replace(from, to, Slice.maxOpen(parsed.content));
-    }
+    tr.replace(first.nodeFrom, last.nodeTo, new Slice(parsed.content, 0, 0));
   } else {
-    tr.replace(from, to, Slice.maxOpen(parsed.content));
+    if (first.nodeFrom !== last.nodeFrom
+      || parsed.childCount !== 1
+      || parsed.firstChild?.type !== tickerSchema.nodes.paragraph) {
+      return { applied: false, failure: 'partial_anchor' };
+    }
+    tr.replace(from, to, new Slice(parsed.firstChild.content, 0, 0));
   }
   const replaced = { from: tr.mapping.map(from, -1), to: tr.mapping.map(to, 1) };
   tr.setTime(1);
@@ -211,7 +213,7 @@ export function updateConversationBlockMarkdown(
     }]);
   }
   view.dispatch(tr.scrollIntoView());
-  return replaced;
+  return { applied: true, ...replaced };
 }
 
 function textBlockBounds(doc: ProseNode, pos: number) {

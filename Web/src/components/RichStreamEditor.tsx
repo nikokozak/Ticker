@@ -19,6 +19,7 @@ import {
   recordThreadToolApplication,
   saveStreamThread,
   type ConversationToolCall,
+  type ConversationToolFailure,
   type DocumentAIVerb,
   type SourceTitlePayload,
   type StreamDocumentConflictPayload,
@@ -78,6 +79,7 @@ import {
   updateConversationBlockMarkdown,
 } from '../richtext/operations';
 import { DocumentSession, type SaveState } from '../richtext/session';
+import { serializeMarkdown } from '../richtext/markdown';
 import {
   addProvenanceSpans,
   hashProvenanceText,
@@ -103,7 +105,11 @@ import {
 } from '../utils/pdfAnchorSelection';
 import { computeSelectionMenuPlacement } from '../utils/selectionMenuPlacement';
 import { formatRelativeTime } from '../utils/relativeTime';
-import { manifestCitations, threadAIReceiptWithUpdateResult } from '../threads/context';
+import {
+  manifestCitations,
+  parseThreadAISentFacts,
+  threadAIReceiptWithUpdateResult,
+} from '../threads/context';
 import {
   activeFormats,
   toggleBlockquote,
@@ -1275,43 +1281,67 @@ export function RichStreamEditor({
     const currentEditor = editorRef.current;
     const surface = currentEditor && conversationSurface(currentEditor.view.state);
     const currentThread = surface && conversationLiveStatesRef.current[surface.key]?.thread;
-    const before = currentEditor && surface
-      ? conversationAnchorText(currentEditor.view.state.doc, surface.anchor)
-      : '';
+    const expanded = expandedConversationRef.current;
+    const persistedThread = Object.values(conversationLiveStatesRef.current)
+      .find((state) => state.thread?.threadId === exchange.threadId)?.thread;
+    const persistedBefore = persistedThread?.anchorText
+      ?? (expanded && expanded.threadId === exchange.threadId
+        ? expanded.anchorText
+        : parseThreadAISentFacts(exchange.sourceManifest)?.anchor.text ?? '');
+    const surfaceMatches = surface?.anchor.threadId === exchange.threadId;
+    let before = persistedBefore;
+    let beforeSerializationFailed = false;
+    if (currentEditor && surface && surfaceMatches && surface.anchor.from < surface.anchor.to) {
+      try {
+        before = serializeMarkdown(currentEditor.view.state.doc.cut(surface.anchor.from, surface.anchor.to));
+      } catch {
+        beforeSerializationFailed = true;
+      }
+    }
     let applied = false;
-    if (currentEditor
-      && surface
-      && exchange.threadId === surface.anchor.threadId
-      && expandedConversationRef.current?.ephemeral !== true
-      && currentThread?.ephemeral !== true
-      && surface.anchor.from < surface.anchor.to
-      && !hasConversationAnchorTextDrifted(
+    let failure: ConversationToolFailure | undefined;
+    if (beforeSerializationFailed) failure = 'apply_error';
+    else if (!currentEditor || !surface) failure = 'surface_closed';
+    else if (!surfaceMatches) failure = 'thread_mismatch';
+    else if (expandedConversationRef.current?.ephemeral === true || currentThread?.ephemeral === true) {
+      failure = 'apply_error';
+    } else if (!currentThread?.anchorText || surface.anchor.from >= surface.anchor.to
+      || hasConversationAnchorTextDrifted(
         currentEditor.view.state.doc,
         surface.anchor,
-        currentThread?.anchorText ?? expandedConversationRef.current?.anchorText ?? '',
-      )) {
+        currentThread.anchorText,
+      )) failure = 'passage_changed';
+    else {
       try {
-        const replaced = updateConversationBlockMarkdown(currentEditor.view, surface.anchor, content, {
+        const result = updateConversationBlockMarkdown(currentEditor.view, surface.anchor, content, {
           requestId: exchange.requestId,
           model: exchange.model,
           verb: exchange.verb,
           threadId: surface.anchor.threadId,
         });
-        applied = true;
-        window.setTimeout(() => {
-          if (currentEditor.view.isDestroyed) return;
-          const highlighted = aiWritingRange(currentEditor.view.state);
-          if (highlighted?.from !== replaced.from || highlighted.to !== replaced.to) return;
-          currentEditor.view.dispatch(
-            setAIWritingRange(currentEditor.view.state.tr, null).setMeta('addToHistory', false),
-          );
-        }, 1_200);
+        if (!result.applied) failure = result.failure;
+        else {
+          applied = true;
+          window.setTimeout(() => {
+            if (currentEditor.view.isDestroyed) return;
+            const highlighted = aiWritingRange(currentEditor.view.state);
+            if (highlighted?.from !== result.from || highlighted.to !== result.to) return;
+            currentEditor.view.dispatch(
+              setAIWritingRange(currentEditor.view.state.tr, null).setMeta('addToHistory', false),
+            );
+          }, 1_200);
+        }
       } catch {
-        applied = false;
+        failure = 'apply_error';
       }
     }
 
-    const localManifest = threadAIReceiptWithUpdateResult(exchange.sourceManifest, before, applied);
+    const applicationFailure = applied ? undefined : failure ?? 'apply_error';
+    const localManifest = threadAIReceiptWithUpdateResult(
+      exchange.sourceManifest,
+      before,
+      applicationFailure,
+    );
     const localExchange = localManifest ? { ...exchange, sourceManifest: localManifest } : exchange;
     try {
       return (await recordThreadToolApplication({
@@ -1319,7 +1349,7 @@ export function RichStreamEditor({
         requestId: exchange.requestId,
         before,
         applied,
-        failure: applied ? undefined : 'passage_changed',
+        failure: applicationFailure,
       })).exchange;
     } catch {
       addToast('The edit result could not be saved to the conversation.', 'info');

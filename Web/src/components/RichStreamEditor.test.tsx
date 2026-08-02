@@ -687,6 +687,7 @@ describe('RichStreamEditor inline conversations', () => {
             failure: payload?.failure ?? null,
           },
         });
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
         return { exchange: { ...completedExchange!, sourceManifest } };
       }
       return { revision: 2 };
@@ -697,8 +698,8 @@ describe('RichStreamEditor inline conversations', () => {
       document: {
         ...stream.document,
         streamId: id,
-        docJSON: docJSON('Outside before.\n\nTarget text.\n\nOutside after.'),
-        markdown: 'Outside before.\n\nTarget text.\n\nOutside after.',
+        docJSON: docJSON('Outside before.\n\nTarget **text**.\n\nOutside after.'),
+        markdown: 'Outside before.\n\nTarget **text**.\n\nOutside after.',
       },
     });
     await selectEditorText('Target');
@@ -761,6 +762,7 @@ describe('RichStreamEditor inline conversations', () => {
     await vi.waitFor(() => expect(vi.mocked(bridge.sendAsync).mock.calls.some(
       ([type]) => type === 'recordThreadToolApplication',
     )).toBe(true));
+    expect(document.querySelector('.conversation-stop')).toBe(null);
 
     expect(serializeMarkdown(liveView!.state.doc)).toBe(
       'Outside before.\n\n# Replacement\n\nFirst.\n\n* one\n* two\n\nOutside after.',
@@ -771,12 +773,16 @@ describe('RichStreamEditor inline conversations', () => {
     expect(provenanceSpans(liveView!.state)).toEqual([
       expect.objectContaining({ origin: 'ai', requestId, meta: expect.objectContaining({ threadId: 'update-thread' }) }),
     ]);
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 60)); });
     expect(document.querySelector('.conversation-tool-note')?.textContent)
       .toBe('AI edited this block · ⌘Z undoes it');
     const disclosure = document.querySelector('.conversation-receipt') as HTMLDetailsElement;
     await act(async () => { (disclosure.querySelector('summary') as HTMLElement).click(); });
-    expect(disclosure.textContent).toContain('Before edit Target text.');
+    expect(disclosure.textContent).toContain('Before edit Target **text**.');
     expect(disclosure.textContent).toContain('After edit # Replacement');
+    expect(vi.mocked(bridge.sendAsync).mock.calls.find(
+      ([type]) => type === 'recordThreadToolApplication',
+    )?.[1]?.before).toBe('Target **text**.');
 
     await act(async () => {
       const undoEvent = new KeyboardEvent('keydown', {
@@ -789,7 +795,7 @@ describe('RichStreamEditor inline conversations', () => {
     expect(provenanceSpans(liveView!.state)).toEqual([]);
   });
 
-  it('renders an update_block proposal without applying when the live passage drifted', async () => {
+  it('renders update_block proposals without applying for drifted passages or mismatched threads', async () => {
     const createdAt = new Date(0).toISOString();
     let liveView: EditorView | null = null;
     let completedExchange: AIExchangeJSON | null = null;
@@ -818,8 +824,8 @@ describe('RichStreamEditor inline conversations', () => {
             updateBlock: {
               before: payload?.before,
               after: 'Proposed replacement.',
-              applied: false,
-              failure: 'passage_changed',
+              applied: payload?.applied,
+              failure: payload?.failure,
             },
           }),
         },
@@ -889,6 +895,112 @@ describe('RichStreamEditor inline conversations', () => {
       applied: false,
       failure: 'passage_changed',
     });
+
+    const composerAgain = document.querySelector('.conversation-composer') as HTMLTextAreaElement;
+    await enterConversationMessage(composerAgain, 'Try the wrong thread');
+    await act(async () => {
+      composerAgain.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', metaKey: true, bubbles: true, cancelable: true,
+      }));
+      await Promise.resolve();
+    });
+    const mismatchedRequestId = activeRequestId();
+    completedExchange = {
+      ...completedExchange,
+      requestId: mismatchedRequestId,
+      threadId: 'another-thread',
+      userInput: 'Try the wrong thread',
+      sourceManifest: JSON.stringify({
+        ...receipt,
+        requestId: mismatchedRequestId,
+      }),
+    };
+    await act(async () => {
+      bridge.receive({
+        type: 'documentAIComplete',
+        payload: {
+          requestId: mismatchedRequestId,
+          exchange: completedExchange!,
+          toolCalls: true,
+          toolCall: {
+            id: 'call-mismatch', name: 'update_block',
+            arguments: JSON.stringify({ content: 'Must not land.' }),
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(vi.mocked(bridge.sendAsync).mock.calls.filter(
+      ([type, payload]) => type === 'recordThreadToolApplication'
+        && payload?.requestId === mismatchedRequestId,
+    )[0]?.[1]).toMatchObject({
+      before: 'Original paragraph.',
+      applied: false,
+      failure: 'thread_mismatch',
+    }));
+    expect(serializeMarkdown(liveView!.state.doc)).toBe(changed);
+    const notes = [...document.querySelectorAll('.conversation-tool-note')];
+    expect(notes[notes.length - 1]?.textContent).toBe("couldn't apply — conversation changed");
+  });
+
+  it('renders a persisted pending tool call as a proposal, never a normal answer', async () => {
+    const updatedAt = new Date().toISOString();
+    const anchored: Stream = {
+      ...stream,
+      id: 'pending-tool-stream',
+      document: {
+        ...stream.document,
+        streamId: 'pending-tool-stream',
+      },
+      conversationAnchors: [{
+        threadId: 'pending-tool-thread',
+        anchorStart: 1,
+        anchorEnd: 20,
+        anchorText: 'Original paragraph.',
+        detached: false,
+        ephemeral: false,
+        updatedAt,
+      }],
+    };
+    vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
+      if (type === 'loadStreamThread') return {
+        thread: {
+          threadId: 'pending-tool-thread', streamId: anchored.id, title: 'Rewrite', workingText: '',
+          anchorText: 'Original paragraph.', anchorStart: 1, anchorEnd: 20,
+          detached: false, ephemeral: false, revision: 0, createdAt: updatedAt, updatedAt,
+          exchanges: [{
+            requestId: 'pending-tool-request', streamId: anchored.id, threadId: 'pending-tool-thread',
+            verb: 'thread', userInput: 'Rewrite it', responseRaw: 'Replacement **markdown**.',
+            sourceManifest: JSON.stringify({
+              version: 2, kind: 'threadAI', requestId: 'pending-tool-request',
+              anchor: { kind: 'stream', text: 'Original paragraph.', from: 1, to: 20 },
+              streamDocument: { sent: true, charCount: 19 }, note: { sent: false },
+              turns: { includedRequestIds: [], totalAtSend: 0 }, sourceContextMode: 'none',
+              sources: [], pinned: [],
+              updateBlock: { before: 'Original paragraph.', after: 'Replacement **markdown**.' },
+            }),
+            createdAt: updatedAt,
+          }],
+        },
+      };
+      return { revision: 2 };
+    }) as typeof bridge.sendAsync);
+    await renderStream(anchored);
+    const block = editor().querySelector('p') as HTMLParagraphElement;
+    await vi.waitFor(() => expect(block.classList.contains('conversation-block-anchored')).toBe(true));
+    vi.spyOn(block, 'getBoundingClientRect').mockReturnValue({
+      left: 10, right: 310, top: 0, bottom: 28, width: 300, height: 28, x: 10, y: 0,
+      toJSON: () => ({}),
+    });
+    await act(async () => {
+      block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 320 }));
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(document.querySelector('.conversation-tool-note')?.textContent)
+      .toBe('Proposed edit (not applied)'));
+    expect(document.querySelector('.conversation-turn--ai .conversation-turn-text')?.textContent)
+      .toBe('Replacement **markdown**.');
   });
 
   it('promotes saved turns in order with citation links and visible AI provenance', async () => {

@@ -5,6 +5,7 @@ import {
   loadStreamThread,
   removeStreamThreadAnchor,
   type ConversationToolCall,
+  type ConversationToolFailure,
 } from '../types/bridge';
 import type {
   AIExchangeJSON,
@@ -95,6 +96,14 @@ export interface ConversationContextOption {
 
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
 
+const toolFailureCopy: Record<ConversationToolFailure, string> = {
+  passage_changed: "couldn't apply — passage changed",
+  partial_anchor: "couldn't apply — select the whole passage",
+  surface_closed: "couldn't apply — conversation closed",
+  thread_mismatch: "couldn't apply — conversation changed",
+  apply_error: "couldn't apply — edit failed",
+};
+
 function ThreadContextDisclosure({ value }: { value: unknown }) {
   const receipt = parseThreadAISentFacts(value);
   if (!receipt) return null;
@@ -149,7 +158,7 @@ const Turn = memo(function Turn({
 }) {
   const facts = parseThreadAISentFacts(receipt);
   const update = facts?.updateBlock;
-  const visibleText = update?.applied === false
+  const visibleText = update && update.applied !== true
     ? update.after || 'Clear this block.'
     : text;
   return (
@@ -159,15 +168,18 @@ const Turn = memo(function Turn({
       {update?.applied === true && (
         <p className="conversation-tool-note">AI edited this block · ⌘Z undoes it</p>
       )}
+      {update && update.applied === undefined && (
+        <p className="conversation-tool-note">Proposed edit (not applied)</p>
+      )}
       {update?.applied === false && (
-        <p className="conversation-tool-note">couldn't apply — passage changed</p>
+        <p className="conversation-tool-note">{toolFailureCopy[update.failure!]}</p>
       )}
       {who === 'AI' && <ThreadContextDisclosure value={receipt} />}
       <div className="conversation-turn-controls">
         {exchange && onPromote && (
           <button type="button" onClick={() => onPromote(exchange)}>↑ Add to Stream</button>
         )}
-        <button type="button" onClick={() => copy(text)}>Copy</button>
+        <button type="button" onClick={() => copy(visibleText)}>Copy</button>
       </div>
     </div>
   );
@@ -252,17 +264,21 @@ export function ConversationSurface({
       activeRequestId.current = null;
       const exchange = payload.exchange as AIExchangeJSON | undefined;
       const toolCall = payload.toolCall as ConversationToolCall | null | undefined;
+      updateState(conversationKey, (current) => ({
+        ...current,
+        exchanges: exchange?.requestId === requestId
+          ? [...current.exchanges, exchange]
+          : current.exchanges,
+        active: null,
+      }));
       void (async () => {
-        const completed = exchange?.requestId === requestId
-          && toolCall?.name === 'update_block'
-          ? await onUpdateBlock(exchange, toolCall).catch(() => exchange)
-          : exchange;
+        if (exchange?.requestId !== requestId || toolCall?.name !== 'update_block') return;
+        const completed = await onUpdateBlock(exchange, toolCall).catch(() => exchange);
         updateState(conversationKey, (current) => ({
           ...current,
-          exchanges: completed?.requestId === requestId
-            ? [...current.exchanges, completed]
-            : current.exchanges,
-          active: null,
+          exchanges: current.exchanges.map((candidate) => (
+            candidate.requestId === requestId ? completed : candidate
+          )),
         }));
       })();
       return;

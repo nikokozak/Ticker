@@ -1,4 +1,4 @@
-import type { DocumentAICitation } from '../types/bridge';
+import type { ConversationToolFailure, DocumentAICitation } from '../types/bridge';
 
 export interface ThreadAISourceFact {
   kind: 'passage' | 'wholeSource';
@@ -45,7 +45,7 @@ export interface ThreadAISentFacts {
     before: string;
     after: string;
     applied?: boolean;
-    failure?: 'passage_changed';
+    failure?: ConversationToolFailure;
   };
 }
 
@@ -54,6 +54,14 @@ function object(value: unknown): Record<string, unknown> | null {
     ? value as Record<string, unknown>
     : null;
 }
+
+const updateBlockFailures = new Set<ConversationToolFailure>([
+  'passage_changed',
+  'partial_anchor',
+  'surface_closed',
+  'thread_mismatch',
+  'apply_error',
+]);
 
 function positiveInteger(value: unknown): number | undefined {
   const number = Number(value);
@@ -153,9 +161,10 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
   const updateApplied = updateBlock?.applied;
   const updateFailure = updateBlock?.failure;
   if (updateApplied !== undefined && typeof updateApplied !== 'boolean') return null;
-  if (updateFailure != null && updateFailure !== 'passage_changed') return null;
+  if (updateFailure != null && (typeof updateFailure !== 'string'
+    || !updateBlockFailures.has(updateFailure as ConversationToolFailure))) return null;
   if ((updateApplied === true && updateFailure != null)
-    || (updateApplied === false && updateFailure !== 'passage_changed')
+    || (updateApplied === false && updateFailure == null)
     || (updateApplied === undefined && updateFailure != null)) return null;
 
   return {
@@ -190,7 +199,7 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
       before: updateBlock.before as string,
       after: updateBlock.after as string,
       applied: updateApplied as boolean | undefined,
-      failure: updateFailure === 'passage_changed' ? updateFailure : undefined,
+      failure: updateFailure == null ? undefined : updateFailure as ConversationToolFailure,
     } : undefined,
   };
 }
@@ -198,7 +207,7 @@ export function parseThreadAISentFacts(value: unknown): ThreadAISentFacts | null
 export function threadAIReceiptWithUpdateResult(
   value: string,
   before: string,
-  applied: boolean,
+  failure?: ConversationToolFailure,
 ): string | null {
   let receipt: Record<string, unknown> | null;
   try { receipt = object(JSON.parse(value) as unknown); } catch { return null; }
@@ -209,8 +218,8 @@ export function threadAIReceiptWithUpdateResult(
     updateBlock: {
       ...updateBlock,
       before,
-      applied,
-      failure: applied ? null : 'passage_changed',
+      applied: failure === undefined,
+      failure: failure ?? null,
     },
   });
 }

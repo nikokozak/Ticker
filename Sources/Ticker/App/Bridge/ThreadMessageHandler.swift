@@ -2,6 +2,10 @@ import Foundation
 
 @MainActor
 final class ThreadMessageHandler: BridgeMessageHandler {
+    private static let updateBlockFailures: Set<String> = [
+        "passage_changed", "partial_anchor", "surface_closed", "thread_mismatch", "apply_error"
+    ]
+
     let handledTypes: Set<String> = [
         "addStreamThreadAnchor",
         "listConversations",
@@ -226,7 +230,9 @@ final class ThreadMessageHandler: BridgeMessageHandler {
                 return
             }
             let failure = payload["failure"]?.value as? String
-            guard (applied && failure == nil) || (!applied && failure == "passage_changed") else {
+            let validFailure = failure.map { Self.updateBlockFailures.contains($0) } ?? false
+            guard (applied && failure == nil)
+                    || (!applied && validFailure) else {
                 respondWithError(callbackId, "Invalid recordThreadToolApplication payload")
                 return
             }
