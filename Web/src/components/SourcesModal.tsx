@@ -247,7 +247,7 @@ export function SourcesModal({
         <div className="sources-modal-header">
           <div>
             <h2 id="sources-modal-title">Sources</h2>
-            <p>{sources.length} {sources.length === 1 ? 'source' : 'sources'}</p>
+            {sources.length > 0 && <p>{sources.length} {sources.length === 1 ? 'source' : 'sources'}</p>}
           </div>
           <button
             type="button"
@@ -262,9 +262,11 @@ export function SourcesModal({
 
         {error && <div className="sources-modal-error">{error}</div>}
 
-        <button type="button" onClick={handleAddSource} className="sources-modal-add">
-          + Add Source
-        </button>
+        {sources.length > 0 && (
+          <button type="button" onClick={handleAddSource} className="sources-modal-add">
+            + Add Source
+          </button>
+        )}
 
         <div className="sources-modal-list">
           {isDragOver && (
@@ -272,8 +274,10 @@ export function SourcesModal({
           )}
           {sources.length === 0 && !isDragOver ? (
             <p className="sources-modal-empty">
-              No sources attached
-              <span>Drag files here or click Add Source.</span>
+              <span>No sources yet. Drag files here or</span>
+              <button type="button" onClick={handleAddSource} className="primary-button" autoFocus>
+                Add Source
+              </button>
             </p>
           ) : (
             sources.map((source) => (

@@ -186,6 +186,26 @@ describe('App stream loading', () => {
     expect(previews).toEqual(['Components with bold docs', 'Empty']);
   });
 
+  it('clears list hover state on leave and before navigation', async () => {
+    await boot();
+    const first = document.querySelector('.stream-item') as HTMLButtonElement;
+    await act(async () => {
+      first.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }));
+    });
+    expect(first.classList.contains('stream-item--hovered')).toBe(true);
+
+    await act(async () => {
+      document.querySelector('.stream-list-content')!.dispatchEvent(new MouseEvent('pointerout', {
+        bubbles: true,
+        relatedTarget: document.body,
+      }));
+    });
+    expect(first.classList.contains('stream-item--hovered')).toBe(false);
+
+    await act(async () => { first.click(); });
+    expect(first.classList.contains('stream-item--hovered')).toBe(false);
+  });
+
   it('keeps the list recoverable while a stream load is pending', async () => {
     await boot();
     await selectStream();

@@ -151,7 +151,7 @@
 }
 
 .conversation-rail:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 3px;
 }
 
@@ -297,7 +297,9 @@
 }
 
 .conversation-receipt summary {
-  width: max-content;
+  width: 100%;
+  min-height: var(--space-6);
+  padding-block: var(--space-1);
   cursor: pointer;
 }
 
@@ -383,10 +385,12 @@
 
 .conversation-context-picker {
   position: relative;
-  align-self: center;
+  align-self: flex-end;
 }
 
 .conversation-context-button {
+  padding-block: var(--space-2);
+  line-height: var(--conversation-line-height);
   white-space: nowrap;
 }
 
@@ -424,18 +428,21 @@
 .conversation-composer {
   flex: 1;
   min-width: 0;
-  resize: vertical;
+  min-height: calc(var(--conversation-line-height) + 2 * var(--space-2) + 2px);
+  max-height: calc(6 * var(--conversation-line-height) + 2 * var(--space-2) + 2px);
+  resize: none;
+  field-sizing: content;
+  overflow-y: auto;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  outline: none;
   background: transparent;
   color: var(--text);
   font: inherit;
   line-height: var(--conversation-line-height);
 }
 
-.conversation-composer:focus {
+.conversation-composer:focus-visible {
   border-color: var(--accent);
 }
 

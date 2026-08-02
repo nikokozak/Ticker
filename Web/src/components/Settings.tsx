@@ -85,6 +85,7 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS);
+  const [headerScrolled, setHeaderScrolled] = useState(false);
   const addToast = useToastStore((state) => state.addToast);
 
   // Proxy auth state
@@ -94,7 +95,7 @@ export function Settings({ onClose }: SettingsProps) {
   const [deviceKeyError, setDeviceKeyError] = useState<string | null>(null);
 
   // Feedback form state (D5)
-  const [feedbackType, setFeedbackType] = useState<'bug' | 'feature'>('bug');
+  const [feedbackType, setFeedbackType] = useState<'bug' | 'feature' | null>(null);
   const [feedbackTitle, setFeedbackTitle] = useState('');
   const [feedbackDesc, setFeedbackDesc] = useState('');
   const [feedbackScreenshot, setFeedbackScreenshot] = useState<string | null>(null);
@@ -185,7 +186,7 @@ export function Settings({ onClose }: SettingsProps) {
 
   // Submit feedback (D5)
   const handleSubmitFeedback = async () => {
-    if (!feedbackTitle.trim()) return;
+    if (!feedbackType || !feedbackTitle.trim()) return;
 
     setFeedbackSubmitting(true);
     setFeedbackError(null);
@@ -206,6 +207,7 @@ export function Settings({ onClose }: SettingsProps) {
 
       if (result.success && result.feedbackId) {
         setFeedbackSuccess(result.feedbackId);
+        setFeedbackType(null);
         // Clear form
         setFeedbackTitle('');
         setFeedbackDesc('');
@@ -302,14 +304,14 @@ export function Settings({ onClose }: SettingsProps) {
 
   return (
     <div className="settings" onKeyDown={handleKeyDown}>
-      <header className="settings-header">
+      <header className={`settings-header ${headerScrolled ? 'settings-header--scrolled' : ''}`}>
         <h1>Settings</h1>
         <button onClick={onClose} className="settings-close">
           Done
         </button>
       </header>
 
-      <div className="settings-content">
+      <div className="settings-content" onScroll={(event) => setHeaderScrolled(event.currentTarget.scrollTop > 0)}>
         <section className="settings-section">
           <h2>Device Key</h2>
           <div className="settings-field">
@@ -379,9 +381,13 @@ export function Settings({ onClose }: SettingsProps) {
         </section>
 
         {/* Usage section - only visible when connected */}
-        {(proxyAuth?.state === 'active' || proxyAuth?.state === 'degradedOffline') &&
+        {proxyAuth === null ? (
+          <section className="settings-section settings-async-placeholder" aria-hidden="true">
+            <h2>Usage</h2>
+          </section>
+        ) : (proxyAuth.state === 'active' || proxyAuth.state === 'degradedOffline') &&
           proxyAuth.limits && proxyAuth.usage && (
-          <section className="settings-section">
+          <section className="settings-section settings-async-section settings-async-section--usage">
             <h2>Usage</h2>
             <div className="settings-field">
               <UsageDisplay limits={proxyAuth.limits} usage={proxyAuth.usage} />
@@ -412,8 +418,12 @@ export function Settings({ onClose }: SettingsProps) {
         </section>
 
         {/* Testing section - only visible when connected (D5) */}
-        {(proxyAuth?.state === 'active' || proxyAuth?.state === 'degradedOffline') && (
-          <section className="settings-section">
+        {proxyAuth === null ? (
+          <section className="settings-section settings-async-placeholder settings-async-placeholder--testing" aria-hidden="true">
+            <h2>Testing</h2>
+          </section>
+        ) : (proxyAuth.state === 'active' || proxyAuth.state === 'degradedOffline') && (
+          <section className="settings-section settings-async-section settings-async-section--testing">
             <h2>Testing</h2>
             <div className="settings-field">
               <p className="settings-hint settings-hint--flush">
@@ -425,73 +435,77 @@ export function Settings({ onClose }: SettingsProps) {
                 <button
                   type="button"
                   className={feedbackType === 'bug' ? 'active' : ''}
-                  onClick={() => setFeedbackType('bug')}
+                  aria-expanded={feedbackType === 'bug'}
+                  onClick={() => setFeedbackType((current) => current === 'bug' ? null : 'bug')}
                 >
                   Report Bug
                 </button>
                 <button
                   type="button"
                   className={feedbackType === 'feature' ? 'active' : ''}
-                  onClick={() => setFeedbackType('feature')}
+                  aria-expanded={feedbackType === 'feature'}
+                  onClick={() => setFeedbackType((current) => current === 'feature' ? null : 'feature')}
                 >
                   Request Feature
                 </button>
               </div>
 
-              {/* Form fields */}
-              <input
-                type="text"
-                className="settings-feedback-title"
-                placeholder="Title (required)"
-                value={feedbackTitle}
-                onChange={(e) => setFeedbackTitle(e.target.value)}
-                disabled={feedbackSubmitting}
-              />
-              <textarea
-                className="settings-feedback-desc"
-                placeholder="Description (optional)"
-                value={feedbackDesc}
-                onChange={(e) => setFeedbackDesc(e.target.value)}
-                disabled={feedbackSubmitting}
-                rows={4}
-              />
+              {feedbackType && (
+                <div className="settings-feedback-form">
+                  <input
+                    type="text"
+                    className="settings-feedback-title"
+                    placeholder="Title (required)"
+                    value={feedbackTitle}
+                    onChange={(e) => setFeedbackTitle(e.target.value)}
+                    disabled={feedbackSubmitting}
+                    autoFocus
+                  />
+                  <textarea
+                    className="settings-feedback-desc"
+                    placeholder="Description (optional)"
+                    value={feedbackDesc}
+                    onChange={(e) => setFeedbackDesc(e.target.value)}
+                    disabled={feedbackSubmitting}
+                    rows={4}
+                  />
 
-              {/* Screenshot drop zone */}
-              <div
-                className="settings-screenshot-drop"
-                onDrop={handleImageDrop}
-                onDragOver={handleDragOver}
-                onPaste={handleImagePaste}
-                tabIndex={0}
-              >
-                {feedbackScreenshot ? (
-                  <div className="settings-screenshot-preview">
-                    <img
-                      src={`data:${feedbackScreenshotType};base64,${feedbackScreenshot}`}
-                      alt="Screenshot preview"
-                    />
-                    <button
-                      type="button"
-                      onClick={clearScreenshot}
-                      className="settings-screenshot-remove"
-                    >
-                      Remove
-                    </button>
+                  <div
+                    className="settings-screenshot-drop"
+                    onDrop={handleImageDrop}
+                    onDragOver={handleDragOver}
+                    onPaste={handleImagePaste}
+                    tabIndex={0}
+                  >
+                    {feedbackScreenshot ? (
+                      <div className="settings-screenshot-preview">
+                        <img
+                          src={`data:${feedbackScreenshotType};base64,${feedbackScreenshot}`}
+                          alt="Screenshot preview"
+                        />
+                        <button
+                          type="button"
+                          onClick={clearScreenshot}
+                          className="settings-screenshot-remove"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <span>Drag &amp; drop or paste screenshot (optional)</span>
+                    )}
                   </div>
-                ) : (
-                  <span>Drag &amp; drop or paste screenshot (optional)</span>
-                )}
-              </div>
 
-              {/* Submit button */}
-              <button
-                type="button"
-                className="settings-feedback-submit"
-                onClick={handleSubmitFeedback}
-                disabled={feedbackSubmitting || !feedbackTitle.trim()}
-              >
-                {feedbackSubmitting ? 'Submitting...' : 'Submit'}
-              </button>
+                  <button
+                    type="button"
+                    className="settings-feedback-submit"
+                    onClick={handleSubmitFeedback}
+                    disabled={feedbackSubmitting || !feedbackTitle.trim()}
+                  >
+                    {feedbackSubmitting ? 'Submitting...' : 'Submit'}
+                  </button>
+                </div>
+              )}
 
               {/* Success/error messages */}
               {feedbackSuccess && (
@@ -671,7 +685,7 @@ export function Settings({ onClose }: SettingsProps) {
               }}
             >
               <p>Write clearly, then trim the noise.</p>
-              <p>## Markdown headings should read naturally.</p>
+              <h3>Markdown headings should read naturally.</h3>
             </div>
           </div>
         </section>

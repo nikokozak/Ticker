@@ -527,7 +527,7 @@ export function ConversationSurface({
             }))}
             onKeyDown={handleComposerKeyDown}
             placeholder="Ask — sees this block, the Stream, and sources"
-            rows={2}
+            rows={1}
             aria-label="Conversation message"
           />
           {state.active?.running ? (

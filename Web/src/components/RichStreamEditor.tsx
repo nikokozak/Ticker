@@ -2525,78 +2525,82 @@ export function RichStreamEditor({
           >
             {sources.length > 0 ? `Sources · ${sources.length}` : 'Sources'}
           </button>
-          <details
-            ref={streamOverflowMenuRef}
-            className="stream-overflow-menu"
+          <div
+            className="stream-overflow-anchor"
             onBlur={(event) => {
-              if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
-                event.currentTarget.open = false;
+              if (!event.currentTarget.contains(event.relatedTarget)) {
+                if (streamOverflowMenuRef.current) streamOverflowMenuRef.current.open = false;
+                setShowConversationList(false);
               }
             }}
             onKeyDown={(event) => {
               if (event.key !== 'Escape') return;
               event.preventDefault();
-              event.currentTarget.open = false;
-              event.currentTarget.querySelector('summary')?.focus();
+              if (streamOverflowMenuRef.current) streamOverflowMenuRef.current.open = false;
+              setShowConversationList(false);
+              streamOverflowMenuRef.current?.querySelector('summary')?.focus();
             }}
           >
-            <summary title="More stream actions" aria-label="More stream actions">
-              <span aria-hidden="true">•••</span>
-            </summary>
-            <div className={`stream-overflow-panel ${showConversationList ? 'stream-overflow-panel--conversations' : ''}`}>
-              <button
-                type="button"
-                className="stream-overflow-action"
-                aria-expanded={showConversationList}
-                onClick={() => void toggleConversationList()}
-              >
-                Conversations
-              </button>
-              {showConversationList && (
-                <div className="conversation-list" aria-label="Conversations">
-                  {conversationListLoading && <p>Loading…</p>}
-                  {conversationListError && <p>Conversations could not be loaded.</p>}
-                  {!conversationListLoading && !conversationListError && conversationRecords.length === 0 && (
-                    <p>No conversations yet.</p>
-                  )}
-                  {conversationRecords.map((record) => (
-                    <div className="conversation-list-row" key={record.threadId}>
-                      <button
-                        type="button"
-                        className="conversation-list-open"
-                        onClick={() => openConversationFromList(record)}
-                      >
-                        <span className="conversation-list-title">
-                          {record.anchorText.split(/\r?\n/, 1)[0] || 'Conversation'}
-                        </span>
-                        <span className="conversation-list-meta">
-                          {formatRelativeTime(record.updatedAt)}{record.detached ? ' · detached' : ''}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="conversation-list-delete"
-                        aria-label="Delete conversation"
-                        onClick={() => setConversationPendingDelete(record)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <button
-                type="button"
-                className="stream-overflow-delete"
-                onClick={() => {
-                  streamOverflowMenuRef.current!.open = false;
-                  setShowDeleteConfirm(true);
-                }}
-              >
-                Delete stream…
-              </button>
-            </div>
-          </details>
+            <details ref={streamOverflowMenuRef} className="stream-overflow-menu">
+              <summary title="More stream actions" aria-label="More stream actions">
+                <span aria-hidden="true">•••</span>
+              </summary>
+              <div className="stream-overflow-panel">
+                <button
+                  type="button"
+                  className="stream-overflow-action"
+                  aria-expanded={showConversationList}
+                  disabled={conversationRecords.length === 0}
+                  onClick={() => {
+                    streamOverflowMenuRef.current!.open = false;
+                    void toggleConversationList();
+                  }}
+                >
+                  Conversations ({conversationRecords.length})
+                </button>
+                <button
+                  type="button"
+                  className="stream-overflow-delete"
+                  onClick={() => {
+                    streamOverflowMenuRef.current!.open = false;
+                    setShowDeleteConfirm(true);
+                  }}
+                >
+                  Delete stream…
+                </button>
+              </div>
+            </details>
+            {showConversationList && (
+              <div className="conversation-popover" aria-label="Conversations">
+                {conversationListLoading && <p>Loading…</p>}
+                {conversationListError && <p>Conversations could not be loaded.</p>}
+                {conversationRecords.map((record) => (
+                  <div className="conversation-list-row" key={record.threadId}>
+                    <button
+                      type="button"
+                      className="conversation-list-open"
+                      onClick={() => openConversationFromList(record)}
+                    >
+                      <span className="conversation-list-title">
+                        {record.anchorText.split(/\r?\n/, 1)[0] || 'Conversation'}
+                      </span>
+                      <span className="conversation-list-meta">
+                        {formatRelativeTime(record.updatedAt)}{record.detached ? ' · detached' : ''}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="conversation-list-delete"
+                      aria-label="Delete conversation"
+                      onClick={() => setConversationPendingDelete(record)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

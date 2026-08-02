@@ -471,7 +471,8 @@ describe('RichStreamEditor chrome parity', () => {
     expect(document.querySelector('.stream-xray-button')?.textContent).toBe('');
     expect(document.querySelector('.stream-overflow-menu')).not.toBe(null);
     expect([...document.querySelectorAll('.stream-overflow-panel button')]
-      .map((button) => button.textContent?.trim())).toEqual(['Conversations', 'Delete stream…']);
+      .map((button) => button.textContent?.trim())).toEqual(['Conversations (0)', 'Delete stream…']);
+    expect((document.querySelector('.stream-overflow-action') as HTMLButtonElement).disabled).toBe(true);
     expect(document.querySelector('.delete-button')).toBe(null);
     expect(document.querySelector('.stream-format-bar')).toBe(null);
     expect(document.querySelector('.selection-action-menu')).toBe(null);
@@ -1694,13 +1695,19 @@ describe('RichStreamEditor inline conversations', () => {
       ephemeral: false,
       updatedAt,
     };
+    const detachedStream = {
+      ...stream,
+      id: 'detached-list-stream',
+      conversationAnchors: [record],
+      document: { ...stream.document!, streamId: 'detached-list-stream' },
+    };
     vi.mocked(bridge.sendAsync).mockImplementation((async (type) => {
       if (type === 'listConversations') return { conversations: [record] };
       if (type === 'loadStreamThread') {
         return {
           thread: {
             threadId: record.threadId,
-            streamId: stream.id,
+            streamId: detachedStream.id,
             title: 'Detached question',
             workingText: '',
             anchorText: record.anchorText,
@@ -1726,7 +1733,11 @@ describe('RichStreamEditor inline conversations', () => {
       return { revision: 2 };
     }) as typeof bridge.sendAsync);
 
+    await renderStream(detachedStream);
+
     const conversations = document.querySelector('.stream-overflow-action') as HTMLButtonElement;
+    expect(conversations.textContent).toContain('Conversations (1)');
+    expect(conversations.disabled).toBe(false);
     await act(async () => {
       conversations.click();
       await Promise.resolve();
@@ -1737,6 +1748,8 @@ describe('RichStreamEditor inline conversations', () => {
       expect(found?.textContent).toContain('detached');
       return found!;
     });
+    expect(row.closest('.conversation-popover')).not.toBe(null);
+    expect(row.closest('.stream-overflow-panel')).toBe(null);
     await act(async () => {
       (row.querySelector('.conversation-list-open') as HTMLButtonElement).click();
       await Promise.resolve();
@@ -1765,7 +1778,7 @@ describe('RichStreamEditor inline conversations', () => {
     });
     expect(vi.mocked(bridge.sendAsync).mock.calls).toContainEqual([
       'deleteStreamThread',
-      { streamId: stream.id, threadId: record.threadId },
+      { streamId: detachedStream.id, threadId: record.threadId },
     ]);
     expect(document.querySelector('.conversation-list-row')).toBe(null);
   });

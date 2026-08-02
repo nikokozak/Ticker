@@ -5,6 +5,7 @@ All notable user-facing changes to Ticker are documented here.
 ## Unreleased
 
 ### Changed
+- editor: polish focus, overlays, settings, conversation menus, and window chrome
 - editor: polish quick capture, conversation drafts, previews, empty states, and stream renaming
 - editor: repair conversation controls, editor focus, global search, and inline action layout
 - editor: let anchored conversations apply scoped AI block edits with one-step undo (phase C7)

@@ -526,6 +526,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainWindow?.styleMask.insert(.fullSizeContentView)
         mainWindow?.titlebarAppearsTransparent = true
         mainWindow?.titleVisibility = .hidden
+        mainWindow?.titlebarSeparatorStyle = .none
+        mainWindow?.toolbar = nil
+        mainWindow?.tabbingMode = .disallowed
         mainWindow?.backgroundColor = NativePalette.background
         mainWindow?.minSize = NSSize(width: 300, height: 400)
         mainWindow?.delegate = self  // Handle close to hide instead of quit
